@@ -1,11 +1,12 @@
 name: Release
 
-# Bundles the Windows and Linux installers and publishes them as a
-# GitHub Release. Stages the daemon sidecar first - src-tauri/binaries/
-# is gitignored, `npm run daemon` regenerates it - then tauri build
-# produces the msi and nsis bundles. The linux job builds the AppImage
-# and deb against the release the windows job created. Unsigned on
-# purpose; the release notes say so.
+# Bundles the Windows and Linux installers and the signed Android APK,
+# and publishes them as a GitHub Release. The desktop jobs stage the
+# daemon sidecar first - src-tauri/binaries/ is gitignored, `npm run
+# daemon` regenerates it - then tauri build produces the msi, nsis and
+# Linux bundles. The desktop bundles are unsigned on purpose; the release
+# notes say so. The Android APK is signed with the release key held as
+# repo secrets, and the job fails unless the signature verifies.
 
 on:
   push:
@@ -75,5 +76,76 @@ jobs:
           gh release upload "$GITHUB_REF_NAME"
           src-tauri/target/release/bundle/appimage/*.AppImage
           src-tauri/target/release/bundle/deb/*.deb
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  android:
+    # The phone. The daemon rides inside the APK as a library, so the
+    # sidecar staging the desktop jobs do is not needed - but tauri's
+    # config still lists the sidecar and the CLI resolves it, so stage
+    # one anyway. Gradle drives cargo back through the tauri CLI once
+    # per ABI; the default is all four, into one universal APK.
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+      # Gradle 9 / AGP 9 want JDK 17 at least; 21 is the LTS in play.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            daemon
+            src-tauri
+      - uses: android-actions/setup-android@v3
+      # AGP installs its own build-tools once the licenses are accepted;
+      # the platform is pinned to the compileSdk.
+      - run: yes | sdkmanager --licenses > /dev/null
+      - run: sdkmanager --install "platforms;android-37"
+      # The tauri CLI locates the NDK through NDK_HOME (cargo-mobile2's
+      # contract); the runner ships several NDKs side by side - point it
+      # at the newest. AGP finds the SDK through local.properties.
+      - run: |
+          set -euo pipefail
+          NDK="$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -n 1)"
+          test -n "$NDK"
+          echo "NDK_HOME=$NDK" >> "$GITHUB_ENV"
+          echo "sdk.dir=$ANDROID_HOME" > src-tauri/gen/android/local.properties
+      - run: npm ci
+      - run: node scripts/sync-daemon.mjs
+      # keystore.properties names the key for the gradle build
+      # (gitignored); the store path is relative to the app module.
+      - name: stage the release signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEYSTORE_ALIAS: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
+        run: |
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > src-tauri/gen/android/app/openremote-release.keystore.p12
+          printf 'storeFile=openremote-release.keystore.p12\npassword=%s\nkeyAlias=%s\n' "$KEYSTORE_PASSWORD" "$KEYSTORE_ALIAS" > src-tauri/gen/android/keystore.properties
+      - run: npx tauri android build --apk
+      # The signature is part of the release contract: the job fails if
+      # the APK does not verify, and the log carries the signer cert.
+      # AGP signs in the assemble when the release signing config is
+      # wired; the -unsigned sibling is the intermediate.
+      - name: verify the signature
+        run: |
+          set -euo pipefail
+          APK="$(find src-tauri/gen/android/app/build/outputs/apk/universal/release -name 'app-universal-*.apk' ! -name '*unsigned*' -printf '%T@ %p\n' | sort -n | tail -n 1 | cut -d' ' -f2-)"
+          test -n "$APK"
+          echo "APK: $APK"
+          APKSIGNER="$(ls -1 "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n 1)"
+          "$APKSIGNER" verify --verbose --print-certs "$APK" | head -n 12
+          cp "$APK" "OpenRemote_${GITHUB_REF_NAME#v}_universal.apk"
+      - run: gh release upload "$GITHUB_REF_NAME" "OpenRemote_${GITHUB_REF_NAME#v}_universal.apk" --clobber
         env:
           GH_TOKEN: ${{ github.token }}
