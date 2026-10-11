@@ -106,19 +106,30 @@ jobs:
           workspaces: |
             daemon
             src-tauri
-      - uses: android-actions/setup-android@v3
-      # AGP installs its own build-tools once the licenses are accepted;
-      # the platform is pinned to the compileSdk.
-      - run: yes | sdkmanager --licenses > /dev/null
-      - run: sdkmanager --install "platforms;android-37"
-      # The tauri CLI locates the NDK through NDK_HOME (cargo-mobile2's
-      # contract); the runner ships several NDKs side by side - point it
-      # at the newest. AGP finds the SDK through local.properties.
-      - run: |
+      # The runner ships the Android SDK preinstalled; setup-android's
+      # own update pass dies on Google's removal of the legacy 'tools'
+      # package, so the SDK is used as it ships. AGP fetches its own
+      # build-tools once the licenses are accepted; the platform is
+      # pinned to the compileSdk. The tauri CLI locates the NDK through
+      # NDK_HOME (cargo-mobile2's contract, the same one
+      # scripts/android-env.sh uses), and AGP finds the SDK through
+      # local.properties.
+      - name: point the build at the SDK and its NDK
+        run: |
           set -euo pipefail
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          SDKMANAGER="$(ls -1 "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | sort -V | tail -n 1)"
+          # yes feeds every license prompt; its SIGPIPE death is the
+          # expected end, so pipefail steps aside for it - sdkmanager's
+          # own exit code still fails the step.
+          set +o pipefail
+          yes | "$SDKMANAGER" --licenses > /dev/null
+          set -o pipefail
+          "$SDKMANAGER" --install "platforms;android-37"
           NDK="$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -n 1)"
           test -n "$NDK"
           echo "NDK_HOME=$NDK" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "sdk.dir=$ANDROID_HOME" > src-tauri/gen/android/local.properties
       - run: npm ci
       - run: node scripts/sync-daemon.mjs
