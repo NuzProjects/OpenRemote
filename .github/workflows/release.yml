@@ -106,12 +106,14 @@ jobs:
           workspaces: |
             daemon
             src-tauri
-      # The runner ships the Android SDK preinstalled; setup-android's
-      # own update pass dies on Google's removal of the legacy 'tools'
-      # package, so the SDK is used as it ships. AGP fetches its own
-      # build-tools once the licenses are accepted; the platform is
-      # pinned to the compileSdk. The tauri CLI locates the NDK through
-      # NDK_HOME (cargo-mobile2's contract, the same one
+      # The runner image ships the SDK with the 37.0 platform (the
+      # minor-version scheme - there is no bare android-37 package) and
+      # build-tools preinstalled; setup-android's own update pass dies
+      # on Google's retirement of the legacy 'tools' package, so the SDK
+      # is used as it ships. Licenses are accepted so AGP can fetch
+      # anything the image lacks, and the 37.0 install is a no-op when
+      # the platform is already there. The tauri CLI locates the NDK
+      # through NDK_HOME (cargo-mobile2's contract, the same one
       # scripts/android-env.sh uses), and AGP finds the SDK through
       # local.properties.
       - name: point the build at the SDK and its NDK
@@ -119,13 +121,12 @@ jobs:
           set -euo pipefail
           export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           SDKMANAGER="$(ls -1 "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | sort -V | tail -n 1)"
-          # yes feeds every license prompt; its SIGPIPE death is the
-          # expected end, so pipefail steps aside for it - sdkmanager's
-          # own exit code still fails the step.
+          # yes feeds every license prompt, then dies on SIGPIPE; its
+          # exit must not fail the step - only sdkmanager's own rc.
           set +o pipefail
           yes | "$SDKMANAGER" --licenses > /dev/null
           set -o pipefail
-          "$SDKMANAGER" --install "platforms;android-37"
+          "$SDKMANAGER" --install "platforms;android-37.0"
           NDK="$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -n 1)"
           test -n "$NDK"
           echo "NDK_HOME=$NDK" >> "$GITHUB_ENV"
