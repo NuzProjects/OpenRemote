@@ -91,6 +91,15 @@ export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target, connection.state, projects])
 
+  // The mode switch starts the machine choice over. A chat in Local runs
+  // on this computer even when Cloud had the New chat aimed at a machine,
+  // and the harness list follows the machine - so the target, and the
+  // project that belongs to it, come back to here.
+  useEffect(() => {
+    setTarget(null)
+    setProjectId(null)
+  }, [mode])
+
   // A machine's own harnesses, fetched when a chat aims at it.
   useEffect(() => {
     let cancelled = false
