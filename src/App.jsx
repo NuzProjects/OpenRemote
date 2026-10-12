@@ -13,11 +13,29 @@ import { ConsoleProvider, useConsole } from './state/console.jsx'
 import { needsSignIn } from './cloud.js'
 import CloudNotices from './CloudNotices.jsx'
 import { isMobile } from './platform.js'
+import { Archive, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Copy, X } from '@phosphor-icons/react'
 import { pushBack, useBack } from './use-back.js'
+import SplitArea from './SplitArea.jsx'
+import ContextMenu from './ContextMenu.jsx'
+import {
+  MAX_PANES,
+  closeLeaf,
+  focusLeaf,
+  leafById,
+  leaves,
+  newLayout,
+  paneCount,
+  restoreLayout,
+  secondaryChatIds,
+  setLeafView,
+  splitLeaf,
+} from './split.js'
+
 
 const OB_KEY = 'openremote-onboarded'
 const STORE_KEY = 'openremote-view-state'
 const MODE_KEY = 'openremote-mode'
+const SPLIT_KEY = 'openremote-split-layout'
 const STATIC_VIEWS = ['new', 'plugins', 'automations', 'machines', 'settings']
 
 // The mode the user left the app in. Local unless they chose Cloud, so a
@@ -58,8 +76,18 @@ function loadViewState(sessions) {
   return { history, hIndex }
 }
 
+function loadLayout() {
+  try {
+    return restoreLayout(JSON.parse(sessionStorage.getItem(SPLIT_KEY) ?? 'null'))
+  } catch {
+    return newLayout()
+  }
+}
+
+const isChatView = (v) => !STATIC_VIEWS.includes(v)
+
 function Shell() {
-  const { sessions, chats, connection, ensureChat, cloud } = useConsole()
+  const { sessions, chats, connection, ensureChat, cloud, watchChats, setChatArchived } = useConsole()
   // The sidebar's docked-vs-overlay shape is the viewport's, not a mount-time
   // guess: crossing 640px live swaps the layout (the alternative - reading
   // innerWidth once at mount - left the sidebar overlaid after narrowing).
@@ -74,6 +102,16 @@ function Shell() {
     return () => mq.removeEventListener('change', onChange)
   }, [])
   const [{ history, hIndex }, setNav] = useState(() => loadViewState([]))
+  // Split panes: more chats beside the primary view, Local and Cloud alike.
+  // The primary pane follows the history above; the others hold their own.
+  const [layout, setLayout] = useState(loadLayout)
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(SPLIT_KEY, JSON.stringify(layout))
+    } catch {
+      /* storage unavailable */
+    }
+  }, [layout])
   // The tour sets up this computer's harnesses; a phone has none, and
   // Cloud's sign-in screen is its welcome.
   const [onboarded, setOnboarded] = useState(() => {
@@ -99,6 +137,27 @@ function Shell() {
   const view = OTHER_MODE[mode].includes(stored) ? 'new' : stored
   const chat = STATIC_VIEWS.includes(view) ? null : chats[view] ?? null
 
+  // Ctrl+\ splits the focused pane to the right, Ctrl+Shift+\ downward.
+  useEffect(() => {
+    if (isMobile || !onboarded) return
+    const onKey = (e) => {
+      if (!e.ctrlKey || e.altKey || e.metaKey || (e.key !== '\\' && e.key !== '|')) return
+      e.preventDefault()
+      setLayout((l) => splitLeaf(l, l.focus, e.shiftKey ? 'col' : 'row'))
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onboarded])
+
+  // Every chat on screen streams live - the primary's and each pane's.
+  const watchKey = [
+    ...(isChatView(view) ? [view] : []),
+    ...secondaryChatIds(layout, isChatView),
+  ].join(',')
+  useEffect(() => {
+    watchChats(watchKey ? watchKey.split(',') : [])
+  }, [watchKey, watchChats])
+
   // Reconcile navigation with the live session list (a chat in the history
   // that no longer exists falls back to New chat). A chat reached by hash
   // still needs its record - ensure it, the same as a sidebar open.
@@ -108,6 +167,11 @@ function Shell() {
     const view = state.history[state.hIndex]
     const session = (sessions ?? []).find((s) => s.id === view)
     if (session) ensureChat(session)
+    // Panes restored from the last visit need their records too.
+    for (const id of secondaryChatIds(layout, isChatView)) {
+      const s = (sessions ?? []).find((x) => x.id === id)
+      if (s) ensureChat(s)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessions])
 
@@ -151,7 +215,9 @@ function Shell() {
     } catch {
       /* storage unavailable */
     }
-    navigate('new')
+    // With panes open the layout is the user's own; the primary view only
+    // falls back when it belongs to the other mode (see `view` above).
+    if (paneCount(layout) === 1) navigate('new')
   }
 
   function goBack() {
@@ -168,6 +234,85 @@ function Shell() {
     navigate(id)
     if (typeof window !== 'undefined' && !window.matchMedia('(min-width: 640px)').matches)
       setSidebarOpen(false)
+  }
+
+  // The sidebar's click goes where the user is looking: the focused pane
+  // when that is a split pane and the target is a chat or New chat; every
+  // other view (plugins, settings, ...) belongs to the primary pane.
+  const focused = leafById(layout, layout.focus)
+  const openInFocus = (id) => {
+    if (focused?.view !== null && (id === 'new' || isChatView(id))) {
+      const session = (sessions ?? []).find((s) => s.id === id)
+      if (session) ensureChat(session)
+      setLayout((l) => setLeafView(l, focused.id, id))
+      return
+    }
+    setLayout((l) => focusLeaf(l, leaves(l.root).find((p) => p.view === null).id))
+    openSession(id)
+  }
+
+  // Open a chat in a new pane beside the focused one.
+  const openBeside = (id, dir = 'row', before = false) => {
+    const session = (sessions ?? []).find((s) => s.id === id)
+    if (session) ensureChat(session)
+    const next = splitLeaf(layout, layout.focus, dir, id, before)
+    if (next === layout) openInFocus(id)
+    else setLayout(next)
+  }
+
+  // Right-click in the main area: split from the pane under the cursor,
+  // and act on the chat it shows. Text, links and fields keep the
+  // browser's own menu (copy, paste, spelling).
+  const [paneMenu, setPaneMenu] = useState(null)
+  const onMainContextMenu = (e) => {
+    if (isMobile) return
+    const t = e.target
+    if (t.closest?.('input, textarea, select, a, [contenteditable="true"], .ctx-menu, .nc-menu')) return
+    if (window.getSelection()?.toString()) return
+    const leafId = t.closest?.('[data-leaf-id]')?.dataset.leafId ?? layout.focus
+    e.preventDefault()
+    setLayout((l) => focusLeaf(l, leafId))
+    setPaneMenu({ x: e.clientX, y: e.clientY, leafId })
+  }
+
+  const archiveFrom = (leaf, id) => {
+    setChatArchived(id, true)
+    if (leaf.view === null) navigate('new')
+    else setLayout((l) => setLeafView(l, leaf.id, 'new'))
+  }
+
+  const paneMenuItems = (leafId) => {
+    const leaf = leafById(layout, leafId)
+    if (!leaf) return []
+    const v = leaf.view ?? view
+    const full = paneCount(layout) >= MAX_PANES
+    const split = (dir, before) => () => setLayout((l) => splitLeaf(l, leafId, dir, 'new', before))
+    const items = [
+      { header: full ? 'New chat split (4 panes is the most)' : 'New chat split' },
+      { label: 'To the left', icon: <ArrowLeft size={14} />, disabled: full, onSelect: split('row', true) },
+      { label: 'To the right', icon: <ArrowRight size={14} />, disabled: full, onSelect: split('row', false) },
+      { label: 'Above', icon: <ArrowUp size={14} />, disabled: full, onSelect: split('col', true) },
+      { label: 'Below', icon: <ArrowDown size={14} />, disabled: full, onSelect: split('col', false) },
+    ]
+    const title = chats[v]?.title
+    if (isChatView(v) && title) {
+      items.push(
+        { divider: true },
+        { label: 'Archive chat', icon: <Archive size={14} />, onSelect: () => archiveFrom(leaf, v) },
+        {
+          label: 'Copy chat title',
+          icon: <Copy size={14} />,
+          onSelect: () => navigator.clipboard?.writeText(title).catch(() => {}),
+        },
+      )
+    }
+    if (leaf.view !== null) {
+      items.push(
+        { divider: true },
+        { label: 'Close pane', icon: <X size={14} />, onSelect: () => setLayout((l) => closeLeaf(l, leafId)) },
+      )
+    }
+    return items
   }
 
   // The sidebar's + : New chat, with the Add project flow engaged.
@@ -209,6 +354,62 @@ function Shell() {
   }, [])
   useBack(narrow && sidebarOpen, () => setSidebarOpen(false))
 
+  // What the primary pane shows: the view the app's navigation points at.
+  const primaryContent = (
+    view === 'settings' ? (
+    <SettingsView onReplay={replayOnboarding} onOpenChat={openSession} />
+  ) : mode === 'cloud' && needsSignIn(cloud) ? (
+    <CloudMode onBackToLocal={isMobile ? null : () => switchMode('local')} />
+  ) : (
+    <>
+      {view === 'new' && (
+        <NewChat
+          onOpen={openSession}
+          mode={mode}
+          addProjectOpen={addProjectOpen}
+          onAddProjectDone={() => setAddProjectOpen(false)}
+        />
+      )}
+      {view === 'machines' && <MachinesView onOpenChat={openSession} />}
+      {view === 'plugins' && <PluginsView />}
+      {view === 'automations' && <AutomationsView onOpenChat={openSession} />}
+      {!STATIC_VIEWS.includes(view) &&
+        (chat ? (
+          <ChatView key={chat.id} chat={chat} />
+        ) : (
+          <div className="cv-none">That chat is no longer in this workspace.</div>
+        ))}
+    </>
+    )
+  )
+
+  const paneLabel = (leaf) => {
+    const v = leaf.view ?? view
+    if (v === 'new') return 'New chat'
+    if (STATIC_VIEWS.includes(v)) return v[0].toUpperCase() + v.slice(1)
+    return chats[v]?.title ?? 'Chat'
+  }
+
+  // A split pane holds a chat or a New chat composer; the same chats and
+  // composers serve Local and Cloud, so one window mixes both.
+  const renderPane = (leaf) => {
+    if (leaf.view === null) return primaryContent
+    if (leaf.view === 'new') {
+      return (
+        <NewChat
+          onOpen={(id) => setLayout((l) => setLeafView(l, leaf.id, id))}
+          mode={mode}
+        />
+      )
+    }
+    const paneChat = chats[leaf.view]
+    return paneChat ? (
+      <ChatView key={paneChat.id} chat={paneChat} />
+    ) : (
+      <div className="cv-none">That chat is no longer in this workspace.</div>
+    )
+  }
+
   const body = () => (
     <>
       {/* The frameless window has no OS chrome - the titlebar (drag,
@@ -221,6 +422,7 @@ function Shell() {
         onForward={goForward}
         canBack={onboarded && hIndex > 0}
         canForward={onboarded && hIndex < history.length - 1}
+        onSplit={onboarded ? () => setLayout((l) => splitLeaf(l, l.focus, 'row')) : undefined}
       />
       {!onboarded ? (
         <div className="app-body">
@@ -231,40 +433,34 @@ function Shell() {
           {sidebarOpen && <div className="sb-backdrop" onClick={() => setSidebarOpen(false)} />}
           <Sidebar
             open={sidebarOpen}
-            active={view === 'new' ? null : view}
+            active={(focused?.view ?? view) === 'new' ? null : (focused?.view ?? view)}
             mode={mode}
             onMode={switchMode}
-            onSelect={openSession}
+            onSelect={openInFocus}
+            onSplit={openBeside}
             onAddProject={addProject}
           />
-          <main className="main">
+          <main className="main" onContextMenu={onMainContextMenu}>
             <CloudNotices />
-            {view === 'settings' ? (
-              <SettingsView onReplay={replayOnboarding} />
-            ) : mode === 'cloud' && needsSignIn(cloud) ? (
-              <CloudMode onBackToLocal={isMobile ? null : () => switchMode('local')} />
+            {paneCount(layout) > 1 ? (
+              <SplitArea
+                layout={layout}
+                setLayout={setLayout}
+                labelFor={paneLabel}
+                renderPane={renderPane}
+              />
             ) : (
-              <>
-                {view === 'new' && (
-                  <NewChat
-                    onOpen={openSession}
-                    mode={mode}
-                    addProjectOpen={addProjectOpen}
-                    onAddProjectDone={() => setAddProjectOpen(false)}
-                  />
-                )}
-                {view === 'machines' && <MachinesView onOpenChat={openSession} />}
-                {view === 'plugins' && <PluginsView />}
-                {view === 'automations' && <AutomationsView onOpenChat={openSession} />}
-                {!STATIC_VIEWS.includes(view) &&
-                  (chat ? (
-                    <ChatView key={chat.id} chat={chat} />
-                  ) : (
-                    <div className="cv-none">That chat is no longer in this workspace.</div>
-                  ))}
-              </>
+              primaryContent
             )}
           </main>
+          {paneMenu && (
+            <ContextMenu
+              x={paneMenu.x}
+              y={paneMenu.y}
+              items={paneMenuItems(paneMenu.leafId)}
+              onClose={() => setPaneMenu(null)}
+            />
+          )}
         </div>
       )}
     </>

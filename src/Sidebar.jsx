@@ -1,7 +1,14 @@
 import { useMemo, useState } from 'react'
 import {
+  Archive,
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
   CaretDown,
+  ChatCircle,
   Cloud,
+  Copy,
   Desktop,
   GearSix,
   House,
@@ -9,25 +16,29 @@ import {
   MagnifyingGlass,
   Plus,
   PuzzlePiece,
+  SplitHorizontal,
   TrashSimple,
   X,
 } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
 import { sections } from './projects.js'
+import { activeSessions } from './archive.js'
 import { deviceName, sessionsForMode } from './cloud.js'
 import { isMobile } from './platform.js'
 import { HarnessMark } from './brand-marks.jsx'
+import ContextMenu from './ContextMenu.jsx'
 import './sidebar.css'
 
-export default function Sidebar({ open, active, mode, onMode, onSelect, onAddProject }) {
-  const { connection, sessions, chats, devices, thisDevice, projects, removeProject } = useConsole()
+export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit, onAddProject }) {
+  const { connection, sessions, chats, devices, thisDevice, projects, removeProject, archived, setChatArchived } = useConsole()
   const [query, setQuery] = useState('')
   const [collapsed, setCollapsed] = useState({})
+  const [menu, setMenu] = useState(null)
 
   // Local: everything that runs on this computer. Cloud: every synced chat,
   // named by the device it runs on when that isn't this one.
   const rows = useMemo(() => {
-    return sessionsForMode(sessions, mode, thisDevice).map((session) => {
+    return sessionsForMode(activeSessions(sessions, archived), mode, thisDevice).map((session) => {
       const elsewhere = session.executor && session.executor !== thisDevice
       const device = elsewhere ? (devices ?? []).find((d) => d.id === session.executor) : null
       return {
@@ -43,7 +54,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onAddPro
         synced: Boolean(session.executor),
       }
     })
-  }, [sessions, chats, mode, devices, thisDevice])
+  }, [sessions, archived, chats, mode, devices, thisDevice])
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -60,30 +71,92 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onAddPro
     setCollapsed((c) => ({ ...c, [id]: !c[id] }))
   }
 
+  const archive = (id) => {
+    setChatArchived(id, true)
+    if (id === active) onSelect('new')
+  }
+
+  // Right-click on a chat: the same actions as the hover buttons, plus the
+  // split directions.
+  const menuItems = (row) => {
+    const split = (dir, before) => () => onSplit(row.id, dir, before)
+    const canSplit = onSplit && !isMobile
+    return [
+      { label: 'Open', icon: <ChatCircle size={14} />, onSelect: () => onSelect(row.id) },
+      ...(canSplit
+        ? [
+            { divider: true },
+            { header: 'Open in a new split' },
+            { label: 'To the left', icon: <ArrowLeft size={14} />, onSelect: split('row', true) },
+            { label: 'To the right', icon: <ArrowRight size={14} />, onSelect: split('row', false) },
+            { label: 'Above', icon: <ArrowUp size={14} />, onSelect: split('col', true) },
+            { label: 'Below', icon: <ArrowDown size={14} />, onSelect: split('col', false) },
+          ]
+        : []),
+      { divider: true },
+      { label: 'Archive', icon: <Archive size={14} />, onSelect: () => archive(row.id) },
+      {
+        label: 'Copy title',
+        icon: <Copy size={14} />,
+        onSelect: () => navigator.clipboard?.writeText(row.title).catch(() => {}),
+      },
+    ]
+  }
+
   const chatRow = (row) => (
-    <button
+    <div
       key={row.id}
-      className={`chat-row${row.id === active ? ' active' : ''}`}
-      data-status={row.status}
-      onClick={() => onSelect(row.id)}
+      className="chat-item"
+      onContextMenu={(e) => {
+        e.preventDefault()
+        setMenu({ x: e.clientX, y: e.clientY, row })
+      }}
     >
-      {/* the harness's mark leads - every harness, one
-          sidebar, the at-a-glance signal of which agent owns
-          each chat - then the title, with the status dot at
-          the right edge so every status scans in one column */}
-      {row.harness && <HarnessMark harness={row.harness} size={13} />}
-      <span className="chat-title">{row.title}</span>
-      {mode === 'cloud' && row.device && (
-        <span className="chat-device">{row.device}</span>
+      <button
+        className={`chat-row${row.id === active ? ' active' : ''}`}
+        data-status={row.status}
+        onClick={() => onSelect(row.id)}
+      >
+        {/* the harness's mark leads - every harness, one
+            sidebar, the at-a-glance signal of which agent owns
+            each chat - then the title, with the status dot at
+            the right edge so every status scans in one column */}
+        {row.harness && <HarnessMark harness={row.harness} size={13} />}
+        <span className="chat-title">{row.title}</span>
+        {mode === 'cloud' && row.device && (
+          <span className="chat-device">{row.device}</span>
+        )}
+        {mode === 'local' && row.synced && (
+          <Cloud size={11} className="chat-synced" aria-label="Synced to your devices" />
+        )}
+        <span
+          className={`dot dot--${row.offline ? 'offline' : row.status}`}
+          title={row.offline ? `${row.device} is offline` : undefined}
+        />
+      </button>
+      {/* Opens the chat in a new pane beside the one in focus. */}
+      {onSplit && !isMobile && (
+        <button
+          type="button"
+          className="chat-split"
+          title="Open beside"
+          aria-label={`Open ${row.title} beside`}
+          onClick={() => onSplit(row.id)}
+        >
+          <SplitHorizontal size={12} />
+        </button>
       )}
-      {mode === 'local' && row.synced && (
-        <Cloud size={11} className="chat-synced" aria-label="Synced to your devices" />
-      )}
-      <span
-        className={`dot dot--${row.offline ? 'offline' : row.status}`}
-        title={row.offline ? `${row.device} is offline` : undefined}
-      />
-    </button>
+      {/* Archive hides the chat from this list; Settings keeps it. */}
+      <button
+        type="button"
+        className="chat-archive"
+        title="Archive this chat"
+        aria-label={`Archive ${row.title}`}
+        onClick={() => archive(row.id)}
+      >
+        <Archive size={12} />
+      </button>
+    </div>
   )
 
   return (
@@ -242,6 +315,9 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onAddPro
           Settings
         </button>
       </footer>
+      {menu && (
+        <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.row)} onClose={() => setMenu(null)} />
+      )}
     </aside>
   )
 }
