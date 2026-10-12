@@ -100,20 +100,39 @@ export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false
     setProjectId(null)
   }, [mode])
 
-  // A machine's own harnesses, fetched when a chat aims at it.
+  // A machine's own harnesses, fetched when a chat aims at it. The first
+  // answer can be empty or fail - the relay link is still coming up, or
+  // the machine is still scanning for its harnesses - so the fetch keeps
+  // trying (backing off to every 15s) until the machine reports some, and
+  // starts over whenever the machine comes back online.
+  const targetOnline = Boolean(targetItem?.online)
   useEffect(() => {
     let cancelled = false
+    let timer = null
+    let wait = 1500
     setTargetCaps(null)
-    if (target) {
-      capabilitiesFor(target).then((caps) => {
-        if (!cancelled) setTargetCaps(caps)
-      })
+    if (!target || connection.state !== 'connected' || !targetOnline) return
+    const attempt = async () => {
+      let caps = null
+      try {
+        caps = await capabilitiesFor(target)
+      } catch {
+        caps = null
+      }
+      if (cancelled) return
+      if (caps) setTargetCaps(caps)
+      if (!(caps?.harnesses ?? []).some((h) => h.available)) {
+        timer = setTimeout(attempt, wait)
+        wait = Math.min(wait * 2, 15000)
+      }
     }
+    attempt()
     return () => {
       cancelled = true
+      clearTimeout(timer)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target])
+  }, [target, targetOnline, connection.state])
 
   // Only what the machine reports installed - no dead UI.
   const available = ((target ? targetCaps : capabilities)?.harnesses ?? []).filter((h) => h.available)

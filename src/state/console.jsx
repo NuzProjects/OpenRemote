@@ -364,10 +364,12 @@ export function ConsoleProvider({ children }) {
   const modelsFor = useCallback(
     async (harnessId, deviceId = null) => {
       const key = `${deviceId ?? ''}:${harnessId}`
-      if (!api.ready || modelsByHarness[key]) return modelsByHarness[key] ?? []
+      // An empty answer is not cached: a machine that was still starting
+      // up gets asked again.
+      if (!api.ready || modelsByHarness[key]?.length) return modelsByHarness[key] ?? []
       try {
         const list = (await api.device(deviceId).models(harnessId)) ?? []
-        setModelsByHarness((current) => ({ ...current, [key]: list }))
+        if (list.length) setModelsByHarness((current) => ({ ...current, [key]: list }))
         return list
       } catch {
         return []

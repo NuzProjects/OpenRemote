@@ -38,6 +38,8 @@ export default function MachineModal({ device, onOpenChat, onClose }) {
   const [busyHarness, setBusyHarness] = useState(null)
   const [signInFor, setSignInFor] = useState(null)
   const [confirmRemove, setConfirmRemove] = useState(false)
+  // Bumped to ask the machine again after a failed read.
+  const [retry, setRetry] = useState(0)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const isMe = device.id === thisDevice
@@ -64,14 +66,26 @@ export default function MachineModal({ device, onOpenChat, onClose }) {
     try {
       const list = await apiFor(device.id).machines()
       setView((list ?? [])[0] ?? null)
+      setError(null)
     } catch (err) {
       setError(err.message ?? String(err))
+      throw err
     }
   }
+  // A machine's first answer can fail while its relay link comes up; ask
+  // again every few seconds rather than staying empty until reopened.
   useEffect(() => {
-    load()
+    let timer = null
+    let cancelled = false
+    load().catch(() => {
+      if (!cancelled) timer = setTimeout(() => setRetry((n) => n + 1), 3000)
+    })
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [device.id, reachable, machines])
+  }, [device.id, reachable, machines, retry])
 
   const act = async (action) => {
     setBusy(true)
@@ -91,7 +105,7 @@ export default function MachineModal({ device, onOpenChat, onClose }) {
     setError(null)
     try {
       await apiFor(isMe ? null : device.id).installHarness(view.machine.id, harnessId)
-      await load()
+      await load().catch(() => {})
     } catch (err) {
       setError(err.message ?? String(err))
     } finally {
