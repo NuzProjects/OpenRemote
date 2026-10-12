@@ -8,7 +8,7 @@ import './contextmenu.css'
  * look (nc-* classes) but has no search and no selection - each entry just
  * does its thing and the menu closes.
  *
- * items: [{ label, icon, onSelect, disabled, hint }], a { header: 'Text' }
+ * items: [{ label, icon, onSelect, disabled, hint, danger }], a { header: 'Text' }
  * for a group label, or { divider: true }.
  */
 export default function ContextMenu({ x, y, items, onClose }) {
@@ -108,7 +108,7 @@ export default function ContextMenu({ x, y, items, onClose }) {
             key={i}
             type="button"
             role="menuitem"
-            className={`nc-item${i === cursor ? ' cursor' : ''}`}
+            className={`nc-item${i === cursor ? ' cursor' : ''}${item.danger ? ' ctx-danger' : ''}`}
             disabled={item.disabled}
             onClick={() => run(item)}
             onMouseEnter={() => !item.disabled && setCursor(i)}

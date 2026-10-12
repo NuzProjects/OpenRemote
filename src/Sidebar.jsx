@@ -26,13 +26,15 @@ import { deviceName, sessionsForMode } from './cloud.js'
 import { isMobile } from './platform.js'
 import { HarnessMark } from './brand-marks.jsx'
 import ContextMenu from './ContextMenu.jsx'
+import DeleteChatModal from './DeleteChatModal.jsx'
 import './sidebar.css'
 
 export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit, onAddProject }) {
-  const { connection, sessions, chats, devices, thisDevice, projects, removeProject, archived, setChatArchived } = useConsole()
+  const { connection, sessions, chats, devices, thisDevice, projects, removeProject, archived, setChatArchived, deleteChat } = useConsole()
   const [query, setQuery] = useState('')
   const [collapsed, setCollapsed] = useState({})
   const [menu, setMenu] = useState(null)
+  const [deleting, setDeleting] = useState(null)
 
   // Local: everything that runs on this computer. Cloud: every synced chat,
   // named by the device it runs on when that isn't this one.
@@ -94,6 +96,18 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
         : []),
       { divider: true },
       { label: 'Archive', icon: <Archive size={14} />, onSelect: () => archive(row.id) },
+      // The daemon deletes synced chats only (it removes them from every
+      // device); a private chat has no delete.
+      ...(row.synced
+        ? [
+            {
+              label: 'Delete chat',
+              icon: <TrashSimple size={14} />,
+              danger: true,
+              onSelect: () => setDeleting(row),
+            },
+          ]
+        : []),
       {
         label: 'Copy title',
         icon: <Copy size={14} />,
@@ -304,6 +318,16 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
       </footer>
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.row)} onClose={() => setMenu(null)} />
+      )}
+      {deleting && (
+        <DeleteChatModal
+          title={deleting.title}
+          onClose={() => setDeleting(null)}
+          onDelete={async () => {
+            await deleteChat(deleting.id)
+            if (deleting.id === active) onSelect('new')
+          }}
+        />
       )}
     </aside>
   )

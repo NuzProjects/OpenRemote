@@ -42,3 +42,33 @@
 html[data-reduce-motion] .ctx-menu {
   animation: none;
 }
+
+.ctx-menu .nc-item.ctx-danger,
+.ctx-menu .nc-item.ctx-danger .ctx-icon {
+  color: var(--red, #f87171);
+}
+
+.ctx-menu .nc-item.ctx-danger.cursor {
+  background: rgba(248, 113, 113, 0.1);
+}
+
+.ctx-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.pn-btn--danger {
+  border-color: rgba(248, 113, 113, 0.4);
+  color: var(--red, #f87171);
+}
+
+.pn-btn--danger:hover:not(:disabled) {
+  background: rgba(248, 113, 113, 0.1);
+  color: var(--red, #f87171);
+}
+
+.pn-btn:disabled {
+  opacity: 0.5;
+}
