@@ -67,6 +67,19 @@ jobs:
             src-tauri
       # Tauri's Linux build dependencies (webkit2gtk 4.1 era).
       - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      # The machine installer downloads a standalone daemon from the
+      # release (openremote-daemon-linux-x86_64, checked against
+      # SHA256SUMS). A plain runner build links a glibc newer than old
+      # servers have, so the asset is cross-built pinned to glibc 2.28 -
+      # the floor the daemon deploys are built to.
+      - name: zig for the glibc-pinned daemon
+        run: |
+          set -euo pipefail
+          ZIG=0.14.1
+          curl -fsSL -o zig.tar.xz "https://ziglang.org/download/${ZIG}/zig-linux-x86_64-${ZIG}.tar.xz"
+          tar -xJf zig.tar.xz
+          echo "$PWD/zig-linux-x86_64-${ZIG}" >> "$GITHUB_PATH"
+          cargo install --locked cargo-zigbuild
       - run: npm ci
       - run: OR_RELEASE=1 node scripts/sync-daemon.mjs
       # The config's bundle targets are the Windows formats; the CLI
@@ -76,6 +89,19 @@ jobs:
           gh release upload "$GITHUB_REF_NAME"
           src-tauri/target/release/bundle/appimage/*.AppImage
           src-tauri/target/release/bundle/deb/*.deb
+        env:
+          GH_TOKEN: ${{ github.token }}
+      # The machine installer's download: the daemon alone, named as
+      # install.sh expects, with the checksum file it verifies against.
+      # The plain triple's artifacts are the sidecar's; the glibc-pinned
+      # build lands under its own target dir.
+      - name: the daemon asset
+        run: |
+          set -euo pipefail
+          ( cd daemon && cargo zigbuild -p openremote-daemon --locked --release --target x86_64-unknown-linux-gnu.2.28 )
+          cp daemon/target/x86_64-unknown-linux-gnu/release/openremote-daemon openremote-daemon-linux-x86_64
+          sha256sum openremote-daemon-linux-x86_64 > SHA256SUMS
+          gh release upload "$GITHUB_REF_NAME" openremote-daemon-linux-x86_64 SHA256SUMS --clobber
         env:
           GH_TOKEN: ${{ github.token }}
 

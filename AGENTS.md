@@ -130,7 +130,11 @@ an old process is still alive; find it before re-running).
   workspace carries its own version.
 - `.github/workflows/release.yml` builds on `v*` tag pushes:
   stage the sidecar, `npx tauri build`, `gh release create` with the
-  notes from `release-notes/<tag>.md`. Push main before pushing the
+  notes from `release-notes/<tag>.md`. The Linux job also uploads the
+  machine installer's download: `openremote-daemon-linux-x86_64` plus
+  `SHA256SUMS`, cross-built with zig pinned to glibc 2.28 (a runner
+  build links a glibc old servers don't have; install.sh verifies the
+  checksum and refuses a mismatch). Push main before pushing the
   tag.
 - Installers are unsigned by decision; the release notes say so
   (SmartScreen, More info > Run anyway).
