@@ -4,6 +4,9 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
+  /* without this the column grows to its transcript and the page clips it
+     instead of .cv-scroll scrolling */
+  min-height: 0;
   background: var(--bg-app);
 }
 
