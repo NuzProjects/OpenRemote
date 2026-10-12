@@ -84,9 +84,9 @@ jobs:
         run: |
           set -euo pipefail
           ZIG=0.14.1
-          curl -fsSL -o zig.tar.xz "https://ziglang.org/download/${ZIG}/zig-linux-x86_64-${ZIG}.tar.xz"
+          curl -fsSL -o zig.tar.xz "https://ziglang.org/download/${ZIG}/zig-x86_64-linux-${ZIG}.tar.xz"
           tar -xJf zig.tar.xz
-          echo "$PWD/zig-linux-x86_64-${ZIG}" >> "$GITHUB_PATH"
+          echo "$PWD/zig-x86_64-linux-${ZIG}" >> "$GITHUB_PATH"
           cargo install --locked cargo-zigbuild
       - run: npm ci
       - run: OR_RELEASE=1 node scripts/sync-daemon.mjs
