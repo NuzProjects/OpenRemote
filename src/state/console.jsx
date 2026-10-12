@@ -36,12 +36,12 @@ export function ConsoleProvider({ children }) {
   const [cloud, setCloud] = useState(null)
   const [devices, setDevices] = useState([])
   const [capabilitiesByDevice, setCapabilitiesByDevice] = useState({})
-  const [openChatId, setOpenChatId] = useState(null)
+  // The chats on screen: each holds a live stream while it is watched, so
+  // several panes can show running agents at once.
+  const [watched, setWatched] = useState([])
   const [archived, setArchived] = useState(loadArchived)
-  const stopEventsRef = useRef(null)
-  const cursorRef = useRef(null)
-  const openChatRef = useRef(null)
-  openChatRef.current = openChatId
+  const streamsRef = useRef(new Map())
+  const chatsRef = useRef({})
 
   const connect = useCallback((url, token) => {
     saveConnection(url, token)
@@ -51,13 +51,11 @@ export function ConsoleProvider({ children }) {
 
   const disconnect = useCallback(() => {
     clearConnection()
-    stopEventsRef.current?.()
-    stopEventsRef.current = null
     setApi(new DaemonApi(null, null))
     setConnection({ state: 'new', error: null })
     setSessions([])
     setChats({})
-    setOpenChatId(null)
+    setWatched([])
   }, [])
 
   // Fresh capabilities - the harness rows carry the harness's own status
@@ -245,68 +243,92 @@ export function ConsoleProvider({ children }) {
     })
   }, [sessions])
 
-  // The open chat: load its history + decisions, then stream live.
-  const openChat = chats[openChatId] ?? null
-  useEffect(() => {
-    stopEventsRef.current?.()
-    stopEventsRef.current = null
-    if (!openChatId || connection.state !== 'connected') return
-    let cancelled = false
-    cursorRef.current = null
-    ;(async () => {
-      try {
-        const list = await api.decisions(openChatId)
-        if (cancelled) return
-        setChats((current) => {
-          const chat = current[openChatId]
-          if (!chat) return current
-          return { ...current, [openChatId]: { ...chat, decisionsList: list ?? [] } }
-        })
-      } catch {
-        /* decisions load is best-effort; the stream carries them anyway */
-      }
-    })()
+  chatsRef.current = chats
 
-    const apply = (event) => {
-      cursorRef.current = event.seq
-      setChats((current) => {
-        const chat = current[openChatId]
-        if (!chat) return current
-        const folded = foldEvent({ ...chat, timeline: [...chat.timeline] }, event)
-        return { ...current, [openChatId]: folded }
-      })
-    }
-    // Replay only what this chat hasn't folded yet - a chat reopened
-    // after a switch already holds its timeline; `after: null` would
-    // fold the whole history in a second time.
-    const after = chats[openChatId]?.foldedSeq ?? null
-    const stop = api.events(openChatId, {
-      after,
-      onEvent: apply,
-      onClose: () => {
-        if (cancelled || openChatRef.current !== openChatId) return
-        // Reconnect from the cursor; the daemon replays anything missed.
-        const retry = setTimeout(() => {
-          if (cancelled || openChatRef.current !== openChatId) return
-          stopEventsRef.current?.()
-          stopEventsRef.current = api.events(openChatId, {
-            after: cursorRef.current,
-            onEvent: apply,
-            onClose: () => {},
-          })
-        }, 800)
-        stopEventsRef.current = () => {
-          clearTimeout(retry)
-        }
-      },
+  // Watch exactly these chats. Order is irrelevant; the same set is a no-op.
+  const watchChats = useCallback((ids) => {
+    setWatched((current) => {
+      const next = [...new Set(ids)].sort()
+      return current.length === next.length && current.every((id, i) => id === next[i])
+        ? current
+        : next
     })
-    stopEventsRef.current = stop
+  }, [])
+
+  // One stream per watched chat: load its decisions, replay what it hasn't
+  // folded yet, then follow it live, reconnecting from its cursor.
+  const openStream = useCallback(
+    (id) => {
+      const stream = { cancelled: false, stop: null, retry: null, cursor: null }
+      const apply = (event) => {
+        stream.cursor = event.seq
+        setChats((current) => {
+          const chat = current[id]
+          if (!chat) return current
+          return { ...current, [id]: foldEvent({ ...chat, timeline: [...chat.timeline] }, event) }
+        })
+      }
+      const follow = (after) => {
+        stream.stop = api.events(id, {
+          after,
+          onEvent: apply,
+          onClose: () => {
+            if (stream.cancelled) return
+            // The daemon replays anything missed from the cursor.
+            stream.retry = setTimeout(() => {
+              if (!stream.cancelled) follow(stream.cursor ?? chatsRef.current[id]?.foldedSeq ?? null)
+            }, 800)
+          },
+        })
+      }
+      ;(async () => {
+        try {
+          const list = await api.decisions(id)
+          if (stream.cancelled) return
+          setChats((current) => {
+            const chat = current[id]
+            if (!chat) return current
+            return { ...current, [id]: { ...chat, decisionsList: list ?? [] } }
+          })
+        } catch {
+          /* decisions load is best-effort; the stream carries them anyway */
+        }
+      })()
+      // A chat shown again after a while already holds its timeline;
+      // `after: null` would fold the whole history in a second time.
+      follow(chatsRef.current[id]?.foldedSeq ?? null)
+      stream.close = () => {
+        stream.cancelled = true
+        clearTimeout(stream.retry)
+        stream.stop?.()
+      }
+      return stream
+    },
+    [api],
+  )
+
+  // A new connection (or none) drops every stream; the next effect reopens
+  // the watched set on it.
+  useEffect(() => {
+    const streams = streamsRef.current
     return () => {
-      cancelled = true
-      stop()
+      for (const stream of streams.values()) stream.close()
+      streams.clear()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openChatId, connection.state])
+  }, [connection.state, openStream])
+
+  useEffect(() => {
+    if (connection.state !== 'connected') return
+    const streams = streamsRef.current
+    const want = new Set(watched)
+    for (const [id, stream] of streams) {
+      if (!want.has(id)) {
+        stream.close()
+        streams.delete(id)
+      }
+    }
+    for (const id of want) if (!streams.has(id)) streams.set(id, openStream(id))
+  }, [watched, connection.state, openStream])
 
   const ensureChat = useCallback(
     (session) => {
@@ -317,7 +339,6 @@ export function ConsoleProvider({ children }) {
           ? current
           : { ...current, [session.id]: chatFromSession(session) },
       )
-      setOpenChatId(session.id)
     },
     [],
   )
@@ -756,8 +777,7 @@ export function ConsoleProvider({ children }) {
       automations,
       projects,
       chats,
-      openChat,
-      openChatId,
+      watchChats,
       connect,
       disconnect,
       ensureChat,
@@ -813,8 +833,7 @@ export function ConsoleProvider({ children }) {
       automations,
       projects,
       chats,
-      openChat,
-      openChatId,
+      watchChats,
       connect,
       disconnect,
       ensureChat,

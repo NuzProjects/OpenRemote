@@ -10,6 +10,7 @@ import {
   MagnifyingGlass,
   Plus,
   PuzzlePiece,
+  SplitHorizontal,
   TrashSimple,
   X,
 } from '@phosphor-icons/react'
@@ -21,7 +22,7 @@ import { isMobile } from './platform.js'
 import { HarnessMark } from './brand-marks.jsx'
 import './sidebar.css'
 
-export default function Sidebar({ open, active, mode, onMode, onSelect, onAddProject }) {
+export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit, onAddProject }) {
   const { connection, sessions, chats, devices, thisDevice, projects, removeProject, archived, setChatArchived } = useConsole()
   const [query, setQuery] = useState('')
   const [collapsed, setCollapsed] = useState({})
@@ -91,6 +92,18 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onAddPro
           title={row.offline ? `${row.device} is offline` : undefined}
         />
       </button>
+      {/* Opens the chat in a new pane beside the one in focus. */}
+      {onSplit && !isMobile && (
+        <button
+          type="button"
+          className="chat-split"
+          title="Open beside"
+          aria-label={`Open ${row.title} beside`}
+          onClick={() => onSplit(row.id)}
+        >
+          <SplitHorizontal size={12} />
+        </button>
+      )}
       {/* Archive hides the chat from this list; Settings keeps it. */}
       <button
         type="button"

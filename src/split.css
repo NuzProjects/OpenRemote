@@ -1,0 +1,164 @@
+.split-area {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
+.split-node {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
+.split-node--row {
+  flex-direction: row;
+}
+
+.split-node--col {
+  flex-direction: column;
+}
+
+.split-cell {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
+.split-cell > .split-pane,
+.split-cell > .split-node {
+  flex: 1;
+}
+
+/* the divider straddles the cell's trailing edge: a 1px line with a wider
+   hit area, so it is easy to grab without taking layout space */
+.split-divider {
+  position: absolute;
+  z-index: 3;
+  touch-action: none;
+}
+
+.split-node--row > .split-cell > .split-divider {
+  top: 0;
+  right: -3px;
+  bottom: 0;
+  width: 7px;
+  cursor: col-resize;
+}
+
+.split-node--col > .split-cell > .split-divider {
+  right: 0;
+  bottom: -3px;
+  left: 0;
+  height: 7px;
+  cursor: row-resize;
+}
+
+.split-divider::after {
+  content: '';
+  position: absolute;
+  background: var(--line);
+}
+
+.split-node--row > .split-cell > .split-divider::after {
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 1px;
+}
+
+.split-node--col > .split-cell > .split-divider::after {
+  top: 3px;
+  right: 0;
+  left: 0;
+  height: 1px;
+}
+
+.split-divider:hover::after {
+  background: var(--accent);
+}
+
+.split-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  /* the pane in focus is where the sidebar opens the next chat */
+  box-shadow: inset 0 0 0 1px transparent;
+}
+
+.split-pane.focused {
+  box-shadow: inset 0 0 0 1px rgba(220, 162, 75, 0.35);
+}
+
+.split-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 30px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-side);
+}
+
+.split-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.split-pane.focused .split-label {
+  color: var(--text-1);
+}
+
+.split-btn {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.split-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.split-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.split-body {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* a pane is narrower than the window: the chat's gutters tighten to match */
+.split-body .cv-head {
+  padding: 14px 18px 12px;
+}
+
+.split-body .cv-thread {
+  padding-right: 18px;
+  padding-left: 18px;
+}
+
+.split-body .cv-composer {
+  padding: 0 14px 14px;
+}

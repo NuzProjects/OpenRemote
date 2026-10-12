@@ -685,7 +685,8 @@ button:focus-visible {
   position: relative;
 }
 
-.chat-archive {
+.chat-archive,
+.chat-split {
   position: absolute;
   top: 50%;
   right: 6px;
@@ -704,22 +705,31 @@ button:focus-visible {
   transition: opacity 0.12s ease;
 }
 
+.chat-split {
+  right: 32px;
+}
+
 .chat-item:hover .chat-archive,
-.chat-item:focus-within .chat-archive {
+.chat-item:focus-within .chat-archive,
+.chat-item:hover .chat-split,
+.chat-item:focus-within .chat-split {
   opacity: 1;
   pointer-events: auto;
 }
 
-.chat-archive:hover {
+.chat-archive:hover,
+.chat-split:hover {
   color: var(--text-1);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .chat-archive {
+  .chat-archive,
+  .chat-split {
     transition: none;
   }
 }
 
-html[data-reduce-motion] .chat-archive {
+html[data-reduce-motion] .chat-archive,
+html[data-reduce-motion] .chat-split {
   transition: none;
 }

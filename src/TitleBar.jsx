@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ArrowLeft, ArrowRight, Info, SidebarSimple } from '@phosphor-icons/react'
+import { ArrowLeft, ArrowRight, Info, SidebarSimple, SplitHorizontal } from '@phosphor-icons/react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import AboutModal from './AboutModal.jsx'
 import { useConsole } from './state/console.jsx'
@@ -35,6 +35,7 @@ export default function TitleBar({
   onForward,
   canBack,
   canForward,
+  onSplit,
 }) {
   const { capabilities } = useConsole()
   const [maximized, setMaximized] = useState(false)
@@ -112,6 +113,13 @@ export default function TitleBar({
         <button className="tb-toggle" onClick={onForward} disabled={!canForward} title="Forward">
           <ArrowRight size={15} />
         </button>
+        {/* Another pane beside this one, for a second agent in the same
+            window (Ctrl+\; Ctrl+Shift+\ splits downward). */}
+        {onSplit && (
+          <button className="tb-toggle" onClick={onSplit} title="Split view (Ctrl+\)">
+            <SplitHorizontal size={15} />
+          </button>
+        )}
       </div>
       <div className="tb-title" data-tauri-drag-region>
         OpenRemote
