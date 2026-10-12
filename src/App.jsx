@@ -13,9 +13,13 @@ import { ConsoleProvider, useConsole } from './state/console.jsx'
 import { needsSignIn } from './cloud.js'
 import CloudNotices from './CloudNotices.jsx'
 import { isMobile } from './platform.js'
+import { Archive, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Copy, X } from '@phosphor-icons/react'
 import { pushBack, useBack } from './use-back.js'
 import SplitArea from './SplitArea.jsx'
+import ContextMenu from './ContextMenu.jsx'
 import {
+  MAX_PANES,
+  closeLeaf,
   focusLeaf,
   leafById,
   leaves,
@@ -83,7 +87,7 @@ function loadLayout() {
 const isChatView = (v) => !STATIC_VIEWS.includes(v)
 
 function Shell() {
-  const { sessions, chats, connection, ensureChat, cloud, watchChats } = useConsole()
+  const { sessions, chats, connection, ensureChat, cloud, watchChats, setChatArchived } = useConsole()
   // The sidebar's docked-vs-overlay shape is the viewport's, not a mount-time
   // guess: crossing 640px live swaps the layout (the alternative - reading
   // innerWidth once at mount - left the sidebar overlaid after narrowing).
@@ -248,12 +252,67 @@ function Shell() {
   }
 
   // Open a chat in a new pane beside the focused one.
-  const openBeside = (id) => {
+  const openBeside = (id, dir = 'row', before = false) => {
     const session = (sessions ?? []).find((s) => s.id === id)
     if (session) ensureChat(session)
-    const next = splitLeaf(layout, layout.focus, 'row', id)
+    const next = splitLeaf(layout, layout.focus, dir, id, before)
     if (next === layout) openInFocus(id)
     else setLayout(next)
+  }
+
+  // Right-click in the main area: split from the pane under the cursor,
+  // and act on the chat it shows. Text, links and fields keep the
+  // browser's own menu (copy, paste, spelling).
+  const [paneMenu, setPaneMenu] = useState(null)
+  const onMainContextMenu = (e) => {
+    if (isMobile) return
+    const t = e.target
+    if (t.closest?.('input, textarea, select, a, [contenteditable="true"], .ctx-menu, .nc-menu')) return
+    if (window.getSelection()?.toString()) return
+    const leafId = t.closest?.('[data-leaf-id]')?.dataset.leafId ?? layout.focus
+    e.preventDefault()
+    setLayout((l) => focusLeaf(l, leafId))
+    setPaneMenu({ x: e.clientX, y: e.clientY, leafId })
+  }
+
+  const archiveFrom = (leaf, id) => {
+    setChatArchived(id, true)
+    if (leaf.view === null) navigate('new')
+    else setLayout((l) => setLeafView(l, leaf.id, 'new'))
+  }
+
+  const paneMenuItems = (leafId) => {
+    const leaf = leafById(layout, leafId)
+    if (!leaf) return []
+    const v = leaf.view ?? view
+    const full = paneCount(layout) >= MAX_PANES
+    const split = (dir, before) => () => setLayout((l) => splitLeaf(l, leafId, dir, 'new', before))
+    const items = [
+      { header: full ? 'New chat split (4 panes is the most)' : 'New chat split' },
+      { label: 'To the left', icon: <ArrowLeft size={14} />, disabled: full, onSelect: split('row', true) },
+      { label: 'To the right', icon: <ArrowRight size={14} />, disabled: full, onSelect: split('row', false) },
+      { label: 'Above', icon: <ArrowUp size={14} />, disabled: full, onSelect: split('col', true) },
+      { label: 'Below', icon: <ArrowDown size={14} />, disabled: full, onSelect: split('col', false) },
+    ]
+    const title = chats[v]?.title
+    if (isChatView(v) && title) {
+      items.push(
+        { divider: true },
+        { label: 'Archive chat', icon: <Archive size={14} />, onSelect: () => archiveFrom(leaf, v) },
+        {
+          label: 'Copy chat title',
+          icon: <Copy size={14} />,
+          onSelect: () => navigator.clipboard?.writeText(title).catch(() => {}),
+        },
+      )
+    }
+    if (leaf.view !== null) {
+      items.push(
+        { divider: true },
+        { label: 'Close pane', icon: <X size={14} />, onSelect: () => setLayout((l) => closeLeaf(l, leafId)) },
+      )
+    }
+    return items
   }
 
   // The sidebar's + : New chat, with the Add project flow engaged.
@@ -381,7 +440,7 @@ function Shell() {
             onSplit={openBeside}
             onAddProject={addProject}
           />
-          <main className="main">
+          <main className="main" onContextMenu={onMainContextMenu}>
             <CloudNotices />
             {paneCount(layout) > 1 ? (
               <SplitArea
@@ -394,6 +453,14 @@ function Shell() {
               primaryContent
             )}
           </main>
+          {paneMenu && (
+            <ContextMenu
+              x={paneMenu.x}
+              y={paneMenu.y}
+              items={paneMenuItems(paneMenu.leafId)}
+              onClose={() => setPaneMenu(null)}
+            />
+          )}
         </div>
       )}
     </>

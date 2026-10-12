@@ -61,6 +61,7 @@ export default function SplitArea({ layout, setLayout, renderPane, labelFor }) {
       return (
         <section
           className={`split-pane${focused ? ' focused' : ''}`}
+          data-leaf-id={node.id}
           onPointerDownCapture={() => setLayout((l) => focusLeaf(l, node.id))}
           aria-label={labelFor(node)}
         >

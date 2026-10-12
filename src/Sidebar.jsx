@@ -1,8 +1,14 @@
 import { useMemo, useState } from 'react'
 import {
   Archive,
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
   CaretDown,
+  ChatCircle,
   Cloud,
+  Copy,
   Desktop,
   GearSix,
   House,
@@ -20,12 +26,14 @@ import { activeSessions } from './archive.js'
 import { deviceName, sessionsForMode } from './cloud.js'
 import { isMobile } from './platform.js'
 import { HarnessMark } from './brand-marks.jsx'
+import ContextMenu from './ContextMenu.jsx'
 import './sidebar.css'
 
 export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit, onAddProject }) {
   const { connection, sessions, chats, devices, thisDevice, projects, removeProject, archived, setChatArchived } = useConsole()
   const [query, setQuery] = useState('')
   const [collapsed, setCollapsed] = useState({})
+  const [menu, setMenu] = useState(null)
 
   // Local: everything that runs on this computer. Cloud: every synced chat,
   // named by the device it runs on when that isn't this one.
@@ -68,8 +76,42 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
     if (id === active) onSelect('new')
   }
 
+  // Right-click on a chat: the same actions as the hover buttons, plus the
+  // split directions.
+  const menuItems = (row) => {
+    const split = (dir, before) => () => onSplit(row.id, dir, before)
+    const canSplit = onSplit && !isMobile
+    return [
+      { label: 'Open', icon: <ChatCircle size={14} />, onSelect: () => onSelect(row.id) },
+      ...(canSplit
+        ? [
+            { divider: true },
+            { header: 'Open in a new split' },
+            { label: 'To the left', icon: <ArrowLeft size={14} />, onSelect: split('row', true) },
+            { label: 'To the right', icon: <ArrowRight size={14} />, onSelect: split('row', false) },
+            { label: 'Above', icon: <ArrowUp size={14} />, onSelect: split('col', true) },
+            { label: 'Below', icon: <ArrowDown size={14} />, onSelect: split('col', false) },
+          ]
+        : []),
+      { divider: true },
+      { label: 'Archive', icon: <Archive size={14} />, onSelect: () => archive(row.id) },
+      {
+        label: 'Copy title',
+        icon: <Copy size={14} />,
+        onSelect: () => navigator.clipboard?.writeText(row.title).catch(() => {}),
+      },
+    ]
+  }
+
   const chatRow = (row) => (
-    <div key={row.id} className="chat-item">
+    <div
+      key={row.id}
+      className="chat-item"
+      onContextMenu={(e) => {
+        e.preventDefault()
+        setMenu({ x: e.clientX, y: e.clientY, row })
+      }}
+    >
       <button
         className={`chat-row${row.id === active ? ' active' : ''}`}
         data-status={row.status}
@@ -273,6 +315,9 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
           Settings
         </button>
       </footer>
+      {menu && (
+        <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.row)} onClose={() => setMenu(null)} />
+      )}
     </aside>
   )
 }

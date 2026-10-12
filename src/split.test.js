@@ -40,6 +40,15 @@ test('repeated same-direction splits stay one flat row and halve the split pane'
   assert.deepEqual(l.root.sizes, [0.25, 0.25, 0.5])
 })
 
+test('splitting before opens to the left or above', () => {
+  let l = splitLeaf(newLayout(), 'p1', 'row', 'new', true)
+  assert.deepEqual(ids(l), ['p2', 'p1'])
+  assert.equal(l.focus, 'p2')
+  l = splitLeaf(l, 'p1', 'row', 'new', true)
+  assert.deepEqual(ids(l), ['p2', 'p3', 'p1'])
+  assert.deepEqual(l.root.sizes, [0.5, 0.25, 0.25])
+})
+
 test('a cross-direction split nests', () => {
   let l = splitLeaf(newLayout(), 'p1', 'row')
   l = splitLeaf(l, 'p2', 'col')

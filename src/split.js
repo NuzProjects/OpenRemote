@@ -37,17 +37,18 @@ function mapNode(node, fn) {
 
 /**
  * Split a pane: the new pane opens beside it ('row') or below it ('col')
- * showing `view`, and takes focus. A pane already inside a split of the
- * same direction just gains a sibling, so repeated splits stay one flat
- * row instead of nesting. At MAX_PANES nothing happens.
+ * showing `view`, and takes focus. With `before` it opens on the other
+ * side - to the left or above. A pane already inside a split of the same
+ * direction just gains a sibling, so repeated splits stay one flat row
+ * instead of nesting. At MAX_PANES nothing happens.
  */
-export function splitLeaf(layout, leafId, dir, view = 'new') {
+export function splitLeaf(layout, leafId, dir, view = 'new', before = false) {
   if (paneCount(layout) >= MAX_PANES || !leafById(layout, leafId)) return layout
   const seq = layout.seq + 1
   const fresh = { type: 'leaf', id: `p${seq}`, view }
   const root = mapNode(layout.root, (node) => {
     if (node.type === 'leaf' && node.id === leafId) {
-      return { type: 'split', id: `s${seq}`, dir, children: [node, fresh], sizes: [0.5, 0.5] }
+      return { type: 'split', id: `s${seq}`, dir, children: before ? [fresh, node] : [node, fresh], sizes: [0.5, 0.5] }
     }
     if (node.type === 'split' && node.dir === dir) {
       const at = node.children.findIndex((c) => c.type === 'leaf' && c.id === leafId)
@@ -56,7 +57,7 @@ export function splitLeaf(layout, leafId, dir, view = 'new') {
       const half = node.sizes[at] / 2
       const children = [...node.children]
       const sizes = [...node.sizes]
-      children.splice(at + 1, 0, fresh)
+      children.splice(before ? at : at + 1, 0, fresh)
       sizes.splice(at, 1, half, half)
       return { ...node, children, sizes }
     }

@@ -1,0 +1,44 @@
+.ctx-menu {
+  width: 224px;
+  max-height: none;
+  outline: none;
+}
+
+.ctx-menu .nc-item:disabled {
+  opacity: 0.4;
+}
+
+.ctx-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 14px;
+  color: var(--text-3);
+}
+
+.nc-item.cursor .ctx-icon {
+  color: var(--text-2);
+}
+
+.ctx-hint {
+  margin-left: auto;
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-weight: 400;
+}
+
+.ctx-sep {
+  height: 1px;
+  margin: 5px 6px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ctx-menu {
+    animation: none;
+  }
+}
+
+html[data-reduce-motion] .ctx-menu {
+  animation: none;
+}
