@@ -35,15 +35,31 @@ jobs:
           workspaces: |
             daemon
             src-tauri
+      # A re-pushed tag whose release already carries the desktop bundles
+      # skips the rebuild; the bundles are already there.
+      - name: a rebuild, or a re-run
+        id: build
+        run: |
+          have=$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length' 2>/dev/null || echo 0)
+          if [ "$have" -ge 2 ]; then
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
       - run: npm ci
+        if: steps.build.outputs.skip != '1'
       - run: OR_RELEASE=1 node scripts/sync-daemon.mjs
+        if: steps.build.outputs.skip != '1'
       - run: npx tauri build
+        if: steps.build.outputs.skip != '1'
       # Tauri embeds the version in the artifact names
       # (OpenRemote_0.1.0_x64_en-US.msi, OpenRemote_0.1.0_x64-setup.exe),
       # so the globs stay version-proof.
       # Create on the first run; a tag that already has a release (a
-      # re-pushed tag) uploads over the existing assets instead.
-      - run: |
+      # re-pushed tag) uploads over the existing assets instead. A skipped
+      # rebuild has nothing new to upload.
+      - if: steps.build.outputs.skip != '1'
+        run: |
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" --clobber \
               src-tauri/target/release/bundle/msi/*.msi \
@@ -166,11 +182,25 @@ jobs:
           echo "NDK_HOME=$NDK" >> "$GITHUB_ENV"
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "sdk.dir=$ANDROID_HOME" > src-tauri/gen/android/local.properties
+      # A re-pushed tag whose release already carries the APK skips the
+      # rebuild; the APK is already there.
+      - name: a rebuild, or a re-run
+        id: build
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' 2>/dev/null \
+            | grep -q 'universal.apk'; then
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
       - run: npm ci
+        if: steps.build.outputs.skip != '1'
       - run: node scripts/sync-daemon.mjs
+        if: steps.build.outputs.skip != '1'
       # keystore.properties names the key for the gradle build
       # (gitignored); the store path is relative to the app module.
       - name: stage the release signing key
+        if: steps.build.outputs.skip != '1'
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -179,11 +209,13 @@ jobs:
           printf '%s' "$KEYSTORE_BASE64" | base64 --decode > src-tauri/gen/android/app/openremote-release.keystore.p12
           printf 'storeFile=openremote-release.keystore.p12\npassword=%s\nkeyAlias=%s\n' "$KEYSTORE_PASSWORD" "$KEYSTORE_ALIAS" > src-tauri/gen/android/keystore.properties
       - run: npx tauri android build --apk
+        if: steps.build.outputs.skip != '1'
       # The signature is part of the release contract: the job fails if
       # the APK does not verify, and the log carries the signer cert.
       # AGP signs in the assemble when the release signing config is
       # wired; the -unsigned sibling is the intermediate.
       - name: verify the signature
+        if: steps.build.outputs.skip != '1'
         run: |
           set -euo pipefail
           APK="$(find src-tauri/gen/android/app/build/outputs/apk/universal/release -name 'app-universal-*.apk' ! -name '*unsigned*' -printf '%T@ %p\n' | sort -n | tail -n 1 | cut -d' ' -f2-)"
@@ -193,5 +225,6 @@ jobs:
           "$APKSIGNER" verify --verbose --print-certs "$APK" | head -n 12
           cp "$APK" "OpenRemote_${GITHUB_REF_NAME#v}_universal.apk"
       - run: gh release upload "$GITHUB_REF_NAME" "OpenRemote_${GITHUB_REF_NAME#v}_universal.apk" --clobber
+        if: steps.build.outputs.skip != '1'
         env:
           GH_TOKEN: ${{ github.token }}
