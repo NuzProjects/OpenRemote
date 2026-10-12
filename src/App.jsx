@@ -240,7 +240,7 @@ function Shell() {
           <main className="main">
             <CloudNotices />
             {view === 'settings' ? (
-              <SettingsView onReplay={replayOnboarding} />
+              <SettingsView onReplay={replayOnboarding} onOpenChat={openSession} />
             ) : mode === 'cloud' && needsSignIn(cloud) ? (
               <CloudMode onBackToLocal={isMobile ? null : () => switchMode('local')} />
             ) : (

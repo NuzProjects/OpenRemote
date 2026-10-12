@@ -678,3 +678,48 @@ button:focus-visible {
 .nav-tile.active .nav-tile-icon {
   color: var(--text-1);
 }
+
+/* a chat row plus its archive control: the control sits over the status
+   dot while the row is hovered or focused, so the column never shifts */
+.chat-item {
+  position: relative;
+}
+
+.chat-archive {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 5px;
+  background: var(--bg-active);
+  color: var(--text-2);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%);
+  cursor: pointer;
+  transition: opacity 0.12s ease;
+}
+
+.chat-item:hover .chat-archive,
+.chat-item:focus-within .chat-archive {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.chat-archive:hover {
+  color: var(--text-1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-archive {
+    transition: none;
+  }
+}
+
+html[data-reduce-motion] .chat-archive {
+  transition: none;
+}

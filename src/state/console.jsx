@@ -6,6 +6,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { DaemonApi, clearConnection, loadConnection, saveConnection } from '../api/daemon.js'
 import { chatFromSession, foldEvent } from './reducer.js'
 import { isMobile, openExternal } from '../platform.js'
+import { loadArchived, saveArchived, withArchived } from '../archive.js'
 
 const ConsoleContext = createContext(null)
 
@@ -36,6 +37,7 @@ export function ConsoleProvider({ children }) {
   const [devices, setDevices] = useState([])
   const [capabilitiesByDevice, setCapabilitiesByDevice] = useState({})
   const [openChatId, setOpenChatId] = useState(null)
+  const [archived, setArchived] = useState(loadArchived)
   const stopEventsRef = useRef(null)
   const cursorRef = useRef(null)
   const openChatRef = useRef(null)
@@ -450,10 +452,21 @@ export function ConsoleProvider({ children }) {
     [api],
   )
 
+  // Archiving is console-side: the chat leaves the sidebar, its transcript
+  // and its other devices are untouched.
+  const setChatArchived = useCallback((id, value) => {
+    setArchived((current) => {
+      const next = withArchived(current, id, value)
+      saveArchived(next)
+      return next
+    })
+  }, [])
+
   // Deleting a synced chat removes it from every device.
   const deleteChat = useCallback(
     async (id) => {
       await api.deleteSession(id)
+      setChatArchived(id, false)
       setSessions((current) => current.filter((s) => s.id !== id))
       setChats((current) => {
         const next = { ...current }
@@ -461,7 +474,7 @@ export function ConsoleProvider({ children }) {
         return next
       })
     },
-    [api],
+    [api, setChatArchived],
   )
 
   const sendPrompt = useCallback(
@@ -763,6 +776,8 @@ export function ConsoleProvider({ children }) {
       removeDevice,
       createEnrollment,
       deleteChat,
+      archived,
+      setChatArchived,
       syncChat,
       sendPrompt,
       updateChatSettings,
@@ -817,6 +832,8 @@ export function ConsoleProvider({ children }) {
       removeDevice,
       createEnrollment,
       deleteChat,
+      archived,
+      setChatArchived,
       syncChat,
       sendPrompt,
       updateChatSettings,

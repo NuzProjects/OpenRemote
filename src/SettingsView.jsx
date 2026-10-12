@@ -5,6 +5,7 @@ import PickerMenu from './PickerMenu.jsx'
 import { useConsole } from './state/console.jsx'
 import { signedIn } from './cloud.js'
 import { isMobile } from './platform.js'
+import { archivedSessions } from './archive.js'
 import { harnessName } from './harness-names.js'
 import { SIGNIN_HARNESSES } from './harness-manager.js'
 import { loadDefaults, saveDefaults } from './defaults.js'
@@ -34,6 +35,7 @@ const SECTIONS = [
   { id: 'cloud', label: 'Cloud' },
   { id: 'daemon', label: 'Daemon' },
   { id: 'harnesses', label: 'Harnesses' },
+  { id: 'archived', label: 'Archived chats' },
   { id: 'this-install', label: 'This install' },
 ]
 
@@ -41,7 +43,7 @@ const SECTIONS = [
 // start with the system: its settings are how it looks and its account.
 const PHONE_SECTIONS = new Set(['appearance', 'cloud', 'this-install'])
 
-export default function SettingsView({ onReplay }) {
+export default function SettingsView({ onReplay, onOpenChat }) {
   const {
     connection,
     capabilities,
@@ -52,7 +54,11 @@ export default function SettingsView({ onReplay }) {
     signOutCloud,
     projects: projectsList,
     removeProject,
+    chats,
+    archived,
+    setChatArchived,
   } = useConsole()
+  const archivedRows = archivedSessions(sessions, archived)
   const [confirmSignOut, setConfirmSignOut] = useState(false)
   const inCloud = signedIn(cloud)
   const harnessList = capabilities?.harnesses ?? []
@@ -595,6 +601,33 @@ export default function SettingsView({ onReplay }) {
       </div>
       </>
       )}
+
+      <h2 className="pn-section" id="stg-archived">Archived chats</h2>
+      <div className="pn-list pn-list--tight">
+        {archivedRows.length === 0 ? (
+          <div className="pn-row">
+            <div>
+              <div className="pn-name">Nothing archived</div>
+              <div className="pn-detail">Archive a chat from the sidebar to tuck it away here.</div>
+            </div>
+          </div>
+        ) : (
+          archivedRows.map((s) => (
+            <div className="pn-row" key={s.id}>
+              <div>
+                <div className="pn-name">{chats[s.id]?.title ?? s.title ?? 'A new task'}</div>
+                <div className="pn-detail">
+                  {harnessName(s.harness)}
+                  {s.workspace ? ` · ${s.workspace}` : ''}
+                </div>
+              </div>
+              <button type="button" className="pn-btn" onClick={() => onOpenChat(s.id)}>Open</button>
+              <button type="button" className="pn-btn" onClick={() => setChatArchived(s.id, false)}>Restore</button>
+            </div>
+          ))
+        )}
+        <div className="pn-detail">Archived chats are hidden on this computer only. They keep running and syncing as usual.</div>
+      </div>
 
       <h2 className="pn-section" id="stg-this-install">This install</h2>
       <div className="pn-list pn-list--tight">
