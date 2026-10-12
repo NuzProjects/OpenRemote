@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import AboutModal from './AboutModal.jsx'
+import DeleteChatModal from './DeleteChatModal.jsx'
 import SignInModal from './SignInModal.jsx'
 import PickerMenu from './PickerMenu.jsx'
 import { useConsole } from './state/console.jsx'
@@ -57,7 +58,9 @@ export default function SettingsView({ onReplay, onOpenChat }) {
     chats,
     archived,
     setChatArchived,
+    deleteChat,
   } = useConsole()
+  const [deleting, setDeleting] = useState(null)
   const archivedRows = archivedSessions(sessions, archived)
   const [confirmSignOut, setConfirmSignOut] = useState(false)
   const inCloud = signedIn(cloud)
@@ -623,10 +626,20 @@ export default function SettingsView({ onReplay, onOpenChat }) {
               </div>
               <button type="button" className="pn-btn" onClick={() => onOpenChat(s.id)}>Open</button>
               <button type="button" className="pn-btn" onClick={() => setChatArchived(s.id, false)}>Restore</button>
+              {s.executor && (
+                <button
+                  type="button"
+                  className="pn-btn pn-btn--danger"
+                  title="Delete this chat from every device"
+                  onClick={() => setDeleting(s)}
+                >
+                  Delete
+                </button>
+              )}
             </div>
           ))
         )}
-        <div className="pn-detail">Archived chats are hidden on this computer only. They keep running and syncing as usual.</div>
+        <div className="pn-detail">Archived chats are hidden on this computer only. They keep running and syncing as usual. Delete removes a synced chat from every device; a private chat can't be deleted.</div>
       </div>
 
       <h2 className="pn-section" id="stg-this-install">This install</h2>
@@ -650,6 +663,13 @@ export default function SettingsView({ onReplay, onOpenChat }) {
       </div>
 
       </div>
+      {deleting && (
+        <DeleteChatModal
+          title={chats[deleting.id]?.title ?? deleting.title ?? 'This chat'}
+          onClose={() => setDeleting(null)}
+          onDelete={() => deleteChat(deleting.id)}
+        />
+      )}
       {about && <AboutModal onClose={() => setAbout(false)} daemonVersion={capabilities?.daemon ?? null} />}
       {signInFor && <SignInModal harnessId={signInFor} onDone={() => setSignInFor(null)} />}
     </div>
