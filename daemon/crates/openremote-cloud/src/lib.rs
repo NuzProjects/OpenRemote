@@ -56,6 +56,8 @@ pub enum CloudError {
     AlreadyEnrolled,
     #[error("sign in to OpenRemote Cloud first")]
     SignedOut,
+    #[error("this computer's Cloud identity changed while joining - try again")]
+    IdentityChanged,
     #[error(transparent)]
     OAuth(#[from] oauth::OAuthError),
     #[error(transparent)]
@@ -333,8 +335,12 @@ impl Cloud {
         if let Some(identity) = self.inner().identity.clone() {
             return Ok(identity);
         }
-        let identity = Identity::generate();
-        self.files.save_identity(&identity)?;
+        // The mint is exclusive across processes: an enroll or agent that
+        // started beside this one may have minted first, and that identity
+        // is the one this device must join with. Two identities on one
+        // machine never pair with one credential, and every Noise
+        // handshake after that fails with nothing to say why.
+        let identity = self.files.mint_identity()?;
         self.inner().identity = Some(identity.clone());
         Ok(identity)
     }
@@ -344,21 +350,53 @@ impl Cloud {
         if self.enrolled() {
             return Err(CloudError::AlreadyEnrolled);
         }
-        let identity = self.ensure_identity()?;
-        let id = identity.device_id.to_string();
-        let registered = self
-            .registry
-            .redeem(
-                code,
-                &DeviceInfo {
-                    id: &id,
-                    name: &self.config.device_name,
-                    platform: &self.config.platform,
-                    noise_pubkey: &identity.noise_public,
-                    app_version: env!("CARGO_PKG_VERSION"),
-                },
-            )
-            .await?;
+        let mut identity = self.ensure_identity()?;
+        let redeem = |identity: &Identity| {
+            let id = identity.device_id.to_string();
+            let key = identity.noise_public.clone();
+            let name = self.config.device_name.clone();
+            async move {
+                self.registry
+                    .redeem(
+                        code,
+                        &DeviceInfo {
+                            id: &id,
+                            name: &name,
+                            platform: &self.config.platform,
+                            noise_pubkey: &key,
+                            app_version: env!("CARGO_PKG_VERSION"),
+                        },
+                    )
+                    .await
+            }
+        };
+        let registered = match redeem(&identity).await {
+            // The identity's row is dead on the account's side (the device
+            // was removed, or an earlier attempt registered the id and
+            // never saved its credential). Join as a new device, the same
+            // recovery the desktop sign-in makes; without it every future
+            // enroll collides with the dead row and the machine stays
+            // un-enrollable until identity.json is deleted by hand.
+            Err(RegistryError::Revoked) | Err(RegistryError::Refused { status: 409, .. }) => {
+                identity = Identity::generate();
+                self.files.save_identity(&identity)?;
+                self.inner().identity = Some(identity.clone());
+                redeem(&identity).await?
+            }
+            other => other?,
+        };
+        // The redeem flew without the identity lock: another process may
+        // have replaced the identity file while it was in flight. Saving a
+        // credential for one id over another id's keys would pair the
+        // files badly and fail every Noise handshake from now on, so the
+        // credential is dropped and the enroll starts over instead.
+        if self
+            .files
+            .identity()
+            .is_none_or(|kept| kept.device_id != identity.device_id)
+        {
+            return Err(CloudError::IdentityChanged);
+        }
         let credentials = Credentials {
             device_credential: Some(registered.credential),
             account: Some(registered.account.clone()),
@@ -424,6 +462,14 @@ impl Cloud {
         )
         .await?;
         let mut inner = self.inner();
+        // A signout or leave finished while the refresh was in flight and
+        // cleared or replaced these credentials. Writing the minted tokens
+        // now would put a live, brand-new refresh token into the signed-out
+        // credentials on disk, so the mint is dropped: the caller sees the
+        // sign-out, not a token nobody will ever revoke.
+        if inner.credentials.refresh_token.as_deref() != Some(refresh.as_str()) {
+            return Err(CloudError::SignedOut);
+        }
         inner.credentials.access_token = Some(tokens.access_token.clone());
         inner.credentials.access_expires_at = now_s() + tokens.expires_in;
         if tokens.refresh_token.is_some() {
@@ -592,5 +638,225 @@ impl Cloud {
         let mut inner = self.inner();
         inner.phase = phase;
         inner.error = error;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+
+    /// A backend whose interesting requests (the token refresh, the code
+    /// redeem) are held until the test lets them go, after first saying
+    /// they arrived. The hold is what makes the races under test
+    /// deterministic: the test changes Cloud's state while the request is
+    /// in flight, which is exactly the moment the races bite.
+    async fn gated_backend() -> (String, Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>) {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let arrived = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        tokio::spawn({
+            let (arrived, release) = (Arc::clone(&arrived), Arc::clone(&release));
+            async move {
+                loop {
+                    let Ok((stream, _)) = listener.accept().await else {
+                        break;
+                    };
+                    let (arrived, release) = (Arc::clone(&arrived), Arc::clone(&release));
+                    tokio::spawn(async move {
+                        serve(stream, arrived, release).await;
+                    });
+                }
+            }
+        });
+        (base, arrived, release)
+    }
+
+    /// One request: the head and body are read whole before anything is
+    /// answered (closing with unread request bytes can reset the
+    /// connection), then the OAuth revocation answers at once and the
+    /// gated endpoints wait for the test.
+    async fn serve(
+        stream: tokio::net::TcpStream,
+        arrived: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+    ) {
+        // Buffered for read_until; the raw stream underneath still writes.
+        let mut stream = tokio::io::BufReader::new(stream);
+        let mut head = Vec::new();
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            if stream.read_until(b'\n', &mut line).await.unwrap_or(0) == 0 {
+                return;
+            }
+            if matches!(line.as_slice(), b"\r\n" | b"\n") {
+                break;
+            }
+            head.extend_from_slice(&line);
+        }
+        let head = String::from_utf8_lossy(&head).into_owned();
+        let mut body = vec![0u8; content_length(&head)];
+        if stream.read_exact(&mut body).await.is_err() {
+            return;
+        }
+        let path = head
+            .lines()
+            .next()
+            .and_then(|l| l.split_whitespace().nth(1))
+            .unwrap_or_default()
+            .to_string();
+        if path.ends_with("/oauth/revoke") {
+            reply(stream.get_mut(), br#"{"revoked":true}"#).await;
+            return;
+        }
+        arrived.notify_one();
+        release.notified().await;
+        if path.ends_with("/oauth/token") {
+            reply(stream.get_mut(), br#"{"access_token":"at-new","refresh_token":"rt-new","token_type":"Bearer","expires_in":3600}"#)
+                .await;
+        } else {
+            // The registry's redeem: a join that succeeded server-side.
+            reply(stream.get_mut(), br#"{"device":{"id":"whatever","kind":"machine"},"credential":"a credential","account":{"id":"acc-1","email":"owner@example.test","name":"owner"}}"#)
+                .await;
+        }
+    }
+
+    async fn reply(stream: &mut tokio::net::TcpStream, body: &[u8]) {
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        let _ = stream.write_all(head.as_bytes()).await;
+        let _ = stream.write_all(body).await;
+    }
+
+    fn content_length(head: &str) -> usize {
+        for line in head.lines() {
+            let Some((name, value)) = line.split_once(':') else {
+                continue;
+            };
+            if name.trim().eq_ignore_ascii_case("content-length") {
+                if let Ok(len) = value.trim().parse() {
+                    return len;
+                }
+            }
+        }
+        0
+    }
+
+    fn test_config(base: &str) -> CloudConfig {
+        CloudConfig {
+            api_base: format!("{base}/v1/openremote"),
+            auth_issuer: format!("{base}/v1/auth"),
+            client_id: crate::config::CLIENT_ID.into(),
+            device_name: "this-box".into(),
+            platform: std::env::consts::OS.into(),
+            redirect_uri: None,
+        }
+    }
+
+    fn scratch_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("or-cloud-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Credentials whose access token is spent, so the next account
+    /// action must refresh - and the refresh is what the sign-out races.
+    fn seed_refresh(dir: &std::path::Path) {
+        Files::new(dir)
+            .save_credentials(&Credentials {
+                kind: "desktop".into(),
+                access_token: Some("a spent access token".into()),
+                access_expires_at: 0,
+                refresh_token: Some("the refresh token in play".into()),
+                ..Credentials::default()
+            })
+            .unwrap();
+    }
+
+    /// A sign-out that finishes while a refresh is in flight must not let
+    /// the minted tokens reach the cleared credentials: the device shows
+    /// signed out, and no live, freshly-minted refresh token survives on
+    /// disk waiting for a future sign-in to overwrite it.
+    #[tokio::test]
+    async fn a_refresh_that_outlives_signout_writes_nothing_back() {
+        let (base, arrived, release) = gated_backend().await;
+        let dir = scratch_dir();
+        seed_refresh(&dir);
+        let cloud = Cloud::open(test_config(&base), &dir);
+        let pending = {
+            let cloud = Arc::clone(&cloud);
+            tokio::spawn(async move { cloud.account_token().await })
+        };
+        arrived.notified().await; // the refresh is in flight
+        cloud.signout().await.unwrap(); // the user signs out mid-flight
+        release.notify_one(); // the minted tokens come back late
+        assert!(matches!(pending.await.unwrap(), Err(CloudError::SignedOut)));
+        let saved = Files::new(&dir).credentials();
+        assert!(saved.access_token.is_none(), "no minted token was written");
+        assert!(saved.refresh_token.is_none());
+        assert_eq!(cloud.phase(), Phase::SignedOut);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The same refresh undisturbed still lands: the write-back is gated
+    /// on the credentials, not on luck.
+    #[tokio::test]
+    async fn an_undisturbed_refresh_persists_its_tokens() {
+        let (base, arrived, release) = gated_backend().await;
+        let dir = scratch_dir();
+        seed_refresh(&dir);
+        let cloud = Cloud::open(test_config(&base), &dir);
+        let pending = {
+            let cloud = Arc::clone(&cloud);
+            tokio::spawn(async move { cloud.account_token().await })
+        };
+        arrived.notified().await;
+        release.notify_one();
+        let token = pending.await.unwrap().unwrap();
+        assert_eq!(token, "at-new");
+        let saved = Files::new(&dir).credentials();
+        assert_eq!(saved.access_token.as_deref(), Some("at-new"));
+        assert_eq!(saved.refresh_token.as_deref(), Some("rt-new"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A redeem that succeeds while another process replaces the identity
+    /// file must not save its credential: the id it registered and the id
+    /// on disk no longer match, and a mismatched pair fails every Noise
+    /// handshake from now on with nothing to say why.
+    #[tokio::test]
+    async fn an_enroll_whose_identity_changed_under_it_saves_nothing() {
+        let (base, arrived, release) = gated_backend().await;
+        let dir = scratch_dir();
+        let cloud = Cloud::open(test_config(&base), &dir);
+        let pending = {
+            let cloud = Arc::clone(&cloud);
+            tokio::spawn(async move { cloud.enroll("a fresh install code").await })
+        };
+        arrived.notified().await; // the redeem is in flight
+        let other = Identity::generate();
+        Files::new(&dir).save_identity(&other).unwrap(); // the other process's identity
+        release.notify_one(); // the redeem answers: joined, server-side
+        assert!(matches!(
+            pending.await.unwrap(),
+            Err(CloudError::IdentityChanged)
+        ));
+        let saved = Files::new(&dir).credentials();
+        assert!(
+            saved.device_credential.is_none(),
+            "no credential was paired with the wrong identity"
+        );
+        assert_eq!(
+            Files::new(&dir).identity().unwrap().device_id,
+            other.device_id,
+            "the identity on disk is left alone"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

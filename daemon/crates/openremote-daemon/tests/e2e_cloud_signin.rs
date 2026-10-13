@@ -213,6 +213,83 @@ async fn a_machine_enrolls_with_an_install_code() {
     }
 }
 
+/// This machine's device id as it sits in `cloud/identity.json`.
+fn disk_identity(data: &std::path::Path) -> String {
+    let raw = std::fs::read(data.join("cloud/identity.json")).unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+    value["device_id"].as_str().unwrap().to_string()
+}
+
+/// A machine the account removed joins again with a fresh code. Its old
+/// identity is a dead row on the server now: a redeem that just fails on
+/// the collision leaves the machine un-enrollable forever, so the enroll
+/// must join as a new device, the same recovery a desktop's sign-in makes.
+#[tokio::test]
+async fn a_removed_machine_enrolls_again_with_a_fresh_code() {
+    let cloud = FakeCloud::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().to_path_buf();
+
+    let code = cloud.enrollment_code("owner@example.test");
+    let (status, out) = tokio::task::spawn_blocking({
+        let (data, cloud, code) = (data.clone(), cloud.clone(), code);
+        move || run_binary(&data, &cloud, &["enroll", &code])
+    })
+    .await
+    .unwrap();
+    assert_eq!(status, 0, "{out}");
+    let first = cloud
+        .devices()
+        .into_iter()
+        .find(|d| d.name == "build-box")
+        .expect("registered the first time");
+    assert_eq!(
+        disk_identity(&data),
+        first.id,
+        "the identity on disk is the registered device"
+    );
+
+    // The account removes the machine (as a desktop would). Its credential
+    // dies with the removal; here unenroll clears it - a running daemon
+    // would learn of the removal and clear it - while the identity stays,
+    // pinning the dead row.
+    cloud.remove_device(&first.id);
+    let (status, out) = tokio::task::spawn_blocking({
+        let (data, cloud) = (data.clone(), cloud.clone());
+        move || run_binary(&data, &cloud, &["unenroll"])
+    })
+    .await
+    .unwrap();
+    assert_eq!(status, 0, "{out}");
+
+    let code = cloud.enrollment_code("owner@example.test");
+    let (status, out) = tokio::task::spawn_blocking({
+        let (data, cloud, code) = (data.clone(), cloud.clone(), code);
+        move || run_binary(&data, &cloud, &["enroll", &code])
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        status, 0,
+        "the machine is enrollable again after its removal: {out}"
+    );
+    let second = cloud
+        .devices()
+        .into_iter()
+        .find(|d| d.name == "build-box" && !d.revoked)
+        .expect("re-enrolled as a live device");
+    assert_ne!(second.id, first.id, "it joins as a new device");
+    assert_eq!(
+        (second.kind.as_str(), second.created_via),
+        ("machine", "enrollment")
+    );
+    assert_eq!(
+        disk_identity(&data),
+        second.id,
+        "the identity on disk followed the new device"
+    );
+}
+
 #[tokio::test]
 async fn a_desktop_mints_an_install_command_for_a_machine() {
     let cloud = FakeCloud::start().await;
