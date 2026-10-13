@@ -397,6 +397,21 @@ impl HarnessRegistry {
         &self.overrides
     }
 
+    /// Lazy eviction (harness audit F18): a spawn failed while the files
+    /// this registry resolved are gone - the harness was uninstalled or
+    /// moved under us since the probe. The entry keeps its slot and its
+    /// facts but stops being offered (no backend) until a re-probe; an
+    /// install or a sign-in already re-probes, so the harness comes back
+    /// the moment it is really there again.
+    pub fn mark_unavailable(&mut self, id: &str) {
+        for entry in &mut self.entries {
+            if entry.harness.id == id {
+                entry.harness.available = false;
+                entry.backend = None;
+            }
+        }
+    }
+
     /// Whether a Node.js new enough for pi is on this machine.
     pub fn node_ready(&self) -> bool {
         self.node_version

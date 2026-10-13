@@ -943,6 +943,14 @@ impl Store {
         self.persist()
     }
 
+    /// The session's next event seq - one past the last applied. A cheap
+    /// drain-progress signal: a caller watching a pump finish its backlog
+    /// can tell "still applying" from "nothing left" without reading the
+    /// whole log.
+    pub fn next_seq(&self, session_id: &SessionId) -> u64 {
+        self.state.next_seq.get(session_id).copied().unwrap_or(0)
+    }
+
     /// Hand out the session's next turn number (monotonic, per-session).
     pub fn bump_turn(&mut self, session_id: &SessionId) -> Result<u64, StoreError> {
         let session = self
