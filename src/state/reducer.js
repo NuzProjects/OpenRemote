@@ -97,6 +97,23 @@ export function mergeSessionIntoChat(existing, session) {
   }
 }
 
+/// The chats whose sessions the polled list no longer carries - a chat
+/// deleted on another device, whose pane and live stream would otherwise
+/// stay pointed at a session the daemon answers 404 for. A local delete
+/// already removed its own record, so this is the synced-delete path.
+/// Only ids a poll once carried count: a chat created between beats is
+/// live in the daemon but not yet in this list, and its record (from the
+/// create response, fresher than the poll) must survive the stale beat.
+export function vanishedChatIds(chats, sessions, polledIds) {
+  const live = new Set(sessions.map((s) => s.id))
+  const gone = []
+  for (const id of Object.keys(chats)) {
+    if (live.has(id) || !polledIds.has(id)) continue
+    gone.push(id)
+  }
+  return gone
+}
+
 /// Fold one event into the chat. Events arrive in seq order; the timeline
 /// preserves that order verbatim. `foldedSeq` advances with each fold -
 /// the seq the timeline has already accounted for, so a replay (a chat

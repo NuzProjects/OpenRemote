@@ -149,10 +149,14 @@ function Shell() {
     return () => window.removeEventListener('keydown', onKey)
   }, [onboarded])
 
-  // Every chat on screen streams live - the primary's and each pane's.
+  // Every chat on screen streams live - the primary's and each pane's -
+  // but only one that still exists. A chat deleted on another device
+  // loses its record on the poll beat that drops it, so it leaves the
+  // watched set here (its pane shows the fallback) and no stream keeps
+  // asking the daemon for a session it no longer has.
   const watchKey = [
-    ...(isChatView(view) ? [view] : []),
-    ...secondaryChatIds(layout, isChatView),
+    ...(isChatView(view) && chats[view] ? [view] : []),
+    ...secondaryChatIds(layout, isChatView).filter((id) => chats[id]),
   ].join(',')
   useEffect(() => {
     watchChats(watchKey ? watchKey.split(',') : [])

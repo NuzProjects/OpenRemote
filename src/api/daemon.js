@@ -55,6 +55,15 @@ export function parseSseLine(line) {
   return null
 }
 
+// Whether a stream close means the session itself is gone: the daemon
+// answered 404 ("no such session"), a chat deleted here or on another
+// device. No retry can outlive that - every other close (a dropped
+// connection, a wedged daemon, another HTTP error) deserves another
+// attempt.
+export function sessionGone(err) {
+  return err?.status === 404
+}
+
 export function loadConnection() {
   try {
     return { url: localStorage.getItem(URL_KEY), token: localStorage.getItem(TOKEN_KEY) }
@@ -450,8 +459,9 @@ export class DaemonApi {
 
   // The live event stream for one session. `onEvent` receives each parsed
   // event; the reader keeps going until the connection drops, then reports
-  // the last cursor through `onClose(cursor)` so the caller can resume with
-  // `after`. Returns a stop function.
+  // the last cursor through `onClose(cursor, err)` so the caller can resume
+  // with `after` - or stop retrying when `err` carries the daemon's own
+  // "no such session" (see sessionGone). Returns a stop function.
   events(id, { after = null, onEvent, onClose }) {
     const controller = new AbortController()
     const run = async () => {
@@ -468,7 +478,14 @@ export class DaemonApi {
           // (the stop handle and the poll decide when it ends).
           signal: controller.signal,
         })
-        if (!response.ok || !response.body) throw new Error(`SSE HTTP ${response.status}`)
+        if (!response.ok || !response.body) {
+          // The status rides the error (the same shape as call()): the
+          // close callback must be able to tell a dead session from a
+          // dead connection, or a deleted chat retries forever.
+          const error = new Error(`SSE HTTP ${response.status}`)
+          error.status = response.status
+          throw error
+        }
         const reader = response.body.getReader()
         const decoder = new TextDecoder()
         let buffer = ''
@@ -504,7 +521,10 @@ export class DaemonApi {
         }
         onClose?.(lastId)
       } catch (err) {
-        if (err?.name !== 'AbortError') onClose?.(lastId ?? cursor)
+        // An aborted stop is not a close. Anything else reports the last
+        // cursor, and the error itself rides along as the second argument
+        // so the caller can stop retrying when the session is gone.
+        if (err?.name !== 'AbortError') onClose?.(lastId ?? cursor, err)
       }
     }
     run()

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { chatFromSession, chatStatus, foldEvent, mergeSessionIntoChat, railItems, titleFrom, workspaceName } from './reducer.js'
+import { chatFromSession, chatStatus, foldEvent, mergeSessionIntoChat, railItems, titleFrom, vanishedChatIds, workspaceName } from './reducer.js'
 
 const session = (over = {}) => ({
   id: 's1',
@@ -303,6 +303,29 @@ test('a poll merge preserves the folded transcript, its cursor, and the running 
   const bare = mergeSessionIntoChat(chatFromSession(session()), session())
   assert.equal(bare.costUsd, 0)
   assert.equal(bare.thinkingTokens, 0)
+})
+
+test('vanished ids: only a chat a poll once carried and then lost counts as gone', () => {
+  const chats = {
+    s1: chatFromSession(session({ id: 's1' })),
+    s2: chatFromSession(session({ id: 's2' })),
+    // Fresh from the create response - the next poll beat has not listed
+    // it yet. Its record is newer than the list; it is not gone.
+    s3: chatFromSession(session({ id: 's3' })),
+  }
+  // Both s1 and s2 once appeared in a beat; this beat dropped s2 (a
+  // delete from another device).
+  const polled = new Set(['s1', 's2'])
+  const beat = [session({ id: 's1' })]
+  assert.deepEqual(vanishedChatIds(chats, beat, polled), ['s2'])
+  // The next beat re-adds nothing: gone stays gone (the record was
+  // pruned), and the fresh chat survives its first no-show because no
+  // beat ever carried it. Once its id lands in a beat, a later drop
+  // would count - the same synced-delete contract.
+  assert.deepEqual(vanishedChatIds({ s1: chats.s1, s3: chats.s3 }, beat, polled), [])
+  const beatWithFresh = [session({ id: 's1' }), session({ id: 's3' })]
+  const polledAfter = new Set(['s1', 's2', 's3'])
+  assert.deepEqual(vanishedChatIds({ s1: chats.s1, s3: chats.s3 }, beatWithFresh, polledAfter), [])
 })
 
 test('parallel same-name tools in one turn pair, out-of-order completion included', () => {

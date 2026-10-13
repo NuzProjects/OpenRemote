@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createServer } from 'node:net'
-import { DaemonApi, parseCursor, parseSseLine } from './daemon.js'
+import { DaemonApi, parseCursor, parseSseLine, sessionGone } from './daemon.js'
 
 // ---- the resume cursor ----
 
@@ -37,8 +37,10 @@ test('an id line carries the frame seq, a data line its event', () => {
 // ---- the SSE reader over a stubbed fetch ----
 
 // Drive `events()` with the daemon's SSE bytes as one finished response;
-// the returned promise settles when the reader reports its close.
-async function collect(frames, { after } = {}) {
+// the returned promise settles when the reader reports its close. A
+// numeric `fail` answers that HTTP status instead of streaming, so the
+// close path an error status takes is observable too.
+async function collect(frames, { after, fail } = {}) {
   const api = new DaemonApi('http://daemon', 'token')
   const seen = []
   const noted = []
@@ -47,6 +49,7 @@ async function collect(frames, { after } = {}) {
   const realError = console.error
   globalThis.fetch = async (requestUrl) => {
     url = requestUrl
+    if (fail != null) return new Response('no such session', { status: fail })
     const body = new ReadableStream({
       start(controller) {
         controller.enqueue(new TextEncoder().encode(frames))
@@ -61,10 +64,10 @@ async function collect(frames, { after } = {}) {
       api.events('s1', {
         after,
         onEvent: (event) => seen.push(event),
-        onClose: resolve,
+        onClose: (cursor, err) => resolve({ cursor, err }),
       })
     })
-    return { seen, noted, url, closedWith }
+    return { seen, noted, url, ...closedWith }
   } finally {
     globalThis.fetch = realFetch
     console.error = realError
@@ -72,34 +75,36 @@ async function collect(frames, { after } = {}) {
 }
 
 test('well-formed frames reach onEvent and the close reports the last seq', async () => {
-  const { seen, closedWith } = await collect(
+  const { seen, cursor, err } = await collect(
     'id: 1\ndata: {"seq":1,"type":"a"}\n\nid: 2\ndata: {"seq":2,"type":"b"}\n\n',
   )
   assert.deepEqual(seen, [
     { seq: 1, type: 'a' },
     { seq: 2, type: 'b' },
   ])
-  assert.equal(closedWith, 2)
+  assert.equal(cursor, 2)
+  // A clean end to the stream is not an error.
+  assert.equal(err, undefined)
 })
 
 test('a malformed frame is skipped, not fatal: reading continues past it', async () => {
-  const { seen, closedWith, noted } = await collect(
+  const { seen, cursor, noted } = await collect(
     'id: 1\ndata: {"seq":1,"type":"a"}\n\n' +
       'id: 2\ndata: {not json\n\n' +
       'id: 3\ndata: {"seq":3,"type":"c"}\n\n',
   )
   assert.deepEqual(seen.map((event) => event.type), ['a', 'c'])
-  assert.equal(closedWith, 3)
+  assert.equal(cursor, 3)
   assert.equal(noted.length, 1)
 })
 
 test('a malformed frame that ends the stream still advances the cursor past it', async () => {
-  const { seen, closedWith } = await collect(
+  const { seen, cursor } = await collect(
     'id: 1\ndata: {"seq":1,"type":"a"}\n\nid: 2\ndata: torn\n\n',
   )
   assert.deepEqual(seen.map((event) => event.type), ['a'])
   // Resuming from 2 starts after the bad frame, never inside it again.
-  assert.equal(closedWith, 2)
+  assert.equal(cursor, 2)
 })
 
 test('a run of malformed frames is noted on the first and again at the tenth', async () => {
@@ -118,6 +123,25 @@ test('a garbage stored cursor is a deliberate full replay: no after param', asyn
 test('a valid stored cursor rides the url', async () => {
   const { url } = await collect('id: 10\ndata: {"seq":10,"type":"a"}\n\n', { after: '9' })
   assert.ok(url.includes('after=9'))
+})
+
+// ---- a session that is no longer there ----
+
+test('a 404 close carries the status: the caller can tell a dead session from a dead connection', async () => {
+  const { cursor, err } = await collect('', { fail: 404 })
+  // No frame was ever read, so the resume cursor is the one asked for.
+  assert.equal(cursor, null)
+  assert.equal(err.status, 404)
+  assert.ok(sessionGone(err))
+})
+
+test('another HTTP error also rides the close, but is not a gone session', async () => {
+  const { err } = await collect('', { fail: 503 })
+  assert.equal(err.status, 503)
+  assert.ok(!sessionGone(err))
+  // A clean close (stream simply ended) and no error at all: retryable.
+  assert.ok(!sessionGone(undefined))
+  assert.ok(!sessionGone(new Error('network drop')))
 })
 
 // ---- a probe the daemon could not ask ----

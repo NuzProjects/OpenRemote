@@ -3,8 +3,8 @@
 // the open chat (resuming from its cursor across reconnects).
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { DaemonApi, clearConnection, loadConnection, saveConnection } from '../api/daemon.js'
-import { chatFromSession, foldEvent, mergeSessionIntoChat } from './reducer.js'
+import { DaemonApi, clearConnection, loadConnection, saveConnection, sessionGone } from '../api/daemon.js'
+import { chatFromSession, foldEvent, mergeSessionIntoChat, vanishedChatIds } from './reducer.js'
 import { isMobile, openExternal } from '../platform.js'
 import { loadArchived, saveArchived, withArchived } from '../archive.js'
 
@@ -42,6 +42,10 @@ export function ConsoleProvider({ children }) {
   const [archived, setArchived] = useState(loadArchived)
   const streamsRef = useRef(new Map())
   const chatsRef = useRef({})
+  // Ids a poll has carried at least once - what tells a chat gone from
+  // this beat (deleted elsewhere) from one not yet in any beat (created
+  // between polls, fresher than the list).
+  const polledIdsRef = useRef(new Set())
 
   const connect = useCallback((url, token) => {
     saveConnection(url, token)
@@ -224,8 +228,13 @@ export function ConsoleProvider({ children }) {
   // preserved-field contract is tested: event-folded facts the session
   // payload doesn't carry (the timeline, the context numbers, the
   // running cost and thinking-token totals, the decisions list) survive
-  // every beat - the stream owns them.
+  // every beat - the stream owns them. A record whose session left the
+  // list goes with it (vanishedChatIds): its pane falls back to "no
+  // longer in this workspace", its watch drops, and its stream stops
+  // asking for a session the daemon answers 404 for.
   useEffect(() => {
+    const polled = polledIdsRef.current
+    for (const session of sessions) polled.add(session.id)
     setChats((current) => {
       const next = { ...current }
       for (const session of sessions) {
@@ -233,6 +242,7 @@ export function ConsoleProvider({ children }) {
         if (!existing) continue
         next[session.id] = mergeSessionIntoChat(existing, session)
       }
+      for (const id of vanishedChatIds(next, sessions, polled)) delete next[id]
       return next
     })
   }, [sessions])
@@ -266,8 +276,13 @@ export function ConsoleProvider({ children }) {
         stream.stop = api.events(id, {
           after,
           onEvent: apply,
-          onClose: () => {
+          onClose: (_cursor, err) => {
             if (stream.cancelled) return
+            // A deleted session is terminal (the daemon answered "no
+            // such session"): without this check the pane kept dialing
+            // the dead id every 800ms forever. The pane lets go of the
+            // chat on its own once the polled session list drops it.
+            if (sessionGone(err)) return
             // The daemon replays anything missed from the cursor.
             stream.retry = setTimeout(() => {
               if (!stream.cancelled) follow(stream.cursor ?? chatsRef.current[id]?.foldedSeq ?? null)
