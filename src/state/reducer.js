@@ -74,6 +74,29 @@ export function chatFromSession(session) {
   return chat
 }
 
+/// Merge a polled session payload into an already-folded chat record.
+/// The session owns the identity facts (status, workspace, model); the
+/// folded transcript owns everything the payload doesn't carry. The
+/// preserved list is the contract: a poll beat must never reset what
+/// the stream folded - the timeline and its cursor, the pending
+/// decision, the context numbers, the decisions list, and the running
+/// cost and thinking-token totals (the session payload carries neither
+/// total, so nothing else can restore them).
+export function mergeSessionIntoChat(existing, session) {
+  const fresh = chatFromSession(session)
+  return {
+    ...fresh,
+    title: existing.title ?? fresh.title,
+    timeline: existing.timeline,
+    foldedSeq: existing.foldedSeq,
+    pendingDecisionId: existing.pendingDecisionId,
+    context: existing.context,
+    decisionsList: existing.decisionsList,
+    costUsd: existing.costUsd ?? 0,
+    thinkingTokens: existing.thinkingTokens ?? 0,
+  }
+}
+
 /// Fold one event into the chat. Events arrive in seq order; the timeline
 /// preserves that order verbatim. `foldedSeq` advances with each fold -
 /// the seq the timeline has already accounted for, so a replay (a chat
@@ -97,7 +120,12 @@ export function foldEvent(chat, event) {
     }
     case 'session.status_changed': {
       chat.status = chatStatus(payload.status)
-      chat.lastError = payload.reason ?? chat.lastError
+      // The reason latches on failure, but only until the session is
+      // healthy again: a non-failed status with no reason clears it, so
+      // a later failure that carries no reason of its own never
+      // resurfaces an old, unrelated failure's words.
+      if (payload.reason != null) chat.lastError = payload.reason
+      else if (payload.status !== 'failed') chat.lastError = null
       chat.running = ['starting', 'working', 'waiting'].includes(payload.status)
       break
     }
@@ -108,7 +136,11 @@ export function foldEvent(chat, event) {
       const session = payload.session
       chat.status = chatStatus(session.status)
       chat.running = ['starting', 'working', 'waiting'].includes(session.status)
-      chat.lastError = session.last_error ?? chat.lastError
+      // The same error latch as session.status_changed: set when the
+      // payload carries one, keep on a failure without one, clear when
+      // the session is healthy and reports no error.
+      if (session.last_error != null) chat.lastError = session.last_error
+      else if (session.status !== 'failed') chat.lastError = null
       if (session.model) chat.model = session.model
       if (session.effort) chat.effort = session.effort
       if (session.harness_session_ref) chat.resumable = true
@@ -157,6 +189,10 @@ export function foldEvent(chat, event) {
         kind: 'tool',
         id: `tool-${event.seq}`,
         name: payload.name,
+        // The turn the call belongs to - the wire carries it on both
+        // tool.started and tool.result, so results pair within the
+        // right turn instead of the nearest same-name tool anywhere.
+        turn: payload.turn,
         input: payload.input,
         state: 'ok',
         result: null,
@@ -169,8 +205,12 @@ export function foldEvent(chat, event) {
     }
     case 'usage.cost': {
       // The harness's own cost number for one turn, verbatim. The facts
-      // row shows the running total for the session.
-      chat.costUsd = (chat.costUsd ?? 0) + payload.cost_usd
+      // row shows the running total for the session. A payload that is
+      // not a finite number is skipped, not folded: 0 + undefined is
+      // NaN, and NaN would render as "$NaN" and survive every merge.
+      if (Number.isFinite(payload.cost_usd)) {
+        chat.costUsd = (chat.costUsd ?? 0) + payload.cost_usd
+      }
       break
     }
     case 'reasoning.added': {
@@ -206,8 +246,11 @@ export function foldEvent(chat, event) {
     }
     case 'thinking.tokens': {
       // The turn's thinking-token count, the harness's own number -
-      // the facts row shows the session's running total.
-      chat.thinkingTokens = (chat.thinkingTokens ?? 0) + payload.tokens
+      // the facts row shows the session's running total. Non-finite
+      // payloads are skipped for the same reason as the cost total.
+      if (Number.isFinite(payload.tokens)) {
+        chat.thinkingTokens = (chat.thinkingTokens ?? 0) + payload.tokens
+      }
       break
     }
     case 'note.added': {
@@ -220,10 +263,14 @@ export function foldEvent(chat, event) {
       break
     }
     case 'tool.result': {
-      // The result completes the most recent unanswered tool of that name.
+      // The result completes the most recent unanswered tool of that
+      // name in that turn - never one of another turn, so a result
+      // that lands after an interrupt cannot complete the next turn's
+      // call. Two parallel same-name calls within one turn still need
+      // a daemon-side call id to pair perfectly.
       for (let i = chat.timeline.length - 1; i >= 0; i--) {
         const item = chat.timeline[i]
-        if (item.kind === 'tool' && item.name === payload.name && item.result == null) {
+        if (item.kind === 'tool' && item.turn === payload.turn && item.name === payload.name && item.result == null) {
           item.result = typeof payload.output === 'string' ? payload.output : JSON.stringify(payload.output)
           item.state = payload.is_error ? 'failed' : 'ok'
           break

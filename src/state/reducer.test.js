@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { chatFromSession, chatStatus, foldEvent, railItems, titleFrom, workspaceName } from './reducer.js'
+import { chatFromSession, chatStatus, foldEvent, mergeSessionIntoChat, railItems, titleFrom, workspaceName } from './reducer.js'
 
 const session = (over = {}) => ({
   id: 's1',
@@ -263,4 +263,128 @@ test('reasoning streams and settles as its own block, thinking tokens sum', () =
   foldEvent(chat, event(6, { type: 'thinking.tokens', tokens: 42 }))
   foldEvent(chat, event(7, { type: 'thinking.tokens', tokens: 8 }))
   assert.equal(chat.thinkingTokens, 50)
+})
+
+test('a poll merge preserves the folded transcript, its cursor, and the running totals', () => {
+  let chat = chatFromSession(session({ status: 'working' }))
+  foldEvent(chat, event(2, { type: 'message.added', message: { id: 'm1', turn: 1, role: 'user', text: 'do the thing' } }))
+  foldEvent(chat, event(3, { type: 'usage.cost', cost_usd: 0.42 }))
+  foldEvent(chat, event(4, { type: 'thinking.tokens', tokens: 1234 }))
+  foldEvent(chat, event(5, { type: 'context.used', used: 1250, window: 200000 }))
+  foldEvent(chat, event(6, {
+    type: 'decision.requested',
+    decision: { id: 'd9', state: 'pending', kind: 'approval', harness_request: { tool_name: 'Bash' }, options: [] },
+  }))
+  // The stream's decisions list is console-side, never folded - set it
+  // the way the stream does before a beat lands.
+  chat.decisionsList = [{ id: 'd9', state: 'pending' }]
+
+  // The polled payload carries none of what the stream folded (the
+  // session payload has no cost or thinking numbers), so the merge
+  // must keep every folded fact or the next beat resets it.
+  const merged = mergeSessionIntoChat(chat, session({ status: 'idle' }))
+  assert.equal(merged.title, 'do the thing')
+  assert.equal(merged.foldedSeq, 6, 'the fold cursor survives the beat')
+  assert.equal(merged.timeline.length, 2, 'the transcript survives the beat')
+  assert.deepEqual(merged.context, { used: 1250, window: 200000 })
+  assert.equal(merged.costUsd, 0.42, 'the running cost survives the beat')
+  assert.equal(merged.thinkingTokens, 1234, 'the thinking-token total survives the beat')
+  assert.equal(merged.pendingDecisionId, 'd9')
+  assert.deepEqual(merged.decisionsList, [{ id: 'd9', state: 'pending' }])
+  // The identity facts still follow the polled session.
+  assert.equal(merged.status, 'idle')
+  assert.equal(merged.running, false)
+
+  // Events folded after the merge add to the preserved totals.
+  foldEvent(merged, event(7, { type: 'usage.cost', cost_usd: 0.08 }))
+  assert.equal(merged.costUsd, 0.5)
+
+  // A chat that never folded a total merges to zero, not undefined.
+  const bare = mergeSessionIntoChat(chatFromSession(session()), session())
+  assert.equal(bare.costUsd, 0)
+  assert.equal(bare.thinkingTokens, 0)
+})
+
+test('parallel same-name tools in one turn pair, out-of-order completion included', () => {
+  let chat = chatFromSession(session())
+  // Two Bash calls in one turn, started in order A then B.
+  foldEvent(chat, event(2, { type: 'tool.started', turn: 1, name: 'Bash', input: { command: 'npm test' } }))
+  foldEvent(chat, event(3, { type: 'tool.started', turn: 1, name: 'Bash', input: { command: 'ls -la' } }))
+  // B completes first - out of order. The most recent unanswered Bash of
+  // that turn is B, so B's result lands on B and A stays open.
+  foldEvent(chat, event(4, { type: 'tool.result', turn: 1, name: 'Bash', output: 'B ran', is_error: false }))
+  let rail = railItems(chat)
+  assert.equal(rail[0].result, null, 'A is still unanswered')
+  assert.equal(rail[1].result, 'B ran')
+  // A completes last and lands on the only unanswered Bash of that turn.
+  foldEvent(chat, event(5, { type: 'tool.result', turn: 1, name: 'Bash', output: 'A ran', is_error: false }))
+  rail = railItems(chat)
+  assert.equal(rail[0].result, 'A ran')
+  assert.equal(rail[1].result, 'B ran')
+})
+
+test('a late result never completes another turn\'s same-name tool', () => {
+  let chat = chatFromSession(session())
+  // Turn 1 is interrupted mid-tool: its Bash never got its result before
+  // turn 2 starts the same tool.
+  foldEvent(chat, event(2, { type: 'tool.started', turn: 1, name: 'Bash', input: { command: 'npm test' } }))
+  foldEvent(chat, event(3, { type: 'tool.started', turn: 2, name: 'Bash', input: { command: 'ls -la' } }))
+  // Turn 1's result arrives after turn 2's call started. Name-only
+  // pairing would fold it onto turn 2's tool; turn scoping keeps
+  // every result on its own turn's call.
+  foldEvent(chat, event(4, { type: 'tool.result', turn: 1, name: 'Bash', output: 'turn 1 output', is_error: false }))
+  let rail = railItems(chat)
+  assert.equal(rail[0].result, 'turn 1 output')
+  assert.equal(rail[1].result, null, 'turn 2\'s tool is untouched')
+  // Turn 2's own result then completes its own tool.
+  foldEvent(chat, event(5, { type: 'tool.result', turn: 2, name: 'Bash', output: 'turn 2 output', is_error: false }))
+  rail = railItems(chat)
+  assert.equal(rail[0].result, 'turn 1 output')
+  assert.equal(rail[1].result, 'turn 2 output')
+})
+
+test('a failed chat\'s reason clears when the session is healthy again', () => {
+  let chat = chatFromSession(session())
+  chat = foldEvent(chat, event(1, { type: 'session.status_changed', status: 'failed', reason: 'harness process exited' }))
+  assert.equal(chat.lastError, 'harness process exited')
+  // The resume is a non-failed status with no reason: the latch clears.
+  chat = foldEvent(chat, event(2, { type: 'session.status_changed', status: 'working', reason: null }))
+  assert.equal(chat.lastError, null)
+  // A later failure with no reason of its own shows nothing - not the
+  // day-old text of the failure before it.
+  chat = foldEvent(chat, event(3, { type: 'session.status_changed', status: 'failed', reason: null }))
+  assert.equal(chat.lastError, null)
+  // A failure that carries its own reason still latches.
+  chat = foldEvent(chat, event(4, { type: 'session.status_changed', status: 'failed', reason: 'exited again' }))
+  assert.equal(chat.lastError, 'exited again')
+})
+
+test('session.updated clears the error latch the same way', () => {
+  let chat = chatFromSession(session())
+  chat = foldEvent(chat, event(1, { type: 'session.status_changed', status: 'failed', reason: 'harness process exited' }))
+  // A settings update riding a healthy, error-less session clears the
+  // stale reason instead of keeping it forever.
+  chat = foldEvent(chat, event(2, { type: 'session.updated', session: session({ status: 'working' }) }))
+  assert.equal(chat.lastError, null)
+  // A failed session payload carries its error and latches it.
+  chat = foldEvent(chat, event(3, { type: 'session.updated', session: session({ status: 'failed', last_error: 'exited' }) }))
+  assert.equal(chat.lastError, 'exited')
+})
+
+test('non-finite cost and token payloads never poison the running totals', () => {
+  let chat = chatFromSession(session())
+  // A missing field, a string, NaN, Infinity - none of them fold;
+  // 0 + undefined would render "$NaN" and survive every merge.
+  foldEvent(chat, event(2, { type: 'usage.cost' }))
+  foldEvent(chat, event(3, { type: 'usage.cost', cost_usd: 'free' }))
+  foldEvent(chat, event(4, { type: 'usage.cost', cost_usd: NaN }))
+  foldEvent(chat, event(5, { type: 'thinking.tokens' }))
+  foldEvent(chat, event(6, { type: 'thinking.tokens', tokens: Infinity }))
+  assert.equal(chat.costUsd, 0)
+  assert.equal(chat.thinkingTokens, 0)
+  // A real number after the malformed ones still folds.
+  foldEvent(chat, event(7, { type: 'usage.cost', cost_usd: 0.42 }))
+  foldEvent(chat, event(8, { type: 'thinking.tokens', tokens: 42 }))
+  assert.equal(chat.costUsd, 0.42)
+  assert.equal(chat.thinkingTokens, 42)
 })

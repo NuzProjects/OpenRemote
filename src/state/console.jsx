@@ -4,7 +4,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { DaemonApi, clearConnection, loadConnection, saveConnection } from '../api/daemon.js'
-import { chatFromSession, foldEvent } from './reducer.js'
+import { chatFromSession, foldEvent, mergeSessionIntoChat } from './reducer.js'
 import { isMobile, openExternal } from '../platform.js'
 import { loadArchived, saveArchived, withArchived } from '../archive.js'
 
@@ -220,24 +220,18 @@ export function ConsoleProvider({ children }) {
 
   // Keep chat records in step with the polled session list: merge
   // identities (status/workspace) without disturbing folded transcripts.
-  // Event-folded facts the session payload doesn't carry (the context
-  // numbers, the decisions list) survive the merge - the stream owns them.
+  // The merge decision lives in reducer.js (mergeSessionIntoChat) so its
+  // preserved-field contract is tested: event-folded facts the session
+  // payload doesn't carry (the timeline, the context numbers, the
+  // running cost and thinking-token totals, the decisions list) survive
+  // every beat - the stream owns them.
   useEffect(() => {
     setChats((current) => {
       const next = { ...current }
       for (const session of sessions) {
         const existing = next[session.id]
         if (!existing) continue
-        const fresh = chatFromSession(session)
-        next[session.id] = {
-          ...fresh,
-          title: existing.title ?? fresh.title,
-          timeline: existing.timeline,
-          foldedSeq: existing.foldedSeq,
-          pendingDecisionId: existing.pendingDecisionId,
-          context: existing.context,
-          decisionsList: existing.decisionsList,
-        }
+        next[session.id] = mergeSessionIntoChat(existing, session)
       }
       return next
     })
