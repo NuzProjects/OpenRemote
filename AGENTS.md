@@ -34,7 +34,7 @@ the project's own map.
 ```sh
 npm install
 npm test               # console tests (node --test)
-npm run dev            # browser only (port 5173)
+npm run dev            # browser only (port 5175)
 npx tauri dev          # desktop shell
 npm run daemon         # build + stage the daemon sidecar
 OR_RELEASE=1 npm run daemon   # release profile

@@ -19,7 +19,7 @@ will ask; choose More info > Run anyway.
 
 ## Develop
 
-Console (port 5173):
+Console (port 5175):
 
 ```sh
 npm install

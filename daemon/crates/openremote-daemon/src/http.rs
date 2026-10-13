@@ -204,7 +204,7 @@ fn api_routes() -> Router<Arc<App>> {
 }
 
 /// The console is a webview on a different origin than the daemon
-/// (vite dev `http://localhost:5173`, Tauri production
+/// (vite dev `http://localhost:5175`, Tauri production
 /// `http://tauri.localhost` / `tauri://localhost`), and webviews enforce
 /// same-origin on fetch - without these headers the console can never
 /// reach the daemon. Loopback-only console origins; everything else
