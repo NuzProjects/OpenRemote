@@ -98,7 +98,18 @@ export default function AutomationsView({ onOpenChat }) {
 
   const submitPill = async (text) => {
     setThread((t) => [...t, { role: 'user', text }])
-    const out = parsePill(text, pillContext)
+    let out
+    try {
+      out = parsePill(text, pillContext)
+    } catch {
+      // The pill answers, always: a sentence that breaks the brain gets
+      // plain words back, not silence (a throw here would swallow the
+      // user's text with no reply, no draft, no error).
+      out = {
+        reply:
+          'That one did not parse - try a simpler shape, e.g. "When the api pipeline on main fails, open a chat to bisect the flaky test."',
+      }
+    }
     if (out.reply) {
       setThread((t) => [...t, { role: 'reply', text: out.reply }])
       return

@@ -62,3 +62,24 @@ test('a "then" sentence carries its tail as the task', () => {
   assert.equal(d.trigger.kind, 'schedule')
   assert.equal(d.task, 'read the diff')
 })
+
+test('a metacharacter project name never breaks the parse', () => {
+  // A folder basename like "c++ (2024)" used to be compiled straight
+  // into a RegExp: a SyntaxError on the mere presence of the project,
+  // before any matching. It must parse - and be detected when named.
+  const metactx = { ...ctx, projects: ['webapp', 'c++ (2024)', 'My[Project]'] }
+  const out = parsePill(
+    'when the c++ (2024) pipeline on main fails, open a chat with codex to bisect the flaky test.',
+    metactx,
+  )
+  const d = out.draft
+  assert.equal(d.trigger.project, 'c++ (2024)')
+  assert.equal(d.project, 'c++ (2024)')
+  // Its presence must not hijack other sentences either: the loop runs
+  // over every project, so every entry has to stay compilable.
+  const other = parsePill('when the webapp pipeline on main fails, open a chat to deploy', metactx)
+  assert.equal(other.draft.trigger.project, 'webapp')
+  // A bracketed name is detected too, not just tolerated.
+  const bracket = parsePill('when the My[Project] build fails, open a chat to investigate', metactx)
+  assert.equal(bracket.draft.trigger.project, 'My[Project]')
+})

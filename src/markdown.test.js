@@ -100,6 +100,23 @@ test('javascript: and data: URLs never link, code spans protect their contents',
   assert.match(code, /<code class="md-code">\*\*not bold\*\* and https:\/\/example\.com<\/code>/, 'code spans untouched')
 })
 
+test('every href the renderer emits starts with http(s)://', () => {
+  // The whole link zoo in one input: if any shape ever emits a non-web
+  // href (a widened regex, a new scheme, an img path), this fails - the
+  // http(s)-only rule lives in safeHref, on the way out.
+  const html = renderMarkdown(
+    '[link](https://a.example/x) and ![img](https://b.example/i.png "hover") ' +
+    'and https://c.example/auto bare and [evil](javascript:alert(1)) ' +
+    'and [data](data:text/plain,x) and ![bad](data:image/svg+xml,1) ' +
+    'and [proto-rel](//example.com) too',
+  )
+  const hrefs = [...html.matchAll(/href="([^"]*)"/g)].map((m) => m[1])
+  assert.ok(hrefs.length >= 3, 'the renderer did emit links')
+  for (const href of hrefs) {
+    assert.match(href, /^https?:\/\//, `non-web href emitted: ${href}`)
+  }
+})
+
 test('math renders through KaTeX - inline, display, and dollars stay prose', () => {
   // Inline math with real TeX content.
   const inlineMath = renderMarkdown('The value $e^{i\pi} + 1 = 0$ holds.')

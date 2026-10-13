@@ -24,7 +24,8 @@ function escapeHtml(text) {
 }
 
 /// A safe href: http(s) only - javascript:, data:, and everything else
-/// never render as links.
+/// never render as links. Every link shape the renderer emits goes
+/// through here, so the rule holds even if a URL regex widens later.
 function safeHref(url) {
   return /^https?:\/\//i.test(url) ? url : null
 }
@@ -58,22 +59,42 @@ function inline(text) {
   out = out.replace(/(^|[^*])\*([^*]+)\*(?!\*)/g, '$1<em>$2</em>')
   out = out.replace(/~~([^~]+)~~/g, '<s>$1</s>')
   // Images render as their alt text linked - no inline <img>, the source
-  // stays the renderer's own shapes. The title is escaped-quote form by now.
+  // stays the renderer's own shapes. The title is escaped-quote form by
+  // now. The URL rides through safeHref: the http(s)-only rule is
+  // enforced on the way out, so a widened regex can never emit a
+  // non-web href (an unsafe match stays escaped plain text).
   out = out.replace(
     /!\[([^\]]*)\]\((https?:\/\/[^)\s]+)(?:\s+&quot;[^&]*&quot;)?\)/g,
-    '<a class="md-link" href="$2" target="_blank" rel="noopener noreferrer">$1</a>',
+    (match, alt, url) => {
+      const href = safeHref(url)
+      return href == null
+        ? match
+        : `<a class="md-link" href="${href}" target="_blank" rel="noopener noreferrer">${alt}</a>`
+    },
   )
   // Links, optional title in the parens - parsed before autolinking so a
-  // titled link's URL isn't autolinked inside its own parens.
+  // titled link's URL isn't autolinked inside its own parens. Same
+  // safeHref gate on the way out.
   out = out.replace(
     /\[([^\]]+)\]\((https?:\/\/[^)\s]+)(?:\s+&quot;[^&]*&quot;)?\)/g,
-    '<a class="md-link" href="$2" target="_blank" rel="noopener noreferrer">$1</a>',
+    (match, label, url) => {
+      const href = safeHref(url)
+      return href == null
+        ? match
+        : `<a class="md-link" href="${href}" target="_blank" rel="noopener noreferrer">${label}</a>`
+    },
   )
   // Bare http(s) URLs autolink - trailing sentence punctuation stays out
-  // of the href. Never one already inside a href=".
+  // of the href. Never one already inside a href=". safeHref gates this
+  // pass too.
   out = out.replace(
     /(?<!href=")(https?:\/\/[^\s<]+?)([.,;:!?)\]]*)(?=[\s<]|$)/g,
-    '<a class="md-link" href="$1" target="_blank" rel="noopener noreferrer">$1</a>$2',
+    (match, url, trail) => {
+      const href = safeHref(url)
+      return href == null
+        ? match
+        : `<a class="md-link" href="${href}" target="_blank" rel="noopener noreferrer">${url}</a>${trail}`
+    },
   )
   // Restore the code spans, escaped, wrapped; then the math.
   out = out.replace(/\u0000(\d+)\u0000/g, (_, i) =>

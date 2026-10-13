@@ -45,9 +45,19 @@ export function parsePill(text, ctx) {
   else if (/review/.test(t)) kind = 'review'
   else if (/release|tag/.test(t)) kind = 'release'
 
+  // Project names are folder basenames - user data, never regex source:
+  // "c++ (2024)" compiled raw is a SyntaxError that eats whatever the
+  // user typed, and an unescaped ".*" would match any sentence. The
+  // metacharacters are quoted, the name is lowercased like the sentence
+  // it is matched against, and the word boundaries only wrap edges that
+  // are word characters (there is no boundary between ")" and a space to
+  // demand).
   let project = null
   for (const p of projects) {
-    if (new RegExp(`\\b${p}\\b`).test(t)) {
+    const quoted = String(p).toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const lead = /^\w/.test(p) ? '\\b' : ''
+    const trail = /\w$/.test(p) ? '\\b' : ''
+    if (new RegExp(`${lead}${quoted}${trail}`).test(t)) {
       project = p
       break
     }
