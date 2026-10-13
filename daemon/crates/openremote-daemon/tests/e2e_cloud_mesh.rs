@@ -158,3 +158,78 @@ async fn a_desktop_drives_a_machine_through_the_relay_and_nothing_more() {
     let gone = call(&a, "GET", &format!("/devices/{id_b}/capabilities"), None).await;
     assert_ne!(gone.status, 200);
 }
+
+/// A removed desktop signs back in and its mesh comes back. The removal
+/// ends the relay loop for good (the relay closes with the removed code);
+/// the slot that loop filled must be released, or the sign-in's own
+/// `start` finds it occupied and this device stays silent until a process
+/// restart - the re-sign-in joins as a new device, and the mesh request
+/// that worked before the removal works again after it.
+#[tokio::test]
+async fn a_removed_device_signs_back_in_and_the_mesh_returns() {
+    let cloud = FakeCloud::start().await;
+    let a = start_cloud_daemon(&[], Some(config(&cloud, "desk-a"))).await;
+    let b = start_cloud_daemon(&[], Some(config(&cloud, "desk-b"))).await;
+    let id_a = sign_in(&a).await;
+    let id_b = sign_in(&b).await;
+
+    until("a sees b online", || sees(&a, &id_b, "online", json!(true))).await;
+    let made = call(
+        &a,
+        "POST",
+        &format!("/cloud/devices/{id_b}/kind"),
+        Some(json!({"kind": "machine"})),
+    )
+    .await;
+    assert_eq!(made.status, 200, "{}", made.raw);
+    until("b knows it is a machine", || {
+        sees(&b, &id_b, "kind", json!("machine"))
+    })
+    .await;
+    let caps = call(&a, "GET", &format!("/devices/{id_b}/capabilities"), None).await;
+    assert_eq!(
+        caps.status, 200,
+        "the mesh works before the removal: {}",
+        caps.raw
+    );
+
+    // The other desktop removes it: its relay loop stops for good.
+    let removed = call(&a, "DELETE", &format!("/cloud/devices/{id_b}"), None).await;
+    assert_eq!(removed.status, 204, "{}", removed.raw);
+    until("b learns it was removed", || async {
+        (call(&b, "GET", "/cloud", None).await.body["state"] == "revoked").then_some(())
+    })
+    .await;
+
+    // Signing back in (as the new device a removed one becomes) brings
+    // the mesh back in the same process: the dead run must not hold it.
+    let id_b2 = sign_in(&b).await;
+    assert_ne!(id_b2, id_b, "a removed device joins as a new one");
+    until("b is online again", || async {
+        (call(&b, "GET", "/cloud", None).await.body["state"] == "online").then_some(())
+    })
+    .await;
+    until("b sees a online again", || {
+        sees(&b, &id_a, "online", json!(true))
+    })
+    .await;
+    until("a sees the new device online", || {
+        sees(&a, &id_b2, "online", json!(true))
+    })
+    .await;
+
+    let made = call(
+        &a,
+        "POST",
+        &format!("/cloud/devices/{id_b2}/kind"),
+        Some(json!({"kind": "machine"})),
+    )
+    .await;
+    assert_eq!(made.status, 200, "{}", made.raw);
+    until("the new device knows it is a machine", || {
+        sees(&b, &id_b2, "kind", json!("machine"))
+    })
+    .await;
+    let caps = call(&a, "GET", &format!("/devices/{id_b2}/capabilities"), None).await;
+    assert_eq!(caps.status, 200, "the mesh works again: {}", caps.raw);
+}

@@ -98,9 +98,13 @@ pub struct Cloud {
     running: Mutex<Option<Running>>,
 }
 
+/// One mesh run. It is alive exactly as long as its relay loop is: the
+/// refresher on its own never ends (it polls the device list forever),
+/// so the loop's handle is the run's liveness.
 struct Running {
     mesh: Arc<Mesh>,
-    tasks: Vec<tokio::task::JoinHandle<()>>,
+    relay: tokio::task::JoinHandle<()>,
+    refresher: tokio::task::JoinHandle<()>,
 }
 
 fn now_s() -> i64 {
@@ -452,13 +456,35 @@ impl Cloud {
 
     /// Brings up the mesh (the relay link and the device list) for a device
     /// that has joined. Does nothing when it isn't joined or is already up.
+    ///
+    /// A run whose relay loop stopped itself is rebuilt, not skipped: the
+    /// loop exits for good when the credential stops working (sign in
+    /// again), the account removes this device, or this device connects
+    /// from elsewhere, and the user's next sign-in must find the slot
+    /// free. Before it looked here, a dead run's handles parked in the
+    /// slot forever and every later start was turned away until the
+    /// process restarted.
     pub fn start(self: &Arc<Self>, host: Arc<dyn CloudHost>) {
         let mut running = self.running.lock().unwrap_or_else(|e| e.into_inner());
-        if running.is_some() || !self.enrolled() {
+        if running.as_ref().is_some_and(|r| !r.relay.is_finished()) {
             return;
         }
-        if let Some((mesh, tasks)) = mesh::start(self, host) {
-            *running = Some(Running { mesh, tasks });
+        if let Some(dead) = running.take() {
+            // The loop is gone but the slot still holds it (its exit path
+            // hasn't released the slot yet, or it never will: it panicked).
+            // Retire the leftovers here. Only a finished loop opens this
+            // door; rebuilding under a live one would run two meshes.
+            Self::teardown(dead);
+        }
+        if !self.enrolled() {
+            return;
+        }
+        if let Some((mesh, relay, refresher)) = mesh::start(self, host) {
+            *running = Some(Running {
+                mesh,
+                relay,
+                refresher,
+            });
         }
     }
 
@@ -471,7 +497,8 @@ impl Cloud {
         }
     }
 
-    /// Takes the mesh down (signing out).
+    /// Takes the mesh down (signing out, or a removal taking this device's
+    /// credential with it). Safe when nothing is running.
     pub fn stop(&self) {
         if let Some(running) = self
             .running
@@ -479,9 +506,7 @@ impl Cloud {
             .unwrap_or_else(|e| e.into_inner())
             .take()
         {
-            for task in running.tasks {
-                task.abort();
-            }
+            Self::teardown(running);
         }
     }
 
@@ -493,9 +518,39 @@ impl Cloud {
             .map(|r| Arc::clone(&r.mesh))
     }
 
+    /// Stops a run's tasks. A task aborting itself is safe (removed() stops
+    /// the very run that reports the removal): the cancellation is only
+    /// delivered at the task's next await, and every caller of removed()
+    /// returns without another one.
+    fn teardown(running: Running) {
+        running.relay.abort();
+        running.refresher.abort();
+    }
+
+    /// The relay loop that ran `mesh` has exited for good: release the slot
+    /// it filled so a later start can rebuild, and stop the refresher that
+    /// would otherwise idle forever polling for a credential that no
+    /// longer works. The slot is matched by mesh identity, so a loop whose
+    /// teardown was delayed (the run was stopped and rebuilt around it)
+    /// can never tear down the run that took its place.
+    pub(crate) fn reap(&self, mesh: &Arc<Mesh>) {
+        if let Some(running) = self
+            .running
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take_if(|r| Arc::ptr_eq(&r.mesh, mesh))
+        {
+            Self::teardown(running);
+        }
+    }
+
     /// This device was removed from the account: its credential is gone for
     /// good, and the daemon wipes the synced chats it held.
     pub(crate) fn removed(&self, host: &dyn CloudHost) {
+        // The run's tasks stop with the credential: the refresher would
+        // otherwise keep waking every few minutes for an account this
+        // device no longer belongs to.
+        self.stop();
         let _ = self.files.save_credentials(&Credentials::default());
         {
             let mut inner = self.inner();

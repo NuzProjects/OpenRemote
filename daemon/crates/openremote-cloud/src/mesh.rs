@@ -629,11 +629,17 @@ enum Ended {
 }
 
 /// Starts the mesh for a joined device: the relay connection (kept up with
-/// backoff) and the device-list refresher.
+/// backoff) and the device-list refresher. The handles come back named so
+/// `Cloud` can tell the run's liveness (the relay loop) from its housekeeping
+/// (the refresher, which never ends on its own).
 pub fn start(
     cloud: &Arc<Cloud>,
     host: Arc<dyn CloudHost>,
-) -> Option<(Arc<Mesh>, Vec<tokio::task::JoinHandle<()>>)> {
+) -> Option<(
+    Arc<Mesh>,
+    tokio::task::JoinHandle<()>,
+    tokio::task::JoinHandle<()>,
+)> {
     let identity = cloud.identity()?;
     let account = cloud.view()["account"]["id"].as_str()?.to_string();
     let kind = cloud.view()["device"]["kind"]
@@ -658,7 +664,7 @@ pub fn start(
     });
     let relay = tokio::spawn(run_relay(Arc::clone(cloud), Arc::clone(&mesh), out_rx));
     let refresher = tokio::spawn(refresh_devices(Arc::clone(cloud), Arc::clone(&mesh)));
-    Some((mesh, vec![relay, refresher]))
+    Some((mesh, relay, refresher))
 }
 
 /// Keeps the device list current: at start, when the relay says it
@@ -682,9 +688,24 @@ async fn refresh_devices(cloud: Arc<Cloud>, mesh: Arc<Mesh>) {
     }
 }
 
+/// The relay loop's wrapper: whatever ended the loop (a credential the relay
+/// refuses, this device removed from the account, it connecting from
+/// elsewhere, a relay url that can't be used, the credential gone outright),
+/// the run it belonged to is released here. Without this the loop's dead
+/// handles stayed in `Cloud`'s Running slot and every later start was
+/// turned away, so one Relink or removal ended Cloud until a restart.
 async fn run_relay(
     cloud: Arc<Cloud>,
     mesh: Arc<Mesh>,
+    out_rx: mpsc::UnboundedReceiver<(DeviceId, Vec<u8>)>,
+) {
+    relay_loop(&cloud, &mesh, out_rx).await;
+    cloud.reap(&mesh);
+}
+
+async fn relay_loop(
+    cloud: &Arc<Cloud>,
+    mesh: &Arc<Mesh>,
     mut out_rx: mpsc::UnboundedReceiver<(DeviceId, Vec<u8>)>,
 ) {
     let mut backoff = Duration::from_secs(1);
@@ -692,7 +713,7 @@ async fn run_relay(
         let Some(credential) = cloud.device_credential() else {
             return;
         };
-        match relay_session(&cloud, &mesh, &credential, &mut out_rx).await {
+        match relay_session(cloud, mesh, &credential, &mut out_rx).await {
             Ended::Stop => return,
             Ended::Retry => {}
         }
