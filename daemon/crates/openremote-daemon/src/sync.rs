@@ -34,11 +34,68 @@ const HEAD_EVERY: Duration = Duration::from_millis(1000);
 pub struct SyncState {
     /// Who has each chat this device runs open: they get its events live.
     watchers: Mutex<HashMap<SessionId, HashSet<DeviceId>>>,
-    /// Chats with a pull in flight: one at a time per chat.
-    pulling: Mutex<HashSet<SessionId>>,
+    /// Chats with a pull in flight: one at a time per chat. Shared with
+    /// the guard that releases a chat's slot, so a pull dropped mid-flight
+    /// (a cancelled HTTP handler) still frees it.
+    pulling: Arc<Mutex<HashSet<SessionId>>>,
     /// When each chat's last head notice went out, and whether a trailing
     /// one is already scheduled.
     heads: Mutex<HashMap<SessionId, (Instant, bool)>>,
+}
+
+/// A chat's slot in the pulling set, held for exactly as long as its pull
+/// runs. Drop gives it back on every exit - completion, error, or
+/// cancellation: the create_remote handler awaits its pull inline, and a
+/// dropped connection drops that future mid-pull, which used to strand the
+/// flag forever (every later pull for the chat then spun its wait out and
+/// gave up, and the chat never synced again until restart).
+struct PullGuard {
+    set: Arc<Mutex<HashSet<SessionId>>>,
+    id: SessionId,
+}
+
+impl Drop for PullGuard {
+    fn drop(&mut self) {
+        lock_recovering(&self.set).remove(&self.id);
+    }
+}
+
+impl SyncState {
+    /// Takes a chat's pull slot if no pull is running; None while one is.
+    fn try_claim_pulling(&self, id: SessionId) -> Option<PullGuard> {
+        lock_recovering(&self.pulling)
+            .insert(id)
+            .then(|| PullGuard {
+                set: Arc::clone(&self.pulling),
+                id,
+            })
+    }
+
+    /// Takes a chat's pull slot, waiting out any pull in flight: the
+    /// newcomer then catches up itself, so a caller that needs the copy (a
+    /// chat just created on a machine) never returns before it exists.
+    /// None: the slot stayed busy past `wait`, and the caller gives up
+    /// rather than pile on.
+    async fn claim_pulling(&self, id: SessionId, wait: Duration) -> Option<PullGuard> {
+        let deadline = Instant::now() + wait;
+        loop {
+            if let Some(guard) = self.try_claim_pulling(id) {
+                return Some(guard);
+            }
+            if Instant::now() > deadline {
+                return None;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
+    /// A chat is gone: every per-chat entry goes with it. Only the watcher
+    /// entry was cleared before; the head-notice entry stayed for the
+    /// daemon's lifetime, so the map grew with every chat ever deleted.
+    fn forget(&self, id: SessionId) {
+        lock_recovering(&self.watchers).remove(&id);
+        lock_recovering(&self.heads).remove(&id);
+    }
 }
 
 /// What this device holds: synced chats only (private ones never leave).
@@ -128,17 +185,14 @@ async fn get(mesh: &Mesh, peer: DeviceId, path: String) -> Option<Value> {
 /// Copies what `peer` has of chat `id` beyond this device's head. One pull
 /// runs per chat at a time; a second one waits for it and then catches up
 /// itself, so a caller that needs the copy (a chat just created on a
-/// machine) never returns before it exists.
+/// machine) never returns before it exists. The slot is a guard: if this
+/// pull is dropped mid-flight, Drop releases it instead of stranding the
+/// chat behind a stuck flag.
 pub async fn pull(app: &Arc<App>, peer: DeviceId, id: SessionId, runner: DeviceId) {
-    let deadline = Instant::now() + Duration::from_secs(60);
-    while !lock_recovering(&app.sync.pulling).insert(id) {
-        if Instant::now() > deadline {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
+    let Some(_slot) = app.sync.claim_pulling(id, Duration::from_secs(60)).await else {
+        return;
+    };
     let Some(mesh) = app.cloud.mesh() else {
-        lock_recovering(&app.sync.pulling).remove(&id);
         return;
     };
     loop {
@@ -162,7 +216,8 @@ pub async fn pull(app: &Arc<App>, peer: DeviceId, id: SessionId, runner: DeviceI
             _ => break,
         }
     }
-    lock_recovering(&app.sync.pulling).remove(&id);
+    // The slot goes back here, on cancellation, or on any early return
+    // above: the guard's Drop is the single release path.
 }
 
 /// Deletes a synced chat here because it was deleted somewhere.
@@ -177,7 +232,7 @@ pub async fn apply_tombstone(app: &Arc<App>, id: SessionId, stone: Tombstone) {
         let _ = app.supervisor.stop(&id).await;
     }
     let _ = lock_recovering(&app.store).tombstone(id, stone);
-    lock_recovering(&app.sync.watchers).remove(&id);
+    app.sync.forget(id);
 }
 
 /// Two devices found each other: trade deletions, then pull what's missing.
@@ -335,6 +390,25 @@ pub async fn announce_tombstone(app: &Arc<App>, id: SessionId, stone: Tombstone)
     }
 }
 
+/// The chats a lag must reconcile: every entry in the watcher map. An
+/// entry can hold an empty set by now (its last watcher left), but the
+/// chat's copies still missed their head notices, so the entry still
+/// counts.
+fn lagged_chats(watchers: &HashMap<SessionId, HashSet<DeviceId>>) -> Vec<SessionId> {
+    watchers.keys().copied().collect()
+}
+
+/// Who the rate-limited head notice may skip: the watchers that already
+/// got the event live. A watcher whose send failed joins the audience
+/// instead - its direct retry may have died with the same link.
+fn head_skips(watchers: &[DeviceId], failed: &[DeviceId]) -> Vec<DeviceId> {
+    watchers
+        .iter()
+        .copied()
+        .filter(|peer| !failed.contains(peer))
+        .collect()
+}
+
 /// The runner's side: every event of a synced chat it runs goes live to the
 /// chat's watchers, and its new head to everyone else, at most once a
 /// second (a trailing notice makes sure the last one goes out).
@@ -345,7 +419,26 @@ pub fn start_pusher(app: &Arc<App>) {
         loop {
             let raw = match events.recv().await {
                 Ok(raw) => raw,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    // The loop stalled (a wedged watcher link holds every
+                    // send hostage through its link retries) and the
+                    // channel overwrote events. Which chats they named is
+                    // unknowable, but the loss only bites chats with
+                    // watchers: everyone else is on the pull path, and
+                    // watchers are exactly whom head notices skip. Every
+                    // watched chat gets one now - a watcher pulls only if
+                    // behind, so an up-to-date one does nothing with it.
+                    let Some(app) = weak.upgrade() else {
+                        return;
+                    };
+                    if let Some(mesh) = app.cloud.mesh() {
+                        let behind = lagged_chats(&lock_recovering(&app.sync.watchers));
+                        for id in behind {
+                            send_head(&app, &mesh, id, Vec::new()).await;
+                        }
+                    }
+                    continue;
+                }
                 Err(_) => return,
             };
             let Some(app) = weak.upgrade() else {
@@ -371,16 +464,23 @@ pub fn start_pusher(app: &Arc<App>) {
                 .map(|w| w.iter().copied().collect())
                 .unwrap_or_default();
             let note = json!({"type": "sync.events", "session": id, "events": [event]});
+            let mut failed: Vec<DeviceId> = Vec::new();
             for peer in &watchers {
                 if mesh.note(*peer, &note).await.is_err() {
-                    // Too big for one message, or the link dropped: the
-                    // head notice below makes the watcher pull instead.
+                    // Too big for one message, or the link dropped. Two
+                    // nudges follow: a head note right back through this
+                    // (possibly dying) link, and a seat in the audience of
+                    // the rate-limited notice below, which still reaches
+                    // the watcher when the direct retry dies with the
+                    // same link. A watcher that is behind pulls; one that
+                    // isn't does nothing.
                     let head =
                         json!({"type": "sync.head", "session": id, "head": local_head(&app, &id)});
                     let _ = mesh.note(*peer, &head).await;
+                    failed.push(*peer);
                 }
             }
-            send_head(&app, &mesh, id, watchers).await;
+            send_head(&app, &mesh, id, head_skips(&watchers, &failed)).await;
         }
     });
 }
@@ -396,14 +496,18 @@ async fn send_head(app: &Arc<App>, mesh: &Arc<Mesh>, id: SessionId, skip: Vec<De
             true
         } else if !entry.1 {
             entry.1 = true;
-            let (app, mesh, skip) = (Arc::clone(app), Arc::clone(mesh), skip.clone());
+            let (app, mesh) = (Arc::clone(app), Arc::clone(mesh));
             tokio::spawn(async move {
                 tokio::time::sleep(HEAD_EVERY).await;
                 if let Some(e) = lock_recovering(&app.sync.heads).get_mut(&id) {
                     e.1 = false;
                     e.0 = Instant::now();
                 }
-                notify_head(&app, &mesh, id, &skip).await;
+                // The trailing notice carries no skip list: by the time it
+                // fires, the skipped watchers may be exactly who needs it.
+                // A lag recovery that arrived inside the rate window rides
+                // this pending trailing out, so it must reach watchers too.
+                notify_head(&app, &mesh, id, &[]).await;
             });
             false
         } else {
@@ -421,5 +525,108 @@ async fn notify_head(app: &Arc<App>, mesh: &Arc<Mesh>, id: SessionId, skip: &[De
         if !skip.contains(&peer) {
             let _ = mesh.note(peer, &note).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_pull_slot_guard_releases_on_any_drop() {
+        let state = SyncState::default();
+        let id = SessionId::new();
+        let guard = state.try_claim_pulling(id).expect("the slot is free");
+        assert!(lock_recovering(&state.pulling).contains(&id));
+        // A pull dropped mid-flight is exactly this drop: cancellation
+        // runs Drop the same way a normal return does.
+        drop(guard);
+        assert!(lock_recovering(&state.pulling).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_second_pull_waits_out_a_running_one_and_takes_over_after() {
+        let state = SyncState::default();
+        let id = SessionId::new();
+        let first = state.try_claim_pulling(id).expect("the slot is free");
+        // While the first pull runs, a second cannot have the slot and
+        // gives up after its wait rather than pile on.
+        assert!(
+            state
+                .claim_pulling(id, Duration::from_millis(60))
+                .await
+                .is_none()
+        );
+        drop(first);
+        // The first finished: the slot is free again, taken at once.
+        let second = state
+            .claim_pulling(id, Duration::from_millis(0))
+            .await
+            .expect("the freed slot is claimed immediately");
+        drop(second);
+        assert!(lock_recovering(&state.pulling).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_pull_frees_its_slot() {
+        // The scenario the guard exists for: create_remote awaits its
+        // pull inline, and a dropped connection drops that future at its
+        // await point, mid-flight. The slot must come back with it, or
+        // every later pull for the chat spins its wait out and the chat
+        // never syncs again until restart.
+        let state = Arc::new(SyncState::default());
+        let id = SessionId::new();
+        let held = Arc::clone(&state);
+        let pull = tokio::spawn(async move {
+            let _slot = held.claim_pulling(id, Duration::from_secs(60)).await;
+            std::future::pending::<()>().await;
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !lock_recovering(&state.pulling).contains(&id) {
+            assert!(Instant::now() < deadline, "the pull takes its slot");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        pull.abort();
+        let _ = pull.await;
+        assert!(
+            lock_recovering(&state.pulling).is_empty(),
+            "the cancelled pull releases its slot"
+        );
+    }
+
+    #[test]
+    fn forgetting_a_chat_evicts_its_watcher_and_head_notice_entries() {
+        let state = SyncState::default();
+        let id = SessionId::new();
+        lock_recovering(&state.watchers).insert(id, HashSet::from([DeviceId::new()]));
+        lock_recovering(&state.heads).insert(id, (Instant::now(), false));
+        state.forget(id);
+        assert!(lock_recovering(&state.watchers).is_empty());
+        assert!(lock_recovering(&state.heads).is_empty());
+    }
+
+    #[test]
+    fn a_lag_reconciles_every_watched_chat_even_a_newly_unwatched_one() {
+        let mut watchers = HashMap::new();
+        let watched = SessionId::new();
+        let just_left = SessionId::new();
+        watchers.insert(watched, HashSet::from([DeviceId::new()]));
+        // The last watcher left: the entry stays until the chat is
+        // deleted, and its copies still missed their head notices.
+        watchers.insert(just_left, HashSet::new());
+        let chats = lagged_chats(&watchers);
+        assert_eq!(chats.len(), 2, "both entries are reconciled");
+        assert!(chats.contains(&watched) && chats.contains(&just_left));
+    }
+
+    #[test]
+    fn a_failed_watcher_send_joins_the_head_notice_audience() {
+        let a = DeviceId::new();
+        let b = DeviceId::new();
+        // a's live send landed, b's failed: only a may be skipped, so b's
+        // copy still gets the rate-limited notice below.
+        assert_eq!(head_skips(&[a, b], &[b]), vec![a]);
+        // No failures: the usual skip, nobody gets notified twice.
+        assert_eq!(head_skips(&[a, b], &[]), vec![a, b]);
     }
 }

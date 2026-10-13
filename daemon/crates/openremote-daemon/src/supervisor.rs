@@ -46,6 +46,14 @@ fn current_local_minute() -> (String, String) {
     )
 }
 
+/// Drops arming entries from days other than `today` (the `YYYY-MM-DD`
+/// prefix of the day-minute key). An entry from an earlier day can never
+/// match again - the engine arms per day - so it is garbage the moment
+/// the day changes. Nothing to do while the day holds.
+fn prune_fired(fired: &mut HashMap<RuleId, String>, today: &str) {
+    fired.retain(|_, minute| minute.split(' ').next().unwrap_or_default() == today);
+}
+
 /// `HH:MM` or a clear error - the schedule's own format.
 fn validate_time(time: Option<&str>) -> Result<String, SupervisorError> {
     let Some(time) = time else {
@@ -143,6 +151,12 @@ pub struct Supervisor {
     /// Live sign-in relays, one per harness: the console polls their view
     /// and feeds the human's answers through.
     signins: StdMutex<HashMap<String, Arc<crate::signin::SignInRun>>>,
+    /// The clock's arming memory: the minute each schedule rule last fired
+    /// in, so a rule fires once per day. Shared with rule removal - a
+    /// deleted rule's entry must go with it - and pruned to the current
+    /// day each tick, or the map ratchets with every rule the account
+    /// ever had.
+    fired: StdMutex<HashMap<RuleId, String>>,
     /// The daemon's own machine - sessions run here, plugins ride from here.
     this_machine: MachineId,
 }
@@ -175,6 +189,7 @@ impl Supervisor {
             events: broadcast::channel(1024).0,
             registry: StdRwLock::new(registry),
             signins: StdMutex::new(HashMap::new()),
+            fired: StdMutex::new(HashMap::new()),
             this_machine,
         });
         supervisor.spawn_presence_ticker(this_machine);
@@ -752,7 +767,13 @@ impl Supervisor {
     }
 
     pub fn remove_rule(&self, id: &RuleId) -> Result<(), SupervisorError> {
-        self.with_store(|s| s.remove_rule(id)).map_err(store_error)
+        self.with_store(|s| s.remove_rule(id))
+            .map_err(store_error)?;
+        // The rule is gone: its arming entry is garbage the clock would
+        // otherwise carry for the daemon's lifetime - every rule the
+        // account ever deleted, one map entry each.
+        lock_recovering(&self.fired).remove(id);
+        Ok(())
     }
 
     // ---- projects ----
@@ -893,7 +914,6 @@ impl Supervisor {
                 .unwrap_or(30_000);
             let mut tick = tokio::time::interval(std::time::Duration::from_millis(tick_ms));
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            let mut fired: HashMap<RuleId, String> = HashMap::new();
             loop {
                 tick.tick().await;
                 let (now_minute, now_time) = current_local_minute();
@@ -911,14 +931,14 @@ impl Supervisor {
                     })
                     .into_iter()
                     .filter(|rule| {
-                        fired
+                        // Already armed for this minute: done for the day.
+                        lock_recovering(&supervisor.fired)
                             .get(&rule.id)
-                            .map(|m| m != &now_minute)
-                            .unwrap_or(true)
+                            .is_none_or(|m| m != &now_minute)
                     })
                     .collect();
                 for rule in due {
-                    fired.insert(rule.id, now_minute.clone());
+                    lock_recovering(&supervisor.fired).insert(rule.id, now_minute.clone());
                     match supervisor.fire_rule(&rule).await {
                         Ok(session) => eprintln!(
                             "automation '{}': fired on the clock, chat {}",
@@ -927,6 +947,11 @@ impl Supervisor {
                         Err(err) => eprintln!("automation '{}': fire failed: {err}", rule.name),
                     }
                 }
+                // A day turned: an arming entry from an earlier day can
+                // never match again (the engine arms per day), so it is
+                // garbage the moment the day changes.
+                let today = now_minute.split(' ').next().unwrap_or_default();
+                prune_fired(&mut lock_recovering(&supervisor.fired), today);
             }
         });
     }
@@ -1546,6 +1571,77 @@ impl Supervisor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A supervisor over a throwaway store with no harnesses: enough for
+    /// the maps and rule removal - nothing here spawns a session.
+    fn supervisor() -> Arc<Supervisor> {
+        let dir = std::env::temp_dir().join(format!("or-supervisor-{}", Uuid::new_v4()));
+        let store = Arc::new(StdMutex::new(Store::open(dir).expect("store opens")));
+        let supervisor = Supervisor::new(store, HarnessRegistry::none());
+        // The engines tick in the background and would hold the store's
+        // directory open; the test asserts only the in-memory maps, so
+        // the directory outlives the run as junk in temp. No cleanup to
+        // race.
+        supervisor
+    }
+
+    /// A schedule rule on this machine, saved through the real path.
+    async fn schedule_rule(supervisor: &Arc<Supervisor>) -> RuleId {
+        let ws = std::env::temp_dir().join(format!("or-rule-ws-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&ws).expect("workspace dir");
+        let machine = supervisor.this_machine;
+        let rule = AutomationRule {
+            id: RuleId::new(),
+            name: "a rule".into(),
+            trigger: openremote_core::Trigger {
+                kind: TriggerKind::Schedule,
+                time: Some("09:00".into()),
+                key: None,
+            },
+            harness: "claude".into(),
+            model: None,
+            workspace: ws,
+            machine,
+            task: "a task".into(),
+            enabled: true,
+            last_chat: None,
+            last_run: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+        supervisor.save_rule(rule, None).expect("rule saves").id
+    }
+
+    /// A deleted rule leaves nothing behind in the clock's arming map:
+    /// removal drops the rule's entry, or the map ratchets with every
+    /// rule the account ever deleted.
+    #[tokio::test]
+    async fn removing_a_rule_evicts_its_fired_arming_entry() {
+        let supervisor = supervisor();
+        let id = schedule_rule(&supervisor).await;
+        lock_recovering(&supervisor.fired).insert(id, "2001-01-01 09:00".into());
+        supervisor.remove_rule(&id).expect("rule removes");
+        assert!(
+            lock_recovering(&supervisor.fired).get(&id).is_none(),
+            "the removed rule's arming entry is evicted"
+        );
+    }
+
+    /// The day prune: an entry from an earlier day is garbage the moment
+    /// the day changes - the engine arms per day, so it can never match
+    /// again - while the current day's arming survives to keep its
+    /// once-per-day guarantee.
+    #[test]
+    fn the_day_prune_drops_only_other_days_arming_entries() {
+        let mut fired = HashMap::new();
+        let old = RuleId::new();
+        let today = RuleId::new();
+        fired.insert(old, "2001-01-01 09:00".into());
+        fired.insert(today, "2001-01-02 09:00".into());
+        prune_fired(&mut fired, "2001-01-02");
+        assert!(fired.contains_key(&today), "today's arming survives");
+        assert!(!fired.contains_key(&old), "the old day's arming is gone");
+    }
 
     /// The poisoning policy is real, not aspirational: a panic while the
     /// lock is held poisons the mutex, and the shared acquisition must
