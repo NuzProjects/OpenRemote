@@ -127,17 +127,41 @@ pub struct Store {
 
 impl Store {
     /// Open (or create) the store under `dir`; heals torn logs and
-    /// reconciles chats that were running when the daemon died.
+    /// reconciles chats that were running when the daemon died. An
+    /// unparseable `state.json` is quarantined beside the store (never
+    /// deleted) and the session logs are replayed to re-derive what the
+    /// events carry - the logs are the history, the state was the
+    /// derived copy.
     pub fn open(dir: PathBuf) -> Result<Self, StoreError> {
         fs::create_dir_all(&dir)?;
         let state = match fs::read_to_string(dir.join("state.json")) {
-            Ok(raw) => {
-                serde_json::from_str(&raw).map_err(|e| StoreError::BadState(e.to_string()))?
-            }
+            Ok(raw) => match serde_json::from_str(&raw) {
+                Ok(state) => state,
+                Err(e) => {
+                    // Booting into a panic loop until the user
+                    // hand-deletes the file (losing everything) is the
+                    // worse failure. Move the bad file aside - if even
+                    // that fails, say so loudly instead of overwriting
+                    // the user's data with fresh state.
+                    let bad = dir.join(format!("state.json.bad-{}", crate::now_ms()));
+                    fs::rename(dir.join("state.json"), &bad).map_err(|io| {
+                        StoreError::BadState(format!(
+                            "{e}; quarantining it to {} failed: {io}",
+                            bad.display()
+                        ))
+                    })?;
+                    eprintln!(
+                        "warning: state.json was corrupt ({e}); it is quarantined at {} and the session logs replay",
+                        bad.display()
+                    );
+                    State::default()
+                }
+            },
             Err(_) => State::default(),
         };
         let mut store = Self { dir, state };
         let healed = store.heal_logs()?;
+        let discovered = store.discover_logs()?;
         let pruned = store.prune_receipts();
         let reconciled = store.reconcile_crashed()?;
         let titled = store.backfill_titles();
@@ -145,7 +169,7 @@ impl Store {
         let this_id = store.ensure_this_machine();
         // Opening the store means the daemon is running - present now.
         store.mark_present(&this_id).ok();
-        if healed || pruned || reconciled || titled || !had_this_machine {
+        if healed || discovered || pruned || reconciled || titled || !had_this_machine {
             store.persist()?;
         }
         Ok(store)
@@ -301,6 +325,83 @@ impl Store {
             run_end = Some(after);
         }
         Ok((run_next, cut_at))
+    }
+
+    /// Chats the state doesn't know but whose logs exist on disk: a lost
+    /// or quarantined state.json. Each log replays in full from its first
+    /// line, re-deriving what its events carry. A log that doesn't open
+    /// with `session.created` at seq 0 can't be re-derived and is left
+    /// untouched.
+    fn discover_logs(&mut self) -> Result<bool, StoreError> {
+        let Ok(entries) = fs::read_dir(self.dir.join("sessions")) else {
+            return Ok(false);
+        };
+        let mut changed = false;
+        for entry in entries.flatten() {
+            let Some(id) = entry.file_name().to_str().and_then(SessionId::parse) else {
+                continue;
+            };
+            if self.state.sessions.contains_key(&id) {
+                continue;
+            }
+            let Ok(mut file) = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(self.event_log(&id))
+            else {
+                eprintln!("warning: session {id} has a log the store can't read");
+                continue;
+            };
+            let len = file.metadata()?.len();
+            if len == 0 {
+                continue;
+            }
+            file.seek(SeekFrom::Start(0))?;
+            let mut raw = Vec::new();
+            file.read_to_end(&mut raw)?;
+            if raw.last() != Some(&b'\n') {
+                match raw.iter().rposition(|b| *b == b'\n') {
+                    Some(i) => {
+                        file.set_len(i as u64 + 1)?;
+                        raw.truncate(i + 1);
+                        changed = true;
+                    }
+                    // One torn line: nothing to replay, nothing to cut.
+                    None => {
+                        file.set_len(0)?;
+                        continue;
+                    }
+                }
+            }
+            // The whole file is the window, so the run must open with the
+            // chat's own `session.created` - the event that re-inserts the
+            // chat - or there is nothing to re-derive from.
+            let opens_chat = raw
+                .split(|b| *b == b'\n')
+                .next()
+                .and_then(|line| std::str::from_utf8(line).ok())
+                .and_then(|text| serde_json::from_str::<Event>(text).ok())
+                .is_some_and(|event| {
+                    event.seq == 0
+                        && event.session_id == id
+                        && matches!(event.payload, EventPayload::SessionCreated { .. })
+                });
+            if !opens_chat {
+                eprintln!(
+                    "warning: session {id}'s log doesn't open with session.created; left as is"
+                );
+                continue;
+            }
+            let (run_next, cut_at) = self.heal_log_window(&id, &raw, 0, 0)?;
+            if let Some(run_next) = run_next {
+                self.state.next_seq.insert(id, run_next);
+                if let Some(cut_at) = cut_at {
+                    file.set_len(cut_at)?;
+                }
+                changed = true;
+            }
+        }
+        Ok(changed)
     }
 
     /// Chats that were running here when the daemon died: mid-turn deaths
@@ -1866,6 +1967,41 @@ mod tests {
         let next = store
             .append(s.id, user_message(3, "after the heal"))
             .unwrap();
+        assert_eq!(next.seq, 2);
+    }
+
+    #[test]
+    fn a_corrupt_state_is_quarantined_and_the_logs_re_derive_the_chats() {
+        let dir = tempdir();
+        let mut store = Store::open(dir.clone()).unwrap();
+        let s = session();
+        store
+            .append(s.id, EventPayload::SessionCreated { session: s.clone() })
+            .unwrap();
+        store
+            .append(s.id, user_message(1, "Recover the title"))
+            .unwrap();
+        drop(store);
+        // Disk-full during the rewrite, or external truncation: an
+        // unparseable state.json where the daemon boots.
+        fs::write(dir.join("state.json"), "{ not json").unwrap();
+
+        let mut store = Store::open(dir.clone()).unwrap();
+        let loaded = store.session(&s.id).unwrap();
+        assert_eq!(loaded.title.as_deref(), Some("Recover the title"));
+        assert_eq!(store.head(&s.id), 2, "the log is the history");
+        // The bad file is never deleted; it waits beside the fresh one.
+        let bad = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .find(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("state.json.bad-")
+            })
+            .expect("the corrupt state is quarantined, not deleted");
+        assert_eq!(fs::read_to_string(bad.path()).unwrap(), "{ not json");
+        let next = store.append(s.id, user_message(2, "still works")).unwrap();
         assert_eq!(next.seq, 2);
     }
 
