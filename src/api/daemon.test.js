@@ -120,6 +120,30 @@ test('a valid stored cursor rides the url', async () => {
   assert.ok(url.includes('after=9'))
 })
 
+// ---- a probe the daemon could not ask ----
+
+test('a failed models probe rejects: never an empty array to cache', async () => {
+  // The daemon answers 503 when a harness's catalog probe fails (the
+  // CLI not signed in, slow to boot, a spawn failure). An empty array is
+  // a real answer callers may hold; a failed probe must never pose as
+  // one, so it surfaces as the same rejection every failed call is.
+  const api = new DaemonApi('http://daemon', 'token')
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response('{"error": "could not ask"}', { status: 503 })
+  try {
+    await assert.rejects(
+      api.models('claude'),
+      (err) => {
+        assert.equal(err.message, 'could not ask')
+        assert.equal(err.status, 503)
+        return true
+      },
+    )
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})
+
 // ---- request timeouts ----
 
 test('a request that never answers rejects when its timeout fires', async () => {
