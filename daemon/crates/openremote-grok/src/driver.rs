@@ -111,6 +111,10 @@ impl Driver {
             // grok's own UUID session id - value form, no flag surface.
             command.arg("--resume").arg(resume);
         }
+        // Windows: no console flash, no Ctrl-C from a shared console; the
+        // why lives on openremote_harness::creation_flags.
+        #[cfg(windows)]
+        command.creation_flags(openremote_harness::creation_flags());
 
         *self.shared.reason.lock().unwrap() = EofReason::Completed;
         let mut child = command

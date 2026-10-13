@@ -72,6 +72,10 @@ impl Driver {
         if let Some(resume) = &opts.resume {
             command.arg("--session").arg(resume);
         }
+        // Windows: no console flash, no Ctrl-C from a shared console; the
+        // why lives on openremote_harness::creation_flags.
+        #[cfg(windows)]
+        command.creation_flags(openremote_harness::creation_flags());
 
         let mut child = command
             .spawn()

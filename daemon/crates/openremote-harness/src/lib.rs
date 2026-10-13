@@ -42,6 +42,23 @@ impl Resolution {
     }
 }
 
+/// The Windows creation flags every harness child spawn carries. The
+/// daemon runs console-less in both production modes (a Tauri sidecar; a
+/// service), so Windows would otherwise allocate a fresh visible console
+/// for every console-subsystem child: a window per session for the
+/// persistent harnesses, a flash per prompt for the process-per-prompt
+/// ones. CREATE_NO_WINDOW suppresses that - the same flag the installer's
+/// `detach()` already sets in openremote-daemon/src/install.rs.
+/// CREATE_NEW_PROCESS_GROUP puts each child in its own group so a Ctrl-C
+/// typed into a shared console (the daemon run by hand, a test run)
+/// cannot kill a harness the supervisor did not order to die.
+#[cfg(windows)]
+pub fn creation_flags() -> u32 {
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
+}
+
 /// Spawn options for one session's harness, harness-agnostic. Each driver
 /// maps these onto its own flags.
 #[derive(Clone, Debug, Default)]

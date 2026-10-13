@@ -54,6 +54,10 @@ impl Driver {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        // Windows: no console flash, no Ctrl-C from a shared console; the
+        // why lives on openremote_harness::creation_flags.
+        #[cfg(windows)]
+        command.creation_flags(openremote_harness::creation_flags());
         // env::vars is not used on purpose; the child inherits the rest.
         let mut child = command
             .spawn()
@@ -358,6 +362,10 @@ pub async fn models(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
+    // Windows: no console flash, no Ctrl-C from a shared console; the
+    // why lives on openremote_harness::creation_flags.
+    #[cfg(windows)]
+    command.creation_flags(openremote_harness::creation_flags());
     let mut child = command
         .spawn()
         .map_err(|e| DriverError::Spawn(format!("claude models: {e}")))?;

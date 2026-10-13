@@ -99,6 +99,10 @@ impl Driver {
         if let Some(conversation) = self.shared.conversation.lock().unwrap().clone() {
             command.arg("--conversation").arg(conversation);
         }
+        // Windows: no console flash, no Ctrl-C from a shared console; the
+        // why lives on openremote_harness::creation_flags.
+        #[cfg(windows)]
+        command.creation_flags(openremote_harness::creation_flags());
 
         *self.shared.reason.lock().unwrap() = EofReason::Completed;
         let mut child = command
@@ -318,11 +322,17 @@ pub async fn models(
         Resolution::Executable(path) => path.clone(),
         _ => return Err(DriverError::Spawn("agy CLI not found".to_string())),
     };
-    let mut child = Command::new(program)
+    let mut command = Command::new(program);
+    command
         .arg("models")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    // Windows: no console flash, no Ctrl-C from a shared console; the
+    // why lives on openremote_harness::creation_flags.
+    #[cfg(windows)]
+    command.creation_flags(openremote_harness::creation_flags());
+    let mut child = command
         .spawn()
         .map_err(|e| DriverError::Spawn(format!("agy models: {e}")))?;
     let stdout = child

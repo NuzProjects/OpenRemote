@@ -137,6 +137,10 @@ async fn spawn_serve(
         // A dropped driver never orphans a serve child - the daemon's
         // crash takes its harnesses with it.
         .kill_on_drop(true);
+    // Windows: no console flash, no Ctrl-C from a shared console; the
+    // why lives on openremote_harness::creation_flags.
+    #[cfg(windows)]
+    command.creation_flags(openremote_harness::creation_flags());
     let mut child = command
         .spawn()
         .map_err(|e| DriverError::Spawn(format!("opencode: {e}")))?;
