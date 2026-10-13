@@ -95,15 +95,48 @@ pub fn default_data_dir() -> PathBuf {
 /// The bearer token: read from `<data>/token` or generated on first run.
 /// Whoever reads it controls every harness here, so the file and its
 /// directory are this user's alone (older builds left them group-readable).
+///
+/// A token that exists but can't be READ (an antivirus lock on Windows,
+/// a permissions blip) is never silently regenerated: the shell holds
+/// the old one and would get 401 on everything while the daemon looks
+/// "up". Read errors get a brief retry window and then a loud failure;
+/// only a missing or empty file means "no token yet" and mints one.
 pub fn load_or_create_token(data_dir: &std::path::Path) -> std::io::Result<String> {
     let path = data_dir.join("token");
-    if let Ok(token) = std::fs::read_to_string(&path) {
-        let token = token.trim().to_string();
-        if !token.is_empty() {
-            openremote_core::fsx::restrict(&path)?;
-            openremote_core::fsx::create_private_dir(data_dir)?;
-            return Ok(token);
+    let mut unreadable = None;
+    for attempt in 1..=5 {
+        match std::fs::read_to_string(&path) {
+            Ok(raw) => {
+                let token = raw.trim().to_string();
+                if !token.is_empty() {
+                    openremote_core::fsx::restrict(&path)?;
+                    openremote_core::fsx::create_private_dir(data_dir)?;
+                    return Ok(token);
+                }
+                // An empty file is a truncated write, not a read
+                // failure: mint again.
+                unreadable = None;
+                break;
+            }
+            // No file is the first run (or the token was never written).
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+            Err(e) => {
+                eprintln!("warning: can't read the token yet (attempt {attempt}/5): {e}");
+                unreadable = Some(e);
+                if attempt < 5 {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
         }
+    }
+    if let Some(e) = unreadable {
+        return Err(std::io::Error::new(
+            e.kind(),
+            format!(
+                "can't read the token at {} and won't mint a new one over it: {e}",
+                path.display()
+            ),
+        ));
     }
     openremote_core::fsx::create_private_dir(data_dir)?;
     let token = uuid::Uuid::new_v4().to_string();
@@ -243,6 +276,39 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("or-token-{}", uuid::Uuid::new_v4()));
         let first = load_or_create_token(&dir).unwrap();
         assert_eq!(load_or_create_token(&dir).unwrap(), first);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn an_empty_token_file_mints_and_the_new_one_sticks() {
+        let dir = std::env::temp_dir().join(format!("or-token-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // A zero-length token: a truncated write, not a secret worth keeping.
+        std::fs::write(dir.join("token"), b"").unwrap();
+        let minted = load_or_create_token(&dir).unwrap();
+        assert!(!minted.is_empty());
+        assert_eq!(load_or_create_token(&dir).unwrap(), minted);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_token_that_exists_but_can_t_be_read_fails_loudly() {
+        let dir = std::env::temp_dir().join(format!("or-token-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // A directory where the token should be: every platform turns that
+        // into a read error that is not NotFound (Windows denies the
+        // open, Unix refuses the read) - the same shape as an antivirus
+        // lock or a permissions blip on the real file.
+        std::fs::create_dir(dir.join("token")).unwrap();
+        let err = load_or_create_token(&dir).unwrap_err();
+        assert!(
+            err.to_string().contains("won't mint a new one"),
+            "the failure names the stakes: {err}"
+        );
+        assert!(
+            dir.join("token").is_dir(),
+            "no token was minted over the unreadable path"
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
