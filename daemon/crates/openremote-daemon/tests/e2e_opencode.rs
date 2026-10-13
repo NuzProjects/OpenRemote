@@ -362,3 +362,70 @@ async fn a_failed_step_ends_the_turn_with_opencodes_own_error() {
     let session = call(&daemon, "GET", &format!("/sessions/{id}"), None).await;
     assert_eq!(session.body["status"], "idle", "raw: {}", session.raw);
 }
+
+/// A server-side close of the event stream mid-turn is terminal for the
+/// session, not silence (harness audit F2): the fixture's `drop`
+/// scenario closes the SSE connection after the first delta and never
+/// finishes the turn. The watcher reports the boundary (StdoutClosed),
+/// so the supervisor fails the session instead of leaving it Working
+/// forever behind a live serve child.
+#[tokio::test]
+async fn a_server_side_event_stream_close_lands_the_session_terminal() {
+    let (daemon, ws) = opencode_daemon(Some("drop")).await;
+    let id = create_opencode(&daemon, &ws).await;
+    until_kinds(
+        &daemon,
+        &format!("/sessions/{id}/events"),
+        &["session.status_changed"],
+    )
+    .await;
+
+    call(
+        &daemon,
+        "POST",
+        &format!("/sessions/{id}/prompts"),
+        Some(json!({"request_id": "oc-drop", "text": "ship the notes"})),
+    )
+    .await;
+
+    // The turn starts, the delta lands, then the stream closes: the
+    // watcher reports the boundary, the supervisor closes the open turn
+    // with a failed boundary and fails the session. The old watcher
+    // ended silently on a clean EOF and the session sat Working forever
+    // behind a live serve child.
+    let events = until_kinds(
+        &daemon,
+        &format!("/sessions/{id}/events"),
+        &[
+            "turn.started",
+            "message.added",
+            "message.delta",
+            "turn.completed",
+            "session.status_changed",
+        ],
+    )
+    .await;
+    let boundary = events
+        .iter()
+        .find(|(_, p)| kind(p) == "turn.completed")
+        .expect("the synthetic boundary closes the open turn");
+    assert_eq!(boundary.1["coarse"], "failed", "events:\n{}", dump(&events));
+    let terminal = events
+        .iter()
+        .rev()
+        .find(|(_, p)| kind(p) == "session.status_changed")
+        .expect("a status change after the drop");
+    assert_eq!(
+        terminal.1["status"],
+        "failed",
+        "the clean EOF is a boundary - the session must not sit working; events:\n{}",
+        dump(&events)
+    );
+    assert_eq!(
+        terminal.1["reason"].as_str().unwrap_or_default(),
+        "harness process exited",
+        "the boundary is the harness's own exit vocabulary"
+    );
+    let session = call(&daemon, "GET", &format!("/sessions/{id}"), None).await;
+    assert_eq!(session.body["status"], "failed", "raw: {}", session.raw);
+}

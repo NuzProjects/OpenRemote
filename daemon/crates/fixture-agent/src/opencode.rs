@@ -6,7 +6,10 @@
 //!
 //! Scenarios: `plain` completes a turn; `ask` requests a permission
 //! (`permission.v2.asked`) and reflects the reply (once/always → run,
-//! reject → denied); `question` asks a structured question.
+//! reject → denied); `question` asks a structured question; `drop`
+//! closes the event connection cleanly mid-turn and never finishes the
+//! turn (the idle keep-alive / internal-restart shape, harness audit
+//! F2).
 
 use std::io::{BufRead, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -49,6 +52,7 @@ pub fn main_opencode() {
     }
 }
 
+/// What rides a subscriber pipe: one bus event.
 struct Server {
     scenario: String,
     /// SSE subscriber pipes (sync senders → their writer threads).
@@ -196,6 +200,18 @@ impl Server {
                         "error": {"type": "unknown", "message": "Provider request failed with HTTP 403"}}
                 }));
             }
+            // The server closes the event connection mid-turn, cleanly -
+            // the idle keep-alive / internal-restart shape (harness
+            // audit F2). No step.ended ever follows: the turn never
+            // finishes on the wire, and the daemon must land the session
+            // terminal, not Working forever behind a live serve child.
+            // The pause before the close is the idle interval a real
+            // keep-alive close sits behind, and it keeps the delta clear
+            // of the EOF race in the driver's event forwarder.
+            "drop" => {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                self.close_streams();
+            }
             _ => {
                 self.broadcast(json!({
                     "id": evt(), "type": "session.next.text.ended",
@@ -248,6 +264,13 @@ impl Server {
         if let Some((_, tx)) = self.pending.lock().unwrap().take() {
             let _ = tx.send(choice);
         }
+    }
+
+    /// Close every subscriber stream cleanly: the dropped senders end
+    /// their writer loops, the sockets close, and the client sees a
+    /// real EOF on the event stream (harness audit F2's drop knob).
+    fn close_streams(&self) {
+        self.subscribers.lock().unwrap().clear();
     }
 
     fn broadcast(&self, event: Value) {

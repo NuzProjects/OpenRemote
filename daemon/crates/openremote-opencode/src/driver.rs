@@ -24,6 +24,15 @@ use uuid::Uuid;
 
 const START_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// A transport error on the event stream is retried while the serve
+/// child stays alive: a momentary loopback hiccup must not end a healthy
+/// session's stream (harness audit F2). Five attempts with doubling
+/// backoff starting at 250ms stays well inside the supervisor's stop
+/// drain (3s) when the stream dies during a stop, and the child liveness
+/// gate means a dead serve never pays the full ladder.
+const SSE_RETRY_LIMIT: usize = 5;
+const SSE_RETRY_PAUSE: Duration = Duration::from_millis(250);
+
 pub struct Driver {
     child: Arc<AsyncMutex<Child>>,
     client: crate::http::HttpClient,
@@ -239,32 +248,72 @@ async fn spawn_serve(
         .await;
 
     let driver = Driver {
-        child,
+        child: Arc::clone(&child),
         client,
         session_id: session_id.clone(),
     };
     // The bus watcher: every event for our session rides the driver
-    // channel; a dropped subscription ends the session's stream.
+    // channel. A clean server-side close of the event connection is a
+    // real EOF for this stream: the watcher reports it (StdoutClosed) so
+    // the session lands on a recorded boundary instead of Working
+    // forever behind a live serve child; a transport error is retried a
+    // few times while the serve child stays alive (a momentary loopback
+    // hiccup must not fail a healthy session) before the same boundary
+    // is reported (harness audit F2).
     let watch_client = crate::http::HttpClient::new(port, &password);
+    let watch_child = child;
     let event_tx = tx.clone();
     let end_tx = tx.clone();
+    let watch_session = session_id.clone();
     tokio::spawn(async move {
-        let result = watch_client
-            .sse("/api/event", move |event| {
-                let Some(event) = map_event(&event, &session_id) else {
-                    return;
-                };
-                let tx = event_tx.clone();
-                tokio::spawn(async move {
-                    let _ = tx.send(event).await;
-                });
-            })
-            .await;
-        if result.is_err() {
-            let _ = end_tx.send(DriverEvent::StdoutClosed).await;
+        let mut backoff = SSE_RETRY_PAUSE;
+        for attempt in 0..SSE_RETRY_LIMIT {
+            let attempt_tx = event_tx.clone();
+            let attempt_session = watch_session.clone();
+            let result = watch_client
+                .sse("/api/event", move |event| {
+                    let Some(event) = map_event(&event, &attempt_session) else {
+                        return;
+                    };
+                    let tx = attempt_tx.clone();
+                    tokio::spawn(async move {
+                        let _ = tx.send(event).await;
+                    });
+                })
+                .await;
+            match result {
+                // Clean EOF: the server closed the stream. Reconnecting
+                // here would paper over a serve that stopped serving
+                // events for this session; a reconnect belongs on the
+                // error path, where the child is healthy and the drop is
+                // momentary. Future work: reestablish the subscription
+                // with a Last-Event-ID replay when the console can
+                // absorb the gap.
+                Ok(()) => break,
+                Err(_)
+                    if attempt + 1 < SSE_RETRY_LIMIT && watch_child_alive(&watch_child).await =>
+                {
+                    tokio::time::sleep(backoff).await;
+                    backoff *= 2;
+                }
+                Err(_) => break,
+            }
         }
+        let _ = end_tx.send(DriverEvent::StdoutClosed).await;
     });
     Ok((driver, rx))
+}
+
+/// Whether the serve child is still with us. A stopped/killed child
+/// means the stream's death is the process's death: the pump's own
+/// boundary events cover it, and the watcher must simply end (harness
+/// audit F2).
+async fn watch_child_alive(child: &Arc<AsyncMutex<Child>>) -> bool {
+    let mut child = child.lock().await;
+    child
+        .try_wait()
+        .map(|status| status.is_none())
+        .unwrap_or(false)
 }
 
 /// Map one bus event for our session onto a driver event.
