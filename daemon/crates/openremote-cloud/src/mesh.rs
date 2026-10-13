@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures_util::future::BoxFuture;
 use futures_util::{SinkExt, StreamExt};
@@ -90,13 +90,20 @@ struct Call {
     done: Option<oneshot::Sender<Result<Response, MeshError>>>,
 }
 
+/// One inbound stream: the request so far, and when its slot in the
+/// per-peer window is reclaimed if the END never comes.
+struct Inbound {
+    request: Request,
+    deadline: Instant,
+}
+
 #[derive(Default)]
 struct State {
     peers: HashMap<DeviceId, Peer>,
     links: HashMap<DeviceId, Link>,
     waiters: HashMap<DeviceId, Vec<oneshot::Sender<()>>>,
     calls: HashMap<(DeviceId, u32), Call>,
-    inbound: HashMap<(DeviceId, u32), Request>,
+    inbound: HashMap<(DeviceId, u32), Inbound>,
     next_stream: u32,
     auto_update: bool,
     online: std::collections::HashSet<DeviceId>,
@@ -119,6 +126,34 @@ pub struct Mesh {
 
 const MAX_INBOUND_PER_PEER: usize = 32;
 const LINK_ATTEMPT: Duration = Duration::from_secs(4);
+/// How long an inbound stream may wait for its END before its slot is
+/// reclaimed. It must outlast the peer's own request timeout (a harness
+/// install may answer slowly) so a live request never loses its slot; the
+/// bound exists for the peer that freezes and never ends anything, which
+/// nothing else would ever clean up.
+const INBOUND_TTL: Duration = Duration::from_secs(960);
+/// Relay sessions in a row that never even established before the phase
+/// admits the relay is down: one failed handshake is a deploy-window
+/// blip; three in a row, seconds apart under backoff, is an outage the
+/// user should see instead of a phase that sits at "connecting" with no
+/// error.
+const HANDSHAKE_FAILURES_TO_ERROR: u32 = 3;
+/// Device-list fetches in a row that fail before they surface. At the
+/// refresher's five-minute cadence this is ten minutes of a frozen device
+/// list, which is an outage, not a blip.
+const REFRESH_FAILURES_TO_ERROR: u32 = 2;
+
+/// A device-list entry's noise key, decoded: `None` unless it is exactly
+/// the 32 bytes an X25519 public key is, in clean base64url. Anything
+/// else must never be pinned or stored as key material; an entry without
+/// a usable key is skipped and fetched again.
+fn validated_pubkey(raw: &str) -> Option<Vec<u8>> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(raw)
+        .ok()?;
+    (bytes.len() == 32).then_some(bytes)
+}
 
 impl Mesh {
     pub fn me(&self) -> DeviceId {
@@ -188,22 +223,42 @@ impl Mesh {
             .unwrap_or_default()
     }
 
-    /// Takes the registry's device list. New keys are pinned; a changed key
-    /// marks the device and its key is not used.
-    pub fn update_devices(&self, body: &Value) {
+    /// Takes the registry's device list. New keys are pinned; a changed
+    /// key marks the device and its key is not used. An entry whose
+    /// `noise_pubkey` is absent or malformed is skipped, never pinned:
+    /// pinning it would flag the device `key_changed` forever once the
+    /// real key shows up. Returns whether every entry was usable; the
+    /// refresher treats a skipped entry like a failed fetch.
+    pub fn update_devices(&self, body: &Value) -> bool {
         let mut pins = self.pins();
         let mut pinned_new = false;
         let mut peers = HashMap::new();
+        let mut unpinnable: Vec<DeviceId> = Vec::new();
         for d in body["devices"].as_array().into_iter().flatten() {
             let Some(id) = d["id"].as_str().and_then(DeviceId::parse) else {
                 continue;
             };
-            let key = d["noise_pubkey"].as_str().unwrap_or_default().to_string();
+            let raw = d["noise_pubkey"].as_str();
+            let Some(pubkey) = raw.and_then(validated_pubkey) else {
+                unpinnable.push(id);
+                continue;
+            };
+            let key = raw.unwrap_or_default();
             let problem = match pins.get(&id.to_string()) {
+                // A pin that isn't valid key material was never a real
+                // key: an older daemon pinned an empty one when the
+                // registry served this entry without a key, and it
+                // poisoned the device. Re-pin the real key instead of
+                // flagging the device forever.
+                Some(pin) if validated_pubkey(pin).is_none() => {
+                    pins.insert(id.to_string(), key.to_string());
+                    pinned_new = true;
+                    None
+                }
                 Some(pin) if *pin != key => Some("key_changed"),
                 Some(_) => None,
                 None => {
-                    pins.insert(id.to_string(), key.clone());
+                    pins.insert(id.to_string(), key.to_string());
                     pinned_new = true;
                     None
                 }
@@ -212,10 +267,6 @@ impl Mesh {
                 *self.kind.lock().unwrap_or_else(|e| e.into_inner()) =
                     d["kind"].as_str().unwrap_or("desktop").to_string();
             }
-            use base64::Engine;
-            let pubkey = base64::engine::general_purpose::URL_SAFE_NO_PAD
-                .decode(&key)
-                .unwrap_or_default();
             peers.insert(
                 id,
                 Peer {
@@ -240,6 +291,13 @@ impl Mesh {
             }
         }
         let mut st = self.state();
+        // A skipped entry keeps its last good self: one glitchy fetch must
+        // not drop a working peer, and its link, from the list.
+        for id in &unpinnable {
+            if let Some(peer) = st.peers.remove(id) {
+                peers.insert(*id, peer);
+            }
+        }
         // Devices that left the account lose their links.
         let gone: Vec<DeviceId> = st
             .links
@@ -252,6 +310,7 @@ impl Mesh {
         }
         st.peers = peers;
         st.auto_update = body["prefs"]["auto_update"].as_bool().unwrap_or(true);
+        unpinnable.is_empty()
     }
 
     fn set_online(&self, ids: &[DeviceId]) {
@@ -490,6 +549,11 @@ impl Mesh {
         let mut st = self.state();
         match kind {
             rpc::OPEN => {
+                let now = Instant::now();
+                // Reclaim expired slots first: a peer that OPENed streams
+                // and then stalled without ending them must not wedge its
+                // whole window to "busy".
+                reclaim_expired(&mut st.inbound, now);
                 let open = st.inbound.keys().filter(|(p, _)| *p == from).count();
                 let request = serde_json::from_slice::<Value>(body).ok().map(|h| Request {
                     method: h["method"].as_str().unwrap_or("GET").to_string(),
@@ -499,7 +563,13 @@ impl Mesh {
                 });
                 match request {
                     Some(r) if open < MAX_INBOUND_PER_PEER => {
-                        st.inbound.insert((from, stream), r);
+                        st.inbound.insert(
+                            (from, stream),
+                            Inbound {
+                                request: r,
+                                deadline: now + INBOUND_TTL,
+                            },
+                        );
                     }
                     _ => {
                         let reset = rpc::frame(rpc::RESET, stream, b"busy");
@@ -510,8 +580,8 @@ impl Mesh {
             rpc::DATA => {
                 let too_big = match st.inbound.get_mut(&(from, stream)) {
                     Some(r) => {
-                        r.body.extend_from_slice(body);
-                        r.body.len() > rpc::MAX_REQUEST
+                        r.request.body.extend_from_slice(body);
+                        r.request.body.len() > rpc::MAX_REQUEST
                     }
                     None => false,
                 };
@@ -522,9 +592,10 @@ impl Mesh {
                 }
             }
             rpc::END => {
-                let Some(request) = st.inbound.remove(&(from, stream)) else {
+                let Some(inbound) = st.inbound.remove(&(from, stream)) else {
                     return;
                 };
+                let request = inbound.request;
                 let context = self.context(&st, from);
                 drop(st);
                 let mesh = Arc::clone(self);
@@ -601,6 +672,17 @@ impl Mesh {
     }
 }
 
+/// Reclaims inbound streams whose END never came: a peer frozen mid
+/// request must not hold its slots in the per-peer window forever. The
+/// OPEN handler checks before admitting new streams, and the refresher
+/// sweeps with this periodically so a silent peer's slots come back even
+/// when it sends nothing more. Returns how many slots were reclaimed.
+fn reclaim_expired(inbound: &mut HashMap<(DeviceId, u32), Inbound>, now: Instant) -> usize {
+    let before = inbound.len();
+    inbound.retain(|_, entry| now < entry.deadline);
+    before - inbound.len()
+}
+
 /// Drops a peer's link and fails everything in flight with it.
 fn fail_peer(st: &mut State, peer: DeviceId, _why: &str) {
     st.links.remove(&peer);
@@ -668,18 +750,49 @@ pub fn start(
 }
 
 /// Keeps the device list current: at start, when the relay says it
-/// changed, when an unknown device knocks, and every few minutes.
+/// changed, when an unknown device knocks, and every few minutes. A
+/// fetch that keeps failing is surfaced instead of swallowed: after
+/// REFRESH_FAILURES_TO_ERROR consecutive failures (a registry that keeps
+/// refusing the credential, or entries too broken to pin) the console
+/// shows an error next to the phase instead of a silently frozen device
+/// list, and the next good fetch clears it. The loop also rides the
+/// inbound sweep: a stream whose END never arrives gives its slot back
+/// here.
 async fn refresh_devices(cloud: Arc<Cloud>, mesh: Arc<Mesh>) {
+    let mut failures = 0u32;
+    // The phase this loop surfaced its error at, so the next success
+    // clears only what it set, and only if the phase hasn't moved on to
+    // something else meanwhile.
+    let mut surfaced: Option<Phase> = None;
     loop {
         if let Some(credential) = cloud.device_credential() {
-            match cloud.registry().devices(&credential).await {
+            let ok = match cloud.registry().devices(&credential).await {
                 Ok(body) => mesh.update_devices(&body),
                 Err(crate::registry::RegistryError::Revoked) => {
                     cloud.removed(&*mesh.host);
                     return;
                 }
-                Err(_) => {}
+                Err(_) => false,
+            };
+            if ok {
+                failures = 0;
+                if let Some(at) = surfaced.take() {
+                    if cloud.phase() == at {
+                        cloud.set_phase(at, None);
+                    }
+                }
+            } else {
+                failures = failures.saturating_add(1);
+                if failures >= REFRESH_FAILURES_TO_ERROR {
+                    let at = cloud.phase();
+                    cloud.set_phase(at, Some("can't reach OpenRemote Cloud".into()));
+                    surfaced = Some(at);
+                }
             }
+        }
+        {
+            let mut st = mesh.state();
+            reclaim_expired(&mut st.inbound, Instant::now());
         }
         tokio::select! {
             _ = mesh.refresh.notified() => {}
@@ -709,20 +822,46 @@ async fn relay_loop(
     mut out_rx: mpsc::UnboundedReceiver<(DeviceId, Vec<u8>)>,
 ) {
     let mut backoff = Duration::from_secs(1);
+    let mut handshake_failures = 0u32;
     loop {
         let Some(credential) = cloud.device_credential() else {
             return;
         };
-        match relay_session(cloud, mesh, &credential, &mut out_rx).await {
+        let (established, ended) = relay_session(cloud, mesh, &credential, &mut out_rx).await;
+        match ended {
             Ended::Stop => return,
             Ended::Retry => {}
         }
         mesh.drop_links();
         if cloud.phase() == Phase::Online {
-            cloud.set_phase(Phase::Offline, None);
+            // However the session ended, the user must not be left looking
+            // at a stale "online".
+            cloud.set_phase(
+                Phase::Offline,
+                Some("the connection to OpenRemote Cloud dropped".into()),
+            );
             // The link was up: this is a fresh drop, not a run of failures.
             backoff = Duration::from_secs(1);
         }
+        if established {
+            handshake_failures = 0;
+        } else {
+            handshake_failures = handshake_failures.saturating_add(1);
+            if handshake_failures >= HANDSHAKE_FAILURES_TO_ERROR {
+                // The endpoint answers something, but the session never
+                // comes up (a proxy in front of the relay 503ing through a
+                // maintenance window). A run of those must reach the user
+                // instead of leaving the phase at whatever it was with no
+                // error.
+                cloud.set_phase(Phase::Offline, Some("can't reach OpenRemote Cloud".into()));
+            }
+        }
+        // Frames queued during the dead session rode links that were just
+        // dropped and can't be delivered in order; anything queued during
+        // the pause below belongs to a fresh link and must ride the next
+        // session. Draining after the pause ate exactly that: the first
+        // handshake of every reconnect.
+        while out_rx.try_recv().is_ok() {}
         // Jitter, so a relay restart isn't met by every device at once.
         let jitter = Duration::from_millis(u64::from(uuid::Uuid::new_v4().as_bytes()[0]) * 4);
         tokio::select! {
@@ -731,23 +870,25 @@ async fn relay_loop(
             }
             _ = mesh.wake.notified() => backoff = Duration::from_secs(1),
         }
-        // Frames queued while away can't be delivered in order any more.
-        while out_rx.try_recv().is_ok() {}
     }
 }
 
+/// One relay session: the WebSocket handshake and the connected loop.
+/// Returns whether the session was ever established (the handshake
+/// completed, even if the socket then died at once), so the loop can tell
+/// a drop apart from a handshake that keeps failing, and how it ended.
 async fn relay_session(
     cloud: &Arc<Cloud>,
     mesh: &Arc<Mesh>,
     credential: &str,
     out_rx: &mut mpsc::UnboundedReceiver<(DeviceId, Vec<u8>)>,
-) -> Ended {
+) -> (bool, Ended) {
     let url = cloud.config().relay_url();
     let Ok(uri) = url.parse::<http::Uri>() else {
-        return Ended::Stop;
+        return (false, Ended::Stop);
     };
     let Ok(mut request) = url.as_str().into_client_request() else {
-        return Ended::Stop;
+        return (false, Ended::Stop);
     };
     let auth = format!("Bearer {credential}");
     if let Ok(value) = auth.parse() {
@@ -758,7 +899,7 @@ async fn relay_session(
     }
     let Ok(stream) = cloud.http().connect(&uri).await else {
         cloud.set_phase(Phase::Offline, Some("can't reach OpenRemote Cloud".into()));
-        return Ended::Retry;
+        return (false, Ended::Retry);
     };
     let ws = match tokio_tungstenite::client_async(request, stream).await {
         Ok((ws, _)) => ws,
@@ -769,16 +910,16 @@ async fn relay_session(
                         Phase::Relink,
                         Some("sign in to OpenRemote Cloud again".into()),
                     );
-                    Ended::Stop
+                    (false, Ended::Stop)
                 }
                 410 => {
                     cloud.removed(&*mesh.host);
-                    Ended::Stop
+                    (false, Ended::Stop)
                 }
-                _ => Ended::Retry,
+                _ => (false, Ended::Retry),
             };
         }
-        Err(_) => return Ended::Retry,
+        Err(_) => return (false, Ended::Retry),
     };
     let (mut sink, mut stream) = ws.split();
     let mut ping = tokio::time::interval(Duration::from_secs(25));
@@ -793,7 +934,7 @@ async fn relay_session(
             incoming = tokio::time::timeout(quiet, stream.next()) => {
                 let message = match incoming {
                     Ok(Some(Ok(m))) => m,
-                    _ => return Ended::Retry,
+                    _ => return (true, Ended::Retry),
                 };
                 probe = None;
                 match message {
@@ -842,37 +983,302 @@ async fn relay_session(
                         return match code {
                             Some(4003) => {
                                 cloud.removed(&*mesh.host);
-                                Ended::Stop
+                                (true, Ended::Stop)
                             }
                             Some(4001) => {
                                 cloud.set_phase(Phase::Offline, Some("this device connected from somewhere else".into()));
-                                Ended::Stop
+                                (true, Ended::Stop)
                             }
-                            _ => Ended::Retry,
+                            _ => (true, Ended::Retry),
                         };
                     }
                     _ => {}
                 }
             }
             outgoing = out_rx.recv() => {
-                let Some((to, payload)) = outgoing else { return Ended::Stop };
+                let Some((to, payload)) = outgoing else { return (true, Ended::Stop) };
                 let mut frame = to.to_bytes().to_vec();
                 frame.extend_from_slice(&payload);
                 if sink.send(Message::Binary(frame.into())).await.is_err() {
-                    return Ended::Retry;
+                    return (true, Ended::Retry);
                 }
             }
             _ = ping.tick() => {
                 if sink.send(Message::Ping(Default::default())).await.is_err() {
-                    return Ended::Retry;
+                    return (true, Ended::Retry);
                 }
             }
             _ = mesh.wake.notified() => {
                 if sink.send(Message::Ping(Default::default())).await.is_err() {
-                    return Ended::Retry;
+                    return (true, Ended::Retry);
                 }
                 probe.get_or_insert(tokio::time::Instant::now() + Duration::from_secs(10));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A host that records nothing: the tests here only exercise the
+    /// pure bookkeeping, never a live frame.
+    struct Nop;
+    impl CloudHost for Nop {
+        fn dispatch(&self, _: PeerContext, _: Request) -> BoxFuture<'static, Response> {
+            Box::pin(std::future::ready(Response {
+                status: 200,
+                content_type: None,
+                body: Vec::new(),
+            }))
+        }
+        fn note(&self, _: PeerContext, _: Value) {}
+        fn linked(&self, _: DeviceId) {}
+        fn online(&self, _: DeviceId) {}
+        fn revoked(&self) {}
+    }
+
+    /// A mesh over a throwaway pins file, in the temp dir the way this
+    /// workspace's other unit tests do it.
+    fn test_mesh() -> (Mesh, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("or-mesh-{}", uuid::Uuid::new_v4()));
+        openremote_core::fsx::create_private_dir(&dir).unwrap();
+        let (out, _rx) = mpsc::unbounded_channel();
+        let mesh = Mesh {
+            me: DeviceId::new(),
+            account: "test".into(),
+            private: Vec::new(),
+            kind: Mutex::new("desktop".into()),
+            out,
+            state: Mutex::new(State::default()),
+            host: Arc::new(Nop),
+            pins_file: dir.join("peers.json"),
+            refresh: Notify::new(),
+            wake: Notify::new(),
+        };
+        (mesh, dir)
+    }
+
+    /// A fresh X25519 public key, base64url, exactly as the registry
+    /// serves them.
+    fn key() -> String {
+        use base64::Engine;
+        let keys = snow::Builder::new(crate::identity::NOISE_PARAMS.parse().unwrap())
+            .generate_keypair()
+            .unwrap();
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(keys.public)
+    }
+
+    fn decode(raw: &str) -> Vec<u8> {
+        use base64::Engine;
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(raw)
+            .unwrap()
+    }
+
+    fn pins_at(mesh: &Mesh) -> HashMap<String, String> {
+        std::fs::read(&mesh.pins_file)
+            .ok()
+            .and_then(|raw| serde_json::from_slice(&raw).ok())
+            .unwrap_or_default()
+    }
+
+    /// `None`: an unpinnable key is never key material.
+    #[test]
+    fn keys_without_32_clean_base64_bytes_are_rejected() {
+        use base64::Engine;
+        let b64 = |bytes: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+        assert!(validated_pubkey(&key()).is_some(), "a real key passes");
+        assert!(validated_pubkey("").is_none(), "empty never pins");
+        assert!(validated_pubkey("no!").is_none(), "bad base64 never pins");
+        assert!(validated_pubkey(&b64(&[0u8; 31])).is_none(), "too short");
+        assert!(validated_pubkey(&b64(&[0u8; 33])).is_none(), "too long");
+        assert_eq!(
+            validated_pubkey(&key()).map(|k| k.len()),
+            Some(32),
+            "the decoded key is exactly the pin"
+        );
+    }
+
+    /// F8: an entry without a usable key is skipped and re-fetched, not
+    /// pinned; when the real key arrives it pins cleanly with no
+    /// `key_changed`, and a glitchy re-fetch never drops a good peer.
+    #[test]
+    fn an_unpinnable_entry_is_skipped_not_pinned() {
+        let (mesh, dir) = test_mesh();
+        let good = (DeviceId::new(), key());
+        let silent = DeviceId::new(); // no noise_pubkey at all
+        let blank = (DeviceId::new(), String::new());
+        let malformed = (DeviceId::new(), "not base64!".to_string());
+        let short = (DeviceId::new(), {
+            use base64::Engine;
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0u8; 31])
+        });
+
+        let entry = |id: Option<DeviceId>, raw: Option<&str>| {
+            let mut d = json!({"name": "d", "kind": "desktop"});
+            if let Some(id) = id {
+                d["id"] = id.to_string().into();
+            }
+            if let Some(raw) = raw {
+                d["noise_pubkey"] = raw.into();
+            }
+            d
+        };
+        let body = json!({"devices": [
+            entry(Some(good.0), Some(&good.1)),
+            entry(Some(silent), None),
+            entry(Some(blank.0), Some(&blank.1)),
+            entry(Some(malformed.0), Some(&malformed.1)),
+            entry(Some(short.0), Some(&short.1)),
+        ]});
+        assert!(
+            !mesh.update_devices(&body),
+            "an unpinnable entry reads as a failed fetch"
+        );
+
+        let peers = mesh.peers();
+        assert_eq!(peers.len(), 1, "only the pinnable device is listed");
+        assert_eq!(peers[0].id, good.0);
+        assert_eq!(peers[0].problem, None, "the good device has no problem");
+        assert_eq!(peers[0].pubkey, decode(&good.1), "its key decodes");
+        let pins = pins_at(&mesh);
+        assert_eq!(pins.len(), 1, "nothing unpinnable was stored");
+        assert_eq!(pins[&good.0.to_string()], good.1, "the good key is pinned");
+
+        // The registry recovers and serves the real key: no key_changed,
+        // because nothing was ever pinned for these devices.
+        let recovered = json!({"devices": [
+            entry(Some(good.0), Some(&good.1)),
+            entry(Some(silent), Some(&key())),
+            entry(Some(blank.0), Some(&key())),
+            entry(Some(malformed.0), Some(&key())),
+            entry(Some(short.0), Some(&key())),
+        ]});
+        assert!(
+            mesh.update_devices(&recovered),
+            "the recovered list is clean"
+        );
+        for id in [&silent, &blank.0, &malformed.0, &short.0] {
+            let peer = mesh.peer(*id).expect("recovered into the list");
+            assert_eq!(peer.problem, None, "the real key pins without a flag");
+        }
+        assert_eq!(pins_at(&mesh).len(), 5, "each device ended up pinned once");
+
+        // One glitchy fetch after a good one: the entry keeps its last
+        // good self (and its link) instead of being dropped from the list.
+        let glitch = json!({"devices": [entry(Some(good.0), None)]});
+        assert!(!mesh.update_devices(&glitch));
+        let kept = mesh
+            .peer(good.0)
+            .expect("a skipped entry keeps its last good self");
+        assert_eq!(kept.problem, None);
+        assert_eq!(kept.pubkey, decode(&good.1), "the last good key survives");
+        // A device the list left out entirely is still removed, as before.
+        assert!(mesh.peer(silent).is_none(), "absent still means removed");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// F8's residue: a pin that isn't valid key material was never a real
+    /// key, so the real key later is a re-pin, not a change. A genuine key
+    /// change is still flagged.
+    #[test]
+    fn an_empty_legacy_pin_is_healed_and_a_real_change_is_still_flagged() {
+        let (mesh, dir) = test_mesh();
+        let id = DeviceId::new();
+        assert!(
+            !mesh.pins_file.exists(),
+            "the throwaway pins file starts clean"
+        );
+
+        // An older daemon pinned the empty key a glitchy fetch served.
+        openremote_core::fsx::write_private(
+            &mesh.pins_file,
+            &serde_json::to_vec(&json!({id.to_string(): ""})).unwrap(),
+        )
+        .unwrap();
+
+        let real = key();
+        let body = json!({"devices": [
+            {"id": id.to_string(), "noise_pubkey": real, "name": "d", "kind": "desktop"},
+        ]});
+        assert!(mesh.update_devices(&body), "the list is otherwise clean");
+        let peer = mesh.peer(id).unwrap();
+        assert_eq!(peer.problem, None, "the empty pin is healed, not flagged");
+        assert_eq!(peer.pubkey, decode(&real));
+        assert_eq!(
+            pins_at(&mesh)[&id.to_string()],
+            real,
+            "the pin is the real key"
+        );
+
+        // The registry's key genuinely changing is still refused.
+        let changed = json!({"devices": [
+            {"id": id.to_string(), "noise_pubkey": key(), "name": "d", "kind": "desktop"},
+        ]});
+        assert!(mesh.update_devices(&changed));
+        assert_eq!(
+            mesh.peer(id).unwrap().problem,
+            Some("key_changed"),
+            "a real change is still flagged"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// F5: an inbound stream whose END never comes gives its slot back at
+    /// its deadline; a live one keeps it.
+    #[test]
+    fn expired_inbound_streams_reclaim_their_slots() {
+        let a = DeviceId::new();
+        let b = DeviceId::new();
+        let live = || Request {
+            method: "GET".into(),
+            path: "/".into(),
+            content_type: None,
+            body: Vec::new(),
+        };
+        let mut inbound = HashMap::new();
+        let now = Instant::now();
+        inbound.insert(
+            (a, 1),
+            Inbound {
+                request: live(),
+                deadline: now - Duration::from_secs(1),
+            },
+        );
+        inbound.insert(
+            (a, 2),
+            Inbound {
+                request: live(),
+                deadline: now, // exactly at the deadline: gone
+            },
+        );
+        inbound.insert(
+            (a, 3),
+            Inbound {
+                request: live(),
+                deadline: now + Duration::from_secs(60),
+            },
+        );
+        inbound.insert(
+            (b, 1),
+            Inbound {
+                request: live(),
+                deadline: now + Duration::from_secs(60),
+            },
+        );
+        assert_eq!(reclaim_expired(&mut inbound, now), 2, "the stale pair goes");
+        assert_eq!(inbound.len(), 2, "the live ones stay");
+        assert!(inbound.contains_key(&(a, 3)));
+        assert!(inbound.contains_key(&(b, 1)));
+        assert_eq!(
+            reclaim_expired(&mut inbound, now + Duration::from_secs(61)),
+            2,
+            "the next sweep takes what has aged out since"
+        );
+        assert!(inbound.is_empty());
     }
 }
