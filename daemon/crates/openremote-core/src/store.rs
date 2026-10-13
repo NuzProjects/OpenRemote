@@ -8,6 +8,12 @@ use thiserror::Error;
 /// Millis in half an hour - the uptime band's slice size.
 const HALF_HOUR_MS: i64 = 1_800_000;
 
+/// Receipts buy idempotency for client retries, and retries come back
+/// within minutes, not years - so the table is bounded. Past the cap the
+/// oldest go; a request older than the window replaying executes again,
+/// exactly as it would on a machine that never saw the first attempt.
+const RECEIPT_CAP: usize = 10_000;
+
 /// The grid's hostname slug: lowercase, alphanumerics and single dashes
 /// (runs of separators collapse - `Build  BOX` and `build-box` are the
 /// same machine).
@@ -74,6 +80,13 @@ pub struct ReplicaAppend {
     pub head: u64,
 }
 
+/// Just a line's sequence number: enough to follow a log's continuity
+/// without parsing (or this build knowing) the whole event.
+#[derive(serde::Deserialize)]
+struct SeqLine {
+    seq: u64,
+}
+
 /// Sessions, decisions, receipts - the durable daemon state.
 ///
 /// Persistence: per-session append-only `events.jsonl` plus an atomically
@@ -125,22 +138,28 @@ impl Store {
         };
         let mut store = Self { dir, state };
         let healed = store.heal_logs()?;
+        let pruned = store.prune_receipts();
         let reconciled = store.reconcile_crashed()?;
         let titled = store.backfill_titles();
         let had_this_machine = store.machines().iter().any(|m| m.this_machine);
         let this_id = store.ensure_this_machine();
         // Opening the store means the daemon is running - present now.
         store.mark_present(&this_id).ok();
-        if healed || reconciled || titled || !had_this_machine {
+        if healed || pruned || reconciled || titled || !had_this_machine {
             store.persist()?;
         }
         Ok(store)
     }
 
     /// A crash can tear the last line of a log, or land a batch in the log
-    /// that state.json never recorded (the log is written first). Cut the
-    /// torn line, and re-apply whatever the log holds past the recorded
-    /// sequence, so the next append doesn't reuse a number.
+    /// that state.json never recorded (the log is written first). Power
+    /// loss can do the reverse - state.json's rewrite reached the disk
+    /// while the log's append didn't - leaving `next_seq` past what the
+    /// log really holds. A chat whose log skips sequence numbers wedges
+    /// every peer pull on it forever (gap, pull, same gap, repeat), so a
+    /// log must stay contiguous from its first line to its last: the torn
+    /// tail is cut, anything after a discontinuity is cut, and `next_seq`
+    /// settles on the log's true tail whichever side it was on.
     fn heal_logs(&mut self) -> Result<bool, StoreError> {
         const TAIL: u64 = 64 * 1024;
         let ids: Vec<SessionId> = self.state.sessions.keys().copied().collect();
@@ -153,8 +172,15 @@ impl Store {
             else {
                 continue;
             };
+            let recorded = self.state.next_seq.get(&id).copied().unwrap_or(0);
             let len = file.metadata()?.len();
             if len == 0 {
+                // A durably empty log that state credits with events is
+                // the state-ahead case at its extreme: everything was lost.
+                if recorded > 0 {
+                    self.state.next_seq.insert(id, 0);
+                    changed = true;
+                }
                 continue;
             }
             let start = len.saturating_sub(TAIL);
@@ -176,25 +202,105 @@ impl Store {
                 }
                 changed = true;
             }
-            let text = String::from_utf8_lossy(&tail);
-            // The window may start mid-line; that partial line is skipped.
-            let lines = text.lines().skip(usize::from(start > 0));
-            let recorded = self.state.next_seq.get(&id).copied().unwrap_or(0);
-            let mut next = recorded;
-            for line in lines {
-                if let Ok(event) = serde_json::from_str::<Event>(line) {
-                    if event.seq >= next {
-                        self.apply(&event)?;
-                        next = event.seq + 1;
-                    }
-                }
+            let (run_next, cut_at) = self.heal_log_window(&id, &tail, start, recorded)?;
+            // `run_next` is the seq after the log's contiguous run - the
+            // replay target when the state lagged, the rewind target when
+            // it didn't.
+            if let Some(run_next) = run_next.filter(|next| *next != recorded) {
+                self.state.next_seq.insert(id, run_next);
+                changed = true;
             }
-            if next > recorded {
-                self.state.next_seq.insert(id, next);
+            if let Some(cut_at) = cut_at {
+                file.set_len(cut_at)?;
                 changed = true;
             }
         }
         Ok(changed)
+    }
+
+    /// Walk a healed window of one chat's log: apply to the state every
+    /// event of the contiguous run at or past `recorded`, and report
+    /// `(the seq after the run's last line, the file offset just past
+    /// it)`. The offset is set only when something follows the run that
+    /// it disowns - a line without a parsable seq, one that breaks the
+    /// sequence, or one naming another chat - so the caller cuts there.
+    /// `start` is the window's offset in the file; a window that opens
+    /// mid-line skips that partial first line.
+    fn heal_log_window(
+        &mut self,
+        id: &SessionId,
+        window: &[u8],
+        start: u64,
+        recorded: u64,
+    ) -> Result<(Option<u64>, Option<u64>), StoreError> {
+        // An empty window that starts at 0 sees a whole empty log;
+        // otherwise the log's tail is simply out of sight.
+        if window.is_empty() {
+            return Ok(((start == 0).then_some(0), None));
+        }
+        let mut expected: Option<u64> = None; // the seq the run wants next
+        let mut run_next = None; // the seq after the run's last line so far
+        let mut run_end = None; // the file offset just past that line
+        let mut cut_at = None;
+        let mut pos = start;
+        let mut partial = start > 0;
+        for segment in window.split_inclusive(|b| *b == b'\n') {
+            let after = pos + segment.len() as u64;
+            let line = match segment.strip_suffix(b"\n") {
+                Some(_skipped) if partial => {
+                    // The window's first bytes are half a line: skip them.
+                    partial = false;
+                    pos = after;
+                    continue;
+                }
+                Some(line) => line,
+                // Trailing bytes without a newline: unreachable after the
+                // torn-tail cut, treated as a break all the same.
+                None => {
+                    cut_at = run_end;
+                    break;
+                }
+            };
+            pos = after;
+            let text = match std::str::from_utf8(line) {
+                Ok(text) => text,
+                Err(_) => {
+                    cut_at = run_end;
+                    break;
+                }
+            };
+            let seq = match serde_json::from_str::<SeqLine>(text) {
+                Ok(SeqLine { seq }) => seq,
+                // A line without a seq ends the reliable log.
+                Err(_) => {
+                    cut_at = run_end;
+                    break;
+                }
+            };
+            if expected.is_some_and(|want| seq != want) {
+                // A skipped number: no peer can ever be sent the missing
+                // range, so the run (and the log) ends before it.
+                cut_at = run_end;
+                break;
+            }
+            // Replay what the state never recorded. Events this build
+            // doesn't know stay in the log; the state just skips them.
+            if seq >= recorded {
+                if let Ok(event) = serde_json::from_str::<Event>(text) {
+                    if event.session_id != *id {
+                        // A line naming another chat doesn't belong in
+                        // this log; the run ends before it.
+                        cut_at = run_end;
+                        break;
+                    }
+                    self.apply(&event)?;
+                }
+            }
+            expected = Some(seq + 1);
+            run_next = Some(seq + 1);
+            run_end = Some(after);
+        }
+        Ok((run_next, cut_at))
     }
 
     /// Chats that were running here when the daemon died: mid-turn deaths
@@ -620,8 +726,37 @@ impl Store {
         }
         let request_id = receipt.request_id.clone();
         self.state.receipts.insert(request_id, receipt);
+        // Before persisting, so the bounded table is what lands on disk.
+        self.prune_receipts();
         self.persist()?;
         Ok(true)
+    }
+
+    /// Evict the oldest receipts past `RECEIPT_CAP` (by update time, then
+    /// request id, so ties evict deterministically). Called on every
+    /// record and on open, so a table that grew under an older build is
+    /// bounded the first time this build sees it.
+    fn prune_receipts(&mut self) -> bool {
+        let len = self.state.receipts.len();
+        if len <= RECEIPT_CAP {
+            return false;
+        }
+        let mut ranked: Vec<(i64, String)> = self
+            .state
+            .receipts
+            .iter()
+            .map(|(id, r)| (r.updated_at, id.clone()))
+            .collect();
+        ranked.sort_unstable();
+        let evicted: Vec<String> = ranked
+            .into_iter()
+            .take(len - RECEIPT_CAP)
+            .map(|(_, id)| id)
+            .collect();
+        for id in evicted {
+            self.state.receipts.remove(&id);
+        }
+        true
     }
 
     /// Mark all pending decisions of a session retired - silently, by contract.
@@ -924,14 +1059,10 @@ impl Store {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), head)),
             Err(e) => return Err(e.into()),
         };
-        #[derive(serde::Deserialize)]
-        struct Seq {
-            seq: u64,
-        }
         let mut out = Vec::new();
         let mut size = 0;
         for line in raw.lines() {
-            let Ok(Seq { seq }) = serde_json::from_str(line) else {
+            let Ok(SeqLine { seq }) = serde_json::from_str(line) else {
                 continue;
             };
             if seq < from {
@@ -1041,6 +1172,12 @@ impl Store {
             .append(true)
             .open(log_dir.join("events.jsonl"))?;
         log.write_all(lines.as_bytes())?;
+        // The append reaches the disk before the state rewrite that
+        // records it (persist fsyncs): otherwise power loss can leave
+        // state's next_seq past what the log really holds, and a chat
+        // whose log skips numbers wedges every peer pull on it forever.
+        // One sync per batch, not per event.
+        log.sync_all()?;
         Ok(())
     }
 
@@ -1643,6 +1780,95 @@ mod tests {
         assert_eq!(next.seq, 2, "no sequence number is reused");
     }
 
+    /// Put a next_seq into state.json directly: the on-disk shape of
+    /// power loss landing state.json's fsynced rewrite while the log's
+    /// append was still in flight.
+    fn force_next_seq(dir: &std::path::Path, id: &SessionId, seq: u64) {
+        let path = dir.join("state.json");
+        let mut state: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        if state.get("next_seq").is_none() {
+            state["next_seq"] = serde_json::json!({});
+        }
+        state["next_seq"][id.to_string()] = serde_json::json!(seq);
+        fs::write(&path, serde_json::to_string(&state).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_state_ahead_of_its_log_rewinds_to_the_log_s_true_tail() {
+        let dir = tempdir();
+        let mut store = Store::open(dir.clone()).unwrap();
+        let s = session();
+        store
+            .append(s.id, EventPayload::SessionCreated { session: s.clone() })
+            .unwrap();
+        store.append(s.id, user_message(1, "Ship it")).unwrap();
+        drop(store);
+        // state.json credits the log with five events; the log holds two.
+        force_next_seq(&dir, &s.id, 5);
+        let mut store = Store::open(dir).unwrap();
+        assert_eq!(store.head(&s.id), 2, "rewound to the log's true tail");
+        let next = store.append(s.id, user_message(2, "still going")).unwrap();
+        assert_eq!(next.seq, 2, "no number is skipped: no gap to wedge a peer");
+    }
+
+    #[test]
+    fn a_log_that_skips_numbers_is_cut_back_to_its_contiguous_run() {
+        let dir = tempdir();
+        let mut store = Store::open(dir.clone()).unwrap();
+        let s = session();
+        store
+            .append(s.id, EventPayload::SessionCreated { session: s.clone() })
+            .unwrap();
+        store.append(s.id, user_message(1, "one")).unwrap();
+        drop(store);
+        // Power loss kept a later page of the log but lost seq 2's, and
+        // state.json recorded all of it: the log jumps 1 -> 3.
+        let orphan = |seq: u64, text: &str| {
+            serde_json::to_string(&Event {
+                seq,
+                session_id: s.id,
+                at: Some(9),
+                payload: user_message(seq, text),
+            })
+            .unwrap()
+        };
+        let mut log = fs::OpenOptions::new()
+            .append(true)
+            .open(
+                dir.join("sessions")
+                    .join(s.id.to_string())
+                    .join("events.jsonl"),
+            )
+            .unwrap();
+        writeln!(log, "{}", orphan(3, "lost the middle")).unwrap();
+        writeln!(log, "{}", orphan(4, "kept the later page")).unwrap();
+        drop(log);
+        force_next_seq(&dir, &s.id, 5);
+
+        let mut store = Store::open(dir).unwrap();
+        assert_eq!(
+            store.head(&s.id),
+            2,
+            "the contiguous run's tail, not the skipped numbers"
+        );
+        let seqs: Vec<u64> = store
+            .events_after(&s.id, None)
+            .unwrap()
+            .iter()
+            .map(|e| e.seq)
+            .collect();
+        assert_eq!(
+            seqs,
+            vec![0, 1],
+            "the gapped lines are cut: a peer pulling never hits a jump"
+        );
+        let next = store
+            .append(s.id, user_message(3, "after the heal"))
+            .unwrap();
+        assert_eq!(next.seq, 2);
+    }
+
     #[test]
     fn receipts_are_idempotent_by_request_id() {
         let dir = tempdir();
@@ -1715,6 +1941,69 @@ mod tests {
         assert_eq!(
             store.receipt("req-2").unwrap().status,
             crate::model::ReceiptStatus::Completed
+        );
+    }
+
+    #[test]
+    fn receipts_are_bounded_and_recent_ids_stay_idempotent() {
+        let dir = tempdir();
+        // A state.json straight off an older, unbounded install: more
+        // receipts than the cap, which the first open must bound.
+        let mut receipts = serde_json::Map::new();
+        for i in 0..(RECEIPT_CAP + 2) {
+            let receipt = Receipt {
+                request_id: format!("old-{i}"),
+                session_id: None,
+                status: ReceiptStatus::Completed,
+                result: None,
+                error: None,
+                updated_at: i as i64,
+            };
+            receipts.insert(format!("old-{i}"), serde_json::to_value(receipt).unwrap());
+        }
+        let state = serde_json::json!({
+            "sessions": {},
+            "decisions": {},
+            "receipts": receipts,
+        });
+        fs::write(
+            dir.join("state.json"),
+            serde_json::to_string(&state).unwrap(),
+        )
+        .unwrap();
+
+        let mut store = Store::open(dir).unwrap();
+        assert!(
+            store.receipt("old-0").is_none(),
+            "past the cap, the oldest go"
+        );
+        assert!(store.receipt("old-1").is_none());
+        assert!(store.receipt("old-2").is_some(), "a cap's worth stays");
+        // One more landing evicts the next oldest, never the recent ones.
+        let fresh = Receipt {
+            request_id: "new".into(),
+            session_id: None,
+            status: ReceiptStatus::Completed,
+            result: Some(serde_json::json!({"ok": true})),
+            error: None,
+            updated_at: RECEIPT_CAP as i64 + 100,
+        };
+        assert!(store.record_receipt(fresh).unwrap());
+        assert!(store.receipt("old-2").is_none());
+        assert!(store.receipt("old-3").is_some());
+        // A recent terminal receipt still dedups: a retry never re-executes.
+        let dup = Receipt {
+            request_id: "new".into(),
+            session_id: None,
+            status: ReceiptStatus::Failed,
+            result: None,
+            error: Some("late".into()),
+            updated_at: RECEIPT_CAP as i64 + 101,
+        };
+        assert!(!store.record_receipt(dup).unwrap());
+        assert_eq!(
+            store.receipt("new").unwrap().status,
+            ReceiptStatus::Completed
         );
     }
 
