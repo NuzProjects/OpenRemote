@@ -243,6 +243,24 @@ pub fn initialize_envelope(request_id: &str) -> String {
     serde_json::to_string(&envelope).expect("envelope serializes")
 }
 
+/// The host's answer to an `AskUserQuestion` can_use_tool request - the
+/// SDK's own question wire (agent-sdk/user-input): `allow`, with
+/// `updatedInput` carrying the original input plus the chosen `answers`
+/// keyed by the question's own text. A structured question is answered
+/// with its selected labels, never with the approval allow/deny pair -
+/// a "Postgres" choice is a delivered answer, not a permission.
+pub fn can_use_tool_question_response(request_id: &str, updated_input: &Value) -> String {
+    let response = serde_json::json!({
+        "behavior": "allow",
+        "updatedInput": if updated_input.is_null() { serde_json::json!({}) } else { updated_input.clone() }
+    });
+    let envelope = serde_json::json!({
+        "type": "control_response",
+        "response": {"subtype": "success", "request_id": request_id, "response": response}
+    });
+    serde_json::to_string(&envelope).expect("envelope serializes")
+}
+
 /// The host's answer to a `can_use_tool` request: `allow` or `deny`, with
 /// `updatedInput` defaulting to the original input on allow (pre-2.1.207
 /// CLIs reject an allow without it).
@@ -409,5 +427,30 @@ mod tests {
         .unwrap();
         assert_eq!(deny["response"]["response"]["behavior"], "deny");
         assert_eq!(deny["response"]["response"]["message"], "no");
+    }
+
+    #[test]
+    fn question_responses_answer_with_the_sdk_wire() {
+        // The SDK's own shape (agent-sdk/user-input): behavior allow with
+        // updatedInput carrying the answers keyed by question text. A
+        // structured question is answered, never approved or denied - the
+        // deny message of the approval wire must not ride along.
+        let answer = serde_json::from_str::<Value>(&can_use_tool_question_response(
+            "cr-7",
+            &json!({"questions": [], "answers": {"Which DB?": "Postgres"}}),
+        ))
+        .unwrap();
+        assert_eq!(answer["type"], "control_response");
+        assert_eq!(answer["response"]["subtype"], "success");
+        assert_eq!(answer["response"]["request_id"], "cr-7");
+        assert_eq!(answer["response"]["response"]["behavior"], "allow");
+        assert_eq!(
+            answer["response"]["response"]["updatedInput"]["answers"]["Which DB?"],
+            "Postgres"
+        );
+        assert!(
+            answer["response"]["response"].get("message").is_none(),
+            "a question answer carries no deny message; raw: {answer}"
+        );
     }
 }

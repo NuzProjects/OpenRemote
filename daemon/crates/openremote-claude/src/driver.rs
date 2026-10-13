@@ -124,25 +124,42 @@ impl Driver {
             .await
     }
 
-    /// Answer a `can_use_tool` request with the chosen option id. On allow,
-    /// `updated_input` defaults to the original input (CLIs before 2.1.207
-    /// reject an allow without it); on deny the message goes back to the
-    /// model.
+    /// Answer a `can_use_tool` request with the chosen option id.
+    /// Approvals answer allow/deny: on allow, `updated_input` defaults to
+    /// the original input (CLIs before 2.1.207 reject an allow without
+    /// it); on deny the message goes back to the model. AskUserQuestion
+    /// requests are the SDK's structured questions: the choice is the
+    /// selected option's label and is answered in the SDK's own wire
+    /// (allow plus `updatedInput.answers`), never with the approval pair -
+    /// a "Postgres" choice must not collapse into a deny.
     pub async fn answer(
         &mut self,
         harness_ref: &str,
         choice: &str,
         request: &Value,
     ) -> Result<(), DriverError> {
-        let allow = choice == "allow";
+        let tool_name = request
+            .get("tool_name")
+            .and_then(|t| t.as_str())
+            .unwrap_or("");
         let original_input = request.get("input").cloned().unwrap_or(Value::Null);
-        self.write_line(frames::can_use_tool_response(
-            harness_ref,
-            allow,
-            &original_input,
-            "Denied from OpenRemote",
-        ))
-        .await
+        if tool_name == "AskUserQuestion" {
+            let updated = question_updated_input(&original_input, choice);
+            self.write_line(frames::can_use_tool_question_response(
+                harness_ref,
+                &updated,
+            ))
+            .await
+        } else {
+            let allow = choice == "allow";
+            self.write_line(frames::can_use_tool_response(
+                harness_ref,
+                allow,
+                &original_input,
+                "Denied from OpenRemote",
+            ))
+            .await
+        }
     }
 
     /// SIGTERM, wait up to 5s, SIGKILL. Returns the exit code if reaped.
@@ -179,6 +196,48 @@ fn context_used(usage: Option<&Value>) -> Option<u64> {
         + field("cache_read_input_tokens")
         + field("cache_creation_input_tokens");
     (used > 0).then_some(used)
+}
+
+/// The SDK's question answer body: the original input with `answers`
+/// added, keyed by the question's own text (the console renders and
+/// answers the first question - `decision_spec` serves its options, so
+/// its labels are the choice ids). Multiple selections arrive as the
+/// labels joined with ", " (the SDK's own accepted textual form for
+/// multi-select) and go back as its array form once every segment is an
+/// offered label, so a label that itself contains ", " is never split.
+/// A hostile shape (no question text) degrades to the original fields
+/// without an answers key - never a panic.
+fn question_updated_input(original: &Value, choice: &str) -> Value {
+    let question_text = original
+        .pointer("/questions/0/question")
+        .and_then(|q| q.as_str());
+    let offered: Vec<&str> = original
+        .pointer("/questions/0/options")
+        .and_then(|o| o.as_array())
+        .map(|opts| {
+            opts.iter()
+                .filter_map(|o| o.get("label").and_then(|l| l.as_str()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let segments: Vec<&str> = choice.split(", ").collect();
+    let selected = if segments.len() > 1 && segments.iter().all(|s| offered.contains(s)) {
+        Value::Array(
+            segments
+                .iter()
+                .map(|s| Value::String(s.to_string()))
+                .collect(),
+        )
+    } else {
+        Value::String(choice.to_string())
+    };
+    let mut updated = original.as_object().cloned().unwrap_or_default();
+    if let Some(text) = question_text {
+        let mut answers = serde_json::Map::new();
+        answers.insert(text.to_string(), selected);
+        updated.insert("answers".to_string(), Value::Object(answers));
+    }
+    Value::Object(updated)
 }
 
 /// Build the decision spec from a `can_use_tool` request: approvals and
@@ -764,6 +823,42 @@ mod tests {
                 .iter()
                 .any(|s| *s == std::ffi::OsStr::new("--mcp-config"))
         );
+    }
+
+    #[test]
+    fn question_answers_speak_the_sdk_wire() {
+        // The SDK's question answer (agent-sdk/user-input): the original
+        // input rides along, `answers` keyed by the question's own text,
+        // the chosen label as the value. The option ids ARE the labels
+        // (`decision_spec` mints them), so a single choice maps straight.
+        let input = json!({"questions": [{"question": "Which DB?", "options": [
+            {"label": "Postgres"}, {"label": "SQLite"}
+        ]}]});
+        let updated = question_updated_input(&input, "Postgres");
+        assert_eq!(updated["questions"][0]["question"], "Which DB?");
+        assert_eq!(updated["answers"]["Which DB?"], "Postgres");
+
+        // Multiple selections arrive as the labels joined with ", " - the
+        // SDK's own accepted form - and go back as its array form.
+        let updated = question_updated_input(&input, "Postgres, SQLite");
+        assert_eq!(
+            updated["answers"]["Which DB?"],
+            json!(["Postgres", "SQLite"])
+        );
+
+        // A label that itself contains ", " is never split: its segments
+        // are not offered labels, so the choice passes through verbatim.
+        let input = json!({"questions": [{"question": "Sure?", "options": [
+            {"label": "Yes, please"}, {"label": "No"}
+        ]}]});
+        let updated = question_updated_input(&input, "Yes, please");
+        assert_eq!(updated["answers"]["Sure?"], "Yes, please");
+
+        // A hostile shape (no questions object) degrades to the original
+        // fields with no answers key - never a panic, never a denial.
+        let updated = question_updated_input(&json!({"other": true}), "Postgres");
+        assert!(updated.get("answers").is_none());
+        assert_eq!(updated["other"], true);
     }
 
     #[test]

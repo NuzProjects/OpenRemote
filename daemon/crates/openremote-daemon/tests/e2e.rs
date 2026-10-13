@@ -200,6 +200,117 @@ async fn approvals_flow_through_decisions() {
 }
 
 #[tokio::test]
+async fn structured_questions_deliver_the_chosen_answer() {
+    let daemon = start_daemon(&[("claude", fixture_agent())]).await;
+    let ws = workspace(Some("question"));
+    let created = call(
+        &daemon,
+        "POST",
+        "/sessions",
+        Some(json!({"request_id": "r-create", "harness": "claude", "workspace": ws.path()})),
+    )
+    .await;
+    let id = created.body["id"].as_str().expect("session id").to_string();
+    until_kinds(
+        &daemon,
+        &format!("/sessions/{id}/events"),
+        &["session.status_changed"],
+    )
+    .await;
+
+    call(
+        &daemon,
+        "POST",
+        &format!("/sessions/{id}/prompts"),
+        Some(json!({"request_id": "r-prompt", "text": "which database"})),
+    )
+    .await;
+
+    let events = until_kinds(
+        &daemon,
+        &format!("/sessions/{id}/events"),
+        &[
+            "tool.started",
+            "decision.requested",
+            "session.status_changed",
+        ],
+    )
+    .await;
+    assert!(
+        events.iter().any(|(_, p)| kind(p) == "decision.requested"),
+        "no decision.requested in:\n{}",
+        dump(&events)
+    );
+    // The pending decision is the structured question itself: its own
+    // options, in the harness's own words.
+    let decisions = call(&daemon, "GET", &format!("/sessions/{id}/decisions"), None).await;
+    let list = decisions.body.as_array().cloned().unwrap_or_default();
+    assert_eq!(list.len(), 1, "decisions: {decisions:?}");
+    let decision = &list[0];
+    assert_eq!(decision["state"], "pending");
+    assert_eq!(decision["kind"], "question");
+    assert_eq!(decision["harness_request"]["tool_name"], "AskUserQuestion");
+    let options: Vec<&str> = decision["options"]
+        .as_array()
+        .expect("options array")
+        .iter()
+        .map(|o| o["id"].as_str().expect("option id"))
+        .collect();
+    assert_eq!(options, vec!["Postgres", "SQLite"]);
+    let decision_id = decision["id"].as_str().expect("decision id").to_string();
+
+    // Answer with a non-"allow" word - the whole point: the chosen label
+    // must reach the model, not collapse into a tool denial.
+    let answer = call(
+        &daemon,
+        "POST",
+        &format!("/decisions/{decision_id}/answer"),
+        Some(json!({"request_id": "r-answer", "choice": "Postgres"})),
+    )
+    .await;
+    assert_eq!(answer.status, 200, "raw: {}", answer.raw);
+
+    // The turn's consequence events have already landed by the time the
+    // answer call returns (the order lock holds across the write); the
+    // decision.responded event is in the log too. Collect the full log
+    // from the start and assert on what the harness did with the answer.
+    let events = sse_collect(&daemon, &format!("/sessions/{id}/events"), 16).await;
+    assert!(
+        events.iter().any(|(_, p)| kind(p) == "decision.responded"),
+        "the answer is recorded; events:\n{}",
+        dump(&events)
+    );
+    // The harness RECEIVED the answer: the fixture echoes the answers
+    // object it was answered with - the chosen label under the question's
+    // own text, and not a denial.
+    let tool_result = events
+        .iter()
+        .find(|(_, p)| kind(p) == "tool.result")
+        .expect("tool.result event");
+    assert_eq!(tool_result.1["name"], "AskUserQuestion");
+    assert_eq!(
+        tool_result.1["is_error"],
+        false,
+        "events:\n{}",
+        dump(&events)
+    );
+    let output = tool_result.1["output"].as_str().unwrap_or_default();
+    assert!(
+        output.contains("question answered"),
+        "the answer must be delivered, not denied; output: {output}"
+    );
+    assert!(
+        output.contains("\"Which database?\":\"Postgres\""),
+        "the chosen label rides the SDK's answers shape; output: {output}"
+    );
+    let completed = events
+        .iter()
+        .find(|(_, p)| kind(p) == "turn.completed")
+        .expect("turn.completed");
+    assert_eq!(completed.1["coarse"], "completed");
+}
+
+#[tokio::test]
 async fn late_answers_get_an_explicit_error() {
     let daemon = start_daemon(&[("claude", fixture_agent())]).await;
     let ws = workspace(Some("approve"));

@@ -69,6 +69,7 @@ fn main() {
 /// A turn parked waiting for the host's approval answer.
 struct PendingApproval {
     tool_id: String,
+    tool_name: String,
     prompt: String,
 }
 
@@ -300,6 +301,7 @@ impl FixtureAgent {
         let prompt = Self::prompt_text(frame);
         match self.scenario.as_str() {
             "approve" | "deny" => self.scenario_approve(&prompt),
+            "question" => self.scenario_question(&prompt),
             "fail" => {
                 self.assistant_text("the fixture is about to fail");
                 self.result("error_during_execution", "fixture failure", "api_error");
@@ -400,6 +402,27 @@ impl FixtureAgent {
         self.can_use_tool_request(&tool_id, "Bash", input);
         self.pending_approval = Some(PendingApproval {
             tool_id,
+            tool_name: "Bash".to_string(),
+            prompt: prompt.to_string(),
+        });
+    }
+
+    /// The structured-question stand-in: the real CLI asks AskUserQuestion
+    /// over the same can_use_tool callback. Emits the tool_use, asks the
+    /// host, parks the turn; `resolve_approval` echoes what actually
+    /// arrived so the e2e can prove the user's choice reached the harness.
+    fn scenario_question(&mut self, prompt: &str) {
+        let tool_id = format!("toolu_{}", self.next_tool_id);
+        self.next_tool_id += 1;
+        let input = serde_json::json!({"questions": [{
+            "question": "Which database?",
+            "options": [{"label": "Postgres"}, {"label": "SQLite"}]
+        }]});
+        self.assistant_tool_use(&tool_id, "AskUserQuestion", input.clone());
+        self.can_use_tool_request(&tool_id, "AskUserQuestion", input);
+        self.pending_approval = Some(PendingApproval {
+            tool_id,
+            tool_name: "AskUserQuestion".to_string(),
             prompt: prompt.to_string(),
         });
     }
@@ -408,10 +431,25 @@ impl FixtureAgent {
         let Some(pending) = self.pending_approval.take() else {
             return;
         };
-        let behavior = frame["response"]["response"]["behavior"]
-            .as_str()
-            .unwrap_or("deny");
+        let response = &frame["response"]["response"];
+        let behavior = response["behavior"].as_str().unwrap_or("deny");
         let allowed = behavior == "allow";
+        // A structured question is answered on the SDK's own wire:
+        // updatedInput.answers keyed by question text. Echo exactly what
+        // arrived so the e2e can tell a delivered answer from a denial
+        // (the bug this pins: every choice collapsed into a deny).
+        if pending.tool_name == "AskUserQuestion" {
+            let answers = &response["updatedInput"]["answers"];
+            let text = if allowed && !answers.is_null() {
+                format!("question answered: {answers}")
+            } else {
+                format!("question denied: behavior={behavior}")
+            };
+            self.tool_result(&pending.tool_id, &text, !allowed);
+            self.assistant_text(&text);
+            self.result("success", &text, "completed");
+            return;
+        }
         self.tool_result(
             &pending.tool_id,
             if allowed {
