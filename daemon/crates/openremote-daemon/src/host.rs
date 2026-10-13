@@ -81,9 +81,8 @@ impl CloudHost for DaemonHost {
     /// Removed from the account: the synced chats here go; private ones stay.
     fn revoked(&self) {
         if let Some(app) = self.app.upgrade() {
-            if let Ok(mut store) = app.store.lock() {
-                let _ = store.purge_synced();
-            }
+            let mut store = crate::supervisor::lock_recovering(&app.store);
+            let _ = store.purge_synced();
         }
     }
 }

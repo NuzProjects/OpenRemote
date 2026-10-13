@@ -685,6 +685,62 @@ async fn sse_resume_after_seq_gets_only_the_tail() {
 }
 
 #[tokio::test]
+async fn a_malformed_after_cursor_is_a_bad_request_not_a_full_replay() {
+    let daemon = start_daemon(&[("claude", fixture_agent())]).await;
+    let ws = workspace(Some("plain"));
+    let created = call(
+        &daemon,
+        "POST",
+        "/sessions",
+        Some(json!({"request_id": "r-create", "harness": "claude", "workspace": ws.path()})),
+    )
+    .await;
+    let id = created.body["id"].as_str().expect("session id").to_string();
+    until_kinds(
+        &daemon,
+        &format!("/sessions/{id}/events"),
+        &["session.status_changed"],
+    )
+    .await;
+    call(
+        &daemon,
+        "POST",
+        &format!("/sessions/{id}/prompts"),
+        Some(json!({"request_id": "r-prompt-1", "text": "first"})),
+    )
+    .await;
+    until_kinds(
+        &daemon,
+        &format!("/sessions/{id}/events"),
+        &["turn.completed", "session.status_changed"],
+    )
+    .await;
+    // Absent stays a fresh connect: the whole history replays, and the
+    // first event is in it (the console's contract for a first open).
+    let full = sse_collect(&daemon, &format!("/sessions/{id}/events"), 3).await;
+    assert!(
+        full.iter().any(|(_, p)| kind(p) == "session.created"),
+        "no cursor must replay from the start; got:\n{}",
+        dump(&full)
+    );
+    // Present-but-garbage is a broken client, not a fresh connect: 400,
+    // so the bug surfaces instead of thousands of silent duplicate frames.
+    let bad = call(
+        &daemon,
+        "GET",
+        &format!("/sessions/{id}/events?after=not-a-seq"),
+        None,
+    )
+    .await;
+    assert_eq!(bad.status, 400, "raw: {}", bad.raw);
+    assert!(
+        bad.body["error"].as_str().unwrap_or("").contains("cursor"),
+        "the error must name the cursor; raw: {}",
+        bad.raw
+    );
+}
+
+#[tokio::test]
 async fn an_unavailable_harness_creates_a_failed_session_not_an_error() {
     // A harness the registry knows nothing about: the same path a probe
     // that found nothing takes (backend lookup fails → explicit error, no

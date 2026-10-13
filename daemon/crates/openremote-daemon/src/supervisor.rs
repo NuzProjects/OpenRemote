@@ -147,13 +147,26 @@ pub struct Supervisor {
     this_machine: MachineId,
 }
 
+/// One poisoning policy for every std mutex the daemon holds: a poisoned
+/// lock means a panic escaped while it was held, not that the data inside
+/// is unusable, so the guard is recovered instead of lost. Every store
+/// acquisition goes through here: before this was shared, a single panic
+/// under the lock would brick every store-backed route until restart
+/// while sync kept mutating state the API could no longer read (sync has
+/// always recovered this way; this is that policy, shared). A recovered
+/// lock may hold half-finished state, which can surface as one bad answer
+/// - the better side of the trade against a dead API.
+pub(crate) fn lock_recovering<T>(m: &StdMutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 impl Supervisor {
     /// Build the supervisor over an opened store and a probed registry.
     /// The registry is injected so tests can point harnesses at fixture
     /// agents; production passes `HarnessRegistry::probe(&HashMap::new())`.
     pub fn new(store: Arc<StdMutex<Store>>, registry: HarnessRegistry) -> Arc<Self> {
         let this_machine = {
-            let mut guard = store.lock().expect("store lock");
+            let mut guard = lock_recovering(&store);
             guard.ensure_this_machine()
         };
         let supervisor = Arc::new(Self {
@@ -268,7 +281,7 @@ impl Supervisor {
     }
 
     fn with_store<R>(&self, f: impl FnOnce(&mut Store) -> R) -> R {
-        let mut guard = self.store.lock().expect("store lock");
+        let mut guard = lock_recovering(&self.store);
         f(&mut guard)
     }
 
@@ -1527,5 +1540,40 @@ impl Supervisor {
                 .map(|s| s.next_turn.saturating_sub(1))
                 .unwrap_or(0)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The poisoning policy is real, not aspirational: a panic while the
+    /// lock is held poisons the mutex, and the shared acquisition must
+    /// recover the guard so the next request is served, not bricked.
+    #[test]
+    fn a_poisoned_store_lock_is_recovered_not_fatal() {
+        let dir = std::env::temp_dir().join(format!("or-poisoned-lock-{}", Uuid::new_v4()));
+        let store = Arc::new(StdMutex::new(
+            Store::open(dir.clone()).expect("store opens"),
+        ));
+        let poisoned = Arc::clone(&store);
+        // A real panic under the lock is what poisons a std mutex: the
+        // spawned thread's unwind drops the guard on its way out.
+        let panicked = std::thread::spawn(move || {
+            let _guard = poisoned.lock().unwrap();
+            panic!("boom under the store lock");
+        })
+        .join();
+        assert!(panicked.is_err(), "the setup thread must have panicked");
+        assert!(store.is_poisoned(), "the lock must be poisoned by now");
+        // The shared policy: the next acquisition recovers the guard and
+        // serves instead of taking the daemon's whole API down with it.
+        let guard = lock_recovering(&store);
+        let sessions = guard.sessions();
+        assert!(
+            sessions.is_empty(),
+            "the recovered guard must read the store"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

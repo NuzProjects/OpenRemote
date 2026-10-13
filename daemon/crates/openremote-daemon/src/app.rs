@@ -49,7 +49,8 @@ impl App {
         let cloud = openremote_cloud::Cloud::open(options.cloud, &options.data_dir);
         // The store learns this device's id from Cloud's own files, so the
         // two agree even when `enroll` ran in another process.
-        if let Ok(mut store) = store.lock() {
+        {
+            let mut store = crate::supervisor::lock_recovering(&store);
             let id = cloud.device_id();
             if id.is_some() && store.this_device() != id {
                 let _ = store.set_this_device(id);
@@ -151,7 +152,7 @@ pub fn event_stream(
         // fresh connect - replay everything, then accept any live seq.
         let mut last: Option<u64> = after;
         let replay = {
-            let store = app.store.lock().expect("store lock");
+            let store = crate::supervisor::lock_recovering(&app.store);
             store.events_after(&session_id, after).unwrap_or_default()
         };
         for event in replay {
@@ -200,8 +201,10 @@ pub fn event_stream(
                             // A lag or a foreign session's event: catch up
                             // from the store so nothing is missed.
                             let missed = {
-                                let store = app.store.lock().expect("store lock");
-                                store.events_after(&session_id, last).unwrap_or_default()
+                                let store = crate::supervisor::lock_recovering(&app.store);
+                                store
+                                    .events_after(&session_id, last)
+                                    .unwrap_or_default()
                             };
                             for event in missed {
                                 if last.is_none_or(|l| event.seq > l) {

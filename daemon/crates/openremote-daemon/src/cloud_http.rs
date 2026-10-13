@@ -136,7 +136,8 @@ pub async fn callback(State(app): State<Arc<App>>, Query(q): Query<CallbackQuery
     };
     match app.cloud.finish_signin(&code, &state).await {
         Ok(signed_in) => {
-            if let Ok(mut store) = app.store.lock() {
+            {
+                let mut store = crate::supervisor::lock_recovering(&app.store);
                 // Another account's synced chats don't belong to this one.
                 if signed_in.previous_account.is_some() {
                     let _ = store.purge_synced();
@@ -276,7 +277,8 @@ pub async fn remove_device(State(app): State<Arc<App>>, Path(id): Path<String>) 
         if let Err(e) = app.cloud.leave().await {
             return cloud_error(e);
         }
-        if let Ok(mut store) = app.store.lock() {
+        {
+            let mut store = crate::supervisor::lock_recovering(&app.store);
             let _ = store.purge_synced();
         }
         return Json(app.cloud.view()).into_response();
@@ -481,7 +483,7 @@ pub async fn forward_remote(
         .unwrap_or_default()
         .to_string();
     let executor = {
-        let store = app.store.lock().expect("store lock");
+        let store = crate::supervisor::lock_recovering(&app.store);
         let session = if path.starts_with("/decisions/") {
             openremote_core::DecisionId::parse(&id)
                 .and_then(|d| store.decision(&d).ok().map(|d| d.session_id))

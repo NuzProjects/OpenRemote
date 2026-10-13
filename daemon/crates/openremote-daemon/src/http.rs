@@ -143,7 +143,7 @@ async fn peer_gate(
     if *tier == Tier::Chat {
         let id = request.uri().path().split('/').nth(2).unwrap_or_default();
         let synced_here = {
-            let store = app.store.lock().expect("store lock");
+            let store = crate::supervisor::lock_recovering(&app.store);
             let session = if path.starts_with("/decisions/") {
                 DecisionId::parse(id)
                     .and_then(|d| store.decision(&d).ok().map(|d| d.session_id))
@@ -391,7 +391,7 @@ async fn stop_sign_in(
 /// A peer sees only the chats this machine runs for the account; private
 /// chats never leave the computer.
 fn for_peer(app: &App, view: &mut Value) {
-    let me = app.store.lock().ok().and_then(|s| s.this_device());
+    let me = crate::supervisor::lock_recovering(&app.store).this_device();
     if let Some(sessions) = view.get_mut("sessions").and_then(Value::as_array_mut) {
         sessions.retain(|s| {
             me.is_some_and(|me| s["executor"].as_str() == Some(me.to_string().as_str()))
@@ -1310,10 +1310,7 @@ async fn delete_session(State(app): State<Arc<App>>, AxumPath(id): AxumPath<Stri
     let Some(id) = SessionId::parse(&id) else {
         return error(StatusCode::NOT_FOUND, "no such chat");
     };
-    let synced = app
-        .store
-        .lock()
-        .expect("store lock")
+    let synced = crate::supervisor::lock_recovering(&app.store)
         .session(&id)
         .map(|s| s.executor.is_some());
     match synced {
@@ -1648,7 +1645,20 @@ async fn session_events(
     if app.supervisor.session(&session_id).is_err() {
         return error(StatusCode::NOT_FOUND, "no such session");
     }
-    let after = query.and_then(|q| serde_urlencoded_form_from(&q));
+    // A cursor that is present but unparseable is a broken client (a value
+    // truncated by local storage, a mangled reconnect): answer 400 so the
+    // bug surfaces, instead of treating it as a fresh connect and silently
+    // replaying the whole history. Absent stays a full replay.
+    let after = match query.as_deref().map(after_cursor) {
+        Some(Cursor::Seq(seq)) => Some(seq),
+        Some(Cursor::Invalid) => {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "the after cursor must be a seq number",
+            );
+        }
+        Some(Cursor::Absent) | None => None,
+    };
     let stream = crate::app::event_stream(Arc::clone(&app), session_id, after);
     Response::builder()
         .status(StatusCode::OK)
@@ -1658,11 +1668,50 @@ async fn session_events(
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
+/// The `after` cursor: absent (a fresh connect - full replay), a valid seq,
+/// or present-but-garbage. The third state is the whole point of the enum:
+/// the old parser folded it into absent and silently replayed everything.
+enum Cursor {
+    Absent,
+    Seq(u64),
+    Invalid,
+}
+
 /// Minimal `after=<seq>` extraction without pulling a query-string crate
-/// for one parameter.
-fn serde_urlencoded_form_from(query: &str) -> Option<u64> {
-    query.split('&').find_map(|pair| {
-        let (key, value) = pair.split_once('=')?;
-        (key == "after").then(|| value.parse().ok())?
-    })
+/// for one parameter. Present-but-unparseable is `Invalid`, not `Absent`.
+fn after_cursor(query: &str) -> Cursor {
+    let Some(pair) = query.split('&').find(|pair| {
+        // The key is everything before the first `=`, present or not.
+        pair.split('=').next().is_some_and(|key| key == "after")
+    }) else {
+        return Cursor::Absent;
+    };
+    match pair.split_once('=') {
+        // `after` with no `=` at all: present but valueless, so invalid.
+        None => Cursor::Invalid,
+        Some((_, value)) => match value.parse() {
+            Ok(seq) => Cursor::Seq(seq),
+            Err(_) => Cursor::Invalid,
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_absent_cursor_is_a_full_replay_and_a_garbage_one_is_invalid() {
+        assert!(matches!(after_cursor(""), Cursor::Absent));
+        assert!(matches!(after_cursor("x=1&y=2"), Cursor::Absent));
+        assert!(matches!(after_cursor("after=41"), Cursor::Seq(41)));
+        assert!(matches!(after_cursor("x=1&after=7"), Cursor::Seq(7)));
+        // A present-but-garbage cursor must not fold into "absent": that
+        // silently replayed the whole history to a struggling client.
+        assert!(matches!(after_cursor("after=oops"), Cursor::Invalid));
+        assert!(matches!(after_cursor("after="), Cursor::Invalid));
+        assert!(matches!(after_cursor("after"), Cursor::Invalid));
+        assert!(matches!(after_cursor("after=-1"), Cursor::Invalid));
+        assert!(matches!(after_cursor("after=41x"), Cursor::Invalid));
+    }
 }

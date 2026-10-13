@@ -23,6 +23,7 @@ use openremote_core::{DeviceId, SessionId};
 use serde_json::{Value, json};
 
 use crate::app::App;
+use crate::supervisor::lock_recovering;
 
 /// Bytes per pulled range.
 const RANGE_BYTES: usize = 256 * 1024;
@@ -40,13 +41,9 @@ pub struct SyncState {
     heads: Mutex<HashMap<SessionId, (Instant, bool)>>,
 }
 
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
-}
-
 /// What this device holds: synced chats only (private ones never leave).
 pub fn summary(app: &App) -> Value {
-    let store = lock(&app.store);
+    let store = lock_recovering(&app.store);
     let (sessions, tombstones) = store.summaries();
     json!({
         "v": 1,
@@ -57,7 +54,7 @@ pub fn summary(app: &App) -> Value {
 
 /// A range of a synced chat's log, verbatim.
 pub fn range(app: &App, id: SessionId, from: u64) -> Result<Value, (u16, &'static str)> {
-    let store = lock(&app.store);
+    let store = lock_recovering(&app.store);
     if store.tombstoned(&id) {
         return Err((410, "this chat was deleted"));
     }
@@ -85,7 +82,7 @@ fn ingest(
     events: Vec<Value>,
 ) -> Result<u64, StoreError> {
     let (fresh, head) = {
-        let mut store = lock(&app.store);
+        let mut store = lock_recovering(&app.store);
         let before = store.head(&id);
         let done = store.append_replicated(id, runner, events.clone())?;
         let fresh: Vec<String> = events
@@ -106,7 +103,7 @@ fn ingest(
 }
 
 fn local_head(app: &App, id: &SessionId) -> u64 {
-    lock(&app.store).head(id)
+    lock_recovering(&app.store).head(id)
 }
 
 async fn get(mesh: &Mesh, peer: DeviceId, path: String) -> Option<Value> {
@@ -134,14 +131,14 @@ async fn get(mesh: &Mesh, peer: DeviceId, path: String) -> Option<Value> {
 /// machine) never returns before it exists.
 pub async fn pull(app: &Arc<App>, peer: DeviceId, id: SessionId, runner: DeviceId) {
     let deadline = Instant::now() + Duration::from_secs(60);
-    while !lock(&app.sync.pulling).insert(id) {
+    while !lock_recovering(&app.sync.pulling).insert(id) {
         if Instant::now() > deadline {
             return;
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
     let Some(mesh) = app.cloud.mesh() else {
-        lock(&app.sync.pulling).remove(&id);
+        lock_recovering(&app.sync.pulling).remove(&id);
         return;
     };
     loop {
@@ -165,13 +162,13 @@ pub async fn pull(app: &Arc<App>, peer: DeviceId, id: SessionId, runner: DeviceI
             _ => break,
         }
     }
-    lock(&app.sync.pulling).remove(&id);
+    lock_recovering(&app.sync.pulling).remove(&id);
 }
 
 /// Deletes a synced chat here because it was deleted somewhere.
 pub async fn apply_tombstone(app: &Arc<App>, id: SessionId, stone: Tombstone) {
     let running_here = {
-        let store = lock(&app.store);
+        let store = lock_recovering(&app.store);
         store
             .session(&id)
             .is_ok_and(|s| s.executor.is_some() && store.executes_here(s) && s.status.is_alive())
@@ -179,8 +176,8 @@ pub async fn apply_tombstone(app: &Arc<App>, id: SessionId, stone: Tombstone) {
     if running_here {
         let _ = app.supervisor.stop(&id).await;
     }
-    let _ = lock(&app.store).tombstone(id, stone);
-    lock(&app.sync.watchers).remove(&id);
+    let _ = lock_recovering(&app.store).tombstone(id, stone);
+    lock_recovering(&app.sync.watchers).remove(&id);
 }
 
 /// Two devices found each other: trade deletions, then pull what's missing.
@@ -198,7 +195,7 @@ pub async fn sync_with(app: &Arc<App>, peer: DeviceId) {
         ) else {
             continue;
         };
-        if !lock(&app.store).tombstoned(&id) {
+        if !lock_recovering(&app.store).tombstoned(&id) {
             let at = stone["at"].as_i64().unwrap_or(0);
             apply_tombstone(app, id, Tombstone { at, by }).await;
         }
@@ -214,7 +211,7 @@ pub async fn sync_with(app: &Arc<App>, peer: DeviceId) {
             continue;
         };
         // The runner's own log is the source; it never takes a copy.
-        if executor == me || lock(&app.store).tombstoned(&id) {
+        if executor == me || lock_recovering(&app.store).tombstoned(&id) {
             continue;
         }
         if head > local_head(app, &id) {
@@ -236,7 +233,7 @@ pub fn on_note(app: &Arc<App>, peer: PeerContext, note: Value) {
     match note["type"].as_str() {
         Some("sync.watch") => {
             let runs_here = {
-                let store = lock(&app.store);
+                let store = lock_recovering(&app.store);
                 store
                     .session(&id)
                     .is_ok_and(|s| s.executor.is_some() && store.executes_here(s))
@@ -244,7 +241,7 @@ pub fn on_note(app: &Arc<App>, peer: PeerContext, note: Value) {
             if !runs_here {
                 return;
             }
-            let mut watchers = lock(&app.sync.watchers);
+            let mut watchers = lock_recovering(&app.sync.watchers);
             let set = watchers.entry(id).or_default();
             if note["on"].as_bool().unwrap_or(false) {
                 set.insert(peer.device_id);
@@ -265,7 +262,7 @@ pub fn on_note(app: &Arc<App>, peer: PeerContext, note: Value) {
             let behind = note["head"]
                 .as_u64()
                 .is_some_and(|h| h > local_head(app, &id));
-            let deleted = lock(&app.store).tombstoned(&id);
+            let deleted = lock_recovering(&app.store).tombstoned(&id);
             // Head notices too: only the runner sends them.
             if behind && !deleted {
                 let app = Arc::clone(app);
@@ -308,7 +305,7 @@ impl Drop for Watch {
 /// Starts watching a copy (catching up first). None for chats run here.
 pub async fn watch(app: &Arc<App>, session: SessionId) -> Option<Watch> {
     let executor = {
-        let store = lock(&app.store);
+        let store = lock_recovering(&app.store);
         let s = store.session(&session).ok()?;
         if store.executes_here(s) {
             return None;
@@ -361,7 +358,7 @@ pub fn start_pusher(app: &Arc<App>) {
                 continue;
             };
             let runs_here = {
-                let store = lock(&app.store);
+                let store = lock_recovering(&app.store);
                 store
                     .session(&id)
                     .is_ok_and(|s| s.executor.is_some() && store.executes_here(s))
@@ -369,7 +366,7 @@ pub fn start_pusher(app: &Arc<App>) {
             let Some(mesh) = app.cloud.mesh().filter(|_| runs_here) else {
                 continue;
             };
-            let watchers: Vec<DeviceId> = lock(&app.sync.watchers)
+            let watchers: Vec<DeviceId> = lock_recovering(&app.sync.watchers)
                 .get(&id)
                 .map(|w| w.iter().copied().collect())
                 .unwrap_or_default();
@@ -390,7 +387,7 @@ pub fn start_pusher(app: &Arc<App>) {
 
 async fn send_head(app: &Arc<App>, mesh: &Arc<Mesh>, id: SessionId, skip: Vec<DeviceId>) {
     let due = {
-        let mut heads = lock(&app.sync.heads);
+        let mut heads = lock_recovering(&app.sync.heads);
         let entry = heads
             .entry(id)
             .or_insert((Instant::now() - HEAD_EVERY, false));
@@ -402,7 +399,7 @@ async fn send_head(app: &Arc<App>, mesh: &Arc<Mesh>, id: SessionId, skip: Vec<De
             let (app, mesh, skip) = (Arc::clone(app), Arc::clone(mesh), skip.clone());
             tokio::spawn(async move {
                 tokio::time::sleep(HEAD_EVERY).await;
-                if let Some(e) = lock(&app.sync.heads).get_mut(&id) {
+                if let Some(e) = lock_recovering(&app.sync.heads).get_mut(&id) {
                     e.1 = false;
                     e.0 = Instant::now();
                 }
