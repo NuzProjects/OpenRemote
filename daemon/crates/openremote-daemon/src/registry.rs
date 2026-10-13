@@ -145,6 +145,17 @@ impl SessionDriver {
             SessionDriver::Agy(driver) => driver.shutdown().await,
         }
     }
+
+    /// Whether this driver runs one process per prompt (grok and agy print
+    /// mode) instead of steering one long-lived process: a second prompt
+    /// while the turn is open would spawn a second process, replace the
+    /// first Child un-killed, and interleave two turns' frames under the
+    /// newest turn number. The supervisor gates prompts on this flag
+    /// (harness audit F8) - the driver advertises its own semantics, so no
+    /// call site matches harness ids.
+    pub fn per_prompt_process(&self) -> bool {
+        matches!(self, SessionDriver::Grok(_) | SessionDriver::Agy(_))
+    }
 }
 
 impl Backend {

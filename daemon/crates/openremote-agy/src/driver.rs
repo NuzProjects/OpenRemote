@@ -82,7 +82,6 @@ impl Driver {
         let mut command = Command::new(program);
         command
             .arg("--print")
-            .arg(text)
             .arg("--output-format")
             .arg("stream-json")
             .current_dir(&cwd)
@@ -99,6 +98,12 @@ impl Driver {
         if let Some(conversation) = self.shared.conversation.lock().unwrap().clone() {
             command.arg("--conversation").arg(conversation);
         }
+        // End-of-options, then the prompt as the one positional (harness
+        // audit F6): Antigravity's parser is yargs-class, and a prompt
+        // that starts with "-" is text after `--`, never a flag guess. The
+        // separator must trail every real flag because it ends option
+        // parsing for the whole rest of the line, so the text rides last.
+        command.arg("--").arg(text);
         // Windows: no console flash, no Ctrl-C from a shared console; the
         // why lives on openremote_harness::creation_flags.
         #[cfg(windows)]

@@ -91,7 +91,6 @@ impl Driver {
         command.args(&prefix);
         command
             .arg("--single")
-            .arg(text)
             .arg("--output-format")
             .arg("streaming-messages-json")
             .arg("--cwd")
@@ -111,6 +110,12 @@ impl Driver {
             // grok's own UUID session id - value form, no flag surface.
             command.arg("--resume").arg(resume);
         }
+        // End-of-options, then the prompt as the one positional (harness
+        // audit F6): grok's parser is yargs-class, and a prompt that starts
+        // with "-" is text after `--`, never a flag guess. The separator
+        // must trail every real flag because it ends option parsing for
+        // the whole rest of the line, so the text rides last.
+        command.arg("--").arg(text);
         // Windows: no console flash, no Ctrl-C from a shared console; the
         // why lives on openremote_harness::creation_flags.
         #[cfg(windows)]

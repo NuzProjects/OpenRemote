@@ -965,8 +965,8 @@ impl Supervisor {
     /// the request must carry the rule's own key. The delivery is then
     /// deduped on (rule id, digest of the raw body) and rate-limited per
     /// rule - the open route has no request_id contract to lean on, and
-    /// an answered error is exactly what sends a sender retrying (F9:
-    /// each retry fired a fresh chat before this). A refused delivery
+    /// an answered error is exactly what sends a sender retrying (each
+    /// retry fired a fresh chat before this). A refused delivery
     /// answers through, not as an error: errors are for retries.
     pub async fn fire_webhook(
         self: &Arc<Self>,
@@ -1244,6 +1244,35 @@ impl Supervisor {
         self.ensure_here(id)?;
         let entry = self.entry(id).await?;
         let _order = entry.order.lock().await;
+        // The Working gate (harness audit F8): a driver that runs one
+        // process per prompt cannot take a second while a turn is open -
+        // `send_prompt` would spawn a second process, replace the first
+        // Child un-killed, and interleave two turns' frames under the
+        // newest turn number. The driver advertises the semantics itself
+        // (`per_prompt_process`), so the check follows the flag, never a
+        // harness id. The answer is Conflict, not an error about the chat:
+        // the turn is in flight and the console lands the message where
+        // the user reads it. Inside the order lock so two racing prompts
+        // see the first one's Working before either bumps the turn; the
+        // driver lock is released before the gate answers (send_prompt
+        // below re-locks it - the mutex is not reentrant).
+        // Stdin-carrying harnesses (claude/codex/pi/opencode) answer false
+        // and keep their behavior - the harness queues or interleaves on
+        // its own wire, as it always has.
+        let per_prompt_process = entry.driver.lock().await.per_prompt_process();
+        if per_prompt_process
+            && matches!(
+                self.session(id)?.status,
+                SessionStatus::Working | SessionStatus::Waiting
+            )
+        {
+            return Err(SupervisorError::Conflict(
+                "a turn is still running on this chat - this harness takes \
+                 one prompt at a time; wait for the turn to finish or stop \
+                 the chat"
+                    .into(),
+            ));
+        }
         let turn = self.with_store(|s| s.bump_turn(id))?;
         self.emit_all(
             id,
@@ -1265,31 +1294,29 @@ impl Supervisor {
         )?;
         drop(_order);
         if let Err(e) = entry.driver.lock().await.send_prompt(text).await {
-            // The turn's existence is already durable (harness audit
-            // F17): a write that failed must not leave it open forever.
-            // A synthetic failed boundary lands under the same order
-            // lock, so no later event can arrive between the turn's
-            // events and its close.
+            // The turn's existence is already durable: a write that
+            // failed must not leave it open forever. The boundary rides
+            // through open_turn_boundary (a no-op when the turn is
+            // already closed) and the status only lands while the
+            // session is still alive, because the process death behind
+            // the failed write also fires the pump's StdoutClosed -
+            // whichever of the two settles first is the record, and
+            // the loser appends nothing on top of it.
             let _order = entry.order.lock().await;
-            let boundary = EventPayload::TurnCompleted {
-                turn,
-                outcome: "failed".to_string(),
-                coarse: TurnOutcome::Failed,
-            };
-            // A dead process also ends the session; a harness whose
-            // spawn failed while its files are gone ends its slot too
-            // (F18's print-mode path).
-            let payloads = match self.session(id) {
-                Ok(session) if session.status.is_alive() => vec![
-                    boundary,
-                    EventPayload::SessionStatusChanged {
-                        status: SessionStatus::Failed,
-                        reason: Some(e.to_string()),
-                    },
-                ],
-                _ => vec![boundary],
-            };
+            let mut payloads = self.open_turn_boundary(id);
+            if self
+                .session(id)
+                .map(|s| s.status.is_alive())
+                .unwrap_or(false)
+            {
+                payloads.push(EventPayload::SessionStatusChanged {
+                    status: SessionStatus::Failed,
+                    reason: Some(e.to_string()),
+                });
+            }
             self.emit_all(id, payloads)?;
+            // A harness whose spawn failed while its files are gone
+            // also ends its slot (lazy eviction's print-mode path).
             let harness = self.session(id).map(|s| s.harness).ok();
             if let Some(harness) = harness {
                 self.evict_harness_if_gone(&harness);
@@ -1564,10 +1591,14 @@ impl Supervisor {
             };
             let Some(driver) = entry else { continue };
             let _ = driver.lock().await.shutdown().await;
-            // Drain with the same quiescence evidence: the transcript's
-            // tail lands before the process goes.
+            // Drain with the same quiescence evidence stop uses: the
+            // transcript's tail lands before the process goes, and a
+            // quiet session (a print-mode harness between prompts, no
+            // process, nothing draining) is recognized by its seq
+            // stopping - not by burning the whole bound.
             let bound = tokio::time::Instant::now() + STOP_DRAIN_BOUND;
             let mut last_seq = self.with_store(|s| s.next_seq(&id));
+            let mut quiet = tokio::time::Instant::now() + STOP_DRAIN_QUIET;
             loop {
                 let settled = self
                     .session(&id)
@@ -1580,6 +1611,9 @@ impl Supervisor {
                 let seq = self.with_store(|s| s.next_seq(&id));
                 if seq != last_seq {
                     last_seq = seq;
+                    quiet = tokio::time::Instant::now() + STOP_DRAIN_QUIET;
+                } else if tokio::time::Instant::now() >= quiet {
+                    break;
                 }
             }
         }
@@ -1964,24 +1998,32 @@ impl Supervisor {
     /// The StdoutClosed settle, the pump's single-writer path. `stopping`
     /// is read while the entry still exists; the boundary is appended
     /// before the status so the transcript closes its open turn first
-    /// (harness audit F10: no dangling open turn survives a death).
-    /// The stderr ring's tail splices into the Failed reason (harness
-    /// audit F14) and goes with the entry.
+    /// - no dangling open turn survives a death. The status itself only
+    /// lands while the session is still alive: the failed-write arm of
+    /// `prompt` can settle the session first, and a terminal status is
+    /// a fact, not an opinion to state twice. The stderr ring's tail
+    /// splices into the Failed reason and goes with the entry.
     async fn settle_terminal_locked(
         &self,
         id: &SessionId,
         stopping: bool,
     ) -> Result<(), SupervisorError> {
         let mut payloads: Vec<EventPayload> = self.open_turn_boundary(id);
-        if stopping {
-            payloads.push(EventPayload::SessionStatusChanged {
-                status: SessionStatus::Stopped,
-                reason: None,
-            });
-        } else {
-            payloads.push(EventPayload::SessionStatusChanged {
-                status: SessionStatus::Failed,
-                reason: Some(self.death_reason(id)),
+        let alive = self
+            .session(id)
+            .map(|s| s.status.is_alive())
+            .unwrap_or(false);
+        if alive {
+            payloads.push(if stopping {
+                EventPayload::SessionStatusChanged {
+                    status: SessionStatus::Stopped,
+                    reason: None,
+                }
+            } else {
+                EventPayload::SessionStatusChanged {
+                    status: SessionStatus::Failed,
+                    reason: Some(self.death_reason(id)),
+                }
             });
         }
         self.emit_all(id, payloads)?;
@@ -2487,8 +2529,9 @@ mod tests {
                 ],
             )
             .expect("open turn");
-        // A pending decision the stop must retire (the second half of
-        // F12: decisions left answerable against a dead process).
+        // A pending decision the stop must retire: decisions left
+        // answerable against a dead process are the other half of the
+        // finding.
         supervisor
             .emit_all(
                 &id,
@@ -2678,5 +2721,118 @@ mod tests {
         // either way, so the error arm only asserts the caller sees
         // something; the Ok arm needs nothing more.
         let _ = result;
+    }
+
+    /// The failed-write arm and the pump's StdoutClosed settle race for
+    /// the same session when the process death behind the write also
+    /// delivers its close event. Whichever settles first is the record;
+    /// the loser must append nothing on top - one boundary for the turn,
+    /// one terminal status for the session, whichever order they run in.
+    /// The arm routes its boundary through open_turn_boundary (a no-op
+    /// on a closed turn) and its status only while the session reads
+    /// alive; the pump's settle skips its status the same way.
+    #[tokio::test]
+    async fn a_failed_prompt_write_racing_the_pumps_close_settles_once() {
+        // Pump first: the StdoutClosed settle closes the turn and fails
+        // the session before the prompt arm takes the order lock back.
+        let (supervisor, id) = lifecycle_supervisor().await;
+        supervisor
+            .emit_all(
+                &id,
+                vec![EventPayload::SessionStatusChanged {
+                    status: SessionStatus::Working,
+                    reason: None,
+                }],
+            )
+            .expect("working");
+        let turn = supervisor.with_store(|s| s.bump_turn(&id)).expect("turn");
+        supervisor
+            .emit_all(&id, vec![EventPayload::TurnStarted { turn }])
+            .expect("turn started");
+        supervisor
+            .settle_terminal_locked(&id, false)
+            .await
+            .expect("pump settles first");
+        // The prompt arm arrives late with its write already failed; its
+        // own route reads the store, not the entry, and must find
+        // nothing left to append.
+        let mut payloads = supervisor.open_turn_boundary(&id);
+        if supervisor
+            .session(&id)
+            .map(|s| s.status.is_alive())
+            .unwrap_or(false)
+        {
+            payloads.push(EventPayload::SessionStatusChanged {
+                status: SessionStatus::Failed,
+                reason: Some("write failed".into()),
+            });
+        }
+        assert!(
+            payloads.is_empty(),
+            "the loser appends nothing: the turn is closed and the status is terminal; got {payloads:?}"
+        );
+
+        // Arm first: the prompt arm settles, then the pump's close
+        // event finds the session already terminal and appends no
+        // second status.
+        let (supervisor, id) = lifecycle_supervisor().await;
+        supervisor
+            .emit_all(
+                &id,
+                vec![EventPayload::SessionStatusChanged {
+                    status: SessionStatus::Working,
+                    reason: None,
+                }],
+            )
+            .expect("working");
+        let turn = supervisor.with_store(|s| s.bump_turn(&id)).expect("turn");
+        supervisor
+            .emit_all(&id, vec![EventPayload::TurnStarted { turn }])
+            .expect("turn started");
+        // The arm's own route: boundary via the scan, status while alive.
+        let mut payloads = supervisor.open_turn_boundary(&id);
+        assert_eq!(payloads.len(), 1, "the open turn is closable");
+        if supervisor
+            .session(&id)
+            .map(|s| s.status.is_alive())
+            .unwrap_or(false)
+        {
+            payloads.push(EventPayload::SessionStatusChanged {
+                status: SessionStatus::Failed,
+                reason: Some("write failed".into()),
+            });
+        }
+        supervisor.emit_all(&id, payloads).expect("arm settles first");
+        // Now the pump's settle arrives.
+        supervisor
+            .settle_terminal_locked(&id, false)
+            .await
+            .expect("pump settles second");
+        let events = supervisor
+            .with_store(|s| s.events_after(&id, None))
+            .expect("events");
+        let kinds: Vec<&str> = events.iter().map(|e| e.kind()).collect();
+        let boundaries = kinds.iter().filter(|k| **k == "turn.completed").count();
+        // The arm's Failed status is the last word: the pump's late
+        // settle found the session terminal and appended nothing after
+        // it. (The Working status the test emitted while opening the
+        // turn is a live status, not a settle - it does not count.)
+        let settles = kinds
+            .iter()
+            .filter(|k| **k == "session.status_changed")
+            .count();
+        assert_eq!(
+            boundaries, 1,
+            "one boundary whichever settled first; kinds: {kinds:?}"
+        );
+        assert_eq!(
+            settles, 2,
+            "the setup's Working plus exactly one terminal settle; kinds: {kinds:?}"
+        );
+        assert_eq!(
+            kinds.last(),
+            Some(&"session.status_changed"),
+            "the arm's settle is the final event; the pump appended nothing after it"
+        );
     }
 }

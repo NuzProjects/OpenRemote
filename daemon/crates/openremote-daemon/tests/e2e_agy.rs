@@ -184,3 +184,163 @@ async fn a_dead_agy_process_fails_the_turn_with_a_note() {
         "antigravity exited before the turn finished"
     );
 }
+
+/// A dash-leading prompt is text, never flags (harness audit F6): the
+/// driver sends it after `--` (end-of-options), the fixture keeps it
+/// positional, and the round-trip is the echo. The old bare-argv shape
+/// would have fed "-v" to the CLI's own parser and died with the generic
+/// exited-before-the-turn note instead of an answer.
+#[tokio::test]
+async fn a_dash_leading_agy_prompt_roundtrips_as_text() {
+    let (daemon, ws) = agy_daemon(Some("plain")).await;
+    let id = create_agy(&daemon, &ws).await;
+    call(
+        &daemon,
+        "POST",
+        &format!("/sessions/{id}/prompts"),
+        Some(json!({"request_id": "a-dash", "text": "-v the notes please"})),
+    )
+    .await;
+    let events = until_count(
+        &daemon,
+        &format!("/sessions/{id}/events"),
+        "turn.completed",
+        1,
+    )
+    .await;
+    let agent = events
+        .iter()
+        .find(|(_, p)| kind(p) == "message.added" && p["message"]["role"] == "assistant")
+        .expect("agent message");
+    assert!(
+        agent.1["message"]["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("-v the notes please"),
+        "the prompt round-tripped through the CLI's own parser; events:\n{}",
+        dump(&events)
+    );
+    let completed = events
+        .iter()
+        .find(|(_, p)| kind(p) == "turn.completed")
+        .expect("completed");
+    assert_eq!(
+        completed.1["outcome"],
+        "SUCCESS",
+        "the turn ran to success, it did not die on a flag misparse; events:\n{}",
+        dump(&events)
+    );
+}
+
+/// A second prompt while the turn runs is refused, not raced (harness
+/// audit F8): Antigravity print mode is one process per prompt, so an
+/// overlapping prompt would spawn a second process, orphan the first
+/// child, and interleave two turns' frames under the newest turn
+/// number. The gate rides the driver's own per-prompt-process flag, so
+/// the answer is 409 with a plain-words message, exactly one process ever
+/// ran (the fixture's run ledger), and the gate re-opens once the turn
+/// completes.
+#[tokio::test]
+async fn a_second_agy_prompt_while_working_answers_409_with_one_process() {
+    let (daemon, ws) = agy_daemon(Some("slow")).await;
+    let id = create_agy(&daemon, &ws).await;
+    let first = call(
+        &daemon,
+        "POST",
+        &format!("/sessions/{id}/prompts"),
+        Some(json!({"request_id": "a-p1", "text": "first"})),
+    )
+    .await;
+    assert_eq!(first.status, 200, "raw: {}", first.raw);
+
+    // The slow scenario holds the turn open, so the second prompt lands
+    // inside the Working window.
+    let refused = call(
+        &daemon,
+        "POST",
+        &format!("/sessions/{id}/prompts"),
+        Some(json!({"request_id": "a-p2", "text": "second"})),
+    )
+    .await;
+    assert_eq!(
+        refused.status, 409,
+        "the overlapping prompt conflicts; raw: {}",
+        refused.raw
+    );
+    let message = refused.body["error"].as_str().unwrap_or("");
+    assert!(
+        message.contains("one prompt at a time"),
+        "the refusal says why in plain words: {message}"
+    );
+
+    // One turn, one process, one frame stream: the refused prompt bumped
+    // no turn, spawned nothing, and its text never landed.
+    let events = until_count(
+        &daemon,
+        &format!("/sessions/{id}/events"),
+        "turn.completed",
+        1,
+    )
+    .await;
+    assert_eq!(
+        events
+            .iter()
+            .filter(|(_, p)| kind(p) == "turn.started")
+            .count(),
+        1,
+        "only the first turn ever started; events:\n{}",
+        dump(&events)
+    );
+    let user_texts: Vec<&str> = events
+        .iter()
+        .filter(|(_, p)| kind(p) == "message.added" && p["message"]["role"] == "user")
+        .map(|(_, p)| p["message"]["text"].as_str().unwrap_or(""))
+        .collect();
+    assert_eq!(
+        user_texts,
+        vec!["first"],
+        "the refused prompt never landed as a message; events:\n{}",
+        dump(&events)
+    );
+    let runs = std::fs::read_to_string(ws.path().join("fixture-agy-runs"))
+        .expect("the fixture's run ledger");
+    assert_eq!(
+        runs.lines().count(),
+        1,
+        "one prompt process ran, never two; ledger:\n{runs}"
+    );
+
+    // The gate re-opens: once the turn completed, the next prompt runs a
+    // real turn through one more process.
+    let third = call(
+        &daemon,
+        "POST",
+        &format!("/sessions/{id}/prompts"),
+        Some(json!({"request_id": "a-p3", "text": "third"})),
+    )
+    .await;
+    assert_eq!(third.status, 200, "raw: {}", third.raw);
+    let events = until_count(
+        &daemon,
+        &format!("/sessions/{id}/events"),
+        "turn.completed",
+        2,
+    )
+    .await;
+    assert_eq!(
+        events
+            .iter()
+            .filter(|(_, p)| kind(p) == "turn.started")
+            .count(),
+        2,
+        "the gate re-opened after the turn; events:\n{}",
+        dump(&events)
+    );
+    let runs = std::fs::read_to_string(ws.path().join("fixture-agy-runs"))
+        .expect("the fixture's run ledger");
+    assert_eq!(
+        runs.lines().count(),
+        2,
+        "the re-opened gate ran exactly one more process; ledger:\n{runs}"
+    );
+}
