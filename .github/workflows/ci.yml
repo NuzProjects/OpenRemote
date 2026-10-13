@@ -85,12 +85,7 @@ jobs:
           mkdir -p binaries
           touch "binaries/openremote-daemon-$triple$exe"
         shell: bash
-      # Advisory until the crate's formatting debt is cleaned up (3 diffs
-      # in desktop.rs and tray.rs at 2026-10-13): once src-tauri passes
-      # `cargo fmt --all --check`, drop continue-on-error to make this
-      # block like the daemon job's fmt.
       - run: cargo fmt --all --check
-        continue-on-error: true
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo check --locked
 
