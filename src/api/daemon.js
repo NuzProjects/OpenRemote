@@ -1,9 +1,50 @@
 // The daemon API client. Every mutating call carries a client request_id
 // (the receipt contract: retries dedup; crashes surface as unknown, never
-// resent). SSE subscriptions resume from a cursor.
+// resent). SSE subscriptions resume from a cursor. Every call but the
+// installer and the event stream carries a timeout, so a daemon that is
+// wedged (alive, but not answering) surfaces as an error instead of a
+// hang.
 
 const TOKEN_KEY = 'openremote-daemon-token'
 const URL_KEY = 'openremote-daemon-url'
+
+// A normal request must answer within this; a daemon that is alive but
+// stuck holds every spinner forever without it. The installer is exempt
+// (it runs minutes by design), and so is the SSE reader (its lifetime is
+// the stream).
+const CALL_TIMEOUT_MS = 10000
+
+// The resume cursor of an SSE stream: the highest event seq the client
+// already holds. Only a non-negative integer counts (a digit string too,
+// since a cursor can survive a round trip through storage or a URL) -
+// anything else is "no cursor", one deliberate full replay, so a garbage
+// value can never pose as a position and starve the stream of events.
+export function parseCursor(value) {
+  if (typeof value === 'number') return Number.isInteger(value) && value >= 0 ? value : null
+  if (typeof value === 'string' && /^\d+$/.test(value)) return Number(value)
+  return null
+}
+
+// One line of an SSE frame. The daemon writes each frame as
+// `id: <seq>\ndata: <json>` - the id line first, so even a frame whose
+// data cannot be parsed has its seq in hand. Returns `{ seq }` for an id
+// line, `{ event }` for a well-formed data line, `{ malformed: true }` for
+// a data line that is not JSON, and null for everything else (frame
+// separators, keep-alive comments, an unreadable id).
+export function parseSseLine(line) {
+  if (line.startsWith('id: ')) {
+    const seq = parseCursor(line.slice(4))
+    return seq == null ? null : { seq }
+  }
+  if (line.startsWith('data: ')) {
+    try {
+      return { event: JSON.parse(line.slice(6)) }
+    } catch {
+      return { malformed: true }
+    }
+  }
+  return null
+}
 
 export function loadConnection() {
   try {
@@ -57,16 +98,32 @@ export class DaemonApi {
     return Boolean(this.url && this.token)
   }
 
-  async call(method, path, body) {
-    const response = await fetch(`${this.url}${this.prefix}${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${this.token}`,
-        ...(body ? { 'Content-Type': 'application/json' } : {}),
-      },
-      body: body ? JSON.stringify(body) : undefined,
-    })
-    const text = await response.text()
+  async call(method, path, body, { timeoutMs = CALL_TIMEOUT_MS } = {}) {
+    let response
+    let text = ''
+    try {
+      response = await fetch(`${this.url}${this.prefix}${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          ...(body ? { 'Content-Type': 'application/json' } : {}),
+        },
+        body: body ? JSON.stringify(body) : undefined,
+        // `null` opts out (the calls whose wait is the point); otherwise
+        // the request must answer within `timeoutMs`.
+        signal: timeoutMs == null ? undefined : AbortSignal.timeout(timeoutMs),
+      })
+      text = await response.text()
+    } catch (err) {
+      // A timed-out request reads as "not answering": the signal aborts
+      // both the headers wait and a stalled body read, and callers only
+      // have err.message to show - the browser's own "signal timed out"
+      // says nothing.
+      if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
+        throw new Error('The daemon did not answer in time')
+      }
+      throw err
+    }
     let json = null
     try {
       json = text ? JSON.parse(text) : null
@@ -210,13 +267,20 @@ export class DaemonApi {
 
   // The long one: an installer runs minutes - the receipt carries the
   // wait. `withRuntime` is the human's go-ahead to set up a runtime the
-  // harness needs (pi's Node.js); the daemon never assumes it.
+  // harness needs (pi's Node.js); the daemon never assumes it. No
+  // timeout here: the wait is the contract (the daemon holds its own
+  // 600 s limit).
   installHarness(machineId, harnessId, { withRuntime = false } = {}) {
-    return this.call('POST', `/machines/${machineId}/harnesses`, {
-      request_id: newRequestId(),
-      harness: harnessId,
-      with_runtime: withRuntime,
-    })
+    return this.call(
+      'POST',
+      `/machines/${machineId}/harnesses`,
+      {
+        request_id: newRequestId(),
+        harness: harnessId,
+        with_runtime: withRuntime,
+      },
+      { timeoutMs: null },
+    )
   }
 
   // ---- plugins ----
@@ -364,12 +428,17 @@ export class DaemonApi {
   events(id, { after = null, onEvent, onClose }) {
     const controller = new AbortController()
     const run = async () => {
-      let cursor = after
-      let lastId = after
+      // A garbage cursor is deliberately absent: one clean full replay
+      // rather than a resume that can never find its position.
+      let cursor = parseCursor(after)
+      let lastId = cursor
+      let skipped = 0
       try {
         const query = cursor == null ? '' : `?after=${cursor}`
         const response = await fetch(`${this.url}/sessions/${id}/events${query}`, {
           headers: { Authorization: `Bearer ${this.token}` },
+          // No timeout: this connection's lifetime is the stream itself
+          // (the stop handle and the poll decide when it ends).
           signal: controller.signal,
         })
         if (!response.ok || !response.body) throw new Error(`SSE HTTP ${response.status}`)
@@ -384,12 +453,25 @@ export class DaemonApi {
           while ((index = buffer.indexOf('\n')) >= 0) {
             const line = buffer.slice(0, index).replace(/\r$/, '')
             buffer = buffer.slice(index + 1)
-            if (line.startsWith('id: ')) {
-              lastId = Number.parseInt(line.slice(4), 10)
-            } else if (line.startsWith('data: ')) {
-              const event = JSON.parse(line.slice(6))
-              cursor = event.seq
-              onEvent(event)
+            const parsed = parseSseLine(line)
+            if (parsed?.seq != null) {
+              lastId = parsed.seq
+            } else if (parsed?.event) {
+              // The event's own seq when it carries a sane one; the id
+              // line otherwise. Either way the cursor only moves
+              // forward to a real position.
+              cursor = parseCursor(parsed.event.seq) ?? lastId ?? cursor
+              onEvent(parsed.event)
+            } else if (parsed?.malformed) {
+              // A frame the console cannot read is skipped, not fatal:
+              // its seq already arrived on the id: line, so the cursor
+              // still moves past it and a reconnect never replays into
+              // the same bad line forever.
+              skipped += 1
+              if (skipped === 1 || skipped === 10) {
+                console.error(`OpenRemote: skipped ${skipped} unreadable event frames in session ${id}`)
+              }
+              cursor = lastId ?? cursor
             }
           }
         }
