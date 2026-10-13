@@ -42,7 +42,10 @@ pub struct TrayState {
 }
 
 fn prefs_path(app: &AppHandle) -> Option<PathBuf> {
-    app.path().app_config_dir().ok().map(|d| d.join("tray.json"))
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|d| d.join("tray.json"))
 }
 
 pub fn load(app: &AppHandle) {
@@ -157,7 +160,11 @@ pub fn tray_prefs(app: AppHandle) -> TrayView {
 /// The console reports `machine` as it changes, and the user's own choice
 /// as `keep_running`.
 #[tauri::command]
-pub fn set_tray_prefs(app: AppHandle, keep_running: Option<bool>, machine: Option<bool>) -> TrayView {
+pub fn set_tray_prefs(
+    app: AppHandle,
+    keep_running: Option<bool>,
+    machine: Option<bool>,
+) -> TrayView {
     {
         let state = app.state::<TrayState>();
         let mut prefs = state.prefs.lock().expect("tray lock");
