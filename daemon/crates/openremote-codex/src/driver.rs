@@ -7,6 +7,7 @@
 //! is the `turn/completed` notification; never guess turn state.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex as StdMutex};
@@ -28,10 +29,93 @@ const DEFAULT_SANDBOX: &str = "workspace-write";
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Where host call ids begin. The server numbers its own requests from
+/// small integers (1, 2, 3, ...), and our approval answers carry those
+/// ids back; a method-less frame holding a server id must never match a
+/// host call's waiter. Host ids therefore start far above any id a real
+/// app-server plausibly mints (harness audit F9).
+const HOST_CALL_ID_BASE: u64 = 1 << 32;
+
+/// Host calls in flight: our call id → response waiter. A call that
+/// gives up (failed write, timeout) removes its own entry, or the map
+/// pins dead senders for the session's life (harness audit F15).
+struct PendingCalls {
+    map: StdMutex<HashMap<u64, oneshot::Sender<Value>>>,
+}
+
+impl PendingCalls {
+    fn new() -> Self {
+        Self {
+            map: StdMutex::new(HashMap::new()),
+        }
+    }
+
+    /// Register the waiter for one call id.
+    fn register(&self, id: u64, waiter: oneshot::Sender<Value>) {
+        self.map.lock().unwrap().insert(id, waiter);
+    }
+
+    /// Give up on a call. No response can arrive for an id whose frame
+    /// never left or whose waiter timed out, so the entry must not
+    /// linger (harness audit F15).
+    fn abandon(&self, id: u64) {
+        self.map.lock().unwrap().remove(&id);
+    }
+
+    /// Hand a method-less stdout frame to the waiter registered for its
+    /// id, if any. False means the frame matched no call: host ids live
+    /// far above the server's, so a frame carrying a server request id
+    /// (an approval answer echo, a late reply) drops instead of waking
+    /// the wrong waiter (harness audit F9).
+    fn deliver(&self, id: u64, frame: Value) -> bool {
+        match self.map.lock().unwrap().remove(&id) {
+            Some(waiter) => waiter.send(frame).is_ok(),
+            None => false,
+        }
+    }
+
+    /// Wait one call out. The timeout abandons the call's entry before
+    /// returning the error, never after (harness audit F15).
+    async fn await_response(
+        &self,
+        id: u64,
+        rx: oneshot::Receiver<Value>,
+        method: &str,
+        timeout: Duration,
+    ) -> Result<Value, DriverError> {
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(value)) => {
+                if let Some(error) = value.get("error") {
+                    Err(DriverError::Harness(format!(
+                        "codex rejected {method} (code {}): {}",
+                        error.get("code").and_then(|c| c.as_i64()).unwrap_or(0),
+                        error
+                            .get("message")
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("no message")
+                    )))
+                } else {
+                    Ok(value.get("result").cloned().unwrap_or(Value::Null))
+                }
+            }
+            Ok(Err(_)) => Err(DriverError::Gone),
+            Err(_) => {
+                self.abandon(id);
+                Err(DriverError::Protocol(format!("{method} timed out")))
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.map.lock().unwrap().is_empty()
+    }
+}
+
 struct Shared {
     child: Arc<AsyncMutex<Child>>,
-    /// call id → response waiter
-    pending: StdMutex<HashMap<u64, oneshot::Sender<Value>>>,
+    /// Host calls in flight, keyed by call id.
+    pending: PendingCalls,
     /// The turn Codex reports as running (turn/started … turn/completed).
     active_turn: StdMutex<Option<String>>,
 }
@@ -89,10 +173,10 @@ impl Driver {
             .take()
             .ok_or_else(|| DriverError::Spawn("stderr not piped".into()))?;
 
-        let (tx, rx) = mpsc::channel(256);
+        let (tx, mut rx) = mpsc::channel(256);
         let shared = Arc::new(Shared {
             child: Arc::new(AsyncMutex::new(child)),
-            pending: StdMutex::new(HashMap::new()),
+            pending: PendingCalls::new(),
             active_turn: StdMutex::new(None),
         });
         tokio::spawn(read_stdout(
@@ -104,58 +188,77 @@ impl Driver {
 
         let mut driver = Self {
             stdin,
-            shared,
+            shared: Arc::clone(&shared),
             thread_id: String::new(),
-            next_id: 1,
+            next_id: HOST_CALL_ID_BASE,
         };
 
         // Handshake (cloudroom lines 22-25): initialize, then the
-        // `initialized` notification.
-        driver
-            .call(
+        // `initialized` notification, then the thread. Each call is
+        // raced against the death of the CLI process: a CLI that crashes
+        // at boot holds its exit status in the first second, and failing
+        // there beats burning the 60s call timeout on an answer that can
+        // never come (harness audit F13).
+        let boot = async {
+            race_child_death(
+                &shared,
                 "initialize",
-                json!({
-                    "clientInfo": {"name": "openremote", "version": env!("CARGO_PKG_VERSION")},
-                    "capabilities": {"experimentalApi": true}
-                }),
+                driver.call(
+                    "initialize",
+                    json!({
+                        "clientInfo": {"name": "openremote", "version": env!("CARGO_PKG_VERSION")},
+                        "capabilities": {"experimentalApi": true}
+                    }),
+                ),
             )
             .await?;
-        driver.notify("initialized", json!({})).await?;
+            driver.notify("initialized", json!({})).await?;
 
-        // Thread: start or resume (cloudroom lines 70-99).
-        let mut params = thread_params(&opts);
-        let (method, thread_id) = if let Some(resume) = &opts.resume {
-            params["threadId"] = json!(resume);
-            params["excludeTurns"] = json!(true);
-            ("thread/resume", resume.clone())
-        } else {
-            ("thread/start", String::new())
+            // Thread: start or resume (cloudroom lines 70-99).
+            let mut params = thread_params(&opts);
+            let (method, thread_id) = if let Some(resume) = &opts.resume {
+                params["threadId"] = json!(resume);
+                params["excludeTurns"] = json!(true);
+                ("thread/resume", resume.clone())
+            } else {
+                ("thread/start", String::new())
+            };
+            let result = race_child_death(&shared, method, driver.call(method, params)).await?;
+            let id = result
+                .pointer("/thread/id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| DriverError::Protocol("thread/start returned no thread id".into()))?
+                .to_string();
+            if !thread_id.is_empty() && id != thread_id {
+                return Err(DriverError::Protocol(
+                    "codex resumed a different conversation".into(),
+                ));
+            }
+            let model = result
+                .get("model")
+                .and_then(|m| m.as_str())
+                .map(String::from);
+            driver.thread_id = id.clone();
+            // The harness conversation is named: hand the supervisor its
+            // session ref through the same channel the reader owns.
+            let _ = tx
+                .send(DriverEvent::Initialized {
+                    session_ref: id,
+                    model,
+                    permission_mode: None,
+                })
+                .await;
+            Ok(())
         };
-        let result = driver.call(method, params).await?;
-        let id = result
-            .pointer("/thread/id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| DriverError::Protocol("thread/start returned no thread id".into()))?
-            .to_string();
-        if !thread_id.is_empty() && id != thread_id {
-            return Err(DriverError::Protocol(
-                "codex resumed a different conversation".into(),
-            ));
+        if let Err(e) = boot.await {
+            // The CLI's dying words ride stderr; splice the tail into the
+            // failure so a broken install explains itself (harness audit
+            // F13), and a child that survived a rejected handshake must
+            // not outlive the session that never was.
+            let tail = stderr_tail(&mut rx).await;
+            discard_child(&shared).await;
+            return Err(splice_tail(e, &tail));
         }
-        let model = result
-            .get("model")
-            .and_then(|m| m.as_str())
-            .map(String::from);
-        driver.thread_id = id.clone();
-        // The harness conversation is named: hand the supervisor its
-        // session ref through the same channel the reader owns.
-        let _ = tx
-            .send(DriverEvent::Initialized {
-                session_ref: id,
-                model,
-                permission_mode: None,
-            })
-            .await;
         Ok((driver, rx))
     }
 
@@ -255,27 +358,20 @@ impl Driver {
         let id = self.next_id;
         self.next_id += 1;
         let (tx, rx) = oneshot::channel();
-        self.shared.pending.lock().unwrap().insert(id, tx);
-        self.write(json!({"id": id, "method": method, "params": params}))
-            .await?;
-        match tokio::time::timeout(CALL_TIMEOUT, rx).await {
-            Ok(Ok(value)) => {
-                if let Some(error) = value.get("error") {
-                    Err(DriverError::Harness(format!(
-                        "codex rejected {method} (code {}): {}",
-                        error.get("code").and_then(|c| c.as_i64()).unwrap_or(0),
-                        error
-                            .get("message")
-                            .and_then(|m| m.as_str())
-                            .unwrap_or("no message")
-                    )))
-                } else {
-                    Ok(value.get("result").cloned().unwrap_or(Value::Null))
-                }
-            }
-            Ok(Err(_)) => Err(DriverError::Gone),
-            Err(_) => Err(DriverError::Protocol(format!("{method} timed out"))),
+        self.shared.pending.register(id, tx);
+        if let Err(e) = self
+            .write(json!({"id": id, "method": method, "params": params}))
+            .await
+        {
+            // The write failed: no response can ever arrive for this id,
+            // so the waiter must not linger in the map (harness audit F15).
+            self.shared.pending.abandon(id);
+            return Err(e);
         }
+        self.shared
+            .pending
+            .await_response(id, rx, method, CALL_TIMEOUT)
+            .await
     }
 
     async fn notify(&mut self, method: &str, params: Value) -> Result<(), DriverError> {
@@ -305,6 +401,70 @@ async fn kill_and_reap(
             Ok(status.code())
         }
     }
+}
+
+/// Race one handshake call against the death of the CLI process (harness
+/// audit F13). Holding the child lock for the race is safe here: nothing
+/// else takes it until spawn returns. When the call wins, the wait is
+/// simply dropped; when the process dies first, the exit status it
+/// already holds becomes the failure, in the first second instead of
+/// after the call timeout.
+async fn race_child_death<T>(
+    shared: &Arc<Shared>,
+    step: &str,
+    call: impl Future<Output = Result<T, DriverError>>,
+) -> Result<T, DriverError> {
+    let mut child = shared.child.lock().await;
+    tokio::select! {
+        result = call => result,
+        waited = child.wait() => Err(DriverError::Protocol(match waited {
+            Ok(status) => format!("codex exited during {step} ({status})"),
+            Err(e) => format!("codex exited during {step} (exit unreadable: {e})"),
+        })),
+    }
+}
+
+/// The CLI's dying words: the last stderr lines queued around the
+/// process's exit. Best effort with a short grace, since the stderr
+/// reader may still be draining when the failure is decided.
+async fn stderr_tail(rx: &mut mpsc::Receiver<DriverEvent>) -> String {
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(500);
+    let mut lines: Vec<String> = Vec::new();
+    while tokio::time::Instant::now() < deadline {
+        match rx.try_recv() {
+            Ok(DriverEvent::Stderr { line }) => {
+                lines.push(line);
+                if lines.len() > 4 {
+                    lines.remove(0);
+                }
+            }
+            Ok(_) => {}
+            Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+        }
+    }
+    lines.join("; ")
+}
+
+/// Splice the CLI's dying words onto a handshake failure so a broken
+/// install explains itself (harness audit F13).
+fn splice_tail(error: DriverError, tail: &str) -> DriverError {
+    if tail.is_empty() {
+        return error;
+    }
+    let message = match error {
+        DriverError::Protocol(message) => message,
+        other => other.to_string(),
+    };
+    DriverError::Protocol(format!("{message}; {tail}"))
+}
+
+/// A child that outlived a failed handshake must not outlive the session
+/// that never was: kill and reap, best effort, leaving the original
+/// failure in place.
+async fn discard_child(shared: &Arc<Shared>) {
+    let mut child = shared.child.lock().await;
+    let _ = child.start_kill();
+    let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
 }
 
 /// Codex's own decision words, in the schema's order.
@@ -424,10 +584,11 @@ async fn read_stdout(
                 }
             }
         } else if let Some(id) = id {
-            // A response to one of our calls.
-            if let Some(waiter) = shared.pending.lock().unwrap().remove(&id) {
-                let _ = waiter.send(frame);
-            }
+            // A response to one of our calls. Host ids live far above the
+            // server's own request ids, so a frame carrying a server id
+            // finds no waiter and drops instead of waking the wrong call
+            // (harness audit F9).
+            shared.pending.deliver(id, frame);
         }
     }
     let _ = tx.send(DriverEvent::StdoutClosed).await;
@@ -715,5 +876,73 @@ mod tests {
             ..Default::default()
         });
         assert!(plain.get("config").is_none());
+    }
+
+    #[test]
+    fn host_call_ids_live_above_any_server_request_id() {
+        // F9's fix is the base itself: host ids must start outside the
+        // small range a real app-server numbers its own requests from.
+        // Const-checked so the check rides the build, not the run.
+        const _: () = assert!(
+            HOST_CALL_ID_BASE > 1_000_000,
+            "host call ids must live far above the server's own id space"
+        );
+    }
+
+    #[test]
+    fn a_server_request_id_cannot_wake_a_host_call() {
+        // F9: a response frame carrying a server request id (the range
+        // the old 1..n host ids occupied) must find no waiter; the host
+        // call keeps waiting for its real answer.
+        let pending = PendingCalls::new();
+        let call_id = HOST_CALL_ID_BASE + 3;
+        let (tx, rx) = oneshot::channel();
+        pending.register(call_id, tx);
+        let misrouted = pending.deliver(2, json!({"id": 2, "result": {"decision": "accept"}}));
+        assert!(!misrouted, "a server id must not match a host call");
+        assert!(!pending.is_empty(), "the host call must still be waiting");
+        // The real response still routes, with the right body.
+        assert!(pending.deliver(
+            call_id,
+            json!({"id": call_id, "result": {"turn": {"id": "t-1"}}}),
+        ));
+        let frame = rx.blocking_recv().expect("the waiter got its response");
+        let expected = json!("t-1");
+        assert_eq!(frame.pointer("/result/turn/id"), Some(&expected));
+    }
+
+    #[tokio::test]
+    async fn a_timed_out_call_leaves_no_waiter_behind() {
+        // F15: the entry must go when the timeout fires, not when (if
+        // ever) a response arrives for it.
+        let pending = PendingCalls::new();
+        let (tx, rx) = oneshot::channel();
+        pending.register(HOST_CALL_ID_BASE, tx);
+        let result = pending
+            .await_response(
+                HOST_CALL_ID_BASE,
+                rx,
+                "model/list",
+                Duration::from_millis(50),
+            )
+            .await;
+        assert!(result.is_err());
+        assert!(pending.is_empty(), "the timed-out call leaked its waiter");
+    }
+
+    #[test]
+    fn an_abandoned_call_cannot_be_answered_late() {
+        // F15's write-failure path: the abandoned id drops any late
+        // response instead of waking a waiter that no longer exists.
+        let pending = PendingCalls::new();
+        let (tx, rx) = oneshot::channel();
+        pending.register(HOST_CALL_ID_BASE, tx);
+        pending.abandon(HOST_CALL_ID_BASE);
+        assert!(pending.is_empty());
+        assert!(!pending.deliver(
+            HOST_CALL_ID_BASE,
+            json!({"id": HOST_CALL_ID_BASE, "result": {}}),
+        ));
+        drop(rx);
     }
 }

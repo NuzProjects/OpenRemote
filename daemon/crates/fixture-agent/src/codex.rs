@@ -8,14 +8,23 @@
 //! Scenarios (via `FIXTURE_AGENT_SCENARIO` / `fixture-scenario`):
 //! `plain` completes without tools; `approve` asks before a
 //! `commandExecution` and reflects the decision (`cancel` interrupts the
-//! turn, `decline` continues it with a denied result).
+//! turn, `decline` continues it with a denied result); `boot-crash`
+//! dies on stdin EOF before answering `initialize` - the broken-install
+//! shape whose exit status is available in the first second (harness
+//! audit F13).
 
 use std::io::{BufRead, Write};
 
 use serde_json::{Value, json};
 
 const THREAD_ID: &str = "thread-fixture-1";
-const APPROVAL_REQUEST_ID: u64 = 5001;
+/// The server's own request id for approvals, pinned deliberately in
+/// the range the old host call ids occupied: 3 was the first
+/// turn/start's id under the old numbering (initialize 1, thread/start
+/// 2, turn/start 3), so an approval answer carrying this id is exactly
+/// the collision the real app-server could produce against the old
+/// driver (harness audit F9).
+const APPROVAL_REQUEST_ID: u64 = 3;
 
 pub fn main_codex() {
     let mut server = CodexFixture::from_env();
@@ -83,6 +92,15 @@ impl CodexFixture {
 
     /// Returns true when the process should exit.
     fn handle_frame(&mut self, frame: Value) -> bool {
+        // The boot-crash knob: a CLI broken at boot never answers the
+        // handshake. EOF on the first frame is the observed shape of a
+        // missing DLL / expired auth crash - exit now, with the reason
+        // on stderr, so the driver's death race has the first-second
+        // truth to fail on (harness audit F13).
+        if self.scenario == "boot-crash" {
+            eprintln!("fixture-codex: crashed at boot: the install is broken");
+            return true;
+        }
         // A response to one of our server requests (the approval answer).
         if frame.get("id").is_some()
             && frame.get("method").is_none()
@@ -152,7 +170,7 @@ impl CodexFixture {
                 self.turn_count += 1;
                 let turn = format!("turn-fixture-{}", self.turn_count);
                 self.active_turn = Some(turn.clone());
-                self.respond(id, json!({"turn": {"id": turn}}));
+                self.respond(id, json!({"turn": {"id": turn.clone()}}));
                 self.notify(
                     "turn/started",
                     json!({
@@ -165,76 +183,10 @@ impl CodexFixture {
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string();
-                match self.scenario.as_str() {
-                    "approve" => {
-                        let item_id = format!("item-{}", self.turn_count);
-                        self.notify("item/started", json!({
-                            "threadId": self.thread(),
-                            "turnId": turn,
-                            "itemId": item_id,
-                            "item": {"type": "commandExecution", "id": item_id, "command": "echo fixture"}
-                        }));
-                        // The approval: a server→client request.
-                        self.out(json!({
-                            "id": APPROVAL_REQUEST_ID,
-                            "method": "commandExecution/requestApproval",
-                            "params": {
-                                "itemId": item_id,
-                                "threadId": self.thread(),
-                                "turnId": turn,
-                                "command": "echo fixture",
-                                "cwd": ".",
-                                "reason": "fixture needs approval",
-                                "startedAtMs": 1
-                            }
-                        }));
-                        self.pending_approval = Some(PendingTurn {
-                            turn,
-                            item_id,
-                            prompt,
-                        });
-                    }
-                    _ => {
-                        let item_id = format!("msg-{}", self.turn_count);
-                        let model = self.applied_model.as_deref().unwrap_or("gpt-5.1-codex");
-                        self.notify(
-                            "item/completed",
-                            json!({
-                                "threadId": self.thread(),
-                                "turnId": turn,
-                                "itemId": item_id,
-                                "item": {"type": "agentMessage", "id": item_id,
-                                         "text": format!("done: {prompt} on {model}")}
-                            }),
-                        );
-                        // The thread's own context numbers - the harness
-                        // reports both the used tokens and the window.
-                        self.notify(
-                            "thread/tokenUsage/updated",
-                            json!({
-                                "threadId": self.thread(),
-                                "turnId": turn,
-                                "tokenUsage": {
-                                    "total": {"totalTokens": 1250, "inputTokens": 1000,
-                                              "cachedInputTokens": 200, "cacheWriteInputTokens": 50,
-                                              "outputTokens": 250, "reasoningOutputTokens": 0},
-                                    "last": {"totalTokens": 300, "inputTokens": 250,
-                                             "cachedInputTokens": 0, "cacheWriteInputTokens": 0,
-                                             "outputTokens": 50, "reasoningOutputTokens": 0},
-                                    "modelContextWindow": 200000
-                                }
-                            }),
-                        );
-                        // The compact scenario: the conversation outgrew
-                        // its window first.
-                        if self.scenario == "compact" {
-                            self.notify(
-                                "thread/compacted",
-                                json!({"threadId": self.thread(), "turnId": turn}),
-                            );
-                        }
-                        self.finish_turn(&turn, "completed");
-                    }
+                if self.scenario == "approve" {
+                    self.ask_approval(&self.active_turn.clone().unwrap(), &prompt);
+                } else {
+                    self.finish_plain_turn(&prompt);
                 }
             }
             ("turn/steer", Some(id)) => {
@@ -376,6 +328,84 @@ impl CodexFixture {
             }),
         );
         self.active_turn = None;
+    }
+
+    /// Emit the `commandExecution` approval request (a server→client
+    /// request carrying the pinned id) and park the turn on the answer.
+    fn ask_approval(&mut self, turn: &str, prompt: &str) {
+        let item_id = format!("item-{}", self.turn_count);
+        self.notify(
+            "item/started",
+            json!({
+                "threadId": self.thread(),
+                "turnId": turn,
+                "itemId": item_id,
+                "item": {"type": "commandExecution", "id": item_id, "command": "echo fixture"}
+            }),
+        );
+        self.out(json!({
+            "id": APPROVAL_REQUEST_ID,
+            "method": "commandExecution/requestApproval",
+            "params": {
+                "itemId": item_id,
+                "threadId": self.thread(),
+                "turnId": turn,
+                "command": "echo fixture",
+                "cwd": ".",
+                "reason": "fixture needs approval",
+                "startedAtMs": 1
+            }
+        }));
+        self.pending_approval = Some(PendingTurn {
+            turn: turn.to_string(),
+            item_id,
+            prompt: prompt.to_string(),
+        });
+    }
+
+    /// The plain turn: agent message, the thread's own context numbers,
+    /// and (for the compact scenario) the compaction marker.
+    fn finish_plain_turn(&mut self, prompt: &str) {
+        let turn = self.active_turn.clone().unwrap_or_default();
+        let item_id = format!("msg-{}", self.turn_count);
+        let model = self.applied_model.as_deref().unwrap_or("gpt-5.1-codex");
+        self.notify(
+            "item/completed",
+            json!({
+                "threadId": self.thread(),
+                "turnId": turn,
+                "itemId": item_id,
+                "item": {"type": "agentMessage", "id": item_id,
+                         "text": format!("done: {prompt} on {model}")}
+            }),
+        );
+        // The thread's own context numbers - the harness
+        // reports both the used tokens and the window.
+        self.notify(
+            "thread/tokenUsage/updated",
+            json!({
+                "threadId": self.thread(),
+                "turnId": turn,
+                "tokenUsage": {
+                    "total": {"totalTokens": 1250, "inputTokens": 1000,
+                              "cachedInputTokens": 200, "cacheWriteInputTokens": 50,
+                              "outputTokens": 250, "reasoningOutputTokens": 0},
+                    "last": {"totalTokens": 300, "inputTokens": 250,
+                             "cachedInputTokens": 0, "cacheWriteInputTokens": 0,
+                             "outputTokens": 50, "reasoningOutputTokens": 0},
+                    "modelContextWindow": 200000
+                }
+            }),
+        );
+        // The compact scenario: the conversation outgrew
+        // its window first.
+        if self.scenario == "compact" {
+            self.notify(
+                "thread/compacted",
+                json!({"threadId": self.thread(), "turnId": turn}),
+            );
+        }
+        self.finish_turn(&turn, "completed");
     }
 
     fn thread(&self) -> &str {

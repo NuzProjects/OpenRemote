@@ -567,3 +567,140 @@ async fn a_live_model_change_lands_on_the_running_thread() {
         session.raw
     );
 }
+
+/// An approval answer carrying a server request id in the old host-id
+/// range must still route to the approval (harness audit F9): the old
+/// driver numbered its own calls from 1, so its first turn/start held
+/// id 3 - and an approval answered with server id 3 could resolve a
+/// host call waiter instead of the parked turn. The fixture pins its
+/// approval at exactly 3 and the turn parks on the answer, so this
+/// flow exercises the small-server-id shape end to end; the driver's
+/// unit test pins the wire-level collision (a frame with the old id
+/// finding no host call waiter) directly.
+#[tokio::test]
+async fn an_approval_answer_routes_correctly_at_the_old_host_id_range() {
+    let (daemon, ws) = codex_daemon(Some("approve")).await;
+    let id = create_codex(&daemon, &ws).await;
+    until_kinds(
+        &daemon,
+        &format!("/sessions/{id}/events"),
+        &["session.status_changed"],
+    )
+    .await;
+
+    call(
+        &daemon,
+        "POST",
+        &format!("/sessions/{id}/prompts"),
+        Some(json!({"request_id": "c-p1", "text": "run the thing"})),
+    )
+    .await;
+    let events = until_kinds(
+        &daemon,
+        &format!("/sessions/{id}/events"),
+        &["decision.requested", "session.status_changed"],
+    )
+    .await;
+    let decision = events
+        .iter()
+        .find(|(_, p)| kind(p) == "decision.requested")
+        .and_then(|(_, p)| p.get("decision"))
+        .expect("the decision");
+    assert_eq!(
+        decision["harness_ref"].as_str().expect("harness ref"),
+        "3",
+        "the fixture pins its approval id at the old turn/start id"
+    );
+    let decision_id = decision["id"].as_str().expect("decision id").to_string();
+
+    // The answer carries server id 3 - a number the old host calls
+    // occupied. It must reach the fixture's parked turn, not any call
+    // waiter, and the turn must finish on the approval's own words.
+    let answer = call(
+        &daemon,
+        "POST",
+        &format!("/decisions/{decision_id}/answer"),
+        Some(json!({"request_id": "c-answer", "choice": "accept"})),
+    )
+    .await;
+    assert_eq!(answer.status, 200, "raw: {}", answer.raw);
+
+    let events = until_kinds(
+        &daemon,
+        &format!("/sessions/{id}/events"),
+        &[
+            "decision.responded",
+            "session.status_changed",
+            "tool.result",
+            "message.added",
+            "turn.completed",
+            "session.status_changed",
+        ],
+    )
+    .await;
+    let tool = events
+        .iter()
+        .find(|(_, p)| kind(p) == "tool.result")
+        .expect("tool.result");
+    assert_eq!(tool.1["is_error"], false, "events:\n{}", dump(&events));
+    let agent = events
+        .iter()
+        .find(|(_, p)| kind(p) == "message.added" && p["message"]["role"] == "assistant")
+        .expect("agent message");
+    assert!(
+        agent.1["message"]["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("ran the command for:"),
+        "the approval answer reached the fixture's turn; events:\n{}",
+        dump(&events)
+    );
+    let session = call(&daemon, "GET", &format!("/sessions/{id}"), None).await;
+    assert_eq!(
+        session.body["status"], "idle",
+        "the turn settled; raw: {}",
+        session.raw
+    );
+}
+
+/// A CLI that dies at boot must fail create in seconds, not after the
+/// 60-120s the unraced handshake calls used to burn (harness audit F13):
+/// the exit status was available in the first second.
+#[tokio::test]
+async fn a_boot_crashed_codex_fails_create_in_seconds_not_minutes() {
+    let started = std::time::Instant::now();
+    let (daemon, ws) = codex_daemon(Some("boot-crash")).await;
+    let id = create_codex(&daemon, &ws).await;
+
+    // The session lands failed with the exit status and the CLI's dying
+    // words - never a hang, never a Working-forever create.
+    let events = until_kinds(
+        &daemon,
+        &format!("/sessions/{id}/events"),
+        &["session.status_changed"],
+    )
+    .await;
+    let failure = events
+        .iter()
+        .find(|(_, p)| kind(p) == "session.status_changed")
+        .expect("the terminal status");
+    assert_eq!(failure.1["status"], "failed", "events:\n{}", dump(&events));
+    let reason = failure.1["reason"].as_str().unwrap_or_default();
+    assert!(
+        reason.contains("exited during initialize"),
+        "the failure names the handshake step; got: {reason}"
+    );
+    assert!(
+        reason.contains("crashed at boot"),
+        "the CLI's dying stderr rides the failure; got: {reason}"
+    );
+    // The patience bound: the old code burned the full 60s call timeout
+    // (120s for codex's two stacked calls). Fail in seconds.
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(20),
+        "create took {:?} - the death race did not fire",
+        started.elapsed()
+    );
+    let session = call(&daemon, "GET", &format!("/sessions/{id}"), None).await;
+    assert_eq!(session.body["status"], "failed", "raw: {}", session.raw);
+}
