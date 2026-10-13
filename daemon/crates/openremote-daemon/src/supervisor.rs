@@ -2002,8 +2002,8 @@ impl Supervisor {
     /// status itself only lands while the session is still alive: the
     /// failed-write arm of `prompt` can settle the session first, and a
     /// terminal status is a fact, not an opinion to state twice. The
-    /// stderr ring's tail splices into the Failed reason and goes with
-    /// the entry.
+    /// stderr ring's tail (harness audit F14) splices into the Failed
+    /// reason and goes with the entry.
     async fn settle_terminal_locked(
         &self,
         id: &SessionId,
