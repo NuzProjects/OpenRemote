@@ -1,8 +1,10 @@
 //! The desktop shell runs the daemon as a sidecar. The shell owns one
-//! daemon for the app's lifetime; the daemon's stdin watchdog (it exits
-//! when stdin closes) kills it transitively on app exit.
+//! daemon for the app's lifetime and respawns it when it dies on its
+//! own; the daemon's stdin watchdog (it exits when stdin closes) kills it
+//! transitively on app exit.
 
 use std::sync::Mutex;
+use std::time::Duration;
 
 use tauri::{Manager, State, WindowEvent};
 use tauri_plugin_shell::process::CommandEvent;
@@ -12,9 +14,22 @@ use crate::{tray, DaemonInfo, DaemonState};
 
 const DAEMON_NAME: &str = "openremote-daemon";
 
-/// The live sidecar child. Held so a requested restart can stop the old
-/// daemon before spawning the new one; the stdin watchdog (the daemon exits
-/// when stdin closes) still owns the app-exit path.
+/// How long the shell waits before respawning a daemon that died on its
+/// own. A daemon that got as far as READY was healthy, so its death was
+/// a blip and the wait resets to the minimum; each daemon that dies (or
+/// fails to start) without ever saying READY doubles the wait, capped,
+/// so a daemon that cannot start is retried slowly instead of in a tight
+/// loop.
+const RESPAWN_WAIT_MIN: Duration = Duration::from_secs(2);
+const RESPAWN_WAIT_MAX: Duration = Duration::from_secs(30);
+
+/// The sidecar child the shell owns: the running daemon's handle, or
+/// None while none runs (dead, and not yet respawned). daemon_restart
+/// takes the child to stop the old daemon before spawning a new one, and
+/// a watcher tells its own daemon by the child's pid. Storing a
+/// replacement drops the child it replaces, and with it the daemon's
+/// stdin pipe: the daemon exits when stdin closes, so a replaced daemon
+/// stops itself, and the app-exit path rides the same watchdog.
 #[derive(Default)]
 struct Sidecar(Mutex<Option<tauri_plugin_shell::process::CommandChild>>);
 
@@ -78,46 +93,125 @@ pub fn run() {
         .expect("error while running OpenRemote");
 }
 
-/// Spawn the daemon sidecar and watch its stdout lines (READY / DATA_DIR).
-/// The daemon prints both at startup; the info publishes once both are
-/// seen (or when the stream ends, for a daemon that never said DATA_DIR).
+/// Spawn the daemon sidecar and keep it alive for the app's lifetime:
+/// watch its stdout lines (READY / DATA_DIR) and publish the info once
+/// both are seen. When the event stream ends while the child is still
+/// this watcher's own (the daemon crashed, or something outside the app
+/// killed it), clear the published info and spawn a replacement after a
+/// bounded wait: the console's poll then sees a not-ready daemon instead
+/// of retrying a dead address, and follows the replacement once it
+/// publishes. A deliberate restart replaces the child itself, which the
+/// watcher sees and stands down for.
 fn spawn_daemon(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
-        let sidecar = app
-            .shell()
-            .sidecar(DAEMON_NAME)
-            .expect("daemon sidecar registered in tauri.conf.json");
-        let sidecar = match system_env() {
-            Some(vars) => sidecar.env_clear().envs(vars),
-            None => sidecar,
-        };
-        let (mut rx, child) = sidecar.spawn().expect("daemon sidecar spawns");
-        app.state::<Sidecar>()
-            .0
-            .lock()
-            .expect("daemon state lock")
-            .replace(child);
-
-        let mut info = DaemonInfo::default();
-        let mut published = false;
-        while let Some(event) = rx.recv().await {
-            if let CommandEvent::Stdout(line) = event {
-                let line = String::from_utf8_lossy(&line).trim().to_string();
-                if let Some(addr) = line.strip_prefix("READY ") {
-                    info.url = Some(format!("http://{addr}"));
-                } else if let Some(dir) = line.strip_prefix("DATA_DIR ") {
-                    info.data_dir = Some(dir.to_string());
+        // The delay before the next spawn after a death.
+        let mut wait = RESPAWN_WAIT_MIN;
+        loop {
+            let sidecar = app
+                .shell()
+                .sidecar(DAEMON_NAME)
+                .expect("daemon sidecar registered in tauri.conf.json");
+            let sidecar = match system_env() {
+                Some(vars) => sidecar.env_clear().envs(vars),
+                None => sidecar,
+            };
+            let (mut rx, child) = match sidecar.spawn() {
+                Ok(spawned) => spawned,
+                Err(err) => {
+                    // The binary could not be started at all:
+                    // quarantined by a scanner, truncated by an
+                    // interrupted copy, locked by another process. That
+                    // can be transient while the app lives, so retry on
+                    // the growing wait; the info stays clear meanwhile.
+                    eprintln!("openremote: the daemon could not be started: {err}");
+                    respawn_delay(wait).await;
+                    if daemon_slot_claimed(&app) {
+                        return;
+                    }
+                    wait = (wait * 2).min(RESPAWN_WAIT_MAX);
+                    continue;
                 }
-                if info.url.is_some() && info.data_dir.is_some() && !published {
-                    publish(&app, &mut info);
-                    published = true;
+            };
+            let pid = child.pid();
+            app.state::<Sidecar>()
+                .0
+                .lock()
+                .expect("daemon state lock")
+                .replace(child);
+
+            let mut info = DaemonInfo::default();
+            let mut published = false;
+            while let Some(event) = rx.recv().await {
+                if let CommandEvent::Stdout(line) = event {
+                    let line = String::from_utf8_lossy(&line).trim().to_string();
+                    if let Some(addr) = line.strip_prefix("READY ") {
+                        info.url = Some(format!("http://{addr}"));
+                    } else if let Some(dir) = line.strip_prefix("DATA_DIR ") {
+                        info.data_dir = Some(dir.to_string());
+                    }
+                    if info.url.is_some() && info.data_dir.is_some() && !published {
+                        publish(&app, &mut info);
+                        published = true;
+                    }
                 }
             }
-        }
-        if !published && info.url.is_some() {
-            publish(&app, &mut info);
+            // The stream ends only when the process is gone. If the
+            // child in the slot is still this one's, the daemon died on
+            // its own: take the dead handle out so the slot says what is
+            // true (no daemon running). Otherwise a deliberate restart
+            // or another watcher already replaced it.
+            let was_mine = {
+                let sidecar = app.state::<Sidecar>();
+                let mut slot = sidecar.0.lock().expect("daemon state lock");
+                let mine = slot.as_ref().is_some_and(|child| child.pid() == pid);
+                if mine {
+                    let _ = slot.take();
+                }
+                mine
+            };
+            if !was_mine {
+                return;
+            }
+            // Clear the dead daemon's info so daemon_info stops answering
+            // with an address nothing listens on. The replacement
+            // repopulates it when it says READY and DATA_DIR.
+            *app.state::<DaemonState>()
+                .info
+                .lock()
+                .expect("daemon state lock") = DaemonInfo::default();
+            eprintln!("openremote: the daemon exited, respawning");
+            respawn_delay(wait).await;
+            if daemon_slot_claimed(&app) {
+                return;
+            }
+            let was_ready = info.url.is_some();
+            wait = if was_ready {
+                RESPAWN_WAIT_MIN
+            } else {
+                (wait * 2).min(RESPAWN_WAIT_MAX)
+            };
         }
     });
+}
+
+/// Whether another spawn claimed the sidecar slot while a dead daemon's
+/// watcher was waiting to respawn it. Only daemon_restart and a
+/// respawning watcher store a child, so a claimed slot means one of them
+/// ran; the waiting watcher stands down rather than double-spawn.
+fn daemon_slot_claimed(app: &tauri::AppHandle) -> bool {
+    app.state::<Sidecar>()
+        .0
+        .lock()
+        .expect("daemon state lock")
+        .is_some()
+}
+
+/// Sleep out a respawn wait on the runtime's blocking pool. The shell
+/// carries no timer of its own, and sleeping inline would park an async
+/// worker that other work still needs; the blocking pool exists for
+/// exactly this kind of wait.
+async fn respawn_delay(wait: Duration) {
+    let _ = tauri::async_runtime::spawn_blocking(move || std::thread::sleep(wait)).await;
 }
 
 /// Under an AppImage the shell runs with the image's own library and data
@@ -179,5 +273,9 @@ fn read_daemon_token_default() -> Option<String> {
 fn read_daemon_token_at(dir: &str) -> Option<String> {
     let token = std::fs::read_to_string(std::path::Path::new(dir).join("token")).ok()?;
     let token = token.trim().to_string();
-    if token.is_empty() { None } else { Some(token) }
+    if token.is_empty() {
+        None
+    } else {
+        Some(token)
+    }
 }
