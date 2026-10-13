@@ -73,6 +73,24 @@ pub struct TestDaemon {
     _child: Option<Box<DaemonChild>>,
 }
 
+impl TestDaemon {
+    /// The address-and-token view over a daemon this test spawned and
+    /// reaps itself (the exit-sweep shape: the child never lives here,
+    /// so dropping this kills nothing).
+    pub fn from_parts(
+        addr: std::net::SocketAddr,
+        token: String,
+        data_dir: tempfile::TempDir,
+    ) -> Self {
+        Self {
+            token,
+            addr,
+            _data_dir: data_dir,
+            _child: None,
+        }
+    }
+}
+
 /// A daemon spawned as its own process (the real binary, its own env).
 /// Dropping kills it; its stdin closes first, which the daemon's own
 /// watchdog honors anyway.
@@ -530,6 +548,25 @@ pub async fn until_count(
         "timed out waiting for {count} × {wanted_kind}; last seen:\n{}",
         dump(&seen)
     );
+}
+
+/// Wait until the session's status settles to one of `wanted` - a poll of
+/// the session itself, for the transitions the event stream cannot name
+/// deterministically (a settle racing the drain window).
+pub async fn until_status(daemon: &TestDaemon, id: &str, wanted: &[&str]) -> Value {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut last = Value::Null;
+    while tokio::time::Instant::now() < deadline {
+        let reply = call(daemon, "GET", &format!("/sessions/{id}"), None).await;
+        last = reply.body.clone();
+        if let Some(status) = reply.body["status"].as_str() {
+            if wanted.contains(&status) {
+                return reply.body;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+    panic!("session {id} never settled to {wanted:?}; last: {last}");
 }
 
 /// A raw HTTP request with arbitrary headers (CORS probes), returning

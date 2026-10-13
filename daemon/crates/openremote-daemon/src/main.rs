@@ -87,15 +87,23 @@ async fn serve(agent: bool) -> ExitCode {
 
     if agent {
         // A service is stopped with SIGTERM (or Ctrl-C when run by hand).
-        tokio::spawn(async {
+        // The sweep before exit(0) is the orphan fix: exit runs no
+        // destructors, so without it every harness child outlives the
+        // daemon (opencode serve children have null stdin and never see
+        // EOF). Bounded - a wedged child never hangs the exit.
+        let app = Arc::clone(&app);
+        tokio::spawn(async move {
             shutdown_signal().await;
             eprintln!("openremote-daemon: stopping");
+            app.supervisor.shutdown_all().await;
             std::process::exit(0);
         });
     } else {
         // The sidecar watchdog: when the shell dies, our stdin closes, and
-        // the daemon must not outlive its owner.
-        tokio::spawn(async {
+        // the daemon must not outlive its owner. Same sweep for the same
+        // reason - the children belong to this process, not to the shell.
+        let app = Arc::clone(&app);
+        tokio::spawn(async move {
             use tokio::io::AsyncReadExt;
             let mut stdin = tokio::io::stdin();
             let mut scratch = [0u8; 512];
@@ -106,6 +114,7 @@ async fn serve(agent: bool) -> ExitCode {
                 }
             }
             eprintln!("openremote-daemon: stdin closed, exiting");
+            app.supervisor.shutdown_all().await;
             std::process::exit(0);
         });
     }
