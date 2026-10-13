@@ -14,6 +14,15 @@ const URL_KEY = 'openremote-daemon-url'
 // the stream).
 const CALL_TIMEOUT_MS = 10000
 
+// Calls whose wait includes a harness boot: creating or resuming a chat
+// spawns the harness CLI and waits for its first answer (opencode's serve
+// line is capped at 30 s, pi's first RPC at 60 s, claude's model handshake
+// at 30 s), so the normal budget would cut a slow cold boot in half and
+// a retry would land as a second chat. Well above every daemon-side boot
+// cap, still bounded: the poll's own banner (three missed 10 s beats)
+// says "not answering" long before this fires.
+const BOOT_TIMEOUT_MS = 120000
+
 // The resume cursor of an SSE stream: the highest event seq the client
 // already holds. Only a non-negative integer counts (a digit string too,
 // since a cursor can survive a round trip through storage or a URL) -
@@ -154,18 +163,25 @@ export class DaemonApi {
     return this.call('GET', `/sessions/${id}`)
   }
 
+  // Creating the chat boots the harness (up to 60 s of CLI cold start
+  // daemon-side) - the boot budget, not the normal one.
   createSession({ harness, workspace, model, effort, permissionMode, fast, deviceId, synced }) {
-    return this.call('POST', '/sessions', {
-      request_id: newRequestId(),
-      harness,
-      workspace,
-      ...(model ? { model } : {}),
-      ...(effort ? { effort } : {}),
-      ...(permissionMode ? { permission_mode: permissionMode } : {}),
-      ...(fast ? { fast: true } : {}),
-      ...(deviceId ? { device_id: deviceId } : {}),
-      ...(synced ? { synced: true } : {}),
-    })
+    return this.call(
+      'POST',
+      '/sessions',
+      {
+        request_id: newRequestId(),
+        harness,
+        workspace,
+        ...(model ? { model } : {}),
+        ...(effort ? { effort } : {}),
+        ...(permissionMode ? { permission_mode: permissionMode } : {}),
+        ...(fast ? { fast: true } : {}),
+        ...(deviceId ? { device_id: deviceId } : {}),
+        ...(synced ? { synced: true } : {}),
+      },
+      { timeoutMs: BOOT_TIMEOUT_MS },
+    )
   }
 
   /** Syncs a private chat to the user's other devices (it keeps running here). */
@@ -243,8 +259,10 @@ export class DaemonApi {
     return this.call('POST', `/sessions/${id}/interrupt`, { request_id: newRequestId() })
   }
 
+  // Resuming boots the harness again (the same cold-start window as
+  // creating) - the boot budget.
   resume(id) {
-    return this.call('POST', `/sessions/${id}/resume`, { request_id: newRequestId() })
+    return this.call('POST', `/sessions/${id}/resume`, { request_id: newRequestId() }, { timeoutMs: BOOT_TIMEOUT_MS })
   }
 
   decisions(id) {
@@ -351,8 +369,15 @@ export class DaemonApi {
     })
   }
 
+  // Run now creates the chat and delivers the task - a harness boot
+  // rides the request, so the boot budget.
   runRule(ruleId) {
-    return this.call('POST', `/automations/${ruleId}/run`, { request_id: newRequestId() })
+    return this.call(
+      'POST',
+      `/automations/${ruleId}/run`,
+      { request_id: newRequestId() },
+      { timeoutMs: BOOT_TIMEOUT_MS },
+    )
   }
 
   // ---- projects ----
@@ -380,9 +405,11 @@ export class DaemonApi {
   }
 
   // The models a harness advertises, in its own words (empty = the slot
-  // stays reserved for that harness).
+  // stays reserved for that harness). The catalog comes from a
+  // short-lived harness CLI (a 30 s handshake daemon-side) - the boot
+  // budget, so a cold CLI is not cut off mid-handshake.
   models(harnessId) {
-    return this.call('GET', `/harnesses/${harnessId}/models`)
+    return this.call('GET', `/harnesses/${harnessId}/models`, null, { timeoutMs: BOOT_TIMEOUT_MS })
   }
 
   // ---- harness sign-in ----

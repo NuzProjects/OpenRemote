@@ -141,20 +141,38 @@ test('a request that never answers rejects when its timeout fires', async () => 
   }
 })
 
-test('normal calls carry a timeout signal; the installer does not', async () => {
+test('every request is bounded: 10s normally, 120s across a harness boot, none for the installer', async () => {
   const api = new DaemonApi('http://daemon', 'token')
+  const budgets = []
   const signals = []
+  const realTimeout = AbortSignal.timeout
   const realFetch = globalThis.fetch
+  // The budget is observable only where it is spent, so record what
+  // reaches AbortSignal.timeout (and whether a signal rides the fetch).
+  AbortSignal.timeout = (ms) => {
+    budgets.push(ms)
+    return new AbortController().signal
+  }
   globalThis.fetch = async (requestUrl, options) => {
     signals.push(options.signal)
     return new Response('null', { status: 200 })
   }
   try {
     await api.call('GET', '/healthz')
+    // The four whose wait includes a harness boot (a cold CLI can take
+    // 30-60 s daemon-side): create, resume, run-now, and the model
+    // catalog's CLI handshake.
+    await api.createSession({ harness: 'claude' })
+    await api.resume('s1')
+    await api.runRule('r1')
+    await api.models('claude')
     await api.installHarness('m1', 'claude')
   } finally {
+    AbortSignal.timeout = realTimeout
     globalThis.fetch = realFetch
   }
-  assert.ok(signals[0] instanceof AbortSignal)
-  assert.equal(signals[1], undefined)
+  assert.deepEqual(budgets, [10000, 120000, 120000, 120000, 120000])
+  assert.ok(signals.slice(0, 5).every((signal) => signal instanceof AbortSignal))
+  // The installer's wait is the contract: no signal at all.
+  assert.equal(signals[5], undefined)
 })
