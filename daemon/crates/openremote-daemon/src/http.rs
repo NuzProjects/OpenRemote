@@ -257,10 +257,23 @@ async fn capabilities(State(app): State<Arc<App>>) -> Response {
 }
 
 /// The models a harness advertises, in its own words. An empty list is a
-/// real answer: the console's model slot stays reserved for that harness.
+/// real answer - the harness advertises nothing, and the console's model
+/// slot stays reserved for it. A probe that failed (the CLI not signed
+/// in, slow to boot, or a spawn failure) is not an answer: 503, the same
+/// transient signal the cloud routes give, so no caller can hold a
+/// failed probe as the harness's empty advertisement.
 async fn harness_models(State(app): State<Arc<App>>, AxumPath(id): AxumPath<String>) -> Response {
-    let models = app.supervisor.models(&id).await;
-    Json(models).into_response()
+    match app.supervisor.models(&id).await {
+        // A harness that doesn't advertise through us answers [] on the
+        // wire: the genuine-empty shape, byte-identical to a harness
+        // that advertises no models.
+        Ok(models) => Json(models.unwrap_or_default()).into_response(),
+        Err(SupervisorError::Driver(err)) => error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            &format!("could not ask '{id}' for its models: {err}"),
+        ),
+        Err(err) => supervisor_error(err),
+    }
 }
 
 // ---- harness sign-in ----

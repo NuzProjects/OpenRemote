@@ -182,30 +182,39 @@ impl Backend {
         }
     }
 
-    /// The models this harness advertises, in its own words. `None` = the
-    /// harness doesn't advertise through us (the console's slot stays
-    /// reserved).
-    pub async fn models(&self) -> Option<Vec<ModelDescriptor>> {
+    /// The models this harness advertises, in its own words, with the
+    /// probe's failure kept apart from the answer. `Ok(None)` = the
+    /// harness doesn't advertise through us (a real answer; the console's
+    /// slot stays reserved); `Ok(Some(list))` = the probe answered, an
+    /// empty list included (the harness advertises no models); `Err` =
+    /// the probe failed (not signed in, a CLI slow to boot, a spawn
+    /// failure) - a non-fact the caller must not dress up as an empty
+    /// advertisement, the same way `signed_in` keeps `None` for a probe
+    /// that could not ask.
+    pub async fn models(&self) -> Result<Option<Vec<ModelDescriptor>>, DriverError> {
         match self {
             Backend::Claude(resolution) => {
                 // The SDK's initialize handshake - its `models` array is the
                 // list the CLI's own /model picker serves.
-                openremote_claude::driver::models(resolution).await.ok()
+                openremote_claude::driver::models(resolution)
+                    .await
+                    .map(Some)
             }
-            Backend::Codex(resolution) => openremote_codex::models(resolution).await.ok(),
+            Backend::Codex(resolution) => openremote_codex::models(resolution).await.map(Some),
             // Grok's own cache of its models endpoint - its names, its
-            // effort words. Grok refetches the cache; we read it.
-            Backend::Grok(_) => Some(openremote_grok::config::catalog()),
+            // effort words. Grok refetches the cache; we read it. No
+            // probe runs here, so there is no failure to keep apart.
+            Backend::Grok(_) => Ok(Some(openremote_grok::config::catalog())),
             // Pi's model catalog needs a signed-in provider (`pi
             // --list-models` answers "No models available" here) - the
             // slot stays reserved until that probe is honest.
-            Backend::Pi(_) => None,
+            Backend::Pi(_) => Ok(None),
             // OpenCode's /api/model is a catalog without a current-model
             // marker (observed live: the model only rides step-started
             // events) - the catalog stays reserved.
-            Backend::Opencode(_) => None,
+            Backend::Opencode(_) => Ok(None),
             // Antigravity's `agy models` prints its own catalog (TSV).
-            Backend::Agy(resolution) => openremote_agy::driver::models(resolution).await.ok(),
+            Backend::Agy(resolution) => openremote_agy::driver::models(resolution).await.map(Some),
         }
     }
 
@@ -412,15 +421,6 @@ impl HarnessRegistry {
     /// overrides; nothing there is a fixture.
     pub fn is_fixture(&self, id: &str) -> bool {
         self.overrides.contains_key(id)
-    }
-
-    /// Advertised models for a harness; empty when the harness doesn't
-    /// advertise through us.
-    pub async fn models(&self, id: &str) -> Vec<ModelDescriptor> {
-        match self.backend(id) {
-            Some(backend) => backend.models().await.unwrap_or_default(),
-            None => Vec::new(),
-        }
     }
 }
 

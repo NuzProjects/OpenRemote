@@ -187,12 +187,35 @@ impl Supervisor {
         self.registry.read().expect("registry lock").harnesses()
     }
 
-    /// Advertised models for a harness (empty = the slot stays reserved).
-    pub async fn models(&self, harness: &str) -> Vec<openremote_harness::ModelDescriptor> {
-        match self.backend(harness) {
-            Some(backend) => backend.models().await.unwrap_or_default(),
-            None => Vec::new(),
-        }
+    /// The models a harness advertises, in its own words, with the
+    /// probe's failure kept apart from the answer: `Ok(None)` = the
+    /// harness advertises nothing through us (a real answer; the slot
+    /// stays reserved), `Ok(Some(list))` = the probe answered (an empty
+    /// list is the harness advertising no models), `Err(Driver)` = the
+    /// probe failed - transient, a later ask may find the CLI signed in
+    /// and booted. The other errors name the harness itself: unknown, or
+    /// known but not installed.
+    pub async fn models(
+        &self,
+        harness: &str,
+    ) -> Result<Option<Vec<openremote_harness::ModelDescriptor>>, SupervisorError> {
+        let backend = {
+            let registry = self.registry.read().expect("registry lock");
+            if !registry.harnesses().iter().any(|h| h.id == harness) {
+                return Err(SupervisorError::Harness(format!(
+                    "harness '{harness}' is not known"
+                )));
+            }
+            registry.backend(harness).cloned()
+        };
+        // A harness that resolved nowhere (not installed) never got a
+        // probe to fail: its answer is its own error, not a catalog.
+        let Some(backend) = backend else {
+            return Err(SupervisorError::Harness(format!(
+                "'{harness}' is not installed on this machine"
+            )));
+        };
+        backend.models().await.map_err(SupervisorError::Driver)
     }
 
     /// A clone of the harness's backend - never a borrowed guard, so
