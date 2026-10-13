@@ -126,13 +126,17 @@ pub async fn spawn_login(
     };
     full.extend(argv.iter().map(|arg| (*arg).into()));
 
-    let mut child = tokio::process::Command::new(&program)
+    let mut command = tokio::process::Command::new(&program);
+    command
         .args(&full)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("spawn failed: {e}"))?;
+        .stderr(std::process::Stdio::piped());
+    // Windows: no console flash, no Ctrl-C from a shared console; the
+    // why lives on openremote_harness::creation_flags.
+    #[cfg(windows)]
+    command.creation_flags(openremote_harness::creation_flags());
+    let mut child = command.spawn().map_err(|e| format!("spawn failed: {e}"))?;
 
     let stdout = child.stdout.take().expect("stdout piped");
     let stderr = child.stderr.take().expect("stderr piped");

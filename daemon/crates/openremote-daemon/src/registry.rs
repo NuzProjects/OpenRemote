@@ -494,13 +494,18 @@ async fn probe_version(resolution: &Resolution) -> Option<String> {
         }
         Resolution::Unavailable => return None,
     };
-    let probe = tokio::process::Command::new(&program)
+    let mut command = tokio::process::Command::new(&program);
+    command
         .args(&argv)
         .arg("--version")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output();
+        .stderr(std::process::Stdio::null());
+    // Windows: no console flash, no Ctrl-C from a shared console; the
+    // why lives on openremote_harness::creation_flags.
+    #[cfg(windows)]
+    command.creation_flags(openremote_harness::creation_flags());
+    let probe = command.output();
     let output = tokio::time::timeout(std::time::Duration::from_secs(5), probe)
         .await
         .ok()?
@@ -536,12 +541,17 @@ async fn probe_signed_in(resolution: &Resolution, args: &[&str]) -> Option<bool>
         Resolution::Unavailable => return None,
     };
     argv.extend(args.iter().map(|arg| (*arg).into()));
-    let probe = tokio::process::Command::new(&program)
+    let mut command = tokio::process::Command::new(&program);
+    command
         .args(&argv)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output();
+        .stderr(std::process::Stdio::piped());
+    // Windows: no console flash, no Ctrl-C from a shared console; the
+    // why lives on openremote_harness::creation_flags.
+    #[cfg(windows)]
+    command.creation_flags(openremote_harness::creation_flags());
+    let probe = command.output();
     let output = tokio::time::timeout(std::time::Duration::from_secs(8), probe)
         .await
         .ok()?
