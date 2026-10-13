@@ -12,6 +12,12 @@ const ConsoleContext = createContext(null)
 
 const hasTauri = typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__
 
+// How many sign-in poll beats in a row (800 ms each, about 30 s) may
+// fail to read the relay's view before the relay is declared dead: one
+// dropped read heals, only a view nobody can read over and over is a
+// failure.
+const SIGNIN_POLL_MISSES = 40
+
 export function ConsoleProvider({ children }) {
   const [api, setApi] = useState(() => {
     const saved = loadConnection()
@@ -592,47 +598,95 @@ export function ConsoleProvider({ children }) {
   // The relay: the harness's own login command runs on the machine, the
   // CLI's words stream into the view, the human's answers ride back.
   // `onBeat` receives each view while the login runs; the promise settles
-  // when the CLI exits, and the capabilities are re-read so the row
-  // carries the harness's own fresh status words.
+  // when the CLI exits (or the relay is cancelled, or its poll gives up -
+  // see below), and the capabilities are re-read so the row carries the
+  // harness's own fresh status words.
   // A harness's own sign-in, relayed - on this computer, or on one of the
   // account's machines (`deviceId`), where its CLI runs.
+  // Returns { promise, cancel }: `cancel` stops the poll (the modal's
+  // cleanup) without touching the daemon's run - the human may still be
+  // finishing in the browser. The poll also gives up on its own: a relay
+  // whose view cannot be read SIGNIN_POLL_MISSES times in a row (about
+  // 30 s - a daemon that restarted, a relay that never survived)
+  // settles with the last error instead of being read every 800ms for
+  // the app's lifetime.
   const signIn = useCallback(
-    async (harnessId, { onBeat, deviceId = null } = {}) => {
+    (harnessId, { onBeat, deviceId = null } = {}) => {
       const target = api.device(deviceId)
-      let start
-      try {
-        start = await target.startSignIn(harnessId)
-      } catch (err) {
-        // A relay already running is one the human abandoned (or a modal
-        // reopened): stop the stale attempt, then start fresh - the new
-        // CLI's own login server is the one that must answer the browser.
-        if (err?.status !== 409) throw err
-        await target.stopSignIn(harnessId)
-        await new Promise((r) => setTimeout(r, 400))
-        start = await target.startSignIn(harnessId)
+      let cancelled = false
+      let stopPoll = null
+      const cancelledError = () => {
+        const err = new Error('Sign-in was cancelled')
+        err.cancelled = true
+        return err
       }
-      const first = start?.result ?? start
-      onBeat?.(first)
-      if (first?.done) {
-        await refreshCapabilities()
-        return first
-      }
-      return await new Promise((resolve) => {
-        const poll = setInterval(async () => {
-          let view = null
-          try {
-            view = await target.signInView(harnessId)
-          } catch {
-            return // the poll heals
-          }
-          onBeat?.(view)
-          if (view?.done) {
+      const promise = (async () => {
+        let start
+        try {
+          start = await target.startSignIn(harnessId)
+        } catch (err) {
+          // A relay already running is one the human abandoned (or a modal
+          // reopened): stop the stale attempt, then start fresh - the new
+          // CLI's own login server is the one that must answer the browser.
+          if (err?.status !== 409) throw err
+          await target.stopSignIn(harnessId)
+          await new Promise((r) => setTimeout(r, 400))
+          if (cancelled) throw cancelledError()
+          start = await target.startSignIn(harnessId)
+        }
+        if (cancelled) throw cancelledError()
+        const first = start?.result ?? start
+        onBeat?.(first)
+        if (first?.done) {
+          await refreshCapabilities()
+          return first
+        }
+        return await new Promise((resolve, reject) => {
+          let misses = 0
+          let lastError = null
+          const poll = setInterval(async () => {
+            let view = null
+            try {
+              view = await target.signInView(harnessId)
+            } catch (err) {
+              // A single dropped read heals; only a relay whose view
+              // cannot be read at all, over and over, is a failure.
+              misses += 1
+              lastError = err
+              if (misses >= SIGNIN_POLL_MISSES) {
+                clearInterval(poll)
+                reject(
+                  lastError ??
+                    new Error('The sign-in stopped answering - try again.'),
+                )
+              }
+              return
+            }
+            misses = 0
+            onBeat?.(view)
+            if (view?.done) {
+              clearInterval(poll)
+              await refreshCapabilities()
+              resolve(view)
+            }
+          }, 800)
+          const stop = () => {
             clearInterval(poll)
-            await refreshCapabilities()
-            resolve(view)
+            reject(cancelledError())
           }
-        }, 800)
-      })
+          // A cancel that arrived before the poll existed (the modal
+          // unmounted while startSignIn was still in flight).
+          if (cancelled) stop()
+          else stopPoll = stop
+        })
+      })()
+      return {
+        promise,
+        cancel: () => {
+          cancelled = true
+          stopPoll?.()
+        },
+      }
     },
     [api, refreshCapabilities],
   )

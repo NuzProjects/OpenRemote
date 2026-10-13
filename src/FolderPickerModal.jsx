@@ -2,7 +2,7 @@
 // the user's machines, browsing its folders inside the app. A path is
 // never typed - the same rule everywhere, local and remote alike.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ArrowUp, Folder, House, X } from '@phosphor-icons/react'
 import './devices.css'
 import './folders.css'
@@ -13,21 +13,43 @@ export default function FolderPickerModal({ api, where, start, onChoose, onClose
   const [listing, setListing] = useState(null)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
+  // Every open carries a token and its own stop. Over the mesh a slow
+  // folder request can resolve after a later fast one (click a big
+  // remote folder, then Home), and last-resolved-wins would clobber the
+  // newer navigation - "Use this folder" then registers the wrong
+  // workspace. A response whose token is stale is dropped, the older
+  // request is stopped, and unmounting stops whatever is still in
+  // flight.
+  const openSeq = useRef(0)
+  const inFlight = useRef(null)
 
   const open = async (path) => {
+    openSeq.current += 1
+    const token = openSeq.current
+    inFlight.current?.abort()
+    const controller = new AbortController()
+    inFlight.current = controller
     setLoading(true)
     setError(null)
     try {
-      setListing(await api.fsDirs(path))
+      const view = await api.fsDirs(path, { signal: controller.signal })
+      if (token !== openSeq.current) return // a newer click owns the modal now
+      setListing(view)
     } catch (err) {
+      // Stopped on purpose (superseded or unmounted), not a failure.
+      if (controller.signal.aborted || token !== openSeq.current) return
       setError(err.message ?? String(err))
     } finally {
-      setLoading(false)
+      if (token === openSeq.current) setLoading(false)
     }
   }
 
   useEffect(() => {
     open(start ?? null)
+    return () => {
+      openSeq.current += 1 // any straggler response is stale
+      inFlight.current?.abort()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

@@ -116,9 +116,36 @@ export class DaemonApi {
     return Boolean(this.url && this.token)
   }
 
-  async call(method, path, body, { timeoutMs = CALL_TIMEOUT_MS } = {}) {
+  async call(method, path, body, { timeoutMs = CALL_TIMEOUT_MS, signal = null } = {}) {
     let response
     let text = ''
+    // The timeout and the caller's own stop (an unmounting folder
+    // picker, say) each end the request, whichever fires first. The
+    // two aborts are told apart by who aborted: the timeout's error is
+    // "not answering", the caller's is a deliberate cancel the stopper
+    // ignores.
+    let timedOut = false
+    let controller = null
+    let forward = null
+    let fetchSignal = null
+    if (timeoutMs != null) {
+      const timeoutSignal = AbortSignal.timeout(timeoutMs)
+      controller = new AbortController()
+      const onTimeout = () => {
+        timedOut = true
+        controller.abort()
+      }
+      if (timeoutSignal.aborted) onTimeout()
+      else timeoutSignal.addEventListener('abort', onTimeout, { once: true })
+      fetchSignal = controller.signal
+    }
+    if (signal != null) {
+      controller ??= new AbortController()
+      forward = () => controller.abort()
+      if (signal.aborted) controller.abort()
+      else signal.addEventListener('abort', forward, { once: true })
+      fetchSignal = controller.signal
+    }
     try {
       response = await fetch(`${this.url}${this.prefix}${path}`, {
         method,
@@ -129,18 +156,27 @@ export class DaemonApi {
         body: body ? JSON.stringify(body) : undefined,
         // `null` opts out (the calls whose wait is the point); otherwise
         // the request must answer within `timeoutMs`.
-        signal: timeoutMs == null ? undefined : AbortSignal.timeout(timeoutMs),
+        signal: fetchSignal ?? undefined,
       })
       text = await response.text()
     } catch (err) {
       // A timed-out request reads as "not answering": the signal aborts
       // both the headers wait and a stalled body read, and callers only
       // have err.message to show - the browser's own "signal timed out"
-      // says nothing.
+      // says nothing. A caller's own stop is a deliberate cancel, not a
+      // failure: the raw error rides through and the stopper ignores it.
+      if (timedOut) {
+        throw new Error('The daemon did not answer in time')
+      }
+      if (signal?.aborted) {
+        throw err
+      }
       if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
         throw new Error('The daemon did not answer in time')
       }
       throw err
+    } finally {
+      if (forward != null && signal != null) signal.removeEventListener('abort', forward)
     }
     let json = null
     try {
@@ -209,17 +245,21 @@ export class DaemonApi {
     return this.call('GET', '/cloud')
   }
 
+  // The receipt contract covers these too: a retry (or a double-firing
+  // mount effect) with the same request_id is one mutation, not two.
+  // The daemon's cloud routes read what they know and ignore the rest.
+
   /** Starts a moreweb sign-in; `open` has the daemon open the browser. */
   cloudSignIn({ open = true } = {}) {
-    return this.call('POST', '/cloud/signin', { open })
+    return this.call('POST', '/cloud/signin', { request_id: newRequestId(), open })
   }
 
   cloudSignInCancel() {
-    return this.call('POST', '/cloud/signin/cancel')
+    return this.call('POST', '/cloud/signin/cancel', { request_id: newRequestId() })
   }
 
   cloudSignOut() {
-    return this.call('POST', '/cloud/signout')
+    return this.call('POST', '/cloud/signout', { request_id: newRequestId() })
   }
 
   cloudDevices() {
@@ -227,20 +267,22 @@ export class DaemonApi {
   }
 
   setDeviceKind(id, kind) {
-    return this.call('POST', `/cloud/devices/${id}/kind`, { kind })
+    return this.call('POST', `/cloud/devices/${id}/kind`, { request_id: newRequestId(), kind })
   }
 
   removeDevice(id) {
-    return this.call('DELETE', `/cloud/devices/${id}`)
+    return this.call('DELETE', `/cloud/devices/${id}?request_id=${encodeURIComponent(newRequestId())}`)
   }
 
   createEnrollment() {
-    return this.call('POST', '/cloud/enrollments')
+    return this.call('POST', '/cloud/enrollments', { request_id: newRequestId() })
   }
 
-  /** The subfolders of `path` (default: home) on the device this aims at. */
-  fsDirs(path) {
-    return this.call('GET', `/fs/dirs${path ? `?path=${encodeURIComponent(path)}` : ''}`)
+  /** The subfolders of `path` (default: home) on the device this aims at.
+   *  `signal` is the caller's own stop for a navigation that no longer
+   *  matters (the folder picker moved on or unmounted). */
+  fsDirs(path, { signal = null } = {}) {
+    return this.call('GET', `/fs/dirs${path ? `?path=${encodeURIComponent(path)}` : ''}`, null, { signal })
   }
 
   prompt(id, text) {

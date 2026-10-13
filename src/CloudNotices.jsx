@@ -36,6 +36,11 @@ export default function CloudNotices() {
   const ready = signedIn(cloud) && account && thisDevice && (devices ?? []).length > 0
   const me = (devices ?? []).find((d) => d.id === thisDevice)
 
+  const settleKind = (kind) => {
+    save(kindKey, kind)
+    setLastKind(kind)
+  }
+
   // The first look at an account is the baseline: nothing is new yet.
   useEffect(() => {
     if (!ready) return
@@ -54,6 +59,22 @@ export default function CloudNotices() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, knownKey, kindKey])
 
+  // A kind change that is not news (made here, or reverted) is remembered
+  // in an effect, never in the render body: a render can be thrown away
+  // (StrictMode double-run, a concurrent update landing mid-render), and
+  // a storage write from a render nobody committed to must not stand as
+  // the last word. The baseline effect above establishes `lastKind`
+  // first; until it has, there is nothing to reconcile against. The
+  // `lastKind` dep re-runs this once the baseline lands, so the two never
+  // race past each other.
+  useEffect(() => {
+    if (!me || lastKind == null || me.kind === lastKind) return
+    if (madeMachineElsewhere(me.kind, lastKind, load(`openremote-kind-set-here:${thisDevice}`))) return
+    // Changed here, or back: nothing to say, just remember it.
+    settleKind(me.kind)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me?.kind, lastKind])
+
   if (!ready || !known) return null
 
   const acknowledge = (id) => {
@@ -63,17 +84,8 @@ export default function CloudNotices() {
     setConfirming(null)
   }
 
-  const settleKind = (kind) => {
-    save(kindKey, kind)
-    setLastKind(kind)
-  }
-
   const fresh = newDevices(devices, known, thisDevice)
   const madeMachine = me && madeMachineElsewhere(me.kind, lastKind, load(`openremote-kind-set-here:${thisDevice}`))
-  if (me && me.kind !== lastKind && !madeMachine) {
-    // Changed here, or back: nothing to say, just remember it.
-    settleKind(me.kind)
-  }
   if (fresh.length === 0 && !madeMachine && !error) return null
 
   return (

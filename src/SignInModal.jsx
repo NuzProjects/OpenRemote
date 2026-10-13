@@ -21,14 +21,19 @@ export default function SignInModal({ harnessId, onDone, deviceId = null }) {
 
   // One relay per modal: it starts the login and polls the beats until
   // the CLI exits. The modal closing does not stop a login the human may
-  // still be finishing in the browser - the daemon's run continues.
+  // still be finishing in the browser - the daemon's run continues - but
+  // it does stop the poll reading it: nothing should keep requesting a
+  // view nobody renders (a cancelled modal's error is silence, not a
+  // banner).
   useEffect(() => {
     let cancelled = false
-    signIn(harnessId, { onBeat: (beat) => !cancelled && setView(beat), deviceId }).catch((err) => {
-      if (!cancelled) setError(err?.message ?? String(err))
+    const relay = signIn(harnessId, { onBeat: (beat) => !cancelled && setView(beat), deviceId })
+    relay.promise.catch((err) => {
+      if (!cancelled && !err?.cancelled) setError(err?.message ?? String(err))
     })
     return () => {
       cancelled = true
+      relay.cancel()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [harnessId])

@@ -224,3 +224,60 @@ test('every request is bounded: 10s normally, 120s across a harness boot, none f
   // The installer's wait is the contract: no signal at all.
   assert.equal(signals[5], undefined)
 })
+
+// ---- a caller's own stop ----
+
+test('a caller-aborted call rejects as a cancel, not as a timeout', async () => {
+  // The folder picker stops its in-flight listing when a newer click
+  // supersedes it: the raw abort must ride through (the stopper ignores
+  // it by its signal, not by a message it cannot know), and it must
+  // never masquerade as "the daemon did not answer in time".
+  const api = new DaemonApi('http://daemon', 'token')
+  const realFetch = globalThis.fetch
+  let fetchSignal = null
+  globalThis.fetch = async (requestUrl, options) => {
+    fetchSignal = options.signal
+    return new Promise((resolve, reject) => {
+      fetchSignal.addEventListener('abort', () => reject(fetchSignal.reason), { once: true })
+    })
+  }
+  const caller = new AbortController()
+  try {
+    const pending = api.call('GET', '/fs/dirs', null, { signal: caller.signal })
+    await new Promise((resolve) => {
+      if (fetchSignal) resolve()
+      else setTimeout(resolve, 5)
+    })
+    caller.abort()
+    await assert.rejects(pending, (err) => {
+      assert.ok(!/did not answer in time/.test(err.message), 'a cancel is not a timeout')
+      return true
+    })
+    // The caller's stop reached the wire.
+    assert.equal(fetchSignal.aborted, true)
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})
+
+test('fsDirs rides the caller-supplied signal to the fetch', async () => {
+  // The F9 wiring: `fsDirs(path, { signal })` must forward the stop to
+  // the underlying call, or the picker's abort guards nothing.
+  const api = new DaemonApi('http://daemon', 'token')
+  const realFetch = globalThis.fetch
+  const seen = []
+  globalThis.fetch = async (requestUrl, options) => {
+    seen.push(options.signal)
+    return new Response('null', { status: 200 })
+  }
+  const controller = new AbortController()
+  try {
+    await api.fsDirs('C:/somewhere', { signal: controller.signal })
+    await api.fsDirs(null, { signal: controller.signal })
+  } finally {
+    globalThis.fetch = realFetch
+  }
+  assert.equal(seen.length, 2)
+  assert.ok(seen.every((signal) => signal instanceof AbortSignal))
+  assert.ok(seen[0] !== seen[1], 'each call builds its own combined signal')
+})

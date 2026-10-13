@@ -17,6 +17,11 @@ export default function AddMachineModal({ onClose }) {
   const [now, setNow] = useState(() => Date.now())
   // The devices there before the command existed: a new one is the arrival.
   const known = useRef(new Set((devices ?? []).map((d) => d.id)))
+  // One mint per mount: React 19 StrictMode double-invokes mount
+  // effects in dev, and two enrollments means two working install
+  // commands where the user only ever saw one. A new command is a
+  // deliberate press of the button, never a remount.
+  const minted = useRef(false)
 
   const mint = async () => {
     setError(null)
@@ -29,6 +34,8 @@ export default function AddMachineModal({ onClose }) {
   }
 
   useEffect(() => {
+    if (minted.current) return
+    minted.current = true
     mint()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
