@@ -29,7 +29,7 @@
     "active": true,
     "android": {
       "minSdkVersion": 26,
-      "versionCode": 3
+      "versionCode": 4
     },
     "targets": [
       "msi",

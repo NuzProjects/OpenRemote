@@ -127,7 +127,10 @@ an old process is still alive; find it before re-running).
 
 - Version lives in `package.json`, `src-tauri/tauri.conf.json`,
   `src-tauri/Cargo.toml` (installer filenames embed it). The daemon
-  workspace carries its own version.
+  workspace carries its own version. `bundle.android.versionCode` in
+  `tauri.conf.json` must strictly increase with every release -
+  Android refuses to install an update whose versionCode does not
+  exceed the installed build's.
 - `.github/workflows/release.yml` builds on `v*` tag pushes:
   stage the sidecar, `npx tauri build`, `gh release create` with the
   notes from `release-notes/<tag>.md`. The Linux job also uploads the
