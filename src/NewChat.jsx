@@ -76,7 +76,9 @@ export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false
   const [targetProjects, setTargetProjects] = useState([])
   useEffect(() => {
     let cancelled = false
-    if (!connection.state === 'connected') return
+    // Not while the daemon is down: the fetch would only fail and blank
+    // the picker for the whole reconnect window.
+    if (connection.state !== 'connected') return
     apiFor(target)
       .projects()
       .then((list) => {

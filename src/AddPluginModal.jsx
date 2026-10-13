@@ -17,16 +17,22 @@ export default function AddPluginModal({ onClose }) {
   const [name, setName] = useState('')
   const [detail, setDetail] = useState('')
   const [command, setCommand] = useState('')
-  const [machineId, setMachineId] = useState(online?.machine.id ?? null)
+  const [machineId, setMachineId] = useState(null)
   const [needsKey, setNeedsKey] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
-  const machine = (machines ?? []).find((m) => m.machine.id === machineId)?.machine ?? null
+  // The modal can open before the machine list has arrived (the daemon
+  // restarting, the first seconds after launch), so a mount-time pick
+  // would stick null forever. While no machine was picked, the choice
+  // follows the first online one - the Add button wakes when the list
+  // does instead of staying dead for the modal's lifetime.
+  const effectiveMachineId = machineId ?? online?.machine.id ?? null
+  const machine = (machines ?? []).find((m) => m.machine.id === effectiveMachineId)?.machine ?? null
   const ready = name.trim() && detail.trim() && command.trim() && machine?.status === 'online'
   const duplicate =
     ready &&
     (plugins ?? []).some(
-      (p) => p.machine === machineId && p.name.toLowerCase() === name.trim().toLowerCase(),
+      (p) => p.machine === effectiveMachineId && p.name.toLowerCase() === name.trim().toLowerCase(),
     )
 
   useEffect(() => {
@@ -49,7 +55,7 @@ export default function AddPluginModal({ onClose }) {
     setBusy(true)
     setError(null)
     try {
-      await installPlugin(machineId, {
+      await installPlugin(effectiveMachineId, {
         name: name.trim(),
         detail: detail.trim(),
         command: command.trim(),
@@ -116,7 +122,7 @@ export default function AddPluginModal({ onClose }) {
                   key={m.machine.id}
                   type="button"
                   disabled={m.machine.status !== 'online'}
-                  className={m.machine.id === machineId ? 'on' : ''}
+                  className={m.machine.id === effectiveMachineId ? 'on' : ''}
                   onClick={() => setMachineId(m.machine.id)}
                 >
                   <span className="pn-pick-name">{m.machine.name}</span>

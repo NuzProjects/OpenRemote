@@ -189,8 +189,13 @@ export default function ChatView({ chat, onBack }) {
     return () => {
       cancelled = true
     }
+    // The fetch also follows the connection and the executor: one failed
+    // call (a restarting daemon, a machine briefly offline) used to stick
+    // an empty list for the view's lifetime, and a chat that synced to a
+    // machine kept the catalog of where it ran before. An empty answer is
+    // not cached (modelsFor), so a retry is cheap.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chat.harness])
+  }, [chat.harness, connection.state, elsewhere ? chat.executor : null])
 
   const openPicker = (kind) => (e) => setPicker({ kind, x: e.clientX, y: e.clientY })
 
