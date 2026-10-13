@@ -51,6 +51,49 @@ jobs:
       - run: cargo build -p fixture-agent --locked
       - run: cargo test --locked
 
+  # The shell crate (src-tauri) reaches a release tag today without ever
+  # being compiled or linted: the console job tests the web app and the
+  # daemon job the daemon workspace, so a broken desktop.rs stays green
+  # on main and is first discovered on the release runner. Check and lint
+  # the shell here so it fails in the PR instead. No daemon build and no
+  # npm here: the console dist and the sidecar are release-time concerns.
+  shell:
+    name: shell (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: src-tauri
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      # The staged sidecar under src-tauri/binaries is gitignored, but the
+      # tauri build script still wants its externalBin path to exist
+      # before it compiles anything. A placeholder file is enough: check
+      # and clippy never execute the sidecar, and bundling swaps in the
+      # real daemon binary from the release pipeline.
+      - run: |
+          triple="$(rustc -vV | sed -n 's/^host: //p' | tr -d '\r')"
+          exe=""
+          case "$triple" in *windows-msvc) exe=".exe" ;; esac
+          mkdir -p binaries
+          touch "binaries/openremote-daemon-$triple$exe"
+        shell: bash
+      # Advisory until the crate's formatting debt is cleaned up (3 diffs
+      # in desktop.rs and tray.rs at 2026-10-13): once src-tauri passes
+      # `cargo fmt --all --check`, drop continue-on-error to make this
+      # block like the daemon job's fmt.
+      - run: cargo fmt --all --check
+        continue-on-error: true
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo check --locked
+
   # The declared MSRV must hold against the real lockfile: transitive deps
   # can silently raise the floor (the yoke 0.8.3 lesson).
   msrv:
