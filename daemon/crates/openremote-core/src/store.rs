@@ -182,8 +182,10 @@ impl Store {
     /// log really holds. A chat whose log skips sequence numbers wedges
     /// every peer pull on it forever (gap, pull, same gap, repeat), so a
     /// log must stay contiguous from its first line to its last: the torn
-    /// tail is cut, anything after a discontinuity is cut, and `next_seq`
-    /// settles on the log's true tail whichever side it was on.
+    /// tail is cut, anything after a discontinuity is cut (the discarded
+    /// bytes move to an `events.jsonl.bad-<unix-ms>` sibling, never
+    /// deleted), and `next_seq` settles on the log's true tail whichever
+    /// side it was on.
     fn heal_logs(&mut self) -> Result<bool, StoreError> {
         const TAIL: u64 = 64 * 1024;
         let ids: Vec<SessionId> = self.state.sessions.keys().copied().collect();
@@ -235,7 +237,7 @@ impl Store {
                 changed = true;
             }
             if let Some(cut_at) = cut_at {
-                file.set_len(cut_at)?;
+                self.salvage_cut(&id, &mut file, cut_at)?;
                 changed = true;
             }
         }
@@ -278,8 +280,15 @@ impl Store {
                     continue;
                 }
                 Some(line) => line,
-                // Trailing bytes without a newline: unreachable after the
-                // torn-tail cut, treated as a break all the same.
+                // Trailing bytes without a newline: the window ends
+                // mid-line, so the run stops at its last complete line.
+                // When the torn-tail pass already made that cut, the
+                // salvage guard below makes landing on it a no-op (the
+                // same boundary, nothing left to cut); when a window
+                // arrives with its torn tail still in it, this is what
+                // cuts it correctly. Do not remove the branch on the
+                // assumption it cannot fire - it is the fallback that
+                // keeps this function total over windows.
                 None => {
                     cut_at = run_end;
                     break;
@@ -327,6 +336,39 @@ impl Store {
         Ok((run_next, cut_at))
     }
 
+    /// Cut a chat's log back to `cut_at`, keeping what leaves: the bytes
+    /// past the cut are real message content (events past the contiguous
+    /// run), so they are appended to an `events.jsonl.bad-<unix-ms>`
+    /// sibling beside the log - cut from the log, never deleted.
+    /// Appending (not renaming) lets more than one cut in the same open
+    /// share a single recovery file, and re-deriving a cut that already
+    /// landed is a no-op (`cut_at >= len`), so the heal passes stay
+    /// idempotent.
+    fn salvage_cut(
+        &self,
+        session_id: &SessionId,
+        file: &mut fs::File,
+        cut_at: u64,
+    ) -> Result<(), StoreError> {
+        let len = file.metadata()?.len();
+        if cut_at >= len {
+            return Ok(());
+        }
+        file.seek(SeekFrom::Start(cut_at))?;
+        let mut discarded = Vec::new();
+        file.read_to_end(&mut discarded)?;
+        let bad = self
+            .event_log(session_id)
+            .with_file_name(format!("events.jsonl.bad-{}", crate::now_ms()));
+        fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(bad)?
+            .write_all(&discarded)?;
+        file.set_len(cut_at)?;
+        Ok(())
+    }
+
     /// Chats the state doesn't know but whose logs exist on disk: a lost
     /// or quarantined state.json. Each log replays in full from its first
     /// line, re-deriving what its events carry. A log that doesn't open
@@ -342,6 +384,15 @@ impl Store {
                 continue;
             };
             if self.state.sessions.contains_key(&id) {
+                continue;
+            }
+            if self.state.tombstones.contains_key(&id) {
+                // Deleted everywhere: its log can outlive its session
+                // record (a delete interrupted by the filesystem leaves
+                // the dir behind), but it never brings the chat back.
+                eprintln!(
+                    "warning: session {id} was deleted everywhere; its orphan log stays dormant"
+                );
                 continue;
             }
             let Ok(mut file) = fs::OpenOptions::new()
@@ -396,7 +447,7 @@ impl Store {
             if let Some(run_next) = run_next {
                 self.state.next_seq.insert(id, run_next);
                 if let Some(cut_at) = cut_at {
-                    file.set_len(cut_at)?;
+                    self.salvage_cut(&id, &mut file, cut_at)?;
                 }
                 changed = true;
             }
@@ -1947,7 +1998,7 @@ mod tests {
         drop(log);
         force_next_seq(&dir, &s.id, 5);
 
-        let mut store = Store::open(dir).unwrap();
+        let store = Store::open(dir.clone()).unwrap();
         assert_eq!(
             store.head(&s.id),
             2,
@@ -1964,10 +2015,118 @@ mod tests {
             vec![0, 1],
             "the gapped lines are cut: a peer pulling never hits a jump"
         );
-        let next = store
-            .append(s.id, user_message(3, "after the heal"))
+        // The cut lines are real messages: they wait in a .bad sibling,
+        // never deleted.
+        let log_dir = dir.join("sessions").join(s.id.to_string());
+        let salvaged = fs::read_dir(&log_dir)
+            .unwrap()
+            .flatten()
+            .find(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("events.jsonl.bad-")
+            })
+            .expect("the discarded lines are preserved, not deleted");
+        let salvaged = fs::read_to_string(salvaged.path()).unwrap();
+        assert_eq!(
+            salvaged.lines().count(),
+            2,
+            "seq 3 and 4 wait in the sibling, verbatim"
+        );
+        assert!(salvaged.contains("lost the middle"));
+        assert!(salvaged.contains("kept the later page"));
+        // Reopening the healed store cuts nothing more and never appends
+        // the same discarded bytes twice.
+        drop(store);
+        let store = Store::open(dir.clone()).unwrap();
+        assert_eq!(store.head(&s.id), 2);
+        let again: Vec<u64> = store
+            .events_after(&s.id, None)
+            .unwrap()
+            .iter()
+            .map(|e| e.seq)
+            .collect();
+        assert_eq!(again, vec![0, 1]);
+        let salvaged_again: Vec<String> = fs::read_dir(&log_dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("events.jsonl.bad-")
+            })
+            .map(|e| fs::read_to_string(e.path()).unwrap())
+            .collect();
+        assert_eq!(
+            salvaged_again
+                .iter()
+                .map(|s| s.lines().count())
+                .sum::<usize>(),
+            2,
+            "the second open salvaged nothing new"
+        );
+    }
+
+    #[test]
+    fn a_tombstoned_chat_s_orphan_log_stays_dormant_at_open() {
+        let dir = tempdir();
+        let mut store = Store::open(dir.clone()).unwrap();
+        let s = session();
+        store
+            .append(s.id, EventPayload::SessionCreated { session: s.clone() })
             .unwrap();
-        assert_eq!(next.seq, 2);
+        store
+            .append(s.id, user_message(1, "Delete me everywhere"))
+            .unwrap();
+        let log = store.event_log(&s.id);
+        let log_text = fs::read_to_string(&log).unwrap();
+        let id = s.id;
+        // Deleted everywhere, but the delete's dir removal half-failed: the
+        // log outlives the session record while the tombstone stands.
+        store
+            .tombstone(
+                id,
+                Tombstone {
+                    at: 1,
+                    by: DeviceId::new(),
+                },
+            )
+            .unwrap();
+        fs::create_dir_all(log.parent().unwrap()).unwrap();
+        fs::write(&log, log_text).unwrap();
+        // Simulate a state.json that no longer names the chat: the orphan
+        // log plus a tombstone entry is what survives.
+        let mut state: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(dir.join("state.json")).unwrap()).unwrap();
+        state["sessions"]
+            .as_object_mut()
+            .unwrap()
+            .remove(&id.to_string());
+        state["next_seq"]
+            .as_object_mut()
+            .unwrap()
+            .remove(&id.to_string());
+        fs::write(
+            dir.join("state.json"),
+            serde_json::to_string(&state).unwrap(),
+        )
+        .unwrap();
+
+        let store = Store::open(dir.clone()).unwrap();
+        assert!(
+            store.session(&id).is_err(),
+            "the tombstone wins: a deleted chat never comes back"
+        );
+        assert!(store.tombstoned(&id));
+        assert!(
+            store
+                .dir
+                .join("sessions")
+                .join(id.to_string())
+                .join("events.jsonl")
+                .exists(),
+            "the orphan log is left as is, not deleted"
+        );
     }
 
     #[test]
