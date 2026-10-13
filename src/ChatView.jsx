@@ -8,6 +8,7 @@ import { findModel, modelDisplayName } from './model-display.js'
 import { HarnessMark } from './brand-marks.jsx'
 import { editRows, isFileEdit, writeRows } from './diff.js'
 import { renderMarkdown } from './markdown.js'
+import { capLines, capRows, MAX_RENDER_LINES, MAX_RENDER_ROWS, shouldRenderLive } from './render-budget.js'
 import ContextRing from './ContextRing.jsx'
 import PickerMenu from './PickerMenu.jsx'
 import { isMobile } from './platform.js'
@@ -28,6 +29,26 @@ const STATUS_LABEL = {
 const decisionAnswer = (item) =>
   item.options.find((option) => option.id === item.answeredChoice)?.label ?? item.answeredChoice ?? ''
 
+/// One markdown body, priced: a settled body's text never changes again,
+/// so it parses once and the cache stands through every later rail render
+/// - a stream delta used to re-parse every earlier message. A live body
+/// (a token stream) re-parses at most once every 100ms; between beats the
+/// last HTML stands, and React sees the same string and skips the
+/// innerHTML write, so a fast token beat neither re-parses nor rewrites
+/// the growing reply per token. The cache keys on the text, not the item
+/// object: the reducer folds deltas into the live item in place, so item
+/// identity would freeze while the text grew - a changed text re-parses,
+/// an unchanged one reuses the cached HTML.
+function MarkdownBody({ text, live = false, className, tail = '' }) {
+  const cache = useRef({ text: null, html: '', at: 0 })
+  let html = cache.current.html
+  if (cache.current.text !== text && (!live || shouldRenderLive(cache.current.at))) {
+    html = renderMarkdown(text)
+    cache.current = { text, html, at: Date.now() }
+  }
+  return <p className={className} dangerouslySetInnerHTML={{ __html: html + tail }} />
+}
+
 /// The harness's own reasoning, dim and collapsible. Collapsed by
 /// default; live streams breathe while the thinking runs.
 function ReasoningBlock({ text, live }) {
@@ -40,10 +61,7 @@ function ReasoningBlock({ text, live }) {
         {label}
       </button>
       {(open || live) && (
-        <p
-          className={`cv-reasoning-body${live ? ' live' : ''}`}
-          dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }}
-        />
+        <MarkdownBody text={text} live={live} className={`cv-reasoning-body${live ? ' live' : ''}`} />
       )}
     </div>
   )
@@ -401,12 +419,15 @@ export default function ChatView({ chat, onBack }) {
             if (item.kind === 'stream') {
               // The live reply - markdown as it arrives, with a breathing
               // caret riding the end. The settled message.added replaces
-              // this item whole.
+              // this item whole, so a beat the throttle holds back never
+              // loses text: the settle carries the complete reply.
               return (
-                <p
+                <MarkdownBody
                   key={item.id}
+                  text={item.text}
+                  live
                   className="cv-node cv-agent"
-                  dangerouslySetInnerHTML={{ __html: `${renderMarkdown(item.text)}<span class="cv-caret"></span>` }}
+                  tail='<span class="cv-caret"></span>'
                 />
               )
             }
@@ -414,14 +435,9 @@ export default function ChatView({ chat, onBack }) {
               if (item.role === 'user') return <div key={item.id} className="cv-user">{item.text}</div>
               if (item.role === 'note') return <p key={item.id} className="cv-node cv-note">{item.text}</p>
               // Agent messages are markdown - the harness's own output
-              // shape - rendered through the escape-first mini renderer.
-              return (
-                <p
-                  key={item.id}
-                  className="cv-node cv-agent"
-                  dangerouslySetInnerHTML={{ __html: renderMarkdown(item.text) }}
-                />
-              )
+              // shape - rendered through the escape-first mini renderer,
+              // parsed once per message (MarkdownBody's cache).
+              return <MarkdownBody key={item.id} text={item.text} className="cv-node cv-agent" />
             }
             if (item.kind === 'tool') {
               // A file edit renders as a split diff - the tool card's
@@ -431,6 +447,15 @@ export default function ChatView({ chat, onBack }) {
                   ? editRows(item.input.old_string, item.input.new_string)
                   : writeRows(item.input.content)
                 : null
+              // What the card actually shows: a bounded first slice, never
+              // the whole walk - a 3000-line write renders 500 rows plus a
+              // note, not thousands of DOM nodes. Tool inputs and outputs
+              // take the same cap on their lines.
+              const diff = edit && edit.length > 0 ? capRows(edit) : null
+              const shownIn = item.input
+                ? capLines(typeof item.input === 'string' ? item.input : JSON.stringify(item.input, null, 2))
+                : null
+              const shownOut = item.result ? capLines(item.result) : null
               // The status rides the name line, right-aligned - the beat of
               // agent work: a breathing green dot and Running while the tool
               // is in flight, a check the moment the result lands (green
@@ -459,32 +484,45 @@ export default function ChatView({ chat, onBack }) {
                       </span>
                     )}
                   </div>
-                  {edit && edit.length > 0 && (
+                  {diff && (
                     <div className="cv-diff">
                       <div className="cv-diff-file">{item.input.file_path}</div>
                       <div className="cv-diff-grid">
-                        {edit.map((row, i) => (
+                        {diff.rows.map((row, i) => (
                           <div className="cv-diff-row" key={i}>
                             <span className={`cv-diff-side cv-diff-side--${row.left.kind ?? 'empty'}`}>{row.left.text}</span>
                             <span className={`cv-diff-side cv-diff-side--${row.right.kind ?? 'empty'}`}>{row.right.text}</span>
                           </div>
                         ))}
+                        {diff.hidden > 0 && (
+                          <div className="cv-diff-more">Showing the first {MAX_RENDER_ROWS} rows.</div>
+                        )}
                       </div>
                     </div>
                   )}
                   {(item.input || item.result) && !edit && (
                     <div className="cv-io">
-                      {item.input && (
-                        <div className="cv-io-row">
-                          <span className="cv-io-label">In</span>
-                          <code>{typeof item.input === 'string' ? item.input : JSON.stringify(item.input, null, 2)}</code>
-                        </div>
+                      {shownIn && (
+                        <>
+                          <div className="cv-io-row">
+                            <span className="cv-io-label">In</span>
+                            <code>{shownIn.text}</code>
+                          </div>
+                          {shownIn.hidden > 0 && (
+                            <div className="cv-io-more">Showing the first {MAX_RENDER_LINES} lines.</div>
+                          )}
+                        </>
                       )}
-                      {item.result && (
-                        <div className="cv-io-row">
-                          <span className="cv-io-label">Out</span>
-                          <code>{item.result}</code>
-                        </div>
+                      {shownOut && (
+                        <>
+                          <div className="cv-io-row">
+                            <span className="cv-io-label">Out</span>
+                            <code>{shownOut.text}</code>
+                          </div>
+                          {shownOut.hidden > 0 && (
+                            <div className="cv-io-more">Showing the first {MAX_RENDER_LINES} lines.</div>
+                          )}
+                        </>
                       )}
                     </div>
                   )}

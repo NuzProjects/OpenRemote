@@ -665,6 +665,15 @@
   white-space: pre-wrap;
 }
 
+/* The tail note under a capped tool input or output - the same
+   "showing the first" wording the folder picker uses. */
+.cv-io-more {
+  padding: 6px 12px;
+  border-top: 1px solid var(--line);
+  color: var(--text-3);
+  font-size: 11px;
+}
+
 /* ── the file-edit diff: a split card, old left, new right ── */
 
 .cv-diff {
@@ -682,6 +691,16 @@
   font-family: 'Geist Mono', ui-monospace, Consolas, monospace;
   font-size: 11px;
   overflow-wrap: anywhere;
+}
+
+/* The tail note under a capped diff - the whole edit stays in the
+   transcript's record, the card shows its head. */
+.cv-diff-more {
+  padding: 6px 12px;
+  border-top: 1px solid var(--line);
+  color: var(--text-3);
+  font-family: 'Geist Mono', ui-monospace, Consolas, monospace;
+  font-size: 11px;
 }
 
 .cv-diff-grid {
