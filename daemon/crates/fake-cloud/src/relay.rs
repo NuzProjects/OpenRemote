@@ -1,8 +1,8 @@
-//! The relay's contract, without its limits: one socket per device, binary
-//! frames `[16-byte device id][payload]` forwarded between one account's
-//! devices with the destination swapped for the sender, and the JSON control
-//! messages (`hello`, `presence`, `devices_changed`, `revoked`,
-//! `undeliverable`).
+//! The relay's contract: one socket per device, binary frames `[16-byte
+//! device id][payload]` forwarded between one account's devices with the
+//! destination swapped for the sender, the JSON control messages
+//! (`hello`, `presence`, `devices_changed`, `revoked`, `undeliverable`),
+//! and the frame ceiling the hello advertises, enforced.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -22,6 +22,14 @@ pub const CLOSE_REPLACED: u16 = 4001;
 pub const CLOSE_REVOKED: u16 = 4003;
 pub const CLOSE_ROTATED: u16 = 4005;
 pub const CLOSE_RESTART: u16 = 1012;
+/// RFC 6455's "message too big": the relay's answer to a frame past the
+/// ceiling its hello advertises.
+pub const CLOSE_TOO_BIG: u16 = 1009;
+
+/// The largest frame the relay carries for a device: a 16-byte device id
+/// plus the biggest Noise message a link ever sends. The hello advertises
+/// this ceiling; a frame past it is closed, not buffered.
+pub const MAX_FRAME: usize = 16 + 65536;
 
 enum Out {
     Message(Message),
@@ -90,7 +98,7 @@ impl Hub {
         let online: Vec<String> = room.keys().filter(|k| *k != device).cloned().collect();
         let _ = tx.send(text(json!({
             "type": "hello", "protocol": 1, "device_id": device, "account_id": account,
-            "online": online, "ping_interval_s": 25, "max_frame": 16 + 65536,
+            "online": online, "ping_interval_s": 25, "max_frame": MAX_FRAME,
         })));
         match room.insert(device.to_string(), Conn { id, tx }) {
             Some(old) => {
@@ -165,7 +173,7 @@ async fn run(hub: std::sync::Arc<Hub>, account: String, device: String, socket: 
     };
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let id = hub.register(&account, &device, tx);
+    let id = hub.register(&account, &device, tx.clone());
     let writer = tokio::spawn(async move {
         while let Some(out) = rx.recv().await {
             match out {
@@ -188,6 +196,13 @@ async fn run(hub: std::sync::Arc<Hub>, account: String, device: String, socket: 
     });
     while let Some(Ok(msg)) = stream.next().await {
         match msg {
+            // The advertised ceiling, enforced: a frame past it closes the
+            // socket with 1009 rather than buffering it, and the device
+            // reconnects, as it would against the real relay.
+            Message::Binary(data) if data.len() > MAX_FRAME => {
+                let _ = tx.send(Out::Close(CLOSE_TOO_BIG));
+                break;
+            }
             Message::Binary(data) if data.len() > 16 => {
                 let Ok(dst) = uuid::Uuid::from_slice(&data[..16]) else {
                     continue;

@@ -309,3 +309,46 @@ async fn a_desktop_mints_an_install_command_for_a_machine() {
         "a non-default backend rides along: {command}"
     );
 }
+
+/// An install code past its expiry is refused the way the real backend
+/// refuses a stale one: the redeem answers invalid_code, the machine
+/// exits with the enroll error, and no half-joined device is left behind.
+/// A fresh code still enrolls the same machine right after.
+#[tokio::test]
+async fn an_expired_install_code_is_refused_and_a_fresh_one_still_enrolls() {
+    use std::time::Duration;
+
+    let cloud = FakeCloud::start().await;
+    // The knob the real backend always has on: codes die after a bound.
+    cloud.set_enrollment_expiry(Some(Duration::from_millis(300)));
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().to_path_buf();
+    let stale = cloud.enrollment_code("owner@example.test");
+    // Outlived its lifetime unspent: dead anyway.
+    tokio::time::sleep(Duration::from_millis(400)).await;
+
+    let (status, out) = {
+        let (data, cloud, stale) = (data.clone(), cloud.clone(), stale);
+        tokio::task::spawn_blocking(move || run_binary(&data, &cloud, &["enroll", &stale]))
+            .await
+            .unwrap()
+    };
+    assert_eq!(status, 1, "the expired code is refused: {out}");
+    assert!(
+        out.contains("couldn't join"),
+        "the machine sees the enroll error, not a crash: {out}"
+    );
+    assert!(cloud.devices().is_empty(), "nothing was half-joined");
+
+    // The same machine, a fresh code: the refusal cost nothing.
+    cloud.set_enrollment_expiry(None);
+    let fresh = cloud.enrollment_code("owner@example.test");
+    let (status, out) = {
+        let (data, cloud, fresh) = (data.clone(), cloud.clone(), fresh);
+        tokio::task::spawn_blocking(move || run_binary(&data, &cloud, &["enroll", &fresh]))
+            .await
+            .unwrap()
+    };
+    assert_eq!(status, 0, "a fresh code still enrolls: {out}");
+    assert_eq!(cloud.devices().len(), 1, "the machine joined once");
+}

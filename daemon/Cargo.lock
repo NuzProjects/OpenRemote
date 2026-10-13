@@ -751,6 +751,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "tokio-tungstenite",
  "tower",
  "tower-http",
  "uuid",

@@ -1101,8 +1101,8 @@ mod tests {
         );
     }
 
-    /// F8: an entry without a usable key is skipped and re-fetched, not
-    /// pinned; when the real key arrives it pins cleanly with no
+    /// An entry without a usable key is skipped and re-fetched, never
+    /// pinned: when the real key arrives it pins cleanly with no
     /// `key_changed`, and a glitchy re-fetch never drops a good peer.
     #[test]
     fn an_unpinnable_entry_is_skipped_not_pinned() {
@@ -1181,9 +1181,9 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// F8's residue: a pin that isn't valid key material was never a real
-    /// key, so the real key later is a re-pin, not a change. A genuine key
-    /// change is still flagged.
+    /// A pin that isn't valid key material was never a real key, so the
+    /// real key later is a re-pin, not a change. A genuine key change is
+    /// still flagged.
     #[test]
     fn an_empty_legacy_pin_is_healed_and_a_real_change_is_still_flagged() {
         let (mesh, dir) = test_mesh();
@@ -1228,8 +1228,8 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// F5: an inbound stream whose END never comes gives its slot back at
-    /// its deadline; a live one keeps it.
+    /// An inbound stream whose END never comes gives its slot back at its
+    /// deadline; a live one keeps it.
     #[test]
     fn expired_inbound_streams_reclaim_their_slots() {
         let a = DeviceId::new();

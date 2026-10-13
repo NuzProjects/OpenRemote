@@ -3,11 +3,13 @@
 //! in memory and on loopback. It serves the same contract as the real
 //! backend, so the daemon's Cloud code is tested end to end without it.
 //!
-//! The authorize page approves at once as the current test user; that is
-//! the one liberty it takes.
+//! The authorize page approves at once as the current test user, and
+//! install codes never expire unless a test turns that knob on; those are
+//! the liberties it takes.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -45,6 +47,24 @@ struct Code {
     challenge: String,
 }
 
+/// One minted install code: the account it adds a device to, whether it
+/// has been spent, and when it stops working. The expiry is None unless a
+/// test turned the knob on; the real backend's codes always carry one.
+struct Enrollment {
+    account: String,
+    spent: bool,
+    expires: Option<Instant>,
+}
+
+impl Enrollment {
+    /// Whether this code can still be redeemed. A code past its expiry
+    /// answers exactly what an unknown one answers: the client can't tell
+    /// them apart, and doesn't need to.
+    fn redeemable(&self) -> bool {
+        !self.spent && !self.expires.is_some_and(|at| Instant::now() >= at)
+    }
+}
+
 #[derive(Default)]
 struct World {
     /// email → account id
@@ -54,7 +74,11 @@ struct World {
     access: HashMap<String, String>,
     refresh: HashMap<String, String>,
     devices: HashMap<String, Device>,
-    enrollments: HashMap<String, (String, bool)>,
+    enrollments: HashMap<String, Enrollment>,
+    /// Codes minted from now on expire after this, as the real backend's
+    /// install codes do. None (the default) leaves them open, and the
+    /// suite's other enrollments never notice the knob.
+    enrollment_ttl: Option<Duration>,
     no_auto_update: std::collections::HashSet<String>,
 }
 
@@ -67,6 +91,15 @@ pub struct FakeCloud {
 
 fn token(prefix: &str) -> String {
     format!("{prefix}{}", uuid::Uuid::new_v4().simple())
+}
+
+/// Seconds since the epoch, the shape the real backend's `expires_at`
+/// carries.
+fn now_epoch() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 impl FakeCloud {
@@ -108,6 +141,12 @@ impl FakeCloud {
         self.world().current_user = email.to_string();
     }
 
+    /// Codes minted from now on stop working after `after`, as the real
+    /// backend's install codes do. None (the default) leaves them open.
+    pub fn set_enrollment_expiry(&self, after: Option<Duration>) {
+        self.world().enrollment_ttl = after;
+    }
+
     pub fn account_id(&self, email: &str) -> String {
         let mut world = self.world();
         world
@@ -125,9 +164,16 @@ impl FakeCloud {
     pub fn enrollment_code(&self, email: &str) -> String {
         let account = self.account_id(email);
         let code = token("mwe_");
-        self.world()
-            .enrollments
-            .insert(code.clone(), (account, false));
+        let mut world = self.world();
+        let expires = world.enrollment_ttl.map(|ttl| Instant::now() + ttl);
+        world.enrollments.insert(
+            code.clone(),
+            Enrollment {
+                account,
+                spent: false,
+                expires,
+            },
+        );
         code
     }
 
@@ -495,16 +541,27 @@ async fn create_enrollment(State(cloud): State<FakeCloud>, headers: HeaderMap) -
         return error(StatusCode::FORBIDDEN, "account_token_required");
     };
     let code = token("mwe_");
-    cloud
-        .world()
-        .enrollments
-        .insert(code.clone(), (account, false));
+    let expires_at = {
+        let mut world = cloud.world();
+        let ttl = world.enrollment_ttl;
+        world.enrollments.insert(
+            code.clone(),
+            Enrollment {
+                account: account.clone(),
+                spent: false,
+                expires: ttl.map(|ttl| Instant::now() + ttl),
+            },
+        );
+        // The mint says when the code dies, the way the real backend's
+        // does; 0 is the stand-in's "no expiry" the suite runs with.
+        ttl.map(|ttl| now_epoch() + ttl.as_secs()).unwrap_or(0)
+    };
     (
         StatusCode::CREATED,
         Json(json!({
             "id": uuid::Uuid::new_v4().to_string(),
             "code": code,
-            "expires_at": 0,
+            "expires_at": expires_at,
             "install_command": format!("curl -fsSL https://moreweb.space/openremote/install.sh | sh -s -- {code}"),
         })),
     )
@@ -522,7 +579,7 @@ async fn redeem(State(cloud): State<FakeCloud>, Json(b): Json<RedeemBody>) -> Re
     let account = {
         let mut world = cloud.world();
         let account = match world.enrollments.get(&b.code) {
-            Some((account, false)) => account.clone(),
+            Some(enrollment) if enrollment.redeemable() => enrollment.account.clone(),
             _ => return error(StatusCode::BAD_REQUEST, "invalid_code"),
         };
         if world
@@ -532,9 +589,9 @@ async fn redeem(State(cloud): State<FakeCloud>, Json(b): Json<RedeemBody>) -> Re
         {
             return error(StatusCode::CONFLICT, "device_conflict");
         }
-        world
-            .enrollments
-            .insert(b.code.clone(), (account.clone(), true));
+        if let Some(enrollment) = world.enrollments.get_mut(&b.code) {
+            enrollment.spent = true;
+        }
         world.devices.insert(
             b.device.id.clone(),
             Device {

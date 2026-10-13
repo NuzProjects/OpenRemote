@@ -45,6 +45,8 @@ libc = "0.2"
 tempfile = "3"
 # the moreweb stand-in the Cloud e2e suites sign in to
 fake-cloud = { path = "../fake-cloud" }
+# the frame-ceiling e2e speaks the relay's WebSocket directly, as a device
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
 # the schedule e2e computes the machine's local HH:MM the same way the
 # engine does
 chrono = "0.4"
