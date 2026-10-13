@@ -329,15 +329,50 @@ pub async fn models(
         .stdout
         .take()
         .ok_or_else(|| DriverError::Spawn("stdout not piped".into()))?;
-    let output = tokio::time::timeout(Duration::from_secs(30), async {
+    // The catalog must land inside this window. A CLI that hangs or dies
+    // mid-print is a failed probe, never an advertisement of nothing: an
+    // empty catalog reads as "no models" end to end, and the console
+    // would hold it as the harness's own answer.
+    let read = tokio::time::timeout(Duration::from_secs(30), async {
         let mut out = String::new();
         let mut reader = BufReader::new(stdout);
-        let _ = tokio::io::AsyncReadExt::read_to_string(&mut reader, &mut out).await;
-        out
-    })
-    .await
-    .unwrap_or_default();
-    let _ = child.start_kill();
+        tokio::io::AsyncReadExt::read_to_string(&mut reader, &mut out).await?;
+        Ok::<_, std::io::Error>(out)
+    });
+    let output = match read.await {
+        Ok(Ok(out)) => out,
+        Ok(Err(e)) => {
+            let _ = child.start_kill();
+            return Err(DriverError::Spawn(format!("agy models: {e}")));
+        }
+        Err(_) => {
+            let _ = child.start_kill();
+            return Err(DriverError::Spawn(
+                "agy models: the CLI never finished printing its catalog".into(),
+            ));
+        }
+    };
+    // The CLI's own exit is the not-signed-in / broken-install signal: a
+    // nonzero exit never vouched for this catalog - a failed probe, not
+    // an advertisement of nothing. Output ends at EOF, so the natural
+    // exit lands shortly after; a CLI that lingers past this short grace
+    // is a hung probe - killed and reported, never answered from.
+    let status = match tokio::time::timeout(Duration::from_secs(10), child.wait()).await {
+        Ok(Ok(status)) => status,
+        Ok(Err(e)) => return Err(DriverError::Spawn(format!("agy models: {e}"))),
+        Err(_) => {
+            let _ = child.start_kill();
+            return Err(DriverError::Spawn(
+                "agy models: the CLI never exited".into(),
+            ));
+        }
+    };
+    if !status.success() {
+        return Err(DriverError::Spawn(format!(
+            "agy models: exited with {}",
+            status.code().unwrap_or(-1)
+        )));
+    }
     let mut models = Vec::new();
     for line in output.lines() {
         let line = line.trim_end_matches(['\r', '\n']);

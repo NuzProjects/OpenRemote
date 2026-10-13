@@ -381,6 +381,10 @@ pub async fn models(
         drop(stdin);
 
         let mut models = Vec::new();
+        // Whether the CLI answered our request id at all - even with a
+        // shape we don't speak. An answered handshake is the catalog
+        // whatever the exit; an unanswered one is judged by the exit.
+        let mut answered = false;
         let mut lines = BufReader::new(stdout).lines();
         while let Some(line) = lines.next_line().await? {
             let Some(frame) = frames::parse_frame(&line) else {
@@ -392,6 +396,7 @@ pub async fn models(
             if response.get("request_id").and_then(|r| r.as_str()) != Some(request_id) {
                 continue;
             }
+            answered = true;
             let Some(list) = catalog_list(&response) else {
                 break; // a shape we don't speak; empty beats a guess
             };
@@ -402,16 +407,49 @@ pub async fn models(
             }
             break;
         }
-        Ok::<_, std::io::Error>(models)
+        Ok::<_, std::io::Error>((models, answered))
     };
-    let (models, read_err) = match tokio::time::timeout(Duration::from_secs(30), catalog).await {
-        Ok(Ok(models)) => (models, None),
-        Ok(Err(e)) => (Vec::new(), Some(e)),
-        Err(_) => (Vec::new(), None), // a CLI that never answers is no catalog, not a failure
-    };
+    let ((models, answered), read_err) =
+        match tokio::time::timeout(Duration::from_secs(30), catalog).await {
+            Ok(Ok(pair)) => (pair, None),
+            Ok(Err(e)) => ((Vec::new(), false), Some(e)),
+            // A CLI that never answers the handshake is a failed probe, not
+            // an empty advertisement: an empty list reads as "no models" end
+            // to end, and the console would hold it as the harness's answer.
+            Err(_) => (
+                (Vec::new(), false),
+                Some(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "the handshake never answered",
+                )),
+            ),
+        };
     let _ = child.start_kill();
     if let Some(e) = read_err {
         return Err(DriverError::Spawn(format!("claude models: {e}")));
+    }
+    if !answered {
+        // No handshake answer landed, so the CLI's own exit is the only
+        // verdict left: a nonzero exit (not signed in, a broken install)
+        // or a wire it closed without answering is a failed probe -
+        // never an advertisement of no models. A clean exit without an
+        // answer keeps the old lenient reading (a shape we don't speak,
+        // empty beats a guess).
+        let status = match tokio::time::timeout(Duration::from_secs(10), child.wait()).await {
+            Ok(Ok(status)) => status,
+            Ok(Err(e)) => return Err(DriverError::Spawn(format!("claude models: {e}"))),
+            Err(_) => {
+                return Err(DriverError::Spawn(
+                    "claude models: the CLI never exited".into(),
+                ));
+            }
+        };
+        if !status.success() {
+            return Err(DriverError::Spawn(format!(
+                "claude models: exited with {}",
+                status.code().unwrap_or(-1)
+            )));
+        }
     }
     Ok(models)
 }
