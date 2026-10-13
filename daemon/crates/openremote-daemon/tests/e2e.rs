@@ -1043,3 +1043,63 @@ async fn an_effort_default_rides_the_session_record_verbatim() {
         plain.raw
     );
 }
+
+#[tokio::test]
+async fn a_giant_line_is_dropped_and_the_turn_still_completes() {
+    // The fixture answers one prompt with an 8 MiB junk line and then a
+    // line with invalid UTF-8 before the real frames (harness audit F11):
+    // the bounded reader drops the giant line and decodes the corrupt one
+    // lossily, so the turn still completes. On the old read_line reader
+    // the corrupt line was Err(InvalidData) - a fatal break with the
+    // process still alive, so this same test dies waiting for the turn.
+    let daemon = start_daemon(&[("claude", fixture_agent())]).await;
+    let ws = workspace(Some("giant-line"));
+    let created = call(
+        &daemon,
+        "POST",
+        "/sessions",
+        Some(json!({"request_id": "r-create", "harness": "claude", "workspace": ws.path()})),
+    )
+    .await;
+    let id = created.body["id"].as_str().expect("session id").to_string();
+    until_kinds(
+        &daemon,
+        &format!("/sessions/{id}/events"),
+        &["session.status_changed"],
+    )
+    .await;
+
+    let prompt = call(
+        &daemon,
+        "POST",
+        &format!("/sessions/{id}/prompts"),
+        Some(json!({"request_id": "r-prompt", "text": "hello giant"})),
+    )
+    .await;
+    assert_eq!(prompt.status, 200, "raw: {}", prompt.raw);
+
+    let events = until_kinds(
+        &daemon,
+        &format!("/sessions/{id}/events"),
+        &[
+            "turn.started",
+            "message.added",
+            "message.added",
+            "context.used",
+            "usage.cost",
+            "turn.completed",
+            "session.status_changed",
+        ],
+    )
+    .await;
+    let completed = events
+        .iter()
+        .find(|(_, p)| kind(p) == "turn.completed")
+        .expect("turn.completed event");
+    assert_eq!(
+        completed.1["coarse"],
+        "completed",
+        "events:\n{}",
+        dump(&events)
+    );
+}

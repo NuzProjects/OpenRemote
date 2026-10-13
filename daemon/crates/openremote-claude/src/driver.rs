@@ -13,7 +13,7 @@ use std::time::Duration;
 use openremote_core::{DecisionKind, DecisionOption, TurnOutcome};
 use openremote_harness::{DriverError, DriverEvent, Resolution, SessionSettings, SpawnOptions};
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, mpsc};
 
@@ -77,8 +77,14 @@ impl Driver {
 
         let (tx, rx) = mpsc::channel(256);
         let child = Arc::new(Mutex::new(child));
-        tokio::spawn(read_stdout(BufReader::new(stdout), tx.clone()));
-        tokio::spawn(read_stderr(BufReader::new(stderr), tx));
+        tokio::spawn(read_stdout(
+            openremote_harness::LineReader::new(BufReader::new(stdout)),
+            tx.clone(),
+        ));
+        tokio::spawn(read_stderr(
+            openremote_harness::LineReader::new(BufReader::new(stderr)),
+            tx,
+        ));
         Ok((
             Self {
                 stdin,
@@ -393,7 +399,10 @@ pub async fn models(
         // shape we don't speak. An answered handshake is the catalog
         // whatever the exit; an unanswered one is judged by the exit.
         let mut answered = false;
-        let mut lines = BufReader::new(stdout).lines();
+        // The probe's line reads carry the same bound as the session
+        // reader (harness audit F11): a runaway catalog line is dropped,
+        // not buffered.
+        let mut lines = openremote_harness::LineReader::new(BufReader::new(stdout));
         while let Some(line) = lines.next_line().await? {
             let Some(frame) = frames::parse_frame(&line) else {
                 continue;
@@ -584,20 +593,18 @@ fn build_argv(opts: &SpawnOptions) -> Vec<std::ffi::OsString> {
 }
 
 async fn read_stdout(
-    mut reader: BufReader<tokio::process::ChildStdout>,
+    mut reader: openremote_harness::LineReader<BufReader<tokio::process::ChildStdout>>,
     tx: mpsc::Sender<DriverEvent>,
 ) {
     // tool_use_id → name, learned from assistant tool_use blocks so later
     // tool_result frames can be named.
     let mut names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    let mut buffer = String::new();
     loop {
-        buffer.clear();
-        // ICRNL lesson: accept \n and \r\n; a bare \r from a raw-mode child
-        // would not flush a line anyway, and the fixture accepts both.
-        match reader.read_line(&mut buffer).await {
-            Ok(0) => break,
-            Ok(_) => {}
+        // Bounded, lossy reads (harness audit F11): an over-long line is
+        // dropped and invalid UTF-8 decodes lossily, never a fatal break.
+        let line = match reader.next_line().await {
+            Ok(None) => break,
+            Ok(Some(line)) => line,
             Err(e) => {
                 let _ = tx
                     .send(DriverEvent::Stderr {
@@ -606,12 +613,11 @@ async fn read_stdout(
                     .await;
                 break;
             }
-        }
-        let line = buffer.trim_end_matches(['\r', '\n']);
+        };
         if line.trim().is_empty() {
             continue;
         }
-        let Some(frame) = frames::parse_frame(line) else {
+        let Some(frame) = frames::parse_frame(&line) else {
             continue;
         };
         let event = match frame {
@@ -761,18 +767,14 @@ async fn read_stdout(
 }
 
 async fn read_stderr(
-    mut reader: BufReader<tokio::process::ChildStderr>,
+    mut reader: openremote_harness::LineReader<BufReader<tokio::process::ChildStderr>>,
     tx: mpsc::Sender<DriverEvent>,
 ) {
-    let mut buffer = String::new();
     loop {
-        buffer.clear();
-        match reader.read_line(&mut buffer).await {
-            Ok(0) => break,
-            Ok(_) => {}
-            Err(_) => break,
-        }
-        let line = buffer.trim_end_matches(['\r', '\n']).to_string();
+        let line = match reader.next_line().await {
+            Ok(None) | Err(_) => break,
+            Ok(Some(line)) => line,
+        };
         if line.is_empty() {
             continue;
         }

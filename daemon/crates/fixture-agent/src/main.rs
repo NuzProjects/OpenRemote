@@ -383,6 +383,22 @@ impl FixtureAgent {
                               "cache_creation_input_tokens": 260, "output_tokens": 60}
                 }));
             }
+            // A runaway prelude (harness audit F11): an 8 MiB blob of
+            // junk on one line, then a line with invalid UTF-8 mid-line,
+            // then the well-formed frames and the turn's result. The
+            // bounded reader drops the blob without buffering it and
+            // decodes the corrupt line lossily, so the turn after them
+            // completes - where the old read_line reader either bloated
+            // memory on the blob or broke the session on the bad bytes.
+            "giant-line" => {
+                let mut blob = std::io::stdout().lock();
+                blob.write_all(&vec![b'x'; 8 * 1024 * 1024]).ok();
+                blob.write_all(b"\n").ok();
+                blob.write_all(b"\xff\xfe not utf-8 mid-line\n").ok();
+                blob.flush().ok();
+                self.assistant_text(&format!("done: {prompt}"));
+                self.result("success", &format!("done: {prompt}"), "completed");
+            }
             _ => {
                 self.assistant_text(&format!("done: {prompt}"));
                 self.result("success", &format!("done: {prompt}"), "completed");

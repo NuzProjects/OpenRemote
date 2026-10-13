@@ -11,7 +11,7 @@ use std::time::Duration;
 use openremote_core::TurnOutcome;
 use openremote_harness::{DriverError, DriverEvent, Resolution, SpawnOptions};
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::BufReader;
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex as AsyncMutex, mpsc};
 
@@ -126,12 +126,12 @@ impl Driver {
             *guard = Some(child);
         }
         tokio::spawn(read_prompt(
-            BufReader::new(stdout),
+            openremote_harness::LineReader::new(BufReader::new(stdout)),
             self.session_tx.clone(),
             Arc::clone(&self.shared),
         ));
         tokio::spawn(drain_stderr(
-            BufReader::new(stderr),
+            openremote_harness::LineReader::new(BufReader::new(stderr)),
             self.session_tx.clone(),
         ));
         Ok(())
@@ -176,25 +176,22 @@ impl Driver {
 }
 
 async fn read_prompt(
-    mut reader: BufReader<tokio::process::ChildStdout>,
+    mut reader: openremote_harness::LineReader<BufReader<tokio::process::ChildStdout>>,
     tx: mpsc::Sender<DriverEvent>,
     shared: Arc<Shared>,
 ) {
-    let mut buffer = String::new();
     let mut saw_result = false;
     loop {
-        buffer.clear();
-        // ICRNL lesson: both delimiters are legal.
-        match reader.read_line(&mut buffer).await {
-            Ok(0) => break,
-            Ok(_) => {}
-            Err(_) => break,
-        }
-        let line = buffer.trim_end_matches(['\r', '\n']);
+        // Bounded, lossy reads (harness audit F11): an over-long line is
+        // dropped and invalid UTF-8 decodes lossily, never a fatal break.
+        let line = match reader.next_line().await {
+            Ok(None) | Err(_) => break,
+            Ok(Some(line)) => line,
+        };
         if line.trim().is_empty() {
             continue;
         }
-        let Ok(frame) = serde_json::from_str::<Value>(line) else {
+        let Ok(frame) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
         let event = frame
@@ -298,17 +295,14 @@ async fn read_prompt(
 }
 
 async fn drain_stderr(
-    mut reader: BufReader<tokio::process::ChildStderr>,
+    mut reader: openremote_harness::LineReader<BufReader<tokio::process::ChildStderr>>,
     tx: mpsc::Sender<DriverEvent>,
 ) {
-    let mut buffer = String::new();
     loop {
-        buffer.clear();
-        match reader.read_line(&mut buffer).await {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {}
-        }
-        let line = buffer.trim_end_matches(['\r', '\n']).to_string();
+        let line = match reader.next_line().await {
+            Ok(None) | Err(_) => break,
+            Ok(Some(line)) => line,
+        };
         if line.is_empty() {
             continue;
         }

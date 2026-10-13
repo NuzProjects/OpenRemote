@@ -17,7 +17,7 @@ use openremote_core::{DecisionKind, DecisionOption, TurnOutcome};
 use openremote_harness::events::{ApprovalRequest, DecisionSpec};
 use openremote_harness::{DriverError, DriverEvent, Resolution, SessionSettings, SpawnOptions};
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
 use uuid::Uuid;
@@ -180,11 +180,14 @@ impl Driver {
             active_turn: StdMutex::new(None),
         });
         tokio::spawn(read_stdout(
-            BufReader::new(stdout),
+            openremote_harness::LineReader::new(BufReader::new(stdout)),
             tx.clone(),
             Arc::clone(&shared),
         ));
-        tokio::spawn(read_stderr(BufReader::new(stderr), tx.clone()));
+        tokio::spawn(read_stderr(
+            openremote_harness::LineReader::new(BufReader::new(stderr)),
+            tx.clone(),
+        ));
 
         let mut driver = Self {
             stdin,
@@ -535,17 +538,16 @@ fn coarse_outcome(status: &str) -> TurnOutcome {
 }
 
 async fn read_stdout(
-    mut reader: BufReader<tokio::process::ChildStdout>,
+    mut reader: openremote_harness::LineReader<BufReader<tokio::process::ChildStdout>>,
     tx: mpsc::Sender<DriverEvent>,
     shared: Arc<Shared>,
 ) {
-    let mut buffer = String::new();
     loop {
-        buffer.clear();
-        // ICRNL lesson: both delimiters are legal.
-        match reader.read_line(&mut buffer).await {
-            Ok(0) => break,
-            Ok(_) => {}
+        // Bounded, lossy reads (harness audit F11): an over-long line is
+        // dropped and invalid UTF-8 decodes lossily, never a fatal break.
+        let line = match reader.next_line().await {
+            Ok(None) => break,
+            Ok(Some(line)) => line,
             Err(e) => {
                 let _ = tx
                     .send(DriverEvent::Stderr {
@@ -554,12 +556,11 @@ async fn read_stdout(
                     .await;
                 break;
             }
-        }
-        let line = buffer.trim_end_matches(['\r', '\n']);
+        };
         if line.trim().is_empty() {
             continue;
         }
-        let Ok(frame) = serde_json::from_str::<Value>(line) else {
+        let Ok(frame) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
         let has_method = frame.get("method").is_some();
@@ -806,18 +807,14 @@ pub async fn models(
 }
 
 async fn read_stderr(
-    mut reader: BufReader<tokio::process::ChildStderr>,
+    mut reader: openremote_harness::LineReader<BufReader<tokio::process::ChildStderr>>,
     tx: mpsc::Sender<DriverEvent>,
 ) {
-    let mut buffer = String::new();
     loop {
-        buffer.clear();
-        match reader.read_line(&mut buffer).await {
-            Ok(0) => break,
-            Ok(_) => {}
-            Err(_) => break,
-        }
-        let line = buffer.trim_end_matches(['\r', '\n']).to_string();
+        let line = match reader.next_line().await {
+            Ok(None) | Err(_) => break,
+            Ok(Some(line)) => line,
+        };
         if line.is_empty() {
             continue;
         }

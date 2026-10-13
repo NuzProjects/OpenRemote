@@ -6,9 +6,11 @@
 
 pub mod anthropic_wire;
 pub mod events;
+pub mod line_reader;
 pub mod paths;
 
 pub use events::{ApprovalRequest, DecisionSpec, DriverEvent};
+pub use line_reader::LineReader;
 
 use std::path::PathBuf;
 
