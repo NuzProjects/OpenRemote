@@ -220,14 +220,29 @@ pub async fn pull(app: &Arc<App>, peer: DeviceId, id: SessionId, runner: DeviceI
     // above: the guard's Drop is the single release path.
 }
 
-/// Deletes a synced chat here because it was deleted somewhere.
+/// Deletes a synced chat here because it was deleted somewhere. A
+/// private chat (no executor: never synced, invisible to peers on every
+/// other path) is refused whole - no stop, no tombstone, nothing: a
+/// note naming one is stale or foreign, and honouring it would destroy
+/// local data on the word of a peer that could not legitimately know
+/// the chat exists. This was the one peer-note path with no ownership
+/// check; it now holds the same line the rest of sync does.
 pub async fn apply_tombstone(app: &Arc<App>, id: SessionId, stone: Tombstone) {
-    let running_here = {
+    let (private_here, running_here) = {
         let store = lock_recovering(&app.store);
-        store
-            .session(&id)
-            .is_ok_and(|s| s.executor.is_some() && store.executes_here(s) && s.status.is_alive())
+        match store.session(&id) {
+            Ok(s) => (
+                s.executor.is_none(),
+                s.executor.is_some() && store.executes_here(s) && s.status.is_alive(),
+            ),
+            // A chat this device never held: nothing runs here, nothing
+            // to refuse - the tombstone memory is the whole job.
+            Err(_) => (false, false),
+        }
     };
+    if private_here {
+        return;
+    }
     if running_here {
         let _ = app.supervisor.stop(&id).await;
     }
@@ -628,5 +643,132 @@ mod tests {
         assert_eq!(head_skips(&[a, b], &[b]), vec![a]);
         // No failures: the usual skip, nobody gets notified twice.
         assert_eq!(head_skips(&[a, b], &[]), vec![a, b]);
+    }
+
+    /// A real app over a throwaway store, no harnesses: enough to drive
+    /// `apply_tombstone` against store-built chats. The engines tick in
+    /// the background and hold the directory open, so the directory
+    /// outlives the run as junk in temp (no cleanup to race).
+    fn test_app(dir: &std::path::Path) -> Arc<App> {
+        let store = Arc::new(Mutex::new(
+            openremote_core::Store::open(dir.to_path_buf()).expect("store opens"),
+        ));
+        let supervisor = crate::supervisor::Supervisor::new(
+            store.clone(),
+            crate::registry::HarnessRegistry::none(),
+        );
+        crate::app::App::assemble(
+            crate::app::AppOptions {
+                data_dir: dir.to_path_buf(),
+                token: "test-token".into(),
+                cloud: openremote_cloud::CloudConfig {
+                    api_base: "http://127.0.0.1:9/v1/openremote".into(),
+                    auth_issuer: "http://127.0.0.1:9/v1/auth".into(),
+                    client_id: openremote_cloud::config::CLIENT_ID.into(),
+                    device_name: "test-device".into(),
+                    platform: "test".into(),
+                    redirect_uri: None,
+                },
+            },
+            store,
+            supervisor,
+        )
+    }
+
+    /// F16: a `sync.tombstone` note naming a private chat is refused whole
+    /// - no stop, no tombstone, no data loss - while a synced chat's
+    /// tombstone still applies. Every other peer path keeps private
+    /// chats invisible; this was the one that could destroy one's data
+    /// on the word of a peer that could not legitimately know the chat
+    /// exists.
+    #[tokio::test]
+    async fn a_tombstone_naming_a_private_chat_is_refused_and_its_data_survives() {
+        let dir = std::env::temp_dir().join(format!("or-tombstone-{}", uuid::Uuid::new_v4()));
+        let app = test_app(&dir);
+        let session = |executor: Option<DeviceId>| openremote_core::Session {
+            id: SessionId::new(),
+            harness: "claude".into(),
+            workspace: None,
+            status: openremote_core::SessionStatus::Starting,
+            model: None,
+            effort: None,
+            permission_mode: None,
+            harness_session_ref: None,
+            created_at: 0,
+            updated_at: 0,
+            last_error: None,
+            next_turn: 1,
+            fast: false,
+            approved_tools: Vec::new(),
+            executor,
+            title: None,
+        };
+        let private = session(None);
+        let mut synced = session(Some(DeviceId::new()));
+        synced.id = SessionId::new();
+        let user_turn = openremote_core::EventPayload::MessageAdded {
+            message: openremote_core::ChatMessage {
+                id: "m1".into(),
+                turn: 1,
+                role: openremote_core::MessageRole::User,
+                text: "private words".into(),
+            },
+        };
+        {
+            let mut store = lock_recovering(&app.store);
+            for s in [&private, &synced] {
+                store
+                    .append(
+                        s.id,
+                        openremote_core::EventPayload::SessionCreated { session: s.clone() },
+                    )
+                    .unwrap();
+            }
+            store.append(private.id, user_turn).unwrap();
+        }
+
+        // The note arrives for both; only the synced one goes.
+        apply_tombstone(
+            &app,
+            private.id,
+            Tombstone {
+                at: 1,
+                by: DeviceId::new(),
+            },
+        )
+        .await;
+        apply_tombstone(
+            &app,
+            synced.id,
+            Tombstone {
+                at: 1,
+                by: DeviceId::new(),
+            },
+        )
+        .await;
+
+        {
+            let store = lock_recovering(&app.store);
+            assert!(
+                store.session(&private.id).is_ok(),
+                "the private chat survives the note"
+            );
+            assert!(
+                !store.tombstoned(&private.id),
+                "no tombstone was recorded against it"
+            );
+            assert_eq!(store.head(&private.id), 2, "its events all survive");
+            let (lines, _) = store.raw_range(&private.id, 0, 64 * 1024).unwrap();
+            assert_eq!(
+                lines.len(),
+                2,
+                "the log holds both events, verbatim - the data is intact"
+            );
+            assert!(
+                store.session(&synced.id).is_err(),
+                "the control: a synced chat's tombstone still applies"
+            );
+            assert!(store.tombstoned(&synced.id));
+        }
     }
 }

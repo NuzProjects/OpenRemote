@@ -287,6 +287,114 @@ async fn webhooks_fire_only_with_their_own_key() {
 }
 
 #[tokio::test]
+async fn a_webhook_replay_dedups_and_a_storm_cools_down() {
+    // The open route had no idempotency at all: a sender's retry (slow
+    // answer), a proxy re-POST, a captured URL - every replay fired a
+    // fresh chat. The delivery's identity is the body the sender brought
+    // (no request_id on an open route), and a rule never fires faster
+    // than its cooldown.
+    let daemon = start_daemon(&[]).await;
+    let machine = this_machine_id(&daemon).await;
+    let ws = workspace(Some("plain"));
+    let saved = call(
+        &daemon,
+        "POST",
+        "/automations",
+        Some(rule_body(
+            &machine,
+            &ws,
+            json!({"trigger": {"kind": "webhook"}, "name": "Deploy hook"}),
+        )),
+    )
+    .await;
+    assert_eq!(saved.status, 201, "raw: {}", saved.raw);
+    let rule_id = saved.body["id"].as_str().expect("rule id").to_string();
+    let key = saved.body["trigger"]["key"]
+        .as_str()
+        .expect("key")
+        .to_string();
+    async fn deliver(
+        daemon: &TestDaemon,
+        rule_id: &str,
+        key: &str,
+        payload: serde_json::Value,
+    ) -> Reply {
+        call(
+            daemon,
+            "POST",
+            &format!("/hooks/{rule_id}?key={key}"),
+            Some(payload),
+        )
+        .await
+    }
+    let fired = |r: &Reply| r.body["fired"].as_bool().unwrap_or(false);
+
+    // A retry storm: the same delivery five times over, as fast as a
+    // sender retries - one fire (the dedup window is minutes; no timing
+    // to race).
+    let first = deliver(&daemon, &rule_id, &key, json!({"delivery": 1})).await;
+    assert_eq!(first.status, 200, "raw: {}", first.raw);
+    assert!(fired(&first), "raw: {}", first.raw);
+    for i in 0..4 {
+        let replay = deliver(&daemon, &rule_id, &key, json!({"delivery": 1})).await;
+        assert_eq!(replay.status, 200, "replay {i}: {}", replay.raw);
+        assert!(
+            !fired(&replay),
+            "a replayed delivery never fires again; raw: {}",
+            replay.raw
+        );
+    }
+    let sessions = call(&daemon, "GET", "/sessions", None).await;
+    assert_eq!(
+        sessions.body.as_array().map(Vec::len),
+        Some(1),
+        "the storm opened one chat, not five; raw: {}",
+        sessions.raw
+    );
+
+    // The cooldown bounds a storm of DIFFERENT bodies (a dedup key the
+    // sender can vary at will): two distinct deliveries at once - the
+    // first to land reserves, the second arrives milliseconds later,
+    // inside the one-second cooldown, and waits. Exactly one fires.
+    // (The sleep first: the storm's own fire is inside the window.)
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    let (a, b) = tokio::join!(
+        deliver(&daemon, &rule_id, &key, json!({"delivery": 2})),
+        deliver(&daemon, &rule_id, &key, json!({"delivery": 3})),
+    );
+    assert_eq!(a.status, 200, "raw: {}", a.raw);
+    assert_eq!(b.status, 200, "raw: {}", b.raw);
+    assert!(
+        fired(&a) ^ fired(&b),
+        "exactly one of the two distinct deliveries fires; a: {} b: {}",
+        a.raw,
+        b.raw
+    );
+
+    // The window is not a wall: past the cooldown, the delivery that
+    // waited fires, and the one that fired is still deduped (minutes of
+    // window, not one second). One more chat, not two.
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    let (a, b) = tokio::join!(
+        deliver(&daemon, &rule_id, &key, json!({"delivery": 2})),
+        deliver(&daemon, &rule_id, &key, json!({"delivery": 3})),
+    );
+    assert!(
+        fired(&a) ^ fired(&b),
+        "the waited-out delivery fires, the replayed one does not; a: {} b: {}",
+        a.raw,
+        b.raw
+    );
+    let sessions = call(&daemon, "GET", "/sessions", None).await;
+    assert_eq!(
+        sessions.body.as_array().map(Vec::len),
+        Some(3),
+        "three fires in total - one per real delivery; raw: {}",
+        sessions.raw
+    );
+}
+
+#[tokio::test]
 async fn rules_wait_for_a_machine_that_hasnt_checked_in() {
     let daemon = start_daemon(&[]).await;
     let ws = workspace(Some("plain"));

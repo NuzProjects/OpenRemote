@@ -13,6 +13,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
+use std::time::{Duration, Instant};
 
 use openremote_core::{
     AutomationRule, Decision, DecisionId, DecisionState, Event, EventPayload, Harness, Machine,
@@ -120,6 +121,71 @@ pub enum SupervisorError {
     Driver(#[from] openremote_harness::DriverError),
 }
 
+/// What a webhook delivery did. Webhook senders are outside the
+/// console's request_id contract, so a refused delivery answers 200
+/// with `fired: false`, not an error status - an error status is what
+/// sends a retrying sender around again, and the retry is exactly what
+/// the refusal exists to stop.
+pub enum WebhookFire {
+    /// The delivery fired: the chat it opened.
+    Fired(Box<Session>),
+    /// The delivery was refused - a replay inside the dedup window, or
+    /// the rule inside its cooldown. The string is the reason the
+    /// answer carries back to the sender.
+    Refused(&'static str),
+}
+
+/// A webhook delivery replays as a duplicate inside this window. Sender
+/// retries come back in seconds (the daemon still busy on the first
+/// delivery, the sender's patience already spent) and the body is the
+/// only idempotency key an open route's caller brings. Past the window a
+/// replay fires again, exactly as a machine that never saw the first
+/// delivery would answer it - same reasoning as the receipt cap, whose
+/// retries also come back within minutes, not years.
+const WEBHOOK_DEDUP_WINDOW: Duration = Duration::from_secs(5 * 60);
+
+/// A rule fires at most this often, whatever the bodies. A storm of
+/// deliveries - a sender's retry loop, a captured URL - cannot multiply
+/// chats faster than one per interval, and a single legitimate delivery
+/// never sees it: nothing fired the rule in the second before it. The
+/// interval runs from a fire's end, so a fire that itself takes a while
+/// has not burned its own cooldown while it ran.
+const WEBHOOK_COOLDOWN: Duration = Duration::from_secs(1);
+
+/// A webhook rule's delivery memory: what fired recently. Refused
+/// deliveries record nothing, so the maps grow only as fast as real
+/// fires - at most one delivery per rule per cooldown - and prune with
+/// the window on the next delivery anywhere.
+#[derive(Default)]
+struct WebhookMemory {
+    /// (rule, digest of the raw body) -> when it fired. The digest, not
+    /// the body: a hook's payload is the sender's to define and can be
+    /// arbitrarily large, and the map holds only 32 bytes of it.
+    deliveries: HashMap<(RuleId, [u8; 32]), Instant>,
+    /// rule -> when it last fired (or started firing - the reservation
+    /// that closes the in-flight window a concurrent replay would race
+    /// through).
+    cooled: HashMap<RuleId, Instant>,
+}
+
+impl WebhookMemory {
+    /// Entries older than their window are garbage: the window is the
+    /// retention, and a replay past it is a new delivery.
+    fn prune(&mut self) {
+        self.deliveries
+            .retain(|_, fired| fired.elapsed() < WEBHOOK_DEDUP_WINDOW);
+        self.cooled
+            .retain(|_, fired| fired.elapsed() < WEBHOOK_COOLDOWN);
+    }
+
+    /// A deleted rule's memory goes with it - the deliveries it deduped
+    /// and its cooldown slot belong to nothing.
+    fn forget_rule(&mut self, id: &RuleId) {
+        self.cooled.remove(id);
+        self.deliveries.retain(|(rule, _), _| rule != id);
+    }
+}
+
 struct SessionEntry {
     driver: Arc<AsyncMutex<SessionDriver>>,
     /// Serializes event sequences for this session across tasks.
@@ -157,19 +223,26 @@ pub struct Supervisor {
     /// day each tick, or the map ratchets with every rule the account
     /// ever had.
     fired: StdMutex<HashMap<RuleId, String>>,
+    /// Webhook delivery memory (see `WebhookMemory`): the open route's
+    /// own idempotency - hook senders bring no request_id, so the body
+    /// they post is all the identity a delivery has.
+    webhooks: StdMutex<WebhookMemory>,
     /// The daemon's own machine - sessions run here, plugins ride from here.
     this_machine: MachineId,
 }
 
-/// One poisoning policy for every std mutex the daemon holds: a poisoned
-/// lock means a panic escaped while it was held, not that the data inside
-/// is unusable, so the guard is recovered instead of lost. Every store
-/// acquisition goes through here: before this was shared, a single panic
-/// under the lock would brick every store-backed route until restart
-/// while sync kept mutating state the API could no longer read (sync has
-/// always recovered this way; this is that policy, shared). A recovered
-/// lock may hold half-finished state, which can surface as one bad answer
-/// - the better side of the trade against a dead API.
+/// One poisoning policy for every mutex that routes through this helper
+/// (the store, the sync maps, the schedule's arming, the webhooks'
+/// delivery memory): a poisoned lock means a panic escaped while it was
+/// held, not that the data inside is unusable, so the guard is recovered
+/// instead of lost. The sign-in relay's and the registry's locks keep
+/// their own patterns, deliberately. Every store acquisition goes
+/// through here: before this was shared, a single panic under the lock
+/// would brick every store-backed route until restart while sync kept
+/// mutating state the API could no longer read (sync has always
+/// recovered this way; this is that policy, shared). A recovered lock
+/// may hold half-finished state, which can surface as one bad answer,
+/// the better side of the trade against a dead API.
 pub(crate) fn lock_recovering<T>(m: &StdMutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -190,6 +263,7 @@ impl Supervisor {
             registry: StdRwLock::new(registry),
             signins: StdMutex::new(HashMap::new()),
             fired: StdMutex::new(HashMap::new()),
+            webhooks: StdMutex::new(WebhookMemory::default()),
             this_machine,
         });
         supervisor.spawn_presence_ticker(this_machine);
@@ -773,6 +847,7 @@ impl Supervisor {
         // otherwise carry for the daemon's lifetime - every rule the
         // account ever deleted, one map entry each.
         lock_recovering(&self.fired).remove(id);
+        lock_recovering(&self.webhooks).forget_rule(id);
         Ok(())
     }
 
@@ -840,12 +915,18 @@ impl Supervisor {
     }
 
     /// A webhook arrived: the rule must be a webhook rule, enabled, and
-    /// the request must carry the rule's own key.
+    /// the request must carry the rule's own key. The delivery is then
+    /// deduped on (rule id, digest of the raw body) and rate-limited per
+    /// rule - the open route has no request_id contract to lean on, and
+    /// an answered error is exactly what sends a sender retrying (F9:
+    /// each retry fired a fresh chat before this). A refused delivery
+    /// answers through, not as an error: errors are for retries.
     pub async fn fire_webhook(
         self: &Arc<Self>,
         id: &RuleId,
         key: Option<&str>,
-    ) -> Result<Session, SupervisorError> {
+        raw_body: &[u8],
+    ) -> Result<WebhookFire, SupervisorError> {
         let rule = self
             .with_store(|s| s.rule(id).cloned())
             .map_err(store_error)?;
@@ -862,7 +943,46 @@ impl Supervisor {
                 "the webhook key does not match".into(),
             ));
         }
-        self.fire_rule(&rule).await
+        // The open route's idempotency key: the body the sender brought,
+        // hashed. Reservations and refusals happen under the one lock, so
+        // two deliveries racing cannot both pass.
+        let digest = openremote_cloud::sha256(raw_body);
+        let delivery = (rule.id, digest);
+        {
+            let mut webhooks = lock_recovering(&self.webhooks);
+            webhooks.prune();
+            if webhooks
+                .deliveries
+                .get(&delivery)
+                .is_some_and(|fired| fired.elapsed() < WEBHOOK_DEDUP_WINDOW)
+            {
+                return Ok(WebhookFire::Refused(
+                    "this delivery already fired - a retry changes nothing",
+                ));
+            }
+            if webhooks
+                .cooled
+                .get(&rule.id)
+                .is_some_and(|fired| fired.elapsed() < WEBHOOK_COOLDOWN)
+            {
+                return Ok(WebhookFire::Refused(
+                    "the rule is cooling down - it fired just now",
+                ));
+            }
+            // Reserve before firing, so a replay that lands while the
+            // fire is still in flight is a refusal, not a race through
+            // an empty slot.
+            webhooks.deliveries.insert(delivery, Instant::now());
+            webhooks.cooled.insert(rule.id, Instant::now());
+        }
+        // The reservation stands whatever the fire does: a failure past
+        // the session's creation is the chat's first fact (the rule ran,
+        // badly), and a retry storm must not multiply chats just because
+        // the first fire failed. The window is the sender's own re-arming
+        // - a genuine later delivery is a new one by then.
+        self.fire_rule(&rule)
+            .await
+            .map(|s| WebhookFire::Fired(Box::new(s)))
     }
 
     /// The one firing path: create the chat, deliver the task, record the

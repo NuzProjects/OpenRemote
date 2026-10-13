@@ -950,23 +950,34 @@ async fn run_rule(
 }
 
 /// A webhook arriving for a rule - open route, the rule's key is the
-/// credential: `/hooks/{rule-id}?key=…`.
+/// credential: `/hooks/{rule-id}?key=…`. The raw body is the delivery's
+/// identity (hook senders bring no request_id), so it is read whole and
+/// hashed for the dedup window. A refused delivery - a replay, a
+/// cooldown - answers 200 with `fired: false`, never an error status:
+/// an error is what sends a retrying sender around again, and the retry
+/// is exactly what the refusal exists to stop.
 async fn incoming_webhook(
     State(app): State<Arc<App>>,
     AxumPath(id): AxumPath<String>,
     axum::extract::Query(query): axum::extract::Query<WebhookQuery>,
+    body: axum::body::Bytes,
 ) -> Response {
     let Some(rule_id) = openremote_core::RuleId::parse(&id) else {
         return error(StatusCode::BAD_REQUEST, "bad rule id");
     };
     match app
         .supervisor
-        .fire_webhook(&rule_id, query.key.as_deref())
+        .fire_webhook(&rule_id, query.key.as_deref(), &body)
         .await
     {
-        Ok(session) => (
+        Ok(crate::supervisor::WebhookFire::Fired(session)) => (
             StatusCode::OK,
             Json(json!({"fired": true, "chat": session.id.to_string()})),
+        )
+            .into_response(),
+        Ok(crate::supervisor::WebhookFire::Refused(reason)) => (
+            StatusCode::OK,
+            Json(json!({"fired": false, "reason": reason})),
         )
             .into_response(),
         Err(err) => supervisor_error(err),
@@ -1156,10 +1167,20 @@ async fn create_session(
         return receipt_response(&receipt);
     }
     let me = app.cloud.device_id();
-    let target = body
-        .device_id
-        .as_deref()
-        .and_then(openremote_core::DeviceId::parse);
+    // A `device_id` that is present but unparseable is a broken client
+    // (a truncated UUID, a stale cache), not "no device named": the old
+    // parse folded it into absent and silently created the chat on this
+    // machine, ignoring the user's intent to run it elsewhere.
+    let target = match device_target(body.device_id.as_deref()) {
+        DeviceTarget::Invalid => {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "device_id must be a device id - name none to run here",
+            );
+        }
+        DeviceTarget::Here => None,
+        DeviceTarget::There(device) => Some(device),
+    };
     if let Some(device) = target.filter(|d| Some(*d) != me) {
         if peer.is_some() {
             return error(StatusCode::BAD_REQUEST, "a chat runs where it is created");
@@ -1260,6 +1281,26 @@ impl CreateSessionBody {
             body["workspace"] = json!(workspace);
         }
         body
+    }
+}
+
+/// The `device_id` a create names: absent (a local chat, the default),
+/// a device to run it on, or present-but-garbage. The third state is
+/// the whole point of the enum: the old parse folded it into absent and
+/// silently ran the chat here when the user had named their machine.
+enum DeviceTarget {
+    Here,
+    There(openremote_core::DeviceId),
+    Invalid,
+}
+
+fn device_target(named: Option<&str>) -> DeviceTarget {
+    match named {
+        None => DeviceTarget::Here,
+        Some(raw) => match openremote_core::DeviceId::parse(raw) {
+            Some(id) => DeviceTarget::There(id),
+            None => DeviceTarget::Invalid,
+        },
     }
 }
 

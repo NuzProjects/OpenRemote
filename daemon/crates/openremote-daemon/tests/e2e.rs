@@ -769,6 +769,72 @@ async fn an_unavailable_harness_creates_a_failed_session_not_an_error() {
 }
 
 #[tokio::test]
+async fn a_malformed_device_id_is_a_bad_request_not_a_silent_local_chat() {
+    // `device_id: "abc"` used to parse to None - "no device named" - so
+    // the chat silently created here instead of on the machine the user
+    // named, surfaced only by the chat never appearing on other devices.
+    // Present-but-invalid is a broken client's 400; absent keeps its
+    // meaning (run here).
+    let daemon = start_daemon(&[("claude", fixture_agent())]).await;
+    let ws = workspace(Some("plain"));
+
+    let bad = call(
+        &daemon,
+        "POST",
+        "/sessions",
+        Some(json!({
+            "request_id": "r-bad-device",
+            "harness": "claude",
+            "workspace": ws.path(),
+            "device_id": "abc",
+        })),
+    )
+    .await;
+    assert_eq!(bad.status, 400, "raw: {}", bad.raw);
+    assert!(
+        bad.body["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("device_id"),
+        "the error names the field; raw: {}",
+        bad.raw
+    );
+
+    // The refusal opened nothing - no silent local chat where the user
+    // had named their machine.
+    let sessions = call(&daemon, "GET", "/sessions", None).await;
+    assert_eq!(
+        sessions.body.as_array().map(Vec::len),
+        Some(0),
+        "the refused create must open nothing; raw: {}",
+        sessions.raw
+    );
+
+    // Absent keeps its meaning: the same request minus the field is a
+    // local chat. (A well-formed id takes the Cloud path - the
+    // e2e_cloud_sessions suite covers it.)
+    let local = call(
+        &daemon,
+        "POST",
+        "/sessions",
+        Some(json!({
+            "request_id": "r-local",
+            "harness": "claude",
+            "workspace": ws.path(),
+        })),
+    )
+    .await;
+    assert_eq!(local.status, 201, "raw: {}", local.raw);
+    let after = call(&daemon, "GET", "/sessions", None).await;
+    assert_eq!(
+        after.body.as_array().map(Vec::len),
+        Some(1),
+        "the local create is the only chat; raw: {}",
+        after.raw
+    );
+}
+
+#[tokio::test]
 async fn console_origins_can_fetch_the_daemon_and_foreign_origins_cannot() {
     // The console is a webview on another origin (vite dev on
     // http://localhost:5173; Tauri production on http://tauri.localhost /

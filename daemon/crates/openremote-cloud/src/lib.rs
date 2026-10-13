@@ -113,6 +113,20 @@ fn now_s() -> i64 {
     openremote_core::now_ms() / 1000
 }
 
+/// A sha256 digest, raw bytes. The daemon's webhook route keys its
+/// delivery-dedup on the body's digest - hook senders are outside the
+/// console's request_id contract, so the body is the only idempotency
+/// key they bring - and this is the crate that already hashes (the OAuth
+/// PKCE challenge), so the digest lives here instead of a new
+/// dependency somewhere else.
+pub fn sha256(bytes: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(bytes);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&digest);
+    out
+}
+
 impl Cloud {
     pub fn open(config: CloudConfig, data_dir: &Path) -> Arc<Self> {
         let http = Http::new();
