@@ -1995,14 +1995,15 @@ impl Supervisor {
         Ok(())
     }
 
-    /// The StdoutClosed settle, the pump's single-writer path. `stopping`
-    /// is read while the entry still exists; the boundary is appended
-    /// before the status so the transcript closes its open turn first
-    /// - no dangling open turn survives a death. The status itself only
-    /// lands while the session is still alive: the failed-write arm of
-    /// `prompt` can settle the session first, and a terminal status is
-    /// a fact, not an opinion to state twice. The stderr ring's tail
-    /// splices into the Failed reason and goes with the entry.
+    /// The StdoutClosed settle, the pump's single-writer path.
+    /// `stopping` is read while the entry still exists; the boundary is
+    /// appended before the status so the transcript closes its open
+    /// turn first, and no dangling open turn survives a death. The
+    /// status itself only lands while the session is still alive: the
+    /// failed-write arm of `prompt` can settle the session first, and a
+    /// terminal status is a fact, not an opinion to state twice. The
+    /// stderr ring's tail splices into the Failed reason and goes with
+    /// the entry.
     async fn settle_terminal_locked(
         &self,
         id: &SessionId,
@@ -2802,7 +2803,9 @@ mod tests {
                 reason: Some("write failed".into()),
             });
         }
-        supervisor.emit_all(&id, payloads).expect("arm settles first");
+        supervisor
+            .emit_all(&id, payloads)
+            .expect("arm settles first");
         // Now the pump's settle arrives.
         supervisor
             .settle_terminal_locked(&id, false)

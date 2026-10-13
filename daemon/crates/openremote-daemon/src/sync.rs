@@ -675,7 +675,7 @@ mod tests {
         )
     }
 
-    /// F16: a `sync.tombstone` note naming a private chat is refused whole
+    /// A `sync.tombstone` note naming a private chat is refused whole
     /// - no stop, no tombstone, no data loss - while a synced chat's
     /// tombstone still applies. Every other peer path keeps private
     /// chats invisible; this was the one that could destroy one's data
