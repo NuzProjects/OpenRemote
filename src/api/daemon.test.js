@@ -260,24 +260,51 @@ test('a caller-aborted call rejects as a cancel, not as a timeout', async () => 
   }
 })
 
-test('fsDirs rides the caller-supplied signal to the fetch', async () => {
+test('fsDirs rides the caller-supplied signal to the fetch, and an abort proves it', async () => {
   // The F9 wiring: `fsDirs(path, { signal })` must forward the stop to
-  // the underlying call, or the picker's abort guards nothing.
+  // the underlying call. call()'s own timeout hands fetch a fresh
+  // AbortSignal on every request, so a signal merely being present
+  // proves nothing - the proof is propagation: aborting the caller's
+  // controller while the listing is in flight must abort the very
+  // signal fetch received (dropped wiring fails the assert, not
+  // silently).
   const api = new DaemonApi('http://daemon', 'token')
   const realFetch = globalThis.fetch
   const seen = []
   globalThis.fetch = async (requestUrl, options) => {
     seen.push(options.signal)
+    if (seen.length === 1) {
+      // Hold the first response until its signal aborts. The fallback
+      // timer releases the hold when no stop ever came, so broken
+      // wiring fails the assert below instead of hanging the suite.
+      await new Promise((resolve) => {
+        if (options.signal.aborted) return resolve()
+        const timer = setTimeout(resolve, 250)
+        options.signal.addEventListener(
+          'abort',
+          () => {
+            clearTimeout(timer)
+            resolve()
+          },
+          { once: true },
+        )
+      })
+    }
     return new Response('null', { status: 200 })
   }
   const controller = new AbortController()
   try {
-    await api.fsDirs('C:/somewhere', { signal: controller.signal })
-    await api.fsDirs(null, { signal: controller.signal })
+    const pending = api.fsDirs('C:/somewhere', { signal: controller.signal })
+    await new Promise((resolve) => setTimeout(resolve, 5)) // the listing is in flight
+    controller.abort()
+    await pending
+    await api.fsDirs(null) // an ordinary listing, no caller stop
   } finally {
     globalThis.fetch = realFetch
   }
   assert.equal(seen.length, 2)
   assert.ok(seen.every((signal) => signal instanceof AbortSignal))
-  assert.ok(seen[0] !== seen[1], 'each call builds its own combined signal')
+  assert.equal(seen[0].aborted, true, "the caller's stop reached the wire")
+  assert.equal(seen[1].aborted, false, 'an ordinary listing is never aborted')
+  assert.ok(seen[0] !== seen[1], 'each call builds its own signal')
 })
