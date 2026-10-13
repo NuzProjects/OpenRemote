@@ -11,6 +11,7 @@
 //! `aborted` → interrupted, `error`/`length` → failed).
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex as StdMutex};
@@ -26,10 +27,82 @@ use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Host calls in flight: our call id (a string, pi's own shape) →
+/// response waiter. A call that gives up (failed write, timeout) removes
+/// its own entry, or the map pins dead senders for the session's life
+/// (harness audit F15).
+struct PendingCalls {
+    map: StdMutex<HashMap<String, oneshot::Sender<Value>>>,
+}
+
+impl PendingCalls {
+    fn new() -> Self {
+        Self {
+            map: StdMutex::new(HashMap::new()),
+        }
+    }
+
+    fn register(&self, id: String, waiter: oneshot::Sender<Value>) {
+        self.map.lock().unwrap().insert(id, waiter);
+    }
+
+    /// Give up on a call: no response can arrive for a frame that never
+    /// left or a waiter that timed out, so the entry must not linger
+    /// (harness audit F15).
+    fn abandon(&self, id: &str) {
+        self.map.lock().unwrap().remove(id);
+    }
+
+    /// Hand a `response` frame to the waiter registered for its id, if
+    /// any.
+    fn deliver(&self, id: &str, frame: Value) -> bool {
+        match self.map.lock().unwrap().remove(id) {
+            Some(waiter) => waiter.send(frame).is_ok(),
+            None => false,
+        }
+    }
+
+    /// Wait one call out. The timeout abandons the call's entry before
+    /// returning the error, never after (harness audit F15).
+    async fn await_response(
+        &self,
+        id: &str,
+        rx: oneshot::Receiver<Value>,
+        method: &str,
+        timeout: Duration,
+    ) -> Result<Value, DriverError> {
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(response)) => {
+                if response.get("success") == Some(&json!(true)) {
+                    Ok(response.get("data").cloned().unwrap_or(Value::Null))
+                } else {
+                    Err(DriverError::Harness(format!(
+                        "pi rejected {method}: {}",
+                        response
+                            .get("error")
+                            .and_then(Value::as_str)
+                            .unwrap_or("no message")
+                    )))
+                }
+            }
+            Ok(Err(_)) => Err(DriverError::Gone),
+            Err(_) => {
+                self.abandon(id);
+                Err(DriverError::Protocol(format!("{method} timed out")))
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.map.lock().unwrap().is_empty()
+    }
+}
+
 struct Shared {
     child: Arc<AsyncMutex<Child>>,
-    /// call id (string) → response waiter
-    pending: StdMutex<HashMap<String, oneshot::Sender<Value>>>,
+    /// Host calls in flight, keyed by pi's own string call id.
+    pending: PendingCalls,
 }
 
 pub struct Driver {
@@ -93,10 +166,10 @@ impl Driver {
             .take()
             .ok_or_else(|| DriverError::Spawn("stderr not piped".into()))?;
 
-        let (tx, rx) = mpsc::channel(256);
+        let (tx, mut rx) = mpsc::channel(256);
         let shared = Arc::new(Shared {
             child: Arc::new(AsyncMutex::new(child)),
-            pending: StdMutex::new(HashMap::new()),
+            pending: PendingCalls::new(),
         });
         tokio::spawn(read_stdout(
             BufReader::new(stdout),
@@ -107,38 +180,61 @@ impl Driver {
 
         let mut driver = Self {
             stdin,
-            shared,
+            shared: Arc::clone(&shared),
             next_id: 1,
         };
 
-        // get_state names the conversation (cloudroom lines 126-151).
-        let state = driver
-            .call("get_state", json!({}))
-            .await
-            .map_err(|e| DriverError::Protocol(format!("pi get_state failed: {e}")))?;
-        let session_id = state
-            .get("sessionId")
-            .and_then(Value::as_str)
-            .ok_or_else(|| DriverError::Protocol("pi reported no session id".into()))?
-            .to_string();
-        if let Some(expected) = &opts.resume {
-            if &session_id != expected {
-                return Err(DriverError::Protocol(
-                    "pi resumed a different conversation".into(),
-                ));
+        // get_state names the conversation (cloudroom lines 126-151),
+        // raced against the death of the CLI process: a CLI that
+        // crashes at boot holds its exit status in the first second, and
+        // failing there beats burning the 60s call timeout on an answer
+        // that can never come (harness audit F13).
+        let boot = async {
+            let state = race_child_death(&shared, "get_state", driver.call("get_state", json!({})))
+                .await
+                .map_err(|e| DriverError::Protocol(format!("pi get_state failed: {e}")))?;
+            let session_id = state
+                .get("sessionId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| DriverError::Protocol("pi reported no session id".into()))?
+                .to_string();
+            if let Some(expected) = &opts.resume {
+                if &session_id != expected {
+                    return Err(DriverError::Protocol(
+                        "pi resumed a different conversation".into(),
+                    ));
+                }
             }
+            let model = state
+                .pointer("/model/id")
+                .and_then(Value::as_str)
+                .map(String::from);
+            let _ = tx
+                .send(DriverEvent::Initialized {
+                    session_ref: session_id,
+                    model,
+                    permission_mode: None,
+                })
+                .await;
+            Ok(())
+        };
+        if let Err(e) = boot.await {
+            // The CLI's dying words ride stderr; splice the tail into
+            // the failure so a broken install explains itself (harness
+            // audit F13), and a child that survived a rejected handshake
+            // must not outlive the session that never was.
+            let tail = stderr_tail(&mut rx).await;
+            discard_child(&shared).await;
+            let message = match e {
+                DriverError::Protocol(message) => message,
+                other => other.to_string(),
+            };
+            return Err(if tail.is_empty() {
+                DriverError::Protocol(message)
+            } else {
+                DriverError::Protocol(format!("{message}; {tail}"))
+            });
         }
-        let model = state
-            .pointer("/model/id")
-            .and_then(Value::as_str)
-            .map(String::from);
-        let _ = tx
-            .send(DriverEvent::Initialized {
-                session_ref: session_id,
-                model,
-                permission_mode: None,
-            })
-            .await;
         Ok((driver, rx))
     }
 
@@ -209,31 +305,23 @@ impl Driver {
         let id = self.next_id.to_string();
         self.next_id += 1;
         let (tx, rx) = oneshot::channel();
-        self.shared.pending.lock().unwrap().insert(id.clone(), tx);
+        self.shared.pending.register(id.clone(), tx);
         let mut frame = json!({"id": id, "type": method});
         if let Some(map) = params.as_object() {
             for (key, value) in map {
                 frame[key] = value.clone();
             }
         }
-        self.write(frame).await?;
-        match tokio::time::timeout(CALL_TIMEOUT, rx).await {
-            Ok(Ok(response)) => {
-                if response.get("success") == Some(&json!(true)) {
-                    Ok(response.get("data").cloned().unwrap_or(Value::Null))
-                } else {
-                    Err(DriverError::Harness(format!(
-                        "pi rejected {method}: {}",
-                        response
-                            .get("error")
-                            .and_then(Value::as_str)
-                            .unwrap_or("no message")
-                    )))
-                }
-            }
-            Ok(Err(_)) => Err(DriverError::Gone),
-            Err(_) => Err(DriverError::Protocol(format!("{method} timed out"))),
+        if let Err(e) = self.write(frame).await {
+            // The write failed: no response can ever arrive for this id,
+            // so the waiter must not linger in the map (harness audit F15).
+            self.shared.pending.abandon(&id);
+            return Err(e);
         }
+        self.shared
+            .pending
+            .await_response(&id, rx, method, CALL_TIMEOUT)
+            .await
     }
 
     async fn write(&mut self, value: Value) -> Result<(), DriverError> {
@@ -258,6 +346,57 @@ async fn kill_and_reap(
             Ok(status.code())
         }
     }
+}
+
+/// Race one handshake call against the death of the CLI process (harness
+/// audit F13). Holding the child lock for the race is safe here: nothing
+/// else takes it until spawn returns. When the call wins, the wait is
+/// simply dropped; when the process dies first, the exit status it
+/// already holds becomes the failure, in the first second instead of
+/// after the call timeout.
+async fn race_child_death<T>(
+    shared: &Arc<Shared>,
+    step: &str,
+    call: impl Future<Output = Result<T, DriverError>>,
+) -> Result<T, DriverError> {
+    let mut child = shared.child.lock().await;
+    tokio::select! {
+        result = call => result,
+        waited = child.wait() => Err(DriverError::Protocol(match waited {
+            Ok(status) => format!("pi exited during {step} ({status})"),
+            Err(e) => format!("pi exited during {step} (exit unreadable: {e})"),
+        })),
+    }
+}
+
+/// The CLI's dying words: the last stderr lines queued around the
+/// process's exit. Best effort with a short grace, since the stderr
+/// reader may still be draining when the failure is decided.
+async fn stderr_tail(rx: &mut mpsc::Receiver<DriverEvent>) -> String {
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(500);
+    let mut lines: Vec<String> = Vec::new();
+    while tokio::time::Instant::now() < deadline {
+        match rx.try_recv() {
+            Ok(DriverEvent::Stderr { line }) => {
+                lines.push(line);
+                if lines.len() > 4 {
+                    lines.remove(0);
+                }
+            }
+            Ok(_) => {}
+            Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+        }
+    }
+    lines.join("; ")
+}
+
+/// A child that outlived a failed handshake must not outlive the session
+/// that never was: kill and reap, best effort, leaving the original
+/// failure in place.
+async fn discard_child(shared: &Arc<Shared>) {
+    let mut child = shared.child.lock().await;
+    let _ = child.start_kill();
+    let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
 }
 
 /// pi's own outcome words from `message_end`.
@@ -365,9 +504,7 @@ async fn read_stdout(
         let event = match frame_type {
             "response" => {
                 if let Some(id) = frame.get("id").and_then(Value::as_str) {
-                    if let Some(waiter) = shared.pending.lock().unwrap().remove(id) {
-                        let _ = waiter.send(frame.clone());
-                    }
+                    shared.pending.deliver(id, frame.clone());
                 }
                 // A failed prompt response surfaces as a note.
                 if frame.get("command") == Some(&json!("prompt"))
@@ -496,5 +633,55 @@ async fn read_stderr(
         if tx.send(DriverEvent::Stderr { line }).await.is_err() {
             return;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_timed_out_call_leaves_no_waiter_behind() {
+        // F15: the entry must go when the timeout fires, not when (if
+        // ever) a response arrives for it.
+        let pending = PendingCalls::new();
+        let (tx, rx) = oneshot::channel();
+        pending.register("1".to_string(), tx);
+        let result = pending
+            .await_response("1", rx, "get_state", Duration::from_millis(50))
+            .await;
+        assert!(result.is_err());
+        assert!(pending.is_empty(), "the timed-out call leaked its waiter");
+    }
+
+    #[test]
+    fn an_abandoned_call_cannot_be_answered_late() {
+        // F15's write-failure path: the abandoned id drops any late
+        // response instead of waking a waiter that no longer exists.
+        let pending = PendingCalls::new();
+        let (tx, rx) = oneshot::channel();
+        pending.register("1".to_string(), tx);
+        pending.abandon("1");
+        assert!(pending.is_empty());
+        assert!(!pending.deliver(
+            "1",
+            json!({"type": "response", "id": "1", "command": "get_state", "success": true}),
+        ));
+        drop(rx);
+    }
+
+    #[test]
+    fn a_response_routes_to_its_own_waiter() {
+        let pending = PendingCalls::new();
+        let (tx, rx) = oneshot::channel();
+        pending.register("1".to_string(), tx);
+        assert!(pending.deliver(
+            "1",
+            json!({"type": "response", "id": "1", "command": "get_state",
+                   "success": true, "data": {"sessionId": "s-1"}}),
+        ));
+        let response = rx.blocking_recv().expect("the waiter got its response");
+        let expected = json!("s-1");
+        assert_eq!(response.pointer("/data/sessionId"), Some(&expected));
     }
 }

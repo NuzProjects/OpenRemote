@@ -6,7 +6,9 @@
 //! `extension_ui_response` (`{value}` or `{cancelled}`).
 //!
 //! Scenarios: `plain` completes without dialogs; `dialog` asks a
-//! select question mid-turn and reflects the answer.
+//! select question mid-turn and reflects the answer; `boot-crash`
+//! dies before answering `get_state` - the broken-install shape whose
+//! exit status is available in the first second (harness audit F13).
 
 use std::io::{BufRead, Write};
 
@@ -50,6 +52,15 @@ impl PiFixture {
     }
 
     fn run(&mut self) {
+        // The boot-crash knob: a CLI broken at boot never answers
+        // get_state. Exiting before the first frame is the observed shape
+        // of a missing DLL / expired auth crash - exit now, with the
+        // reason on stderr, so the driver's death race has the
+        // first-second truth to fail on (harness audit F13).
+        if self.scenario == "boot-crash" {
+            eprintln!("fixture-pi: crashed at boot: the install is broken");
+            return;
+        }
         let stdin = std::io::stdin();
         for line in stdin.lock().lines() {
             let line = match line {

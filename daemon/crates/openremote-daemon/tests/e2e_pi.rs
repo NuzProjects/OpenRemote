@@ -271,3 +271,52 @@ async fn pi_resumes_the_same_conversation() {
         dump(&events)
     );
 }
+
+/// A CLI that dies at boot must fail create in seconds, not after the
+/// 60s the unraced get_state call used to burn (harness audit F13).
+#[tokio::test]
+async fn a_boot_crashed_pi_fails_create_in_seconds_not_a_minute() {
+    let started = std::time::Instant::now();
+    let (daemon, ws) = pi_daemon(Some("boot-crash")).await;
+    let created = call(
+        &daemon,
+        "POST",
+        "/sessions",
+        Some(json!({"request_id": "pi-create", "harness": "pi", "workspace": ws.path()})),
+    )
+    .await;
+    assert_eq!(created.status, 201, "raw: {}", created.raw);
+    let id = created.body["id"].as_str().expect("session id").to_string();
+
+    // The session lands failed with the exit status and the CLI's dying
+    // words - never a hang, never a Working-forever create.
+    let events = until_kinds(
+        &daemon,
+        &format!("/sessions/{id}/events"),
+        &["session.status_changed"],
+    )
+    .await;
+    let failure = events
+        .iter()
+        .find(|(_, p)| kind(p) == "session.status_changed")
+        .expect("the terminal status");
+    assert_eq!(failure.1["status"], "failed", "events:\n{}", dump(&events));
+    let reason = failure.1["reason"].as_str().unwrap_or_default();
+    assert!(
+        reason.contains("exited during get_state"),
+        "the failure names the handshake step; got: {reason}"
+    );
+    assert!(
+        reason.contains("crashed at boot"),
+        "the CLI's dying stderr rides the failure; got: {reason}"
+    );
+    // The patience bound: the old code burned the full 60s call
+    // timeout. Fail in seconds.
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(20),
+        "create took {:?} - the death race did not fire",
+        started.elapsed()
+    );
+    let session = call(&daemon, "GET", &format!("/sessions/{id}"), None).await;
+    assert_eq!(session.body["status"], "failed", "raw: {}", session.raw);
+}
