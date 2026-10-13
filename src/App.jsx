@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Sidebar from './Sidebar.jsx'
 import TitleBar from './TitleBar.jsx'
 import NewChat from './NewChat.jsx'
@@ -13,6 +13,7 @@ import { ConsoleProvider, useConsole } from './state/console.jsx'
 import { needsSignIn } from './cloud.js'
 import CloudNotices from './CloudNotices.jsx'
 import { isMobile } from './platform.js'
+import { hashWriteReady } from './settings.js'
 import { Archive, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Copy, X } from '@phosphor-icons/react'
 import { pushBack, useBack } from './use-back.js'
 import SplitArea from './SplitArea.jsx'
@@ -101,6 +102,23 @@ function Shell() {
     mq.addEventListener('change', onChange)
     return () => mq.removeEventListener('change', onChange)
   }, [])
+  // The startup preference plants the last view in the hash before first
+  // paint (restoreBootPrefs in settings.js). A static seed validates
+  // right here, but a chat id cannot - the session list is empty until
+  // the first poll beat - so the seed is held as state until a beat
+  // answers or the user navigates. The [sessions] reconcile below
+  // consumes the seeded hash once a beat lands, and the hash-write
+  // effect holds off until then (hashWriteReady). Null when the boot
+  // hash is empty or static: nothing needs holding.
+  const [bootSeed, setBootSeed] = useState(() => {
+    const bootHash = location.hash.replace(/^#/, '')
+    return bootHash && !STATIC_VIEWS.includes(bootHash) ? bootHash : null
+  })
+  // The sessions list the shell mounted with (the console's initial
+  // empty one): any later identity is a beat's answer, and that answer
+  // is the hold's release.
+  const mountSessionsRef = useRef(sessions)
+  const [sessionsAnswered, setSessionsAnswered] = useState(false)
   const [{ history, hIndex }, setNav] = useState(() => loadViewState([]))
   // Split panes: more chats beside the primary view, Local and Cloud alike.
   // The primary pane follows the history above; the others hold their own.
@@ -166,6 +184,12 @@ function Shell() {
   // that no longer exists falls back to New chat). A chat reached by hash
   // still needs its record - ensure it, the same as a sidebar open.
   useEffect(() => {
+    // The first beat's answer (a new sessions identity - the mount-time
+    // list is the console's initial empty one, not an answer) marks the
+    // session list as loaded. This run reads the still-seeded hash
+    // against the real list, which is the seed's consumption; from here
+    // the hash-write effect may run again (hashWriteReady).
+    if (sessions !== mountSessionsRef.current) setSessionsAnswered(true)
     const state = loadViewState(sessions)
     setNav(state)
     const view = state.history[state.hIndex]
@@ -188,6 +212,15 @@ function Shell() {
   }, [history, hIndex])
 
   useEffect(() => {
+    // This effect runs on mount, and its replaceState would clobber a
+    // boot-seeded chat id to #new before any session beat arrived to
+    // validate it (the [sessions] reconcile above is the hash's only
+    // reader), stamping 'new' over the last-view record too. So it
+    // holds until the seed is resolved: a beat answered, or no seed is
+    // pending (never planted, or the user navigated). The rule lives in
+    // hashWriteReady so it is tested.
+    if (!hashWriteReady({ sessionsLoaded: sessionsAnswered, seedConsumed: bootSeed === null }))
+      return
     // Keep the entry's state: on a phone it is a back step.
     window.history.replaceState(window.history.state, '', `#${view}`)
     // The last view the user was on, for the startup preference's
@@ -200,9 +233,13 @@ function Shell() {
         /* storage unavailable */
       }
     }
-  }, [view, onboarded])
+  }, [view, onboarded, sessionsAnswered, bootSeed])
 
   const navigate = (id) => {
+    // The user's click supersedes the boot seed - release the hash hold
+    // so the write effect reflects where they chose to go. Even a click
+    // landing on the current view is their intent.
+    setBootSeed(null)
     if (id === view) return
     setNav((nav) => ({
       history: [...nav.history.slice(0, nav.hIndex + 1), id],
@@ -225,10 +262,14 @@ function Shell() {
   }
 
   function goBack() {
+    // Back and forward are the user's navigation too - the seed gives way.
+    setBootSeed(null)
     setNav((nav) => ({ ...nav, hIndex: Math.max(0, nav.hIndex - 1) }))
   }
-  const goForward = () =>
+  const goForward = () => {
+    setBootSeed(null)
     setNav((nav) => ({ ...nav, hIndex: Math.min(nav.history.length - 1, nav.hIndex + 1) }))
+  }
 
   // Opening a chat from the sidebar: make sure its record exists even
   // before the next session poll.

@@ -66,6 +66,20 @@ export function restoreBootPrefs(doc, loc = window.location) {
   }
 }
 
+// Whether the shell's hash-write effect may run yet. The seed above can
+// be a chat id, which only the session list can validate - and that
+// list is empty until the console's first poll beat - so the [sessions]
+// reconcile (the hash's only reader) must consume the seed before the
+// write effect replaceState's #new over it and stamps 'new' into the
+// last-view record. Two things release the hold: a session beat having
+// answered (any list the console set after mount, even an empty one -
+// an answer is an answer), or the seed being consumed already (nothing
+// was planted, or the user navigated, which supersedes it). Pure, so
+// the hold's rule is tested without a DOM.
+export function hashWriteReady({ sessionsLoaded = false, seedConsumed = false } = {}) {
+  return sessionsLoaded || seedConsumed
+}
+
 // Recently used workspace folders - one shared parse instead of a copy
 // per view. Capped and deduped on write, most recent first.
 export function loadRecentWorkspaces() {

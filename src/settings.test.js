@@ -17,6 +17,7 @@ const {
   applyReduceMotion,
   applyDensity,
   restoreBootPrefs,
+  hashWriteReady,
   loadRecentWorkspaces,
   pushRecentWorkspace,
 } = await import('./settings.js')
@@ -111,6 +112,24 @@ test('restoreBootPrefs seeds the hash only when asked and only when empty', () =
   const loc4 = { hash: '' }
   restoreBootPrefs(doc, loc4)
   assert.equal(loc4.hash, '#nonsense-view')
+})
+
+test('hashWriteReady holds while a chat seed waits for its first session beat', () => {
+  // The boot the fix exists for: a chat id is seeded, no poll has
+  // answered yet - the write effect must not clobber the hash.
+  assert.equal(hashWriteReady({ sessionsLoaded: false, seedConsumed: false }), false)
+
+  // The first beat answers (even an empty list): the reconcile consumes
+  // the seed on that beat, so the write effect may run again.
+  assert.equal(hashWriteReady({ sessionsLoaded: true, seedConsumed: false }), true)
+
+  // No seed pending - a static seed validates at mount, nothing was
+  // planted, or the user navigated past it: immediate, as before the fix.
+  assert.equal(hashWriteReady({ sessionsLoaded: false, seedConsumed: true }), true)
+  assert.equal(hashWriteReady({ sessionsLoaded: true, seedConsumed: true }), true)
+
+  // Bare defaults are the closed hold.
+  assert.equal(hashWriteReady(), false)
 })
 
 test('recents parse garbage, filter non-strings, and cap at eight', () => {
