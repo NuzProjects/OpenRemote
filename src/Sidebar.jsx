@@ -16,7 +16,6 @@ import {
   MagnifyingGlass,
   Plus,
   PuzzlePiece,
-  SplitHorizontal,
   TrashSimple,
   X,
 } from '@phosphor-icons/react'
@@ -134,18 +133,6 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
           title={row.offline ? `${row.device} is offline` : undefined}
         />
       </button>
-      {/* Opens the chat in a new pane beside the one in focus. */}
-      {onSplit && !isMobile && (
-        <button
-          type="button"
-          className="chat-split"
-          title="Open beside"
-          aria-label={`Open ${row.title} beside`}
-          onClick={() => onSplit(row.id)}
-        >
-          <SplitHorizontal size={12} />
-        </button>
-      )}
       {/* Archive hides the chat from this list; Settings keeps it. */}
       <button
         type="button"
