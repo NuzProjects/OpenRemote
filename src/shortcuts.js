@@ -60,8 +60,21 @@ export const ACTIONS = [
   { id: 'close-pane', group: 'layout', label: 'Close the pane', keys: 'Mod+W' },
 ]
 
+// macOS keeps Cmd+H (hide), Cmd+M (minimize) and Cmd+W (close the
+// window) for itself, so those three actions default to Option+Cmd there.
+const MAC_KEYS = {
+  'pick-harness': 'Mod+Alt+H',
+  'pick-model': 'Mod+Alt+M',
+  'close-pane': 'Mod+Alt+W',
+}
+
 const ACTION_IDS = new Set(ACTIONS.map((a) => a.id))
-const DEFAULTS = Object.fromEntries(ACTIONS.map((a) => [a.id, a.keys]))
+
+// The default key for an action on this platform.
+export function defaultKey(id, mac = false) {
+  if (mac && Object.hasOwn(MAC_KEYS, id)) return MAC_KEYS[id]
+  return ACTIONS.find((a) => a.id === id)?.keys ?? null
+}
 
 const MOD_ORDER = ['Mod', 'Ctrl', 'Alt', 'Shift']
 
@@ -193,7 +206,7 @@ export function saveOverrides(overrides) {
 // Every action's live combo: the user's choice where they made one, else
 // the default - but a default never shares a key with a user's choice
 // (the user's choice wins; the default is shadowed to unbound).
-export function effectiveBindings(overrides) {
+export function effectiveBindings(overrides, mac = false) {
   const out = {}
   const taken = new Set()
   for (const a of ACTIONS) {
@@ -204,7 +217,8 @@ export function effectiveBindings(overrides) {
   }
   for (const a of ACTIONS) {
     if (Object.hasOwn(out, a.id)) continue
-    out[a.id] = a.keys && !taken.has(a.keys) ? a.keys : null
+    const key = defaultKey(a.id, mac)
+    out[a.id] = key && !taken.has(key) ? key : null
     if (out[a.id]) taken.add(out[a.id])
   }
   return out
@@ -218,8 +232,8 @@ export function actionForCombo(bindings, combo) {
 // Taking a key another action holds moves it: the new action gets the
 // key, the other is left unbound. Returns the new overrides and the
 // actions that lost their key (for the "moved from" message).
-export function rebind(overrides, actionId, combo) {
-  const before = effectiveBindings(overrides)
+export function rebind(overrides, actionId, combo, mac = false) {
+  const before = effectiveBindings(overrides, mac)
   const displaced = Object.keys(before).filter((id) => id !== actionId && before[id] === combo)
   const next = { ...overrides, [actionId]: combo }
   for (const id of displaced) next[id] = null
@@ -232,12 +246,12 @@ export function unbind(overrides, actionId) {
 
 // Back to the default key. If another action took that key meanwhile, it
 // gives it back and is left unbound - the same rule as a rebind.
-export function resetOne(overrides, actionId) {
+export function resetOne(overrides, actionId, mac = false) {
   const next = { ...overrides }
   delete next[actionId]
-  const key = DEFAULTS[actionId]
+  const key = defaultKey(actionId, mac)
   if (!key) return next
-  const live = effectiveBindings(next)
+  const live = effectiveBindings(next, mac)
   if (live[actionId] === key) return next
   for (const [id, combo] of Object.entries(live)) {
     if (id !== actionId && combo === key) next[id] = null

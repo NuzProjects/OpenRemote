@@ -4,7 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import AboutModal from './AboutModal.jsx'
 import { useConsole } from './state/console.jsx'
 import { isMobile } from './platform.js'
-import { useHint } from './keyboard.jsx'
+import { isMac, useHint } from './keyboard.jsx'
 import './titlebar.css'
 
 const hasTauri = typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__
@@ -12,6 +12,11 @@ const hasTauri = typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__
 // Windows draws its caption glyphs from Segoe MDL2 (the contract). Other
 // systems don't have that font, so the same 10px shapes are drawn here.
 const MDL2 = typeof navigator !== 'undefined' && /Windows/.test(navigator.userAgent)
+
+// macOS draws its own traffic lights over the bar's left end (the overlay
+// titlebar, tauri.macos.conf.json), so the bar leaves them room and has
+// no caption buttons of its own there.
+const MAC = isMac && !isMobile
 
 function CaptionGlyph({ kind }) {
   return (
@@ -112,7 +117,7 @@ export default function TitleBar({
   }
 
   return (
-    <header className="titlebar" data-tauri-drag-region>
+    <header className={MAC ? 'titlebar is-mac' : 'titlebar'} data-tauri-drag-region>
       <div className="tb-left" data-tauri-drag-region>
         {onToggleSidebar && (
           <button
@@ -148,6 +153,7 @@ export default function TitleBar({
           <Info size={12} />
         </button>
       </div>
+      {!MAC && (
       <div className="tb-controls">
         <button className="tb-btn" onClick={action('minimize')} title="Minimize">
           {MDL2 ? '\uE921' : <CaptionGlyph kind="minimize" />}
@@ -163,6 +169,7 @@ export default function TitleBar({
           {MDL2 ? '\uE8BB' : <CaptionGlyph kind="close" />}
         </button>
       </div>
+      )}
       {about && <AboutModal onClose={() => setAbout(false)} daemonVersion={capabilities?.daemon ?? null} />}
     </header>
   )

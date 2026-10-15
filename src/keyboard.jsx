@@ -35,7 +35,7 @@ const KeyboardContext = createContext(null)
 
 export function KeyboardProvider({ children }) {
   const [overrides, setOverrides] = useState(loadOverrides)
-  const bindings = useMemo(() => effectiveBindings(overrides), [overrides])
+  const bindings = useMemo(() => effectiveBindings(overrides, isMac), [overrides])
   const bindingsRef = useRef(bindings)
   bindingsRef.current = bindings
   const handlers = useRef(new Map())
@@ -114,12 +114,12 @@ export function KeyboardProvider({ children }) {
         capturing.current = on
       },
       rebind: (id, combo) => {
-        const { overrides: next, displaced } = rebind(overrides, id, combo)
+        const { overrides: next, displaced } = rebind(overrides, id, combo, isMac)
         commit(next)
         return displaced
       },
       unbind: (id) => commit(unbind(overrides, id)),
-      reset: (id) => commit(resetOne(overrides, id)),
+      reset: (id) => commit(resetOne(overrides, id, isMac)),
       resetAll: () => commit({}),
     }),
     [bindings, overrides, run, available, source, register, commit],

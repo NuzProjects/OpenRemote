@@ -23,6 +23,7 @@ const {
   resetOne,
   fuzzyScore,
   rankMatches,
+  defaultKey,
 } = await import('./shortcuts.js')
 
 const key = (code, mods = {}) => ({
@@ -140,4 +141,20 @@ test('fuzzy ranking: whole words beat scattered letters, misses drop', () => {
   assert.equal(ranked[0], 'Switch to Opus 5.5')
   // `op` as letters still finds Open plugins; Haiku has no o-p in order.
   assert.deepEqual(rankMatches('op', ['Haiku 5.5', 'Open plugins'], (s) => s), ['Open plugins'])
+})
+
+test('macOS keeps its own Cmd+H, Cmd+M and Cmd+W: those defaults move to Option+Cmd', () => {
+  const mac = effectiveBindings({}, true)
+  assert.equal(mac['pick-harness'], 'Mod+Alt+H')
+  assert.equal(mac['pick-model'], 'Mod+Alt+M')
+  assert.equal(mac['close-pane'], 'Mod+Alt+W')
+  // Everywhere else they stay where they were.
+  assert.equal(effectiveBindings({}, false)['pick-model'], 'Mod+M')
+  // No two mac defaults collide either.
+  const keys = Object.values(mac).filter(Boolean)
+  assert.equal(new Set(keys).size, keys.length)
+  // A reset on a Mac lands on the Mac default.
+  assert.equal(defaultKey('close-pane', true), 'Mod+Alt+W')
+  const moved = rebind({}, 'stop', 'Mod+Alt+W', true).overrides
+  assert.equal(effectiveBindings(resetOne(moved, 'close-pane', true), true)['close-pane'], 'Mod+Alt+W')
 })

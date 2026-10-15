@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- The placeholder app icon, at full resolution: the same dark circle
+       the 32-256px PNGs carry. `npx tauri icon src-tauri/icons/app-icon.svg`
+       regenerates every size from it; swap this file for the real mark. -->
+  <circle cx="512" cy="512" r="368" fill="#0f1216"/>
+</svg>

@@ -142,3 +142,8 @@
 .tb-split {
   display: block;
 }
+
+/* macOS: the system's traffic lights sit over the bar's left end */
+.titlebar.is-mac .tb-left {
+  padding-left: 76px;
+}
