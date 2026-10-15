@@ -316,26 +316,43 @@ async fn the_daemons_exit_sweep_takes_the_serve_child_with_it() {
     }
 }
 
-/// The fixture-agent processes running right now, as PIDs (Windows
-/// tasklist; the suite is Windows-first and CI runs it there).
+/// The fixture-agent processes running right now, as PIDs. Windows
+/// tasklist speaks CSV; elsewhere pgrep lists them (exit 1 when none
+/// match, which output() still returns) - the CI runners carry both.
 async fn fixture_agent_pids() -> Vec<String> {
     let name = if cfg!(windows) {
         "fixture-agent.exe"
     } else {
         "fixture-agent"
     };
-    let output = std::process::Command::new("tasklist")
-        .args(["/FI", &format!("IMAGENAME eq {name}"), "/FO", "CSV", "/NH"])
-        .output()
-        .expect("tasklist runs");
+    let output = if cfg!(windows) {
+        std::process::Command::new("tasklist")
+            .args(["/FI", &format!("IMAGENAME eq {name}"), "/FO", "CSV", "/NH"])
+            .output()
+            .expect("tasklist runs")
+    } else {
+        std::process::Command::new("pgrep")
+            .arg("-f")
+            .arg(name)
+            .output()
+            .expect("pgrep runs")
+    };
     let text = String::from_utf8_lossy(&output.stdout).to_string();
-    text.lines()
-        .filter(|line| line.contains(&format!("\"{name}\"")))
-        .filter_map(|line| {
-            // CSV: "name","pid",...
-            line.split(',')
-                .nth(1)
-                .map(|pid| pid.trim_matches('"').to_string())
-        })
-        .collect()
+    if cfg!(windows) {
+        text.lines()
+            .filter(|line| line.contains(&format!("\"{name}\"")))
+            .filter_map(|line| {
+                // CSV: "name","pid",...
+                line.split(',')
+                    .nth(1)
+                    .map(|pid| pid.trim_matches('"').to_string())
+            })
+            .collect()
+    } else {
+        // One PID per line, nothing to parse out.
+        text.lines()
+            .map(|line| line.trim().to_string())
+            .filter(|pid| !pid.is_empty())
+            .collect()
+    }
 }
