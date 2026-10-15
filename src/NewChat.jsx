@@ -331,7 +331,6 @@ export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false
                     items={models.map((m) => ({
                       id: m.model,
                       name: m.display_name ?? m.model,
-                      reasoning_efforts: m.reasoning_efforts,
                     }))}
                     groups={null}
                     selectedId={model ?? ''}
@@ -342,13 +341,6 @@ export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false
                     }}
                     onClose={() => setPicker(null)}
                     anchor={{ left: picker.x, top: picker.y }}
-                    renderSubline={(m) =>
-                      m.reasoning_efforts?.length ? (
-                        <span className="nc-item-sub">
-                          {m.reasoning_efforts.join(' · ')}
-                        </span>
-                      ) : null
-                    }
                   />
                 )}
                 {effortTiers.length > 0 && (

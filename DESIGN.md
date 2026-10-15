@@ -204,8 +204,10 @@ Every screen the design specifies, backed by the real daemon:
   all six harnesses, each installable through its owner's own installer
   on Windows, macOS, and Linux - the command stays the daemon's, never
   shown; pi's Node.js is set up only after a calm go-ahead),
-  model picker where the harness advertises (its own catalog, efforts as
-  sublines), the Fast toggle where the harness's own fast mode is usable
+  model picker where the harness advertises (its own catalog, the model
+  names alone - the effort picker offers the chosen model's own tiers
+  right after, so the model rows carry no tier sublines), the Fast toggle
+  where the harness's own fast mode is usable
   (claude `fastMode` ≥ 2.1.205, codex `fast` service tier ≥ 0.110), the
   project picker (the registered projects on the machine the chat runs
   on, "No project", and the picker's own Add project row; the Add project
