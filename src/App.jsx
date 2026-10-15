@@ -9,6 +9,9 @@ import SettingsView from './SettingsView.jsx'
 import PluginsView from './PluginsView.jsx'
 import AutomationsView from './AutomationsView.jsx'
 import MachinesView from './MachinesView.jsx'
+import AccountView from './AccountView.jsx'
+import MobileView from './MobileView.jsx'
+import MetricsView from './MetricsView.jsx'
 import { ConsoleProvider, useConsole } from './state/console.jsx'
 import { needsSignIn } from './cloud.js'
 import CloudNotices from './CloudNotices.jsx'
@@ -37,7 +40,7 @@ const OB_KEY = 'openremote-onboarded'
 const STORE_KEY = 'openremote-view-state'
 const MODE_KEY = 'openremote-mode'
 const SPLIT_KEY = 'openremote-split-layout'
-const STATIC_VIEWS = ['new', 'plugins', 'automations', 'machines', 'settings']
+const STATIC_VIEWS = ['new', 'plugins', 'automations', 'machines', 'settings', 'account', 'mobile', 'metrics']
 
 // The mode the user left the app in. Local unless they chose Cloud, so a
 // first launch never asks anyone to sign in. A phone runs no chats of its
@@ -399,10 +402,26 @@ function Shell() {
   }, [])
   useBack(narrow && sidebarOpen, () => setSidebarOpen(false))
 
+  // Account's devices row crosses to Machines, which is Cloud's view -
+  // the crossover switches the mode too, so the button never lands dead.
+  const openMachines = () => {
+    if (mode !== 'cloud') switchMode('cloud')
+    navigate('machines')
+  }
+
   // What the primary pane shows: the view the app's navigation points at.
+  // The footer's views - settings, account, mobile, metrics - render
+  // before Cloud's sign-in door: each carries its own signed-out state,
+  // so its icon never lands somewhere else.
   const primaryContent = (
     view === 'settings' ? (
     <SettingsView onReplay={replayOnboarding} onOpenChat={openSession} />
+  ) : view === 'account' ? (
+    <AccountView onOpenMachines={openMachines} />
+  ) : view === 'mobile' ? (
+    <MobileView onOpenChat={openSession} />
+  ) : view === 'metrics' ? (
+    <MetricsView />
   ) : mode === 'cloud' && needsSignIn(cloud) ? (
     <CloudMode onBackToLocal={isMobile ? null : () => switchMode('local')} />
   ) : (

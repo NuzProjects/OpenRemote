@@ -6,10 +6,12 @@ import {
   ArrowRight,
   ArrowUp,
   CaretDown,
+  ChartBar,
   ChatCircle,
   Cloud,
   Copy,
   Desktop,
+  DeviceMobile,
   GearSix,
   House,
   Lightning,
@@ -17,6 +19,7 @@ import {
   Plus,
   PuzzlePiece,
   TrashSimple,
+  UserCircle,
   X,
 } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
@@ -307,14 +310,50 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
       </nav>
 
       <footer className="sb-foot">
-        {/* Settings is a view like the others - the gear navigates to it. */}
-        <button
-          className={`settings-btn${active === 'settings' ? ' on' : ''}`}
-          onClick={() => onSelect('settings')}
-        >
-          <GearSix size={15} />
-          Settings
-        </button>
+        {/* The footer's views, as icons: account, mobile, metrics, then
+            settings. Each opens its view in the primary pane. */}
+        <div className="sb-foot-row" role="group" aria-label="Account, mobile, metrics, settings">
+          <button
+            type="button"
+            className={`sb-icon-btn${active === 'account' ? ' on' : ''}`}
+            aria-pressed={active === 'account'}
+            title="Account"
+            aria-label="Account"
+            onClick={() => onSelect('account')}
+          >
+            <UserCircle size={17} />
+          </button>
+          <button
+            type="button"
+            className={`sb-icon-btn${active === 'mobile' ? ' on' : ''}`}
+            aria-pressed={active === 'mobile'}
+            title="Mobile"
+            aria-label="Mobile"
+            onClick={() => onSelect('mobile')}
+          >
+            <DeviceMobile size={17} />
+          </button>
+          <button
+            type="button"
+            className={`sb-icon-btn${active === 'metrics' ? ' on' : ''}`}
+            aria-pressed={active === 'metrics'}
+            title="Metrics"
+            aria-label="Metrics"
+            onClick={() => onSelect('metrics')}
+          >
+            <ChartBar size={17} />
+          </button>
+          <button
+            type="button"
+            className={`sb-icon-btn${active === 'settings' ? ' on' : ''}`}
+            aria-pressed={active === 'settings'}
+            title="Settings"
+            aria-label="Settings"
+            onClick={() => onSelect('settings')}
+          >
+            <GearSix size={17} />
+          </button>
+        </div>
       </footer>
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.row)} onClose={() => setMenu(null)} />
