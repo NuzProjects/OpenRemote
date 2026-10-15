@@ -35,8 +35,8 @@ function CaptionGlyph({ kind }) {
 function SplitGlyph() {
   return (
     <svg className="tb-split" width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <rect x="1.75" y="2.75" width="12.5" height="10.5" stroke="currentColor" strokeWidth="1.2" />
-      <path d="M8 2.75v10.5" stroke="currentColor" strokeWidth="1.2" />
+      <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5" stroke="currentColor" strokeWidth="1.2" />
+      <path d="M8 2.75v10.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
     </svg>
   )
 }
