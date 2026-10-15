@@ -534,11 +534,10 @@ button.side-tile:active {
 }
 
 /* The footer's icon row: account, mobile, metrics, settings - square
-   ghost buttons, right-aligned, the quietest chrome in the sidebar. */
+   ghost buttons, spaced evenly across the footer. */
 .sb-foot-row {
   display: flex;
-  justify-content: flex-end;
-  gap: 6px;
+  justify-content: space-evenly;
 }
 
 .sb-icon-btn {
