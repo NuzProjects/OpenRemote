@@ -37,11 +37,6 @@ async fn a_hand_written_plugin_lives_its_lifecycle() {
     let daemon = start_daemon(&[]).await;
     let machine = this_machine_id(&daemon).await;
 
-    // No curated catalog. The route stays so a client can ask; it answers empty.
-    let market = call(&daemon, "GET", "/mcp-servers/marketplace", None).await;
-    assert_eq!(market.status, 200, "raw: {}", market.raw);
-    assert_eq!(market.body.as_array().map(Vec::len), Some(0));
-
     // A plugin that needs no key rides immediately.
     let installed = call(
         &daemon,
@@ -209,7 +204,8 @@ async fn custom_plugins_carry_their_own_command_and_dedup() {
     .await;
     assert_eq!(bare.status, 422, "raw: {}", bare.raw);
 
-    // A catalog id names nothing - there is no curated catalog.
+    // There is no catalog to name an entry from: an MCP server is written
+    // by hand, and a body that names only a catalog id is incomplete.
     let unknown = call(
         &daemon,
         "POST",
@@ -220,7 +216,7 @@ async fn custom_plugins_carry_their_own_command_and_dedup() {
         )),
     )
     .await;
-    assert_eq!(unknown.status, 404, "raw: {}", unknown.raw);
+    assert_eq!(unknown.status, 422, "raw: {}", unknown.raw);
 }
 
 #[tokio::test]

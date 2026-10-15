@@ -24,6 +24,8 @@ pub struct App {
     /// The plugin folders on this machine and the installs awaiting an
     /// answer (Plugins).
     pub plugins: crate::plugins::PluginHost,
+    /// The marketplaces' cached catalogs (Plugins > Discover).
+    pub marketplaces: crate::marketplace::MarketplaceHost,
 }
 
 pub struct AppOptions {
@@ -58,12 +60,19 @@ impl App {
             if id.is_some() && store.this_device() != id {
                 let _ = store.set_this_device(id);
             }
+            // OpenRemote's own marketplace and Anthropic's directory, each
+            // added once: fetched the first time Discover opens.
+            for preset in crate::marketplace::presets(openremote_core::now_ms()) {
+                let _ = store.seed_marketplace(preset);
+            }
         }
         let plugins = crate::plugins::PluginHost::new(&options.data_dir);
+        let marketplaces = crate::marketplace::MarketplaceHost::new(&options.data_dir);
         let app = Arc::new(Self {
             token: options.token,
             data_dir: options.data_dir,
             plugins,
+            marketplaces,
             store,
             supervisor,
             cloud,

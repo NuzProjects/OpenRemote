@@ -192,13 +192,23 @@ fn api_routes() -> Router<Arc<App>> {
             "/mcp-servers",
             get(list_mcp_servers).post(create_mcp_server),
         )
-        .route("/mcp-servers/marketplace", get(mcp_marketplace))
         .route("/plugins", get(list_plugins))
         .route("/plugins/stage", post(stage_plugin))
         .route("/plugins/stage/{id}/install", post(install_staged))
         .route("/plugins/stage/{id}/cancel", post(cancel_staged))
-        .route("/plugins/{name}/enabled", post(set_plugin_enabled))
-        .route("/plugins/{name}/remove", post(remove_plugin))
+        .route("/plugins/{id}/enabled", post(set_plugin_enabled))
+        .route("/plugins/{id}/remove", post(remove_plugin))
+        .route(
+            "/marketplaces",
+            get(list_marketplaces).post(add_marketplace),
+        )
+        .route("/marketplaces/catalog", get(marketplace_catalog))
+        .route("/marketplaces/{name}/refresh", post(refresh_marketplace))
+        .route(
+            "/marketplaces/{name}/enabled",
+            post(set_marketplace_enabled),
+        )
+        .route("/marketplaces/{name}/remove", post(remove_marketplace))
         .route(
             "/mcp-servers/{id}",
             axum::routing::delete(remove_mcp_server),
@@ -660,7 +670,8 @@ fn builtin_ids(app: &App) -> Vec<String> {
         .collect()
 }
 
-/// The six built-in harness plugins and what the user installed.
+/// The six built-in harness plugins and what the user installed, each
+/// installed one with its id (`name@marketplace`).
 async fn list_plugins(State(app): State<Arc<App>>) -> Response {
     let builtin: Vec<Value> = app
         .supervisor
@@ -677,17 +688,114 @@ async fn list_plugins(State(app): State<Arc<App>>) -> Response {
             })
         })
         .collect();
-    let installed: Vec<openremote_core::InstalledPlugin> = {
+    let installed: Vec<Value> = {
         let store = crate::supervisor::lock_recovering(&app.store);
-        store.installed_plugins().into_iter().cloned().collect()
+        store
+            .installed_plugins()
+            .into_iter()
+            .map(installed_json)
+            .collect()
     };
     Json(json!({"builtin": builtin, "installed": installed})).into_response()
+}
+
+/// An installed plugin as the console reads it: its record and its id.
+fn installed_json(plugin: &openremote_core::InstalledPlugin) -> Value {
+    let mut value = serde_json::to_value(plugin).unwrap_or(Value::Null);
+    if let Some(fields) = value.as_object_mut() {
+        fields.insert("id".into(), Value::String(plugin.id()));
+    }
+    value
 }
 
 #[derive(Deserialize)]
 struct StageBody {
     request_id: String,
     source: crate::plugins::SourceRequest,
+}
+
+/// What a stage request names, resolved: a fetch to stage, or - for a
+/// `command` entry whose exact command the user has not approved yet - the
+/// command to show them first.
+enum Resolved {
+    Fetch(Box<crate::plugins::StageRequest>),
+    NeedsCommand(Value),
+}
+
+/// A direct source stages as it is; a marketplace entry through its
+/// catalog, as the entry names it.
+fn resolve_stage(
+    app: &App,
+    source: crate::plugins::SourceRequest,
+) -> Result<Resolved, PluginFailure> {
+    use crate::marketplace::{EntrySource, entry_source, read_catalog};
+    if let Some(direct) = source.direct() {
+        return Ok(Resolved::Fetch(Box::new(direct)));
+    }
+    let crate::plugins::SourceRequest::Marketplace {
+        marketplace,
+        plugin,
+        approve_command,
+    } = source
+    else {
+        unreachable!("direct() answers every other source");
+    };
+    let record = {
+        let store = crate::supervisor::lock_recovering(&app.store);
+        store.marketplace(&marketplace).cloned()
+    }
+    .map_err(|_| {
+        (
+            StatusCode::NOT_FOUND,
+            format!("no marketplace named {marketplace}"),
+        )
+    })?;
+    let catalog = read_catalog(&app.marketplaces.catalog_dir(&record)).map_err(|_| {
+        (
+            StatusCode::CONFLICT,
+            format!("{marketplace} has not been fetched yet - refresh it first"),
+        )
+    })?;
+    let entry = catalog.entry(&plugin).cloned().ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            format!("{marketplace} lists no plugin named {plugin}"),
+        )
+    })?;
+    let cannot = |why: String| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("{plugin} can't be installed: {why}"),
+        )
+    };
+    let source = entry_source(&entry, catalog.plugin_root.as_deref()).map_err(cannot)?;
+    if let EntrySource::Command {
+        command,
+        timeout_secs,
+    } = &source
+    {
+        if approve_command.as_deref() != Some(command.as_str()) {
+            return Ok(Resolved::NeedsCommand(json!({
+                "id": format!("{plugin}@{marketplace}"),
+                "command": command,
+                "timeout_secs": timeout_secs,
+            })));
+        }
+    }
+    let fetch = source
+        .fetch(app.marketplaces.files(&record).as_deref())
+        .map_err(cannot)?;
+    Ok(Resolved::Fetch(Box::new(crate::plugins::StageRequest {
+        fetch,
+        recorded: openremote_core::PluginSource::Marketplace {
+            marketplace: marketplace.clone(),
+            plugin: plugin.clone(),
+            from: source.describe(),
+        },
+        marketplace,
+        entry_name: Some(plugin),
+        entry: Some(entry),
+    })))
 }
 
 /// Fetch a plugin and read what it is - nothing is installed until the
@@ -697,24 +805,46 @@ async fn stage_plugin(State(app): State<Arc<App>>, Json(body): Json<StageBody>) 
     let task = {
         let app = Arc::clone(&app);
         async move {
-            let (stage_id, manifest) = app
+            let request = match resolve_stage(&app, body.source)? {
+                Resolved::NeedsCommand(command) => return Ok(json!({"needs_command": command})),
+                Resolved::Fetch(request) => *request,
+            };
+            let command = match &request.fetch {
+                crate::plugins::Fetch::Command(approved) => Some(approved.clone()),
+                _ => None,
+            };
+            let marketplace = request.marketplace.clone();
+            let (stage_id, manifest, name) = app
                 .plugins
-                .stage(body.source, ids)
+                .stage(request, ids)
                 .await
                 .map_err(plugin_failure)?;
-            let installed_version = {
+            let id = format!("{name}@{marketplace}");
+            let installed = {
                 let store = crate::supervisor::lock_recovering(&app.store);
-                store
-                    .installed_plugin(&manifest.name)
-                    .ok()
-                    .map(|p| p.version.clone().unwrap_or_default())
+                store.installed_plugin(&id).ok().cloned()
+            };
+            let new_powers: Vec<openremote_core::PluginPower> = match &installed {
+                Some(have) => manifest
+                    .powers
+                    .iter()
+                    .filter(|p| !have.powers.contains(p))
+                    .copied()
+                    .collect(),
+                None => Vec::new(),
             };
             Ok(json!({
                 "stage_id": stage_id,
+                "id": id,
+                "name": name,
+                "marketplace": marketplace,
                 "manifest": manifest,
-                // An install of a name already here replaces it - the
-                // approval screen says so.
-                "replaces": installed_version,
+                // An install of an id already here replaces it - the
+                // approval screen says so, and calls out any power the
+                // new version adds.
+                "replaces": installed.as_ref().map(|p| p.version.clone().unwrap_or_default()),
+                "new_powers": new_powers,
+                "command": command,
             }))
         }
     };
@@ -722,6 +852,7 @@ async fn stage_plugin(State(app): State<Arc<App>>, Json(body): Json<StageBody>) 
 }
 
 /// The user approved: move the staged plugin into place and record it.
+/// An update keeps the plugin on or off as it was.
 async fn install_staged(
     State(app): State<Arc<App>>,
     AxumPath(id): AxumPath<String>,
@@ -736,31 +867,36 @@ async fn install_staged(
                     "that install is no longer waiting - stage it again".to_string(),
                 )
             })?;
+            let plugin_id = staged.id();
             let manifest = staged.manifest.clone();
             let source = staged.source.clone();
+            let name = staged.name.clone();
+            let marketplace = staged.marketplace.clone();
+            let resolved = staged.resolved.clone();
+            let command = staged.command.clone();
             app.plugins.install(staged).map_err(plugin_failure)?;
             let now = openremote_core::now_ms();
             let mut store = crate::supervisor::lock_recovering(&app.store);
-            let installed_at = store
-                .installed_plugin(&manifest.name)
-                .map(|p| p.installed_at)
-                .unwrap_or(now);
+            let before = store.installed_plugin(&plugin_id).ok().cloned();
             let plugin = openremote_core::InstalledPlugin {
-                name: manifest.name,
+                name,
+                marketplace,
+                resolved,
+                command,
                 version: manifest.version,
                 description: manifest.description,
                 runtime: manifest.runtime,
                 powers: manifest.powers,
                 source,
                 scope: openremote_core::PluginScope::Machine,
-                enabled: true,
-                installed_at,
+                enabled: before.as_ref().is_none_or(|p| p.enabled),
+                installed_at: before.as_ref().map_or(now, |p| p.installed_at),
                 updated_at: now,
             };
             store
                 .put_installed_plugin(plugin.clone())
                 .map_err(store_failure)?;
-            Ok(serde_json::to_value(&plugin).unwrap_or(Value::Null))
+            Ok(installed_json(&plugin))
         }
     };
     receipted_plain(&app, body.request_id, task).await
@@ -784,28 +920,33 @@ struct PluginEnabledBody {
     enabled: bool,
 }
 
+/// A built-in harness's id has no `@`; an installed plugin's always does.
+fn is_builtin(app: &App, id: &str) -> bool {
+    !id.contains('@') && builtin_ids(app).iter().any(|b| b == id)
+}
+
 /// On or off. A built-in harness plugin that is off hides its harness from
 /// every picker; its chats keep working.
 async fn set_plugin_enabled(
     State(app): State<Arc<App>>,
-    AxumPath(name): AxumPath<String>,
+    AxumPath(id): AxumPath<String>,
     Json(body): Json<PluginEnabledBody>,
 ) -> Response {
-    let builtin = builtin_ids(&app).contains(&name);
+    let builtin = is_builtin(&app, &id);
     let task = {
         let app = Arc::clone(&app);
         async move {
             let mut store = crate::supervisor::lock_recovering(&app.store);
             if builtin {
                 store
-                    .set_builtin_enabled(&name, body.enabled)
+                    .set_builtin_enabled(&id, body.enabled)
                     .map_err(store_failure)?;
-                Ok(json!({"id": name, "enabled": body.enabled}))
+                Ok(json!({"id": id, "enabled": body.enabled}))
             } else {
                 let plugin = store
-                    .set_installed_plugin_enabled(&name, body.enabled)
+                    .set_installed_plugin_enabled(&id, body.enabled)
                     .map_err(store_failure)?;
-                Ok(serde_json::to_value(&plugin).unwrap_or(Value::Null))
+                Ok(installed_json(&plugin))
             }
         }
     };
@@ -815,32 +956,253 @@ async fn set_plugin_enabled(
 /// Uninstall: its folder and its record go. A built-in can only be off.
 async fn remove_plugin(
     State(app): State<Arc<App>>,
-    AxumPath(name): AxumPath<String>,
+    AxumPath(id): AxumPath<String>,
     Json(body): Json<RequestBody>,
 ) -> Response {
-    let builtin = builtin_ids(&app).contains(&name);
+    let builtin = is_builtin(&app, &id);
     let task = {
         let app = Arc::clone(&app);
         async move {
             if builtin {
                 return Err((
                     StatusCode::CONFLICT,
-                    format!("{name} is built in - turn it off instead"),
+                    format!("{id} is built in - turn it off instead"),
                 ));
             }
+            let plugin = {
+                let store = crate::supervisor::lock_recovering(&app.store);
+                store
+                    .installed_plugin(&id)
+                    .cloned()
+                    .map_err(store_failure)?
+            };
+            app.plugins
+                .uninstall(&plugin.marketplace, &plugin.name)
+                .map_err(plugin_failure)?;
+            let mut store = crate::supervisor::lock_recovering(&app.store);
+            store.remove_installed_plugin(&id).map_err(store_failure)?;
+            Ok(json!({"removed": id}))
+        }
+    };
+    receipted_plain(&app, body.request_id, task).await
+}
+
+// ---- marketplaces (Plugins > Discover, Marketplaces): this machine's own ----
+
+async fn list_marketplaces(State(app): State<Arc<App>>) -> Response {
+    let records: Vec<openremote_core::MarketplaceRecord> = {
+        let store = crate::supervisor::lock_recovering(&app.store);
+        store.marketplaces().into_iter().cloned().collect()
+    };
+    Json(records).into_response()
+}
+
+#[derive(Deserialize)]
+struct AddMarketplaceBody {
+    request_id: String,
+    /// As typed: `owner/repo`, a git URL, a folder, or a marketplace.json
+    /// link.
+    source: String,
+}
+
+/// Add a marketplace: fetch its catalog, check the name it gives itself,
+/// keep both.
+async fn add_marketplace(
+    State(app): State<Arc<App>>,
+    Json(body): Json<AddMarketplaceBody>,
+) -> Response {
+    let task = {
+        let app = Arc::clone(&app);
+        async move {
+            let source = crate::marketplace::parse_source(&body.source).map_err(plugin_failure)?;
+            let fetched = app
+                .marketplaces
+                .fetch(&source)
+                .await
+                .map_err(plugin_failure)?;
+            let name = fetched.catalog.name.clone();
+            crate::marketplace::check_name(&name, &source).map_err(plugin_failure)?;
             {
                 let store = crate::supervisor::lock_recovering(&app.store);
-                store.installed_plugin(&name).map_err(store_failure)?;
+                if store.marketplace(&name).is_ok() {
+                    return Err((
+                        StatusCode::CONFLICT,
+                        format!("a marketplace named {name} is already added"),
+                    ));
+                }
             }
-            app.plugins.uninstall(&name).map_err(plugin_failure)?;
+            let catalog = app
+                .marketplaces
+                .settle(&name, fetched)
+                .map_err(plugin_failure)?;
+            let now = openremote_core::now_ms();
+            let record = openremote_core::MarketplaceRecord {
+                name,
+                source,
+                enabled: true,
+                removable: true,
+                owner: catalog.owner,
+                description: catalog.description,
+                plugin_count: catalog.entries.len(),
+                added_at: now,
+                refreshed_at: Some(now),
+                error: None,
+                heads: Default::default(),
+            };
             let mut store = crate::supervisor::lock_recovering(&app.store);
             store
-                .remove_installed_plugin(&name)
+                .put_marketplace(record.clone())
                 .map_err(store_failure)?;
+            Ok(serde_json::to_value(&record).unwrap_or(Value::Null))
+        }
+    };
+    receipted_plain(&app, body.request_id, task).await
+}
+
+/// Fetch a marketplace's catalog again. A failed fetch keeps the cached
+/// copy serving Discover and says why on the record.
+async fn refresh_marketplace(
+    State(app): State<Arc<App>>,
+    AxumPath(name): AxumPath<String>,
+    Json(body): Json<RequestBody>,
+) -> Response {
+    let task = {
+        let app = Arc::clone(&app);
+        async move {
+            let (mut record, installed) = {
+                let store = crate::supervisor::lock_recovering(&app.store);
+                let record = store.marketplace(&name).cloned().map_err(store_failure)?;
+                let installed: Vec<openremote_core::InstalledPlugin> = store
+                    .installed_plugins()
+                    .into_iter()
+                    .filter(|p| p.marketplace == name)
+                    .cloned()
+                    .collect();
+                (record, installed)
+            };
+            record.refreshed_at = Some(openremote_core::now_ms());
+            match app.marketplaces.fetch(&record.source).await {
+                Ok(fetched) if fetched.catalog.name != record.name => {
+                    record.error = Some(format!(
+                        "its catalog now calls itself {}",
+                        fetched.catalog.name
+                    ));
+                }
+                Ok(fetched) => {
+                    let catalog = app
+                        .marketplaces
+                        .settle(&name, fetched)
+                        .map_err(plugin_failure)?;
+                    record.heads = crate::marketplace::followed_heads(&catalog, &installed).await;
+                    record.owner = catalog.owner;
+                    record.description = catalog.description;
+                    record.plugin_count = catalog.entries.len();
+                    record.error = None;
+                }
+                Err(e) => record.error = Some(e.to_string()),
+            }
+            let mut store = crate::supervisor::lock_recovering(&app.store);
+            // Removed while it fetched: stays removed.
+            if store.marketplace(&name).is_ok() {
+                store
+                    .put_marketplace(record.clone())
+                    .map_err(store_failure)?;
+            }
+            Ok(serde_json::to_value(&record).unwrap_or(Value::Null))
+        }
+    };
+    receipted_plain(&app, body.request_id, task).await
+}
+
+/// Off hides a marketplace from Discover; what was installed from it stays.
+async fn set_marketplace_enabled(
+    State(app): State<Arc<App>>,
+    AxumPath(name): AxumPath<String>,
+    Json(body): Json<PluginEnabledBody>,
+) -> Response {
+    let task = {
+        let app = Arc::clone(&app);
+        async move {
+            let mut store = crate::supervisor::lock_recovering(&app.store);
+            let mut record = store.marketplace(&name).cloned().map_err(store_failure)?;
+            record.enabled = body.enabled;
+            store
+                .put_marketplace(record.clone())
+                .map_err(store_failure)?;
+            Ok(serde_json::to_value(&record).unwrap_or(Value::Null))
+        }
+    };
+    receipted_plain(&app, body.request_id, task).await
+}
+
+/// Remove a marketplace. The plugins installed from it stay installed and
+/// keep working; they just get no more updates. OpenRemote's own can only
+/// be turned off.
+async fn remove_marketplace(
+    State(app): State<Arc<App>>,
+    AxumPath(name): AxumPath<String>,
+    Json(body): Json<RequestBody>,
+) -> Response {
+    let task = {
+        let app = Arc::clone(&app);
+        async move {
+            let record = {
+                let store = crate::supervisor::lock_recovering(&app.store);
+                store.marketplace(&name).cloned().map_err(store_failure)?
+            };
+            if !record.removable {
+                return Err((
+                    StatusCode::CONFLICT,
+                    format!("{name} is OpenRemote's own marketplace - turn it off instead"),
+                ));
+            }
+            app.marketplaces.forget(&record);
+            let mut store = crate::supervisor::lock_recovering(&app.store);
+            store.remove_marketplace(&name).map_err(store_failure)?;
             Ok(json!({"removed": name}))
         }
     };
     receipted_plain(&app, body.request_id, task).await
+}
+
+/// Every enabled marketplace's entries, as Discover shows them, from the
+/// cached catalogs - no network.
+async fn marketplace_catalog(State(app): State<Arc<App>>) -> Response {
+    let (records, installed) = {
+        let store = crate::supervisor::lock_recovering(&app.store);
+        let records: Vec<openremote_core::MarketplaceRecord> = store
+            .marketplaces()
+            .into_iter()
+            .filter(|r| r.enabled)
+            .cloned()
+            .collect();
+        let installed: Vec<openremote_core::InstalledPlugin> =
+            store.installed_plugins().into_iter().cloned().collect();
+        (records, installed)
+    };
+    let ids = builtin_ids(&app);
+    let reader = Arc::clone(&app);
+    let entries = tokio::task::spawn_blocking(move || {
+        let mut entries = Vec::new();
+        for record in &records {
+            let Ok(catalog) =
+                crate::marketplace::read_catalog(&reader.marketplaces.catalog_dir(record))
+            else {
+                continue;
+            };
+            entries.extend(crate::marketplace::entry_views(
+                record,
+                &catalog,
+                reader.marketplaces.files(record).as_deref(),
+                &installed,
+                &ids,
+            ));
+        }
+        entries
+    })
+    .await
+    .unwrap_or_default();
+    Json(json!({"entries": entries})).into_response()
 }
 
 // ---- MCP servers ----
@@ -849,16 +1211,10 @@ async fn list_mcp_servers(State(app): State<Arc<App>>) -> Response {
     Json(app.supervisor.mcp_server_entries()).into_response()
 }
 
-async fn mcp_marketplace() -> Response {
-    Json(crate::mcp_catalog::marketplace()).into_response()
-}
-
 #[derive(Deserialize)]
 struct CreateMcpServerBody {
     request_id: String,
     machine: String,
-    #[serde(default)]
-    catalog_id: Option<String>,
     #[serde(default)]
     name: Option<String>,
     #[serde(default)]
@@ -879,35 +1235,26 @@ async fn create_mcp_server(
     let Some(machine_id) = MachineId::parse(&body.machine) else {
         return error(StatusCode::BAD_REQUEST, "bad machine id");
     };
-    // A marketplace install names the entry; a custom one carries its own
-    // name, detail, and launch command.
-    let custom = match (
-        body.catalog_id.is_none(),
-        &body.name,
-        &body.detail,
-        &body.command,
-    ) {
-        (true, Some(name), Some(detail), Some(command)) => {
-            if name.trim().is_empty() || command.trim().is_empty() {
-                return error(
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    "an MCP server needs a name and a launch command",
-                );
-            }
-            Some((name.trim(), detail.trim(), command.trim(), body.needs_key))
-        }
-        (true, _, _, _) => {
-            return error(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "an MCP server needs a name, a detail, and a launch command",
-            );
-        }
-        _ => None,
+    // An MCP server is written by hand: its name, detail and launch command.
+    let (Some(name), Some(detail), Some(command)) = (&body.name, &body.detail, &body.command)
+    else {
+        return error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "an MCP server needs a name, a detail, and a launch command",
+        );
     };
+    if name.trim().is_empty() || command.trim().is_empty() {
+        return error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "an MCP server needs a name and a launch command",
+        );
+    }
     match app.supervisor.add_mcp_server(
         &machine_id,
-        body.catalog_id.as_deref(),
-        custom.as_ref().map(|(n, d, c, k)| (*n, *d, *c, *k)),
+        name.trim(),
+        detail.trim(),
+        command.trim(),
+        body.needs_key,
     ) {
         Ok(plugin) => {
             let receipt = Receipt {

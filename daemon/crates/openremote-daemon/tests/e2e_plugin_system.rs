@@ -177,10 +177,13 @@ async fn a_folder_plugin_is_staged_then_installed_only_on_approval() {
     let list = installed(&daemon).await;
     assert_eq!(list.len(), 1);
     assert_eq!(list[0]["name"], "toy");
+    // A direct install is filed under the marketplace name "local".
+    assert_eq!(list[0]["id"], "toy@local");
+    assert_eq!(list[0]["marketplace"], "local");
     assert_eq!(list[0]["source"]["kind"], "folder");
     assert_eq!(list[0]["scope"], "machine");
     assert_eq!(list[0]["enabled"], true);
-    let on_disk = daemon.data_dir().join("plugins").join("toy");
+    let on_disk = daemon.data_dir().join("plugins").join("local").join("toy");
     assert!(on_disk.join("openremote.json").is_file());
     assert!(
         on_disk
@@ -193,7 +196,7 @@ async fn a_folder_plugin_is_staged_then_installed_only_on_approval() {
     let off = call(
         &daemon,
         "POST",
-        "/plugins/toy/enabled",
+        "/plugins/toy@local/enabled",
         Some(json!({"request_id": "f-off", "enabled": false})),
     )
     .await;
@@ -203,7 +206,7 @@ async fn a_folder_plugin_is_staged_then_installed_only_on_approval() {
     let removed = call(
         &daemon,
         "POST",
-        "/plugins/toy/remove",
+        "/plugins/toy@local/remove",
         Some(json!({"request_id": "f-rm"})),
     )
     .await;
@@ -244,7 +247,7 @@ async fn a_git_repo_installs_without_its_history() {
     assert_eq!(install(&daemon, "g-install", id).await.status, 200);
     let list = installed(&daemon).await;
     assert_eq!(list[0]["source"]["kind"], "git");
-    let on_disk = daemon.data_dir().join("plugins").join("toy");
+    let on_disk = daemon.data_dir().join("plugins").join("local").join("toy");
     assert!(on_disk.join("openremote.json").is_file());
     assert!(!on_disk.join(".git").exists(), "the history stays behind");
 }
@@ -280,7 +283,7 @@ async fn a_zip_installs_with_its_top_folder_unwrapped() {
     assert!(
         daemon
             .data_dir()
-            .join("plugins/toy/openremote.json")
+            .join("plugins/local/toy/openremote.json")
             .is_file()
     );
 }

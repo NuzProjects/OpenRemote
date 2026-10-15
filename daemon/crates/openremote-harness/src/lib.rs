@@ -88,6 +88,10 @@ pub struct SpawnOptions {
     /// `mcp_servers.<id>.*` config overrides). A harness with no wire for
     /// them simply doesn't run plugins.
     pub mcp_servers: Vec<McpServer>,
+    /// The folders of the plugins the user installed and left on - Claude
+    /// Code's own plugin layout. claude loads each with `--plugin-dir`;
+    /// the other harnesses get them when plugins reach every harness.
+    pub plugin_dirs: Vec<PathBuf>,
 }
 
 /// One MCP server a session should start, from an enabled plugin on the

@@ -36,7 +36,8 @@ use crate::events::{Event, EventPayload};
 use crate::ids::{DecisionId, DeviceId, MachineId, ProjectId, RuleId, SessionId};
 use crate::model::{
     AutomationRule, Decision, DecisionState, InstalledPlugin, Machine, MachineStatus,
-    McpServerEntry, MessageRole, Project, Receipt, ReceiptStatus, Session, SessionStatus,
+    MarketplaceRecord, McpServerEntry, MessageRole, Project, Receipt, ReceiptStatus, Session,
+    SessionStatus,
 };
 
 #[derive(Debug, Error)]
@@ -111,12 +112,21 @@ struct State {
     /// plugin system took that name.
     #[serde(default, alias = "plugins")]
     mcp_servers: BTreeMap<String, McpServerEntry>,
-    /// The plugins the user installed on this machine, by name.
+    /// The plugins the user installed on this machine, by id
+    /// (`name@marketplace`). The first builds keyed them by bare name; open
+    /// re-keys those.
     #[serde(default)]
     installed_plugins: BTreeMap<String, InstalledPlugin>,
     /// The built-in harness plugins the user turned off.
     #[serde(default)]
     disabled_builtins: BTreeSet<String>,
+    /// The plugin marketplaces on this machine, by catalog name.
+    #[serde(default)]
+    marketplaces: BTreeMap<String, MarketplaceRecord>,
+    /// The marketplaces OpenRemote added on its own, ever - so one the
+    /// user removed is not added back on the next start.
+    #[serde(default)]
+    seeded_marketplaces: BTreeSet<String>,
     #[serde(default)]
     rules: BTreeMap<RuleId, AutomationRule>,
     #[serde(default)]
@@ -168,6 +178,7 @@ impl Store {
             Err(_) => State::default(),
         };
         let mut store = Self { dir, state };
+        let rekeyed = store.rekey_installed_plugins();
         let healed = store.heal_logs()?;
         let discovered = store.discover_logs()?;
         let pruned = store.prune_receipts();
@@ -177,10 +188,32 @@ impl Store {
         let this_id = store.ensure_this_machine();
         // Opening the store means the daemon is running - present now.
         store.mark_present(&this_id).ok();
-        if healed || discovered || pruned || reconciled || titled || !had_this_machine {
+        if rekeyed || healed || discovered || pruned || reconciled || titled || !had_this_machine {
             store.persist()?;
         }
         Ok(store)
+    }
+
+    /// The folder the store lives in - the daemon's data dir.
+    pub fn dir(&self) -> &std::path::Path {
+        &self.dir
+    }
+
+    /// The first plugin builds keyed installs by bare name, before plugins
+    /// had marketplaces: file each under its id (`name@local`, the serde
+    /// default), so the same name from a marketplace can sit beside it.
+    fn rekey_installed_plugins(&mut self) -> bool {
+        if self
+            .state
+            .installed_plugins
+            .iter()
+            .all(|(key, plugin)| *key == plugin.id())
+        {
+            return false;
+        }
+        let plugins = std::mem::take(&mut self.state.installed_plugins);
+        self.state.installed_plugins = plugins.into_values().map(|p| (p.id(), p)).collect();
+        true
     }
 
     /// A crash can tear the last line of a log, or land a batch in the log
@@ -723,38 +756,37 @@ impl Store {
         self.state.installed_plugins.values().collect()
     }
 
-    pub fn installed_plugin(&self, name: &str) -> Result<&InstalledPlugin, StoreError> {
+    /// One installed plugin by id (`name@marketplace`).
+    pub fn installed_plugin(&self, id: &str) -> Result<&InstalledPlugin, StoreError> {
         self.state
             .installed_plugins
-            .get(name)
-            .ok_or_else(|| StoreError::NotFound(format!("plugin {name}")))
+            .get(id)
+            .ok_or_else(|| StoreError::NotFound(format!("plugin {id}")))
     }
 
-    /// Record an install - a new plugin, or an update of one by name.
+    /// Record an install - a new plugin, or an update of one by id.
     pub fn put_installed_plugin(&mut self, plugin: InstalledPlugin) -> Result<(), StoreError> {
-        self.state
-            .installed_plugins
-            .insert(plugin.name.clone(), plugin);
+        self.state.installed_plugins.insert(plugin.id(), plugin);
         self.persist()
     }
 
-    pub fn remove_installed_plugin(&mut self, name: &str) -> Result<(), StoreError> {
-        if self.state.installed_plugins.remove(name).is_none() {
-            return Err(StoreError::NotFound(format!("plugin {name}")));
+    pub fn remove_installed_plugin(&mut self, id: &str) -> Result<(), StoreError> {
+        if self.state.installed_plugins.remove(id).is_none() {
+            return Err(StoreError::NotFound(format!("plugin {id}")));
         }
         self.persist()
     }
 
     pub fn set_installed_plugin_enabled(
         &mut self,
-        name: &str,
+        id: &str,
         enabled: bool,
     ) -> Result<InstalledPlugin, StoreError> {
         let plugin = self
             .state
             .installed_plugins
-            .get_mut(name)
-            .ok_or_else(|| StoreError::NotFound(format!("plugin {name}")))?;
+            .get_mut(id)
+            .ok_or_else(|| StoreError::NotFound(format!("plugin {id}")))?;
         plugin.enabled = enabled;
         plugin.updated_at = crate::now_ms();
         let out = plugin.clone();
@@ -773,6 +805,47 @@ impl Store {
             self.state.disabled_builtins.insert(id.to_string());
         }
         self.persist()
+    }
+
+    // ---- plugin marketplaces ----
+
+    pub fn marketplaces(&self) -> Vec<&MarketplaceRecord> {
+        self.state.marketplaces.values().collect()
+    }
+
+    pub fn marketplace(&self, name: &str) -> Result<&MarketplaceRecord, StoreError> {
+        self.state
+            .marketplaces
+            .get(name)
+            .ok_or_else(|| StoreError::NotFound(format!("marketplace {name}")))
+    }
+
+    /// Record a marketplace - newly added, or refreshed, by name.
+    pub fn put_marketplace(&mut self, record: MarketplaceRecord) -> Result<(), StoreError> {
+        self.state.marketplaces.insert(record.name.clone(), record);
+        self.persist()
+    }
+
+    pub fn remove_marketplace(&mut self, name: &str) -> Result<(), StoreError> {
+        if self.state.marketplaces.remove(name).is_none() {
+            return Err(StoreError::NotFound(format!("marketplace {name}")));
+        }
+        self.persist()
+    }
+
+    /// Add one of OpenRemote's own marketplaces - once, ever: one the user
+    /// removed stays removed. True when it was added now.
+    pub fn seed_marketplace(&mut self, record: MarketplaceRecord) -> Result<bool, StoreError> {
+        if self.state.seeded_marketplaces.contains(&record.name) {
+            return Ok(false);
+        }
+        self.state.seeded_marketplaces.insert(record.name.clone());
+        self.state
+            .marketplaces
+            .entry(record.name.clone())
+            .or_insert(record);
+        self.persist()?;
+        Ok(true)
     }
 
     // ---- MCP servers ----
@@ -1659,6 +1732,66 @@ mod tests {
         let saved = std::fs::read_to_string(dir.join("state.json")).unwrap();
         assert!(saved.contains("\"mcp_servers\""), "{saved}");
         assert!(!saved.contains("\"plugins\""), "{saved}");
+    }
+
+    #[test]
+    fn plugins_installed_before_marketplaces_are_filed_under_local() {
+        // The first plugin builds keyed an install by its bare name and
+        // knew no marketplaces. Such a state loads with each one filed as
+        // name@local, so a marketplace's plugin of the same name can sit
+        // beside it.
+        let dir = tempdir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let plugin = serde_json::json!({
+            "name": "toy",
+            "runtime": "process",
+            "powers": ["run_programs"],
+            "source": {"kind": "folder", "path": "/somewhere/toy"},
+            "scope": "machine",
+            "enabled": true,
+            "installed_at": 1,
+            "updated_at": 1,
+        });
+        let state = serde_json::json!({
+            "sessions": {}, "decisions": {}, "receipts": {},
+            "installed_plugins": {"toy": plugin},
+        });
+        std::fs::write(dir.join("state.json"), state.to_string()).unwrap();
+        let store = Store::open(dir.clone()).unwrap();
+        let toy = store.installed_plugin("toy@local").unwrap();
+        assert_eq!(toy.marketplace, "local");
+        assert!(store.installed_plugin("toy").is_err());
+        let saved = std::fs::read_to_string(dir.join("state.json")).unwrap();
+        assert!(saved.contains("\"toy@local\""), "{saved}");
+    }
+
+    #[test]
+    fn a_seeded_marketplace_the_user_removed_stays_removed() {
+        let dir = tempdir();
+        let mut store = Store::open(dir.clone()).unwrap();
+        let record = MarketplaceRecord {
+            name: "openremote".into(),
+            source: crate::model::MarketplaceSource::Github {
+                repo: "morewebs/openremote-plugins".into(),
+                reference: None,
+            },
+            enabled: true,
+            removable: false,
+            owner: None,
+            description: None,
+            plugin_count: 0,
+            added_at: 0,
+            refreshed_at: None,
+            error: None,
+            heads: Default::default(),
+        };
+        assert!(store.seed_marketplace(record.clone()).unwrap());
+        assert!(!store.seed_marketplace(record.clone()).unwrap());
+        store.remove_marketplace("openremote").unwrap();
+        drop(store);
+        let mut store = Store::open(dir).unwrap();
+        assert!(!store.seed_marketplace(record).unwrap());
+        assert!(store.marketplace("openremote").is_err());
     }
 
     #[test]

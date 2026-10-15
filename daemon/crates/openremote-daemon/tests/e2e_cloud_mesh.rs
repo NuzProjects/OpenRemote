@@ -124,6 +124,8 @@ async fn a_desktop_drives_a_machine_through_the_relay_and_nothing_more() {
     // aren't even routed for one.
     for path in [
         "plugins",
+        "marketplaces",
+        "marketplaces/catalog",
         "mcp-servers",
         "automations",
         "sessions",

@@ -838,6 +838,7 @@ name = "openremote-daemon"
 version = "0.3.2"
 dependencies = [
  "axum",
+ "base64",
  "chrono",
  "fake-cloud",
  "flate2",
@@ -852,8 +853,11 @@ dependencies = [
  "openremote-harness",
  "openremote-opencode",
  "openremote-pi",
+ "semver",
  "serde",
  "serde_json",
+ "sha1",
+ "sha2",
  "tar",
  "tempfile",
  "thiserror",

@@ -746,15 +746,15 @@ impl Supervisor {
         self.with_store(|s| s.mcp_servers().into_iter().cloned().collect())
     }
 
-    /// Install a plugin from the marketplace (by catalog id) or written by
-    /// hand, on a machine that has checked in. The store dedups; the
-    /// machine's reachability is ruled here. A custom plugin is
-    /// `(name, detail, command, needs_key)`.
+    /// Add an MCP server written by hand, on a machine that has checked
+    /// in. The store dedups; the machine's reachability is ruled here.
     pub fn add_mcp_server(
         &self,
         machine_id: &MachineId,
-        catalog_id: Option<&str>,
-        custom: Option<(&str, &str, &str, bool)>,
+        name: &str,
+        detail: &str,
+        command: &str,
+        needs_key: bool,
     ) -> Result<McpServerEntry, SupervisorError> {
         let machine = self
             .with_store(|s| s.machine(machine_id).cloned())
@@ -765,46 +765,72 @@ impl Supervisor {
                 machine.name
             )));
         }
-        let plugin = match (catalog_id, custom) {
-            (Some(catalog_id), _) => {
-                let entry = crate::mcp_catalog::catalog_entry(catalog_id).ok_or_else(|| {
-                    SupervisorError::NotFound(format!("no marketplace entry '{catalog_id}'"))
-                })?;
-                McpServerEntry {
-                    id: format!("{catalog_id}@{}", machine.id),
-                    catalog_id: Some(entry.id),
-                    name: entry.name,
-                    detail: entry.detail,
-                    command: entry.command,
-                    machine: machine.id,
-                    needs_key: entry.needs_key,
-                    has_key: false,
-                    enabled: true,
-                    created_at: now_ms(),
-                    updated_at: now_ms(),
-                }
-            }
-            (None, Some((name, detail, command, needs_key))) => McpServerEntry {
-                id: format!("custom-{}@{}", uuid::Uuid::new_v4(), machine.id),
-                catalog_id: None,
-                name: name.to_string(),
-                detail: detail.to_string(),
-                command: command.to_string(),
-                machine: machine.id,
-                needs_key,
-                has_key: false,
-                enabled: true,
-                created_at: now_ms(),
-                updated_at: now_ms(),
-            },
-            (None, None) => {
-                return Err(SupervisorError::Conflict(
-                    "a plugin comes from the marketplace or by hand - one of the two".into(),
-                ));
-            }
+        let server = McpServerEntry {
+            id: format!("custom-{}@{}", uuid::Uuid::new_v4(), machine.id),
+            catalog_id: None,
+            name: name.to_string(),
+            detail: detail.to_string(),
+            command: command.to_string(),
+            machine: machine.id,
+            needs_key,
+            has_key: false,
+            enabled: true,
+            created_at: now_ms(),
+            updated_at: now_ms(),
         };
-        self.with_store(|s| s.add_mcp_server(plugin))
+        self.with_store(|s| s.add_mcp_server(server))
             .map_err(store_error)
+    }
+
+    /// The folders of the plugins installed here and left on that claude
+    /// can load - each has Claude's own plugin.json (the install writes
+    /// one where Claude parts arrived without it).
+    fn plugin_dirs(&self) -> Vec<std::path::PathBuf> {
+        self.with_store(|s| {
+            let data_dir = s.dir().to_path_buf();
+            s.installed_plugins()
+                .into_iter()
+                .filter(|p| p.enabled)
+                .map(|p| crate::plugins::plugin_dir(&data_dir, &p.marketplace, &p.name))
+                .filter(|dir| dir.join(".claude-plugin").join("plugin.json").is_file())
+                .collect()
+        })
+    }
+
+    /// Before a claude chat starts: each enabled plugin installed from a
+    /// `command` source runs its approved command again, and a changed
+    /// folder replaces the copy. A failure leaves the last copy; the
+    /// answer is the notes the chat shows about it.
+    async fn rerun_plugin_commands(&self, harness: &str) -> Vec<String> {
+        if harness != "claude" {
+            return Vec::new();
+        }
+        let (data_dir, plugins) = self.with_store(|s| {
+            let plugins: Vec<openremote_core::InstalledPlugin> = s
+                .installed_plugins()
+                .into_iter()
+                .filter(|p| p.enabled && p.command.is_some())
+                .cloned()
+                .collect();
+            (s.dir().to_path_buf(), plugins)
+        });
+        let mut notes = Vec::new();
+        for plugin in plugins {
+            match crate::plugins::rerun_command(&data_dir, &plugin).await {
+                Ok(Some(hash)) => {
+                    let mut updated = plugin.clone();
+                    updated.resolved = Some(hash);
+                    updated.updated_at = now_ms();
+                    let _ = self.with_store(|s| s.put_installed_plugin(updated));
+                }
+                Ok(None) => {}
+                Err(e) => notes.push(format!(
+                    "The plugin {}'s command failed ({e}); this chat has its last copy.",
+                    plugin.id()
+                )),
+            }
+        }
+        notes
     }
 
     pub fn remove_mcp_server(&self, id: &str) -> Result<(), SupervisorError> {
@@ -1210,6 +1236,16 @@ impl Supervisor {
         };
         let id = session.id;
         self.emit_all(&id, vec![EventPayload::SessionCreated { session }])?;
+        let notes = self.rerun_plugin_commands(harness).await;
+        if !notes.is_empty() {
+            self.emit_all(
+                &id,
+                notes
+                    .into_iter()
+                    .map(|text| EventPayload::NoteAdded { text })
+                    .collect(),
+            )?;
+        }
 
         let current = self.session(&id)?;
         let opts = openremote_harness::SpawnOptions {
@@ -1221,6 +1257,7 @@ impl Supervisor {
             include_deltas: true,
             fast: current.fast,
             mcp_servers: self.mcp_servers(),
+            plugin_dirs: self.plugin_dirs(),
         };
         match backend.spawn(opts).await {
             Ok((driver, rx)) => {
@@ -1732,6 +1769,7 @@ impl Supervisor {
                 session.harness
             )));
         };
+        let notes = self.rerun_plugin_commands(&session.harness).await;
         let opts = openremote_harness::SpawnOptions {
             cwd: session.workspace.clone().unwrap_or_else(Self::home_dir),
             model: session.model.clone(),
@@ -1741,6 +1779,7 @@ impl Supervisor {
             include_deltas: true,
             fast: session.fast,
             mcp_servers: self.mcp_servers(),
+            plugin_dirs: self.plugin_dirs(),
         };
         let (driver, rx) = match backend.spawn(opts).await {
             Ok(pair) => pair,
@@ -1764,13 +1803,16 @@ impl Supervisor {
                 },
             );
         }
-        self.emit_all(
-            id,
-            vec![EventPayload::SessionStatusChanged {
-                status: SessionStatus::Starting,
-                reason: None,
-            }],
-        )?;
+        let mut events = vec![EventPayload::SessionStatusChanged {
+            status: SessionStatus::Starting,
+            reason: None,
+        }];
+        events.extend(
+            notes
+                .into_iter()
+                .map(|text| EventPayload::NoteAdded { text }),
+        );
+        self.emit_all(id, events)?;
         self.spawn_pump(*id, rx);
         self.session(id)
     }

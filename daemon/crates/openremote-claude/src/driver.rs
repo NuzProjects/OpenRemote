@@ -587,6 +587,12 @@ fn build_argv(opts: &SpawnOptions) -> Vec<std::ffi::OsString> {
                 .into(),
         );
     }
+    for dir in &opts.plugin_dirs {
+        // One flag per plugin rather than the folder that holds them all:
+        // a plugin the user turned off sits in that folder too.
+        argv.push("--plugin-dir".into());
+        argv.push(dir.as_os_str().to_owned());
+    }
     if let Some(id) = &opts.resume {
         argv.push(format!("--resume={id}").into());
     }
@@ -805,6 +811,7 @@ mod tests {
             include_deltas: true,
             fast: false,
             mcp_servers: Vec::new(),
+            plugin_dirs: Vec::new(),
         };
         let argv = build_argv(&opts);
         let joined = argv
@@ -875,6 +882,30 @@ mod tests {
             !plain
                 .iter()
                 .any(|s| *s == std::ffi::OsStr::new("--mcp-config"))
+        );
+    }
+
+    #[test]
+    fn each_installed_plugin_rides_its_own_plugin_dir_flag() {
+        let opts = SpawnOptions {
+            cwd: std::path::PathBuf::from("/w"),
+            plugin_dirs: vec!["/data/plugins/local/toy".into(), "/data/plugins/x/y".into()],
+            ..Default::default()
+        };
+        let argv: Vec<String> = build_argv(&opts)
+            .iter()
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect();
+        let joined = argv.join(" ");
+        assert!(
+            joined.contains("--plugin-dir /data/plugins/local/toy --plugin-dir /data/plugins/x/y"),
+            "{joined}"
+        );
+        let plain = build_argv(&SpawnOptions::default());
+        assert!(
+            !plain
+                .iter()
+                .any(|s| *s == std::ffi::OsStr::new("--plugin-dir"))
         );
     }
 

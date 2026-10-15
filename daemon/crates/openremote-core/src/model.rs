@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -229,8 +230,23 @@ fn default_true() -> bool {
 /// the user turned one off.
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct InstalledPlugin {
-    /// The plugin's own name, from its manifest - unique on the machine.
+    /// The plugin's name: its marketplace entry's name, or for a direct
+    /// install its manifest's. Unique within its marketplace only - the
+    /// same name from two marketplaces installs side by side.
     pub name: String,
+    /// The marketplace it came from; `local` for a folder, git repo or
+    /// archive installed directly (what 6a's installs were, unnamed).
+    #[serde(default = "local_marketplace")]
+    pub marketplace: String,
+    /// What exactly was fetched - the commit, the archive's sha256, the
+    /// npm version, a folder's content hash - so an update can tell a
+    /// changed plugin from the same one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved: Option<String>,
+    /// The command a `command` source printed the plugin folder with,
+    /// exactly as the user approved it: only this command ever runs again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<ApprovedCommand>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -245,6 +261,91 @@ pub struct InstalledPlugin {
     pub enabled: bool,
     pub installed_at: i64,
     pub updated_at: i64,
+}
+
+fn local_marketplace() -> String {
+    LOCAL_MARKETPLACE.to_string()
+}
+
+/// The marketplace name a direct install (folder, git repo, archive) is
+/// filed under. No real marketplace may take it.
+pub const LOCAL_MARKETPLACE: &str = "local";
+
+impl InstalledPlugin {
+    /// `name@marketplace` - the plugin's id on the machine, in routes and
+    /// in the store.
+    pub fn id(&self) -> String {
+        format!("{}@{}", self.name, self.marketplace)
+    }
+}
+
+/// A `command` source's command as the user approved it at install.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub struct ApprovedCommand {
+    pub command: String,
+    pub timeout_secs: u64,
+}
+
+/// A plugin marketplace the user added, or one OpenRemote added for them
+/// (Plugins > Marketplaces). Its catalog is Claude Code's own
+/// `.claude-plugin/marketplace.json`, cached on disk; this record is what
+/// the machine remembers about it.
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct MarketplaceRecord {
+    /// The catalog's own `name` - what plugin ids end in.
+    pub name: String,
+    pub source: MarketplaceSource,
+    /// Off hides it from Discover; what was installed from it stays.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// OpenRemote's own marketplace can be turned off, not removed.
+    #[serde(default = "default_true")]
+    pub removable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub plugin_count: usize,
+    pub added_at: i64,
+    /// The last time its catalog was fetched; never, until the first
+    /// Discover opens it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refreshed_at: Option<i64>,
+    /// Why the last fetch failed, in its own words. The cached copy (if
+    /// any) keeps serving Discover.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// For installed plugins whose entry follows a branch with no version
+    /// to compare: the commit that branch pointed at when the catalog was
+    /// last fetched, by plugin name. Unequal to what was installed means
+    /// an update.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub heads: BTreeMap<String, String>,
+}
+
+/// Where a marketplace's catalog is fetched from - the forms Claude Code's
+/// own `marketplace add` takes.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MarketplaceSource {
+    /// `owner/repo` on GitHub, cloned over https.
+    Github {
+        repo: String,
+        #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
+        reference: Option<String>,
+    },
+    /// Any git repository by URL.
+    Git {
+        url: String,
+        #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
+        reference: Option<String>,
+    },
+    /// A folder on this machine, read in place.
+    Directory { path: String },
+    /// A link to a `marketplace.json` alone: its entries must point
+    /// elsewhere, there are no files beside it.
+    Url { url: String },
 }
 
 /// How a plugin runs. `content` is a Claude Code plugin with no
@@ -279,9 +380,22 @@ pub enum PluginPower {
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PluginSource {
-    Folder { path: String },
-    Git { url: String },
-    Archive { location: String },
+    Folder {
+        path: String,
+    },
+    Git {
+        url: String,
+    },
+    Archive {
+        location: String,
+    },
+    /// An entry in a marketplace's catalog; `from` says, in a line, where
+    /// the entry itself fetched it (a repo, a subfolder, a package).
+    Marketplace {
+        marketplace: String,
+        plugin: String,
+        from: String,
+    },
 }
 
 /// Who a plugin is installed for. This machine only, for now; Global,
