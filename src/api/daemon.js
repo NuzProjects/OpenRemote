@@ -196,6 +196,18 @@ export class DaemonApi {
     return this.call('GET', '/healthz')
   }
 
+  // The one route that answers a document rather than JSON: the
+  // third-party notices, served as plain text because they are read,
+  // not parsed. Same token as everything else.
+  async notices() {
+    const response = await fetch(`${this.url}${this.prefix}/notices`, {
+      headers: { Authorization: `Bearer ${this.token}` },
+      signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+    })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    return response.text()
+  }
+
   capabilities() {
     return this.call('GET', '/capabilities')
   }

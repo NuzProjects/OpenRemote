@@ -48,6 +48,7 @@ export default function SettingsView({ onReplay, onOpenChat }) {
   const {
     connection,
     capabilities,
+    api,
     sessions,
     disconnect,
     modelsFor,
@@ -670,7 +671,13 @@ export default function SettingsView({ onReplay, onOpenChat }) {
           onDelete={() => deleteChat(deleting.id)}
         />
       )}
-      {about && <AboutModal onClose={() => setAbout(false)} daemonVersion={capabilities?.daemon ?? null} />}
+      {about && (
+        <AboutModal
+          onClose={() => setAbout(false)}
+          daemonVersion={capabilities?.daemon ?? null}
+          api={api}
+        />
+      )}
       {signInFor && <SignInModal harnessId={signInFor} onDone={() => setSignInFor(null)} />}
     </div>
   )
