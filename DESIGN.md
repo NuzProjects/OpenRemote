@@ -210,7 +210,12 @@ Every screen the design specifies, backed by the real daemon:
   Mistral, Meta, each its owner's official path in its official color,
   text alone where the maker is unknown - the effort picker offers the
   chosen model's own tiers
-  right after, so the model rows carry no tier sublines), the Fast toggle
+  right after, so the model rows carry no tier sublines), the permission
+  picker where the harness has its own words (claude `--permission-mode`,
+  codex `approvalPolicy`, grok `--permission-mode` - the vocabulary rides
+  /capabilities, the harness's own default row marked "runs this by
+  default", unset sends nothing so the default holds; agy/pi/opencode
+  offer no words, so no chip), the Fast toggle
   where the harness's own fast mode is usable
   (claude `fastMode` ≥ 2.1.205, codex `fast` service tier ≥ 0.110), the
   project picker (the registered projects on the machine the chat runs
@@ -219,8 +224,11 @@ Every screen the design specifies, backed by the real daemon:
   the sidebar's +, the settings rows, itself), the In-progress list.
 - **Chat** - the rail transcript (user cards, agent text, notes, tool
   cards with In/Out, decisions in the harness's own words with its
-  affirmative first), the facts row (workspace · harness · model · Fast ·
-  «tool» allowed for this chat · status), stop/resume, the floating
+  affirmative first), the facts row (workspace · harness · model ·
+  effort · permission word · Fast · «tool» allowed for this chat ·
+  status - the permission word shown in the harness's own spelling,
+  changeable only while stopped: start-time on every harness, so a
+  stopped chat's change lands on resume), stop/resume, the floating
   composer with the ContextRing where the harness reports its window
   (codex; claude reports usage but no window on the wire).
 - **Machines** - Cloud's view of the account's devices (2026-10-07): this
@@ -238,9 +246,13 @@ Every screen the design specifies, backed by the real daemon:
   machine's own clock, a webhook with its own key), Run now, the form,
   and the everywhere-pill (the keyword parser,
   the rule-draft action card, honest refusals for connector-only kinds).
+  A rule's Chat section carries the permission picker too - the word
+  rides the chat the rule fires.
 - **Settings** - a view (section rail), not a popup: new-task defaults
-  (harness/model/workspace, per-harness effort tier in the harness's own
-  words), appearance (compact density; the dark theme is contract), startup
+  (harness/model/workspace, per-harness effort tier and permission word
+  in the harness's own words - the same pickers the composer holds,
+  rendered only where the default harness offers them), appearance
+  (compact density; the dark theme is contract), startup
   (launch at login, reopen last view vs New chat), the daemon connection
   (port, version, data dir, restart, two-step Forget), the harness list,
   reduce-motion (restored before first paint), first-run replay.
@@ -295,8 +307,7 @@ between machines and switching
 its harness mid-chat (one hand-over mechanism), the connector triggers
 (pipeline/errors/review/release), the agent behind the pill, claude's
 context *window* on the wire (the ring rides a nominal 200k until the
-stream-json carries one), grok/pi/opencode/agy MCP wires,
-per-harness approval-mode defaults (no daemon-side vocabulary surface yet).
+stream-json carries one), grok/pi/opencode/agy MCP wires.
 
 ## Shipped - the film's design, adopted (2026-10-08)
 
