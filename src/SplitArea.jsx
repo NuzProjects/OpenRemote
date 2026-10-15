@@ -1,5 +1,5 @@
 import { useRef } from 'react'
-import { SplitHorizontal, SplitVertical, X } from '@phosphor-icons/react'
+import { ColumnsPlusRight, RowsPlusBottom, X } from '@phosphor-icons/react'
 import { MAX_PANES, closeLeaf, focusLeaf, paneCount, resizeSplit, splitLeaf } from './split.js'
 import './split.css'
 
@@ -75,7 +75,7 @@ export default function SplitArea({ layout, setLayout, renderPane, labelFor }) {
               disabled={count >= MAX_PANES}
               onClick={() => setLayout((l) => splitLeaf(l, node.id, 'row'))}
             >
-              <SplitHorizontal size={13} />
+              <ColumnsPlusRight size={13} />
             </button>
             <button
               type="button"
@@ -85,7 +85,7 @@ export default function SplitArea({ layout, setLayout, renderPane, labelFor }) {
               disabled={count >= MAX_PANES}
               onClick={() => setLayout((l) => splitLeaf(l, node.id, 'col'))}
             >
-              <SplitVertical size={13} />
+              <RowsPlusBottom size={13} />
             </button>
             {!primary && (
               <button
