@@ -432,13 +432,16 @@ jobs:
             src-tauri/binaries/openremote-daemon-aarch64-apple-darwin \
             src-tauri/binaries/openremote-daemon-x86_64-apple-darwin
           lipo -info src-tauri/binaries/openremote-daemon-universal-apple-darwin
-      - run: npx tauri build --target universal-apple-darwin --bundles dmg
+      # The .app as its own bundle too, not only inside the dmg: the check
+      # below inspects it.
+      - run: npx tauri build --target universal-apple-darwin --bundles app,dmg
         if: steps.build.outputs.skip != '1'
       - name: check the bundle
         if: steps.build.outputs.skip != '1'
         run: |
           set -euo pipefail
           BUNDLE=src-tauri/target/universal-apple-darwin/release/bundle
+          ls -la "$BUNDLE" "$BUNDLE"/* || true
           APP="$(find "$BUNDLE/macos" -maxdepth 1 -name '*.app' | head -n 1)"
           DMG="$(find "$BUNDLE/dmg" -maxdepth 1 -name '*.dmg' | head -n 1)"
           test -n "$APP"
