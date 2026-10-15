@@ -533,20 +533,20 @@ button.side-tile:active {
   border-top: 1px solid var(--line);
 }
 
-/* The footer's icon row: account, mobile, metrics, settings - four
-   equal ghost tiles that span the footer, no dead space beside them. */
+/* The footer's icon row: account, mobile, metrics, settings - square
+   ghost buttons, right-aligned, the quietest chrome in the sidebar. */
 .sb-foot-row {
   display: flex;
+  justify-content: flex-end;
   gap: 6px;
 }
 
 .sb-icon-btn {
   display: inline-flex;
-  flex: 1 1 0;
-  min-width: 0;
   align-items: center;
   justify-content: center;
-  height: 44px;
+  width: 36px;
+  height: 36px;
   padding: 0;
   border: 0;
   border-radius: var(--radius);
