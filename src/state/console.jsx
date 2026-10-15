@@ -33,7 +33,9 @@ export function ConsoleProvider({ children }) {
   const [mcpServers, setMcpServers] = useState([])
   // The Plugins page: the built-in harness plugins and what is installed.
   const [plugins, setPlugins] = useState(null)
-  const [marketplace, setMarketplace] = useState([])
+  // Plugins > Marketplaces, and Discover's entries from their catalogs.
+  const [marketplaces, setMarketplaces] = useState([])
+  const [catalog, setCatalog] = useState(null)
   const [automations, setAutomations] = useState([])
   // The registered projects - daemon-side, the one list every surface
   // reads (the sidebar's groups, the composer's picker, the pill).
@@ -149,7 +151,8 @@ export function ConsoleProvider({ children }) {
       const machineList = await api.machines()
       const mcpList = await api.mcpServers()
       const pluginList = await api.plugins().catch(() => null)
-      const market = await api.mcpMarketplace()
+      const marketList = await api.marketplaces().catch(() => [])
+      const catalogList = await api.marketplaceCatalog().catch(() => null)
       const rules = await api.automations()
       const projectList = await api.projects().catch(() => [])
       // Cloud is optional: a daemon without it still connects.
@@ -162,7 +165,8 @@ export function ConsoleProvider({ children }) {
       setMachines(machineList ?? [])
       setMcpServers(mcpList ?? [])
       setPlugins(pluginList)
-      setMarketplace(market ?? [])
+      setMarketplaces(marketList ?? [])
+      setCatalog(catalogList)
       setAutomations(rules ?? [])
       setProjects(projectList ?? [])
       setConnection({ state: 'connected', error: null })
@@ -725,13 +729,63 @@ export function ConsoleProvider({ children }) {
 
   // ---- plugins ----
 
+  // The installed list and Discover's view of it (installed, update) move
+  // together.
   const refreshPlugins = useCallback(async () => {
     try {
-      setPlugins(await api.plugins())
+      const [pluginList, catalogList] = await Promise.all([api.plugins(), api.marketplaceCatalog()])
+      setPlugins(pluginList)
+      setCatalog(catalogList)
     } catch {
       /* the next action refreshes again */
     }
   }, [api])
+
+  const refreshMarketplaces = useCallback(async () => {
+    try {
+      const [marketList, catalogList] = await Promise.all([api.marketplaces(), api.marketplaceCatalog()])
+      setMarketplaces(marketList ?? [])
+      setCatalog(catalogList)
+    } catch {
+      /* the next action refreshes again */
+    }
+  }, [api])
+
+  const addMarketplace = useCallback(
+    async (source) => {
+      const reply = await api.addMarketplace(source)
+      await refreshMarketplaces()
+      return reply
+    },
+    [api, refreshMarketplaces],
+  )
+
+  // A failed fetch is not thrown: the record carries its error, and the
+  // cached catalog keeps serving Discover.
+  const refreshMarketplace = useCallback(
+    async (name) => {
+      const reply = await api.refreshMarketplace(name)
+      await refreshMarketplaces()
+      return reply
+    },
+    [api, refreshMarketplaces],
+  )
+
+  const setMarketplaceEnabled = useCallback(
+    async (name, enabled) => {
+      await api.setMarketplaceEnabled(name, enabled)
+      await refreshMarketplaces()
+    },
+    [api, refreshMarketplaces],
+  )
+
+  const removeMarketplace = useCallback(
+    async (name) => {
+      await api.removeMarketplace(name)
+      await refreshMarketplaces()
+    },
+    [api, refreshMarketplaces],
+  )
 
   const stagePlugin = useCallback(async (source) => api.stagePlugin(source), [api])
   const cancelStagedPlugin = useCallback(async (stageId) => api.cancelStagedPlugin(stageId), [api])
@@ -748,16 +802,16 @@ export function ConsoleProvider({ children }) {
   // A built-in harness turned off leaves every picker - the pickers read
   // capabilities, so those refresh too.
   const setPluginEnabled = useCallback(
-    async (name, enabled) => {
-      await api.setPluginEnabled(name, enabled)
+    async (id, enabled) => {
+      await api.setPluginEnabled(id, enabled)
       await Promise.all([refreshPlugins(), refreshCapabilities()])
     },
     [api, refreshPlugins, refreshCapabilities],
   )
 
   const removePlugin = useCallback(
-    async (name) => {
-      await api.removePlugin(name)
+    async (id) => {
+      await api.removePlugin(id)
       await refreshPlugins()
     },
     [api, refreshPlugins],
@@ -902,7 +956,12 @@ export function ConsoleProvider({ children }) {
       cancelStagedPlugin,
       setPluginEnabled,
       removePlugin,
-      marketplace,
+      marketplaces,
+      catalog,
+      addMarketplace,
+      refreshMarketplace,
+      setMarketplaceEnabled,
+      removeMarketplace,
       automations,
       projects,
       chats,
@@ -969,7 +1028,12 @@ export function ConsoleProvider({ children }) {
       cancelStagedPlugin,
       setPluginEnabled,
       removePlugin,
-      marketplace,
+      marketplaces,
+      catalog,
+      addMarketplace,
+      refreshMarketplace,
+      setMarketplaceEnabled,
+      removeMarketplace,
       automations,
       projects,
       chats,

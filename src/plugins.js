@@ -50,7 +50,80 @@ export function sourceLabel(source) {
   if (source.kind === 'folder') return `Folder: ${source.path}`
   if (source.kind === 'git') return `Git: ${source.url}`
   if (source.kind === 'archive') return `Archive: ${source.location}`
+  if (source.kind === 'marketplace') return `${source.marketplace}: ${source.from}`
   return ''
+}
+
+// Plugins of one name that are on at once. Their skills and commands
+// carry the same name, so a Claude chat may mix them up - the Installed
+// tab and the home screen say so. Each clash: the name and its ids.
+export function clashes(installed) {
+  const byName = new Map()
+  for (const p of installed ?? []) {
+    if (!p.enabled) continue
+    byName.set(p.name, [...(byName.get(p.name) ?? []), p.id])
+  }
+  return [...byName]
+    .filter(([, ids]) => ids.length > 1)
+    .map(([name, ids]) => ({ name, ids }))
+}
+
+// A catalog is fetched again when Discover opens and its copy is over a
+// day old (or was never fetched). Nothing refreshes in the background.
+export const STALE_MS = 24 * 60 * 60 * 1000
+
+export function isStale(record, now = Date.now()) {
+  return Boolean(record?.enabled) && (!record.refreshed_at || now - record.refreshed_at > STALE_MS)
+}
+
+// Discover's filters: every word somewhere in the name, description,
+// author, category or tags; one category; one marketplace.
+export function filterEntries(entries, { query = '', category = '', marketplace = '' } = {}) {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean)
+  return (entries ?? []).filter((e) => {
+    if (category && e.category !== category) return false
+    if (marketplace && e.marketplace !== marketplace) return false
+    if (!words.length) return true
+    const hay = [e.name, e.display_name, e.description, e.author, e.category, ...(e.tags ?? [])]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase()
+    return words.every((w) => hay.includes(w))
+  })
+}
+
+export function categories(entries) {
+  return [...new Set((entries ?? []).map((e) => e.category).filter(Boolean))].sort()
+}
+
+// A Discover entry's install, as the daemon takes it. A command entry
+// stages only with the exact command the user was shown.
+export function entrySource(entry, approveCommand = null) {
+  return {
+    kind: 'marketplace',
+    marketplace: entry.marketplace,
+    plugin: entry.name,
+    ...(approveCommand ? { approve_command: approveCommand } : {}),
+  }
+}
+
+// Where an entry stands: can't be installed, not installed, installed,
+// or installed with something newer on offer.
+export function entryState(entry) {
+  if (!entry.installable) return 'unavailable'
+  if (!entry.installed) return 'available'
+  return entry.update ? 'update' : 'installed'
+}
+
+// When its catalog was last fetched, in a few words.
+export function fetchedLabel(record, now = Date.now()) {
+  if (!record?.refreshed_at) return 'Not fetched yet'
+  const minutes = Math.round((now - record.refreshed_at) / 60_000)
+  if (minutes < 1) return 'Fetched just now'
+  if (minutes < 60) return `Fetched ${minutes} min ago`
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return `Fetched ${hours} h ago`
+  return `Fetched ${Math.round(hours / 24)} d ago`
 }
 
 // The Install dialog's source as the daemon takes it; null until there

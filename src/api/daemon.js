@@ -416,12 +416,50 @@ export class DaemonApi {
     return this.call('POST', `/plugins/stage/${stageId}/cancel`, { request_id: newRequestId() })
   }
 
-  setPluginEnabled(name, enabled) {
-    return this.call('POST', `/plugins/${name}/enabled`, { request_id: newRequestId(), enabled })
+  // An installed plugin's id is name@marketplace; a built-in's is the
+  // harness id.
+  setPluginEnabled(id, enabled) {
+    return this.call('POST', `/plugins/${encodeURIComponent(id)}/enabled`, { request_id: newRequestId(), enabled })
   }
 
-  removePlugin(name) {
-    return this.call('POST', `/plugins/${name}/remove`, { request_id: newRequestId() })
+  removePlugin(id) {
+    return this.call('POST', `/plugins/${encodeURIComponent(id)}/remove`, { request_id: newRequestId() })
+  }
+
+  // ---- marketplaces (Plugins > Discover, Marketplaces) ----
+
+  marketplaces() {
+    return this.call('GET', '/marketplaces')
+  }
+
+  // Every enabled marketplace's entries, from the cached catalogs.
+  marketplaceCatalog() {
+    return this.call('GET', '/marketplaces/catalog')
+  }
+
+  // Adding and refreshing fetch the catalog - a clone can take a while.
+  addMarketplace(source) {
+    return this.call('POST', '/marketplaces', { request_id: newRequestId(), source }, { timeoutMs: 180_000 })
+  }
+
+  refreshMarketplace(name) {
+    return this.call(
+      'POST',
+      `/marketplaces/${encodeURIComponent(name)}/refresh`,
+      { request_id: newRequestId() },
+      { timeoutMs: 180_000 },
+    )
+  }
+
+  setMarketplaceEnabled(name, enabled) {
+    return this.call('POST', `/marketplaces/${encodeURIComponent(name)}/enabled`, {
+      request_id: newRequestId(),
+      enabled,
+    })
+  }
+
+  removeMarketplace(name) {
+    return this.call('POST', `/marketplaces/${encodeURIComponent(name)}/remove`, { request_id: newRequestId() })
   }
 
   // ---- MCP servers (Settings > MCP servers) ----
@@ -430,15 +468,14 @@ export class DaemonApi {
     return this.call('GET', '/mcp-servers')
   }
 
-  mcpMarketplace() {
-    return this.call('GET', '/mcp-servers/marketplace')
-  }
-
-  addMcpServer(machineId, { catalogId, name, detail, command, needsKey }) {
+  addMcpServer(machineId, { name, detail, command, needsKey }) {
     return this.call('POST', '/mcp-servers', {
       request_id: newRequestId(),
       machine: machineId,
-      ...(catalogId ? { catalog_id: catalogId } : { name, detail, command, needs_key: needsKey }),
+      name,
+      detail,
+      command,
+      needs_key: needsKey,
     })
   }
 

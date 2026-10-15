@@ -482,6 +482,7 @@ function Shell() {
           onAddProjectDone={() => setAddProjectOpen(false)}
           presetProject={presetProject}
           focused={primaryFocused}
+          onOpenPlugins={() => goView('plugins')}
         />
       )}
       {view === 'machines' && <MachinesView onOpenChat={openSession} openDevice={openDevice} />}

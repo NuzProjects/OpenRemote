@@ -16,6 +16,7 @@ import { ModelMark } from './model-marks.jsx'
 import { SIGNIN_HARNESSES, pickable } from './harness-manager.js'
 import { loadDefaults } from './defaults.js'
 import { projectName } from './projects.js'
+import { clashes } from './plugins.js'
 import { isMobile } from './platform.js'
 import './newchat.css'
 import './composer.css'
@@ -32,12 +33,15 @@ export default function NewChat({
   onAddProjectDone,
   presetProject = null,
   focused = true,
+  onOpenPlugins = null,
 }) {
   const privacy = usePrivacyMode()
   const {
     connection, capabilities, sessions, chats, createChat, modelsFor, devices, thisDevice,
-    capabilitiesFor, apiFor, projects, addProject,
+    capabilitiesFor, apiFor, projects, addProject, plugins,
   } = useConsole()
+  // Plugins of one name both on: said here too, where chats start.
+  const clashing = mode === 'local' ? clashes(plugins?.installed) : []
   // In Cloud a chat can run on this computer or one of the account's
   // machines; in Local it always runs here.
   const [target, setTarget] = useState(null)
@@ -397,6 +401,19 @@ export default function NewChat({
   return (
     <div className="newchat">
       <h1 className="nc-greeting">What are we working on?</h1>
+      {clashing.map((c) => (
+        <div className="nc-signin" key={c.name}>
+          <div className="nc-signin-note">
+            Two plugins named {c.name} are on ({c.ids.join(' and ')}). A Claude chat may mix up their
+            commands.
+          </div>
+          {onOpenPlugins && (
+            <button className="nc-signin-btn" onClick={onOpenPlugins}>
+              Plugins
+            </button>
+          )}
+        </div>
+      ))}
       {needsSignIn && (
         <div className="nc-signin">
           <div className="nc-signin-note">

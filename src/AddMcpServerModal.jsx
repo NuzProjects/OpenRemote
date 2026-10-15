@@ -82,7 +82,10 @@ export default function AddMcpServerModal({ onClose }) {
             <X size={14} weight="bold" />
           </button>
         </div>
-        <p className="dv-modal-hint">For a tool that is not in the marketplace.</p>
+        <p className="dv-modal-hint">
+          An MCP server you run yourself. Plugins can bring their own; this is for one that comes
+          with none.
+        </p>
         <label className="dv-host">
           Name
           <input
