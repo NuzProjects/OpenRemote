@@ -78,7 +78,8 @@ spacing.
   `+` in the section head, unregister on hover; a project's chats grouped
   under it) and the flat Chats list (every chat that belongs to no
   project), each row led by its harness's brand mark with the status dot
-  at the row's right edge; Settings pinned in the footer.
+  at the row's right edge; the footer is an icon row - Account, Mobile,
+  Metrics, Settings - square ghost buttons, no labels.
 - **Settings is a view, not a popup:** a slim section rail on the left
   (New tasks, Appearance, Startup, Cloud, Daemon, Harnesses, This install),
   the panel on the right. Phone width stacks the rail into a top scroller.
@@ -235,6 +236,16 @@ Every screen the design specifies, backed by the real daemon:
   (launch at login, reopen last view vs New chat), the daemon connection
   (port, version, data dir, restart, two-step Forget), the harness list,
   reduce-motion (restored before first paint), first-run replay.
+- **Account, Mobile, Metrics** - the footer's views (2026-10-15), each
+  rendering before Cloud's sign-in door with its own signed-out row:
+  Account carries the sign-in state and its actions, this device's
+  identity, and the devices count (its Machines button crosses modes);
+  Mobile is the phone companion page - the install-and-sign-in lead, the
+  account's phones as cards opening the same device detail, the signed-out
+  row when there is no account; Metrics counts the polled record (status
+  sentence, the synced split, per-harness counts, a 14-day strip of new
+  chats) beside this machine's 48-cell presence band, all derived from
+  the poll - cost and tokens stay out until the daemon aggregates them.
 
 ## Cloud mode (2026-10-07)
 
