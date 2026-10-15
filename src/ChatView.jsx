@@ -193,6 +193,12 @@ export default function ChatView({ chat, onBack }) {
   const composerRef = useRef(null)
   const rail = railItems(chat)
   const pendingDecision = rail.find((item) => item.kind === 'decision' && item.pending)
+  // Every tool call riding the rail, keyed the way the duplicate checks
+  // pair a decision with its run: (name, input). A settled approval
+  // whose run is here hides - the run card is the one full record.
+  const toolCalls = new Set(
+    rail.filter((item) => item.kind === 'tool').map((item) => `${item.name}|${JSON.stringify(item.input)}`),
+  )
   // The daemon takes a prompt on any session whose driver is alive - an
   // idle chat (its last turn finished) is sendable; only stopped/failed
   // need Resume first. Gating on `running` dead-locked the composer
@@ -483,9 +489,10 @@ export default function ChatView({ chat, onBack }) {
               const diff = edit && edit.length > 0 ? capRows(edit) : null
               // A command run renders as a terminal tile - the command
               // itself in mono, its description as the caption, never a
-              // JSON dump of the input.
+              // JSON dump of the input. The tile replaces the In row
+              // alone; the Out row still shows what the command printed.
               const command = !edit && isCommandRun(item.input) ? item.input : null
-              const shownIn = item.input && !command
+              const shownIn = item.input && !command && !edit
                 ? capLines(typeof item.input === 'string' ? item.input : JSON.stringify(item.input, null, 2))
                 : null
               const shownOut = item.result ? capLines(item.result) : null
@@ -543,7 +550,7 @@ export default function ChatView({ chat, onBack }) {
                       <code className="cv-cmd-text">{command.command}</code>
                     </div>
                   )}
-                  {(item.input || item.result) && !edit && !command && (
+                  {(shownIn || shownOut) && !edit && (
                     <div className="cv-io">
                       {shownIn && (
                         <>
@@ -572,7 +579,23 @@ export default function ChatView({ chat, onBack }) {
                 </div>
               )
             }
-            // decision: approval or question, options in the harness's words
+            // decision: approval or question, options in the harness's words.
+            // A settled approval whose own run rides the rail hides -
+            // the run card is the one full record (its Done/Failed is
+            // the outcome); the answered card would only repeat the
+            // command. Questions always keep theirs - nothing else
+            // carries the Q&A - and a settled approval with no run card
+            // (an ask that never became one) keeps its answer line.
+            const isQuestion =
+              item.input && typeof item.input === 'object' && Array.isArray(item.input.questions)
+            if (
+              !item.pending &&
+              !isQuestion &&
+              item.toolName &&
+              toolCalls.has(`${item.toolName}|${JSON.stringify(item.input)}`)
+            ) {
+              return null
+            }
             return (
               <div key={item.id} className={`cv-node cv-node--${item.pending ? 'pending' : 'done'}`}>
                 <div className="cv-tool-line">
