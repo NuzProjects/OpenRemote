@@ -18,22 +18,6 @@ const hasTauri = typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__
 // failure.
 const SIGNIN_POLL_MISSES = 40
 
-// TEMP DEV MOCK - revert before any release work. A fake phone in the
-// devices beat so the footer's Mobile badge can be dogfooded without a
-// real phone in the Cloud. DEV-only: the production build replaces the
-// guard with false and drops the branch. Flips online every few calls
-// so both badge words show.
-let devMockBeat = 0
-function withDevMockPhone(devices) {
-  if (!import.meta.env.DEV) return devices
-  devMockBeat += 1
-  const online = Math.floor(devMockBeat / 3) % 2 === 0
-  return [
-    ...devices.filter((d) => d.id !== 'dev-mock-phone'),
-    { id: 'dev-mock-phone', name: 'Dev phone', platform: 'android', kind: 'desktop', online, app_version: '0.3.2-dev' },
-  ]
-}
-
 export function ConsoleProvider({ children }) {
   const [api, setApi] = useState(() => {
     const saved = loadConnection()
@@ -169,7 +153,7 @@ export function ConsoleProvider({ children }) {
       const [cloudView, deviceList] = await Promise.allSettled([api.cloud(), api.cloudDevices()])
       if (cancelled) return
       if (cloudView.status === 'fulfilled') setCloud(cloudView.value)
-      if (deviceList.status === 'fulfilled') setDevices(withDevMockPhone(deviceList.value?.devices ?? []))
+      if (deviceList.status === 'fulfilled') setDevices(deviceList.value?.devices ?? [])
       setCapabilities(caps)
       setSessions(list ?? [])
       setMachines(machineList ?? [])
@@ -219,7 +203,7 @@ export function ConsoleProvider({ children }) {
           api.cloudDevices(),
         ])
       if (cloudView.status === 'fulfilled') setCloud(cloudView.value)
-      if (deviceList.status === 'fulfilled') setDevices(withDevMockPhone(deviceList.value?.devices ?? []))
+      if (deviceList.status === 'fulfilled') setDevices(deviceList.value?.devices ?? [])
       if (sessionList.status === 'fulfilled') setSessions(sessionList.value ?? [])
       if (machineList.status === 'fulfilled') setMachines(machineList.value ?? [])
       if (pluginList.status === 'fulfilled') setPlugins(pluginList.value ?? [])
