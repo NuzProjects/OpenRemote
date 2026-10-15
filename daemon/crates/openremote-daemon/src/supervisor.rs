@@ -1846,7 +1846,7 @@ impl Supervisor {
     /// The event that holds a waiting queue, when there is one to hold.
     fn hold_payload(&self, id: &SessionId) -> Option<EventPayload> {
         let session = self.session(id).ok()?;
-        (!session.queue.is_empty() && !session.queue_paused).then(|| EventPayload::QueueChanged {
+        (!session.queue.is_empty() && !session.queue_paused).then_some(EventPayload::QueueChanged {
             queue: session.queue,
             paused: true,
         })
