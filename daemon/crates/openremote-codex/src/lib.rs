@@ -16,7 +16,7 @@ pub mod resolve;
 
 use std::path::Path;
 
-pub use driver::{Driver, models};
+pub use driver::{Driver, commands, models};
 pub use openremote_harness::{DriverError, DriverEvent, Resolution, SpawnOptions};
 
 /// Find the Codex CLI. `override` wins (tests point it at the fixture

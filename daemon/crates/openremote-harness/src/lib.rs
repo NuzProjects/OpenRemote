@@ -161,3 +161,32 @@ pub struct ModelDescriptor {
     #[serde(default)]
     pub is_default: bool,
 }
+
+/// A command a harness runs when a prompt starts with `/name`, in its own
+/// words: a built-in, one of its skills, a plugin's (`plugin:skill`).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct CommandDescriptor {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// What it takes after its name, as the harness hints it (`<issue>`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub argument_hint: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+}
+
+/// One of a harness's subagents, which a prompt can mention.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct AgentDescriptor {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// What a harness offers a composer: its commands and its agents.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct CommandCatalog {
+    pub commands: Vec<CommandDescriptor>,
+    pub agents: Vec<AgentDescriptor>,
+}

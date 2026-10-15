@@ -101,6 +101,9 @@ const PEER_ROUTES: &[(&str, &str, Tier)] = &[
     ("GET", "/machines", Tier::Machine),
     ("GET", "/harnesses/{id}/models", Tier::Machine),
     ("GET", "/fs/dirs", Tier::Machine),
+    // What a composer's / and @ menus offer for a chat on this machine.
+    ("GET", "/commands", Tier::Machine),
+    ("GET", "/files", Tier::Machine),
     ("POST", "/harnesses/{id}/signin", Tier::Machine),
     ("GET", "/harnesses/{id}/signin", Tier::Machine),
     ("POST", "/harnesses/{id}/signin/input", Tier::Machine),
@@ -122,6 +125,7 @@ const PEER_ROUTES: &[(&str, &str, Tier)] = &[
     ("POST", "/sessions/{id}/interrupt", Tier::Chat),
     ("POST", "/sessions/{id}/stop", Tier::Chat),
     ("POST", "/sessions/{id}/resume", Tier::Chat),
+    ("POST", "/sessions/{id}/title", Tier::Chat),
     ("POST", "/decisions/{id}/answer", Tier::Chat),
 ];
 
@@ -176,6 +180,10 @@ fn api_routes() -> Router<Arc<App>> {
     Router::new()
         .route("/capabilities", get(capabilities))
         .route("/fs/dirs", get(fs_dirs))
+        .route("/commands", get(get_commands))
+        .route("/files", get(get_files))
+        .route("/sessions/{id}/mentions/{chat}", get(get_mentioned_chat))
+        .route("/sessions/{id}/title", post(post_title))
         .route("/sync/summary", get(sync_summary))
         .route("/sync/sessions/{id}/events", get(sync_range))
         .route("/harnesses/{id}/models", get(harness_models))
@@ -1205,6 +1213,129 @@ async fn marketplace_catalog(State(app): State<Arc<App>>) -> Response {
     Json(json!({"entries": entries})).into_response()
 }
 
+// ---- the composer's menus (/ and @) ----
+
+#[derive(Deserialize)]
+struct ComposerQuery {
+    #[serde(default)]
+    harness: Option<String>,
+    #[serde(default)]
+    workspace: Option<String>,
+    /// A chat: its harness and workspace stand in for the two above.
+    #[serde(default)]
+    session: Option<String>,
+    #[serde(default)]
+    q: Option<String>,
+}
+
+/// The harness and workspace a composer query is about: the chat's own,
+/// or the ones it names (a chat not started yet - the home screen).
+fn composer_target(
+    app: &App,
+    query: &ComposerQuery,
+) -> Result<(Option<String>, Option<std::path::PathBuf>), Box<Response>> {
+    if let Some(raw) = &query.session {
+        let Some(id) = SessionId::parse(raw) else {
+            return Err(Box::new(error(StatusCode::BAD_REQUEST, "bad session id")));
+        };
+        let session = app
+            .supervisor
+            .session(&id)
+            .map_err(|e| Box::new(supervisor_error(e)))?;
+        return Ok((Some(session.harness), session.workspace));
+    }
+    Ok((
+        query.harness.clone(),
+        query
+            .workspace
+            .as_deref()
+            .filter(|w| !w.is_empty())
+            .map(std::path::PathBuf::from),
+    ))
+}
+
+/// What `/` and `@` offer: the harness's commands and agents, the
+/// plugins' (dimmed where the harness can't run them), the MCP servers.
+async fn get_commands(
+    State(app): State<Arc<App>>,
+    axum::extract::Query(query): axum::extract::Query<ComposerQuery>,
+) -> Response {
+    let (harness, workspace) = match composer_target(&app, &query) {
+        Ok(target) => target,
+        Err(response) => return *response,
+    };
+    let Some(harness) = harness else {
+        return error(StatusCode::BAD_REQUEST, "name a harness or a chat");
+    };
+    match app.supervisor.commands(&harness, workspace).await {
+        Ok(view) => Json(view).into_response(),
+        Err(err) => supervisor_error(err),
+    }
+}
+
+/// @ file suggestions in a chat's workspace (or a named one), ranked for
+/// the query.
+async fn get_files(
+    State(app): State<Arc<App>>,
+    axum::extract::Query(query): axum::extract::Query<ComposerQuery>,
+) -> Response {
+    let (_, workspace) = match composer_target(&app, &query) {
+        Ok(target) => target,
+        Err(response) => return *response,
+    };
+    let root = workspace.unwrap_or_else(|| {
+        std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+    });
+    match app
+        .files
+        .search(&root, query.q.as_deref().unwrap_or(""))
+        .await
+    {
+        Ok((entries, truncated)) => {
+            Json(json!({"entries": entries, "truncated": truncated})).into_response()
+        }
+        Err(message) => error(StatusCode::BAD_REQUEST, &message),
+    }
+}
+
+#[derive(Deserialize)]
+struct TitleBody {
+    request_id: String,
+    title: String,
+}
+
+/// Rename a chat (the composer's /rename): the name every device shows.
+async fn post_title(
+    State(app): State<Arc<App>>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<TitleBody>,
+) -> Response {
+    let sup = Arc::clone(&app.supervisor);
+    receipted(&app, body.request_id, &id, |sid| async move {
+        let session = sup.rename(&sid, &body.title)?;
+        Ok(serde_json::to_value(&session).unwrap_or(Value::Null))
+    })
+    .await
+}
+
+/// The read-a-chat tool's call: a chat this one was pointed at, condensed.
+/// Local only - the MCP server runs on this machine.
+async fn get_mentioned_chat(
+    State(app): State<Arc<App>>,
+    AxumPath((id, chat)): AxumPath<(String, String)>,
+) -> Response {
+    let Some(reader) = SessionId::parse(&id) else {
+        return error(StatusCode::BAD_REQUEST, "bad session id");
+    };
+    match app.supervisor.read_mentioned(&reader, &chat) {
+        Ok(text) => Json(json!({"text": text})).into_response(),
+        Err(err) => supervisor_error(err),
+    }
+}
+
 // ---- MCP servers ----
 
 async fn list_mcp_servers(State(app): State<Arc<App>>) -> Response {
@@ -2051,6 +2182,17 @@ struct RequestBody {
 struct PromptBody {
     request_id: String,
     text: String,
+    /// The chats this message points at with @: from now on this chat's
+    /// agent may read them, and only them.
+    #[serde(default)]
+    mentioned_chats: Vec<String>,
+}
+
+fn mentioned(body: &PromptBody) -> Vec<SessionId> {
+    body.mentioned_chats
+        .iter()
+        .filter_map(|id| SessionId::parse(id))
+        .collect()
 }
 
 #[derive(Deserialize)]
@@ -2135,6 +2277,10 @@ async fn post_prompt(
     // Crash after this line, before the terminal write, leaves `accepted`
     // - surfaced to the console as unknown work, never resent.
     app.supervisor.record_receipt(accepted);
+    let pointed = mentioned(&body);
+    if let Err(err) = app.supervisor.note_mentions(&session_id, &pointed) {
+        return supervisor_error(err);
+    }
     match app.supervisor.prompt(&session_id, &body.text).await {
         Ok(()) => {
             let receipt = Receipt {
@@ -2219,7 +2365,9 @@ async fn post_queue(
     Json(body): Json<PromptBody>,
 ) -> Response {
     let sup = Arc::clone(&app.supervisor);
+    let pointed = mentioned(&body);
     receipted(&app, body.request_id, &id, |sid| async move {
+        sup.note_mentions(&sid, &pointed)?;
         let session = sup.queue_add(&sid, &body.text).await?;
         Ok(serde_json::to_value(&session).unwrap_or(Value::Null))
     })
@@ -2273,7 +2421,9 @@ async fn post_steer(
     Json(body): Json<PromptBody>,
 ) -> Response {
     let sup = Arc::clone(&app.supervisor);
+    let pointed = mentioned(&body);
     receipted(&app, body.request_id, &id, |sid| async move {
+        sup.note_mentions(&sid, &pointed)?;
         sup.steer(&sid, &body.text).await?;
         Ok(json!({"steered": true}))
     })

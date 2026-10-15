@@ -125,6 +125,11 @@ pub struct Driver {
     shared: Arc<Shared>,
     thread_id: String,
     next_id: u64,
+    /// The workspace: an `@path` names a file under it.
+    cwd: PathBuf,
+    /// Codex's own skills here (name, SKILL.md path), asked once, the
+    /// first time a prompt names one with `/`.
+    skills: Option<Vec<(String, String)>>,
 }
 
 impl Driver {
@@ -194,6 +199,8 @@ impl Driver {
             shared: Arc::clone(&shared),
             thread_id: String::new(),
             next_id: HOST_CALL_ID_BASE,
+            cwd: opts.cwd.clone(),
+            skills: None,
         };
 
         // Handshake (cloudroom lines 22-25): initialize, then the
@@ -268,7 +275,7 @@ impl Driver {
     /// Send one user message as a turn. If a turn is already running, the
     /// message steers it (Codex's own mechanism, `expectedTurnId`).
     pub async fn send_prompt(&mut self, text: &str) -> Result<(), DriverError> {
-        let input = json!([{"type": "text", "text": text, "text_elements": []}]);
+        let input = self.user_input(text).await;
         let active = self.shared.active_turn.lock().unwrap().clone();
         if let Some(turn) = active {
             self.call(
@@ -377,6 +384,51 @@ impl Driver {
             .await
     }
 
+    /// The turn's input in Codex's own items: the text as typed, plus a
+    /// `skill` item for each `/name` that names one of Codex's skills and a
+    /// `mention` item for each `@path` that names a file in the workspace.
+    /// Codex runs skills and reads mentioned files through those items;
+    /// the text alone would leave both to the model.
+    async fn user_input(&mut self, text: &str) -> Value {
+        let mut items = vec![json!({"type": "text", "text": text, "text_elements": []})];
+        let words = mention_words(text);
+        if self.skills.is_none() && words.iter().any(|w| w.starts_with('/')) {
+            let cwd = self.cwd.to_string_lossy().into_owned();
+            let listed = self
+                .call("skills/list", json!({"cwds": [cwd]}))
+                .await
+                .map(|r| skills_from(&r))
+                .unwrap_or_default();
+            self.skills = Some(listed.into_iter().map(|s| (s.0, s.2)).collect());
+        }
+        for word in words {
+            if let Some(name) = word.strip_prefix('/') {
+                if let Some((name, path)) = self
+                    .skills
+                    .iter()
+                    .flatten()
+                    .find(|(skill, _)| skill == name)
+                {
+                    items.push(json!({"type": "skill", "name": name, "path": path}));
+                }
+            } else if let Some(relative) = word.strip_prefix('@') {
+                let path = self.cwd.join(relative);
+                if path.exists() {
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| relative.to_string());
+                    items.push(json!({
+                        "type": "mention",
+                        "name": name,
+                        "path": path.to_string_lossy(),
+                    }));
+                }
+            }
+        }
+        Value::Array(items)
+    }
+
     async fn notify(&mut self, method: &str, params: Value) -> Result<(), DriverError> {
         self.write(json!({"method": method, "params": params}))
             .await
@@ -389,6 +441,181 @@ impl Driver {
         self.stdin.flush().await?;
         Ok(())
     }
+}
+
+/// The `/name` and `@path` words of a prompt: each at the start or after
+/// whitespace; an `@"quoted path"` keeps its spaces.
+pub fn mention_words(text: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let at_start = i == 0 || chars[i - 1].is_whitespace();
+        if at_start && (chars[i] == '/' || chars[i] == '@') {
+            let sigil = chars[i];
+            let mut j = i + 1;
+            let word: String = if sigil == '@' && chars.get(j) == Some(&'"') {
+                j += 1;
+                let start = j;
+                while j < chars.len() && chars[j] != '"' {
+                    j += 1;
+                }
+                let inner: String = chars[start..j].iter().collect();
+                j += 1;
+                inner
+            } else {
+                let start = j;
+                while j < chars.len() && !chars[j].is_whitespace() {
+                    j += 1;
+                }
+                chars[start..j].iter().collect()
+            };
+            if !word.is_empty() {
+                words.push(format!("{sigil}{word}"));
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    words
+}
+
+/// `skills/list`'s answer as (name, description, SKILL.md path), enabled
+/// skills only.
+fn skills_from(result: &Value) -> Vec<(String, Option<String>, String)> {
+    let mut out = Vec::new();
+    for entry in result
+        .get("data")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        for skill in entry
+            .get("skills")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if skill.get("enabled").and_then(Value::as_bool) == Some(false) {
+                continue;
+            }
+            let (Some(name), Some(path)) = (
+                skill.get("name").and_then(Value::as_str),
+                skill.get("path").and_then(Value::as_str),
+            ) else {
+                continue;
+            };
+            let description = skill
+                .get("shortDescription")
+                .and_then(Value::as_str)
+                .or_else(|| skill.get("description").and_then(Value::as_str))
+                .map(String::from);
+            out.push((name.to_string(), description, path.to_string()));
+        }
+    }
+    out
+}
+
+/// The skills a Codex chat in `cwd` can run, as commands: a short-lived
+/// app-server, its handshake, and `skills/list` - no thread is started
+/// and nothing is sent to a model. Codex runs a skill named in a prompt
+/// as a `skill` input item, which the driver adds for each `/name`.
+pub async fn commands(
+    resolution: &Resolution,
+    cwd: &std::path::Path,
+) -> Result<openremote_harness::CommandCatalog, DriverError> {
+    use tokio::io::AsyncBufReadExt;
+    let (program, mut argv): (PathBuf, Vec<std::ffi::OsString>) = match resolution {
+        Resolution::Executable(path) => (path.clone(), Vec::new()),
+        Resolution::NodeScript { node, script } => {
+            (node.clone(), vec![script.as_os_str().to_os_string()])
+        }
+        Resolution::Unavailable => {
+            return Err(DriverError::Spawn("codex CLI not found".to_string()));
+        }
+    };
+    argv.extend(["app-server".into(), "--listen".into(), "stdio://".into()]);
+    let mut command = Command::new(&program);
+    command
+        .args(&argv)
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    command.creation_flags(openremote_harness::creation_flags());
+    let mut child = command
+        .spawn()
+        .map_err(|e| DriverError::Spawn(format!("codex commands: {e}")))?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| DriverError::Spawn("stdin not piped".into()))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| DriverError::Spawn("stdout not piped".into()))?;
+    let cwd_text = cwd.to_string_lossy().into_owned();
+    let exchange = async {
+        let frames = [
+            json!({"id": 1, "method": "initialize", "params": {
+                "clientInfo": {"name": "openremote", "version": env!("CARGO_PKG_VERSION")},
+                "capabilities": {"experimentalApi": true}
+            }}),
+            json!({"method": "initialized", "params": {}}),
+            json!({"id": 2, "method": "skills/list", "params": {"cwds": [cwd_text]}}),
+        ];
+        for frame in frames {
+            let mut line = serde_json::to_string(&frame).expect("frame serializes");
+            line.push('\n');
+            stdin.write_all(line.as_bytes()).await?;
+        }
+        stdin.flush().await?;
+        let mut lines = BufReader::new(stdout).lines();
+        while let Some(line) = lines.next_line().await? {
+            let Ok(frame) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            if frame.get("id").and_then(Value::as_u64) == Some(2) {
+                return Ok::<_, std::io::Error>(Some(frame));
+            }
+        }
+        Ok(None)
+    };
+    let answer = tokio::time::timeout(Duration::from_secs(30), exchange).await;
+    let _ = child.start_kill();
+    let frame = match answer {
+        Ok(Ok(Some(frame))) => frame,
+        Ok(Ok(None)) => {
+            return Err(DriverError::Protocol(
+                "codex closed before skills/list".into(),
+            ));
+        }
+        Ok(Err(e)) => return Err(e.into()),
+        Err(_) => return Err(DriverError::Protocol("codex skills/list timed out".into())),
+    };
+    if let Some(error) = frame.get("error") {
+        return Err(DriverError::Harness(format!(
+            "codex rejected skills/list: {error}"
+        )));
+    }
+    let result = frame.get("result").cloned().unwrap_or(Value::Null);
+    Ok(openremote_harness::CommandCatalog {
+        commands: skills_from(&result)
+            .into_iter()
+            .map(
+                |(name, description, _)| openremote_harness::CommandDescriptor {
+                    name,
+                    description,
+                    argument_hint: None,
+                    aliases: Vec::new(),
+                },
+            )
+            .collect(),
+        agents: Vec::new(),
+    })
 }
 
 async fn kill_and_reap(

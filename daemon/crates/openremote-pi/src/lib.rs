@@ -11,11 +11,13 @@
 //! (@earendil-works/pi-coding-agent) - cloudroom auto-cancels dialogs,
 //! OpenRemote ANSWERS them.
 
+pub mod commands;
 pub mod driver;
 pub mod resolve;
 
 use std::path::Path;
 
+pub use commands::commands;
 pub use driver::Driver;
 pub use openremote_harness::{DriverError, DriverEvent, Resolution, SpawnOptions};
 

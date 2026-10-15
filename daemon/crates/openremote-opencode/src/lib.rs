@@ -12,12 +12,14 @@
 //! labels); the turn boundary is `session.next.step.ended` with its own
 //! `finish` string.
 
+pub mod commands;
 pub mod driver;
 pub mod http;
 pub mod resolve;
 
 use std::path::Path;
 
+pub use commands::commands;
 pub use driver::Driver;
 pub use openremote_harness::{DriverError, DriverEvent, Resolution, SpawnOptions};
 

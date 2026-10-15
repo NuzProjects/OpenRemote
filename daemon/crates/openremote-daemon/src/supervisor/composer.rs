@@ -1,0 +1,613 @@
+//! The composer's side of the supervisor: what `/` and `@` offer for a
+//! chat - the harness's own commands and agents (asked once per workspace
+//! and cached, asked again when the plugins change or a running chat
+//! reports a different list), the installed plugins' parts, the MCP
+//! servers that ride - plus the chats a chat was pointed at with @, and
+//! the read-a-chat MCP server those reads go through.
+
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+
+use openremote_core::{Event, EventPayload, MessageRole, Session, SessionId};
+use openremote_harness::CommandCatalog;
+use serde::Serialize;
+
+use super::{Supervisor, SupervisorError, lock_recovering, now_ms, store_error};
+
+/// Why a plugin's command or agent is shown but can't be picked.
+const NOT_HERE: &str = "needs a harness that runs plugins";
+
+/// A read-a-chat answer is cut to this many characters, keeping its end.
+const READ_LIMIT: usize = 40_000;
+
+/// One harness's command list for one workspace, as last asked.
+pub struct CachedCommands {
+    catalog: Option<CommandCatalog>,
+    /// What the list depends on: the harness's version and the installed
+    /// plugins. A different stamp asks again.
+    stamp: String,
+    /// A running chat reported a different list, or the last ask failed.
+    stale: bool,
+    error: Option<String>,
+}
+
+/// Where the read-a-chat MCP server comes from: this binary, and the
+/// API's loopback port it calls back on.
+#[derive(Clone)]
+pub struct Controls {
+    exe: PathBuf,
+    port: u16,
+}
+
+/// A command the / menu offers.
+#[derive(Serialize, Debug)]
+pub struct CommandEntry {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub argument_hint: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+    /// `harness` (its own) or `plugin` (an installed plugin's).
+    pub source: &'static str,
+    /// The plugin's id, for a plugin's command.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<String>,
+    pub available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+}
+
+/// An agent the @ menu offers.
+#[derive(Serialize, Debug)]
+pub struct AgentEntry {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub source: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<String>,
+    pub available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+}
+
+/// An MCP server the @ menu offers by name (`@server:`).
+#[derive(Serialize, Debug, PartialEq, Eq)]
+pub struct McpServerName {
+    pub name: String,
+    /// `settings` (set up by hand) or `plugin`.
+    pub source: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<String>,
+}
+
+/// What the composer's menus offer for one harness in one workspace.
+#[derive(Serialize, Debug)]
+pub struct CommandsView {
+    pub harness: String,
+    pub runs_plugins: bool,
+    pub commands: Vec<CommandEntry>,
+    pub agents: Vec<AgentEntry>,
+    pub mcp_servers: Vec<McpServerName>,
+    /// Why the harness's own list couldn't be asked; what an earlier ask
+    /// found still shows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// The name a plugin's commands carry: its Claude manifest's own name.
+fn manifest_name(dir: &Path) -> Option<String> {
+    let raw = std::fs::read(dir.join(".claude-plugin").join("plugin.json")).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&raw).ok()?;
+    value.get("name")?.as_str().map(String::from)
+}
+
+impl Supervisor {
+    /// Chats get OpenRemote's read-a-chat MCP server from here on.
+    pub fn set_controls(&self, exe: PathBuf, port: u16) {
+        let _ = self.controls.set(Controls { exe, port });
+    }
+
+    /// The MCP servers a chat starts with: the hand-written ones that ride
+    /// this machine, and OpenRemote's read-a-chat server for this chat.
+    /// The server reads the token from the data folder itself, so the
+    /// token never appears on a command line.
+    pub(super) fn mcp_servers_for(&self, id: &SessionId) -> Vec<openremote_harness::McpServer> {
+        let mut servers = self.mcp_servers();
+        if let Some(controls) = self.controls.get() {
+            let data_dir = self.with_store(|s| s.dir().to_path_buf());
+            servers.push(openremote_harness::McpServer {
+                id: "openremote".into(),
+                command: controls.exe.to_string_lossy().into_owned(),
+                args: vec![
+                    "mcp-chat".into(),
+                    "--session".into(),
+                    id.to_string(),
+                    "--port".into(),
+                    controls.port.to_string(),
+                    "--data-dir".into(),
+                    data_dir.to_string_lossy().into_owned(),
+                ],
+            });
+        }
+        servers
+    }
+
+    /// What `/` and `@` offer for a chat on `harness` in `workspace`.
+    pub async fn commands(
+        &self,
+        harness: &str,
+        workspace: Option<PathBuf>,
+    ) -> Result<CommandsView, SupervisorError> {
+        let (backend, version) = {
+            let registry = self.registry.read().expect("registry lock");
+            let Some(known) = registry
+                .harnesses()
+                .iter()
+                .find(|h| h.id == harness)
+                .cloned()
+            else {
+                return Err(SupervisorError::Harness(format!(
+                    "harness '{harness}' is not known"
+                )));
+            };
+            (registry.backend(harness).cloned(), known.version)
+        };
+        let Some(backend) = backend else {
+            return Err(SupervisorError::Harness(format!(
+                "'{harness}' is not installed on this machine"
+            )));
+        };
+        let cwd = workspace.unwrap_or_else(Self::home_dir);
+        let (plugins, data_dir) = self.with_store(|s| {
+            let plugins: Vec<openremote_core::InstalledPlugin> = s
+                .installed_plugins()
+                .into_iter()
+                .filter(|p| p.enabled)
+                .cloned()
+                .collect();
+            (plugins, s.dir().to_path_buf())
+        });
+        // Each enabled plugin: its id, its folder, the name its commands carry.
+        let folders: Vec<(String, PathBuf, String)> = plugins
+            .iter()
+            .map(|p| {
+                let dir = crate::plugins::plugin_dir(&data_dir, &p.marketplace, &p.name);
+                let prefix = manifest_name(&dir).unwrap_or_else(|| p.name.clone());
+                (p.id(), dir, prefix)
+            })
+            .collect();
+        let runs_plugins = backend.runs_plugins();
+        let plugin_dirs: Vec<PathBuf> = if runs_plugins {
+            folders
+                .iter()
+                .map(|(_, dir, _)| dir.clone())
+                .filter(|dir| dir.join(".claude-plugin").join("plugin.json").is_file())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let stamp = format!(
+            "{}|{}",
+            version.unwrap_or_default(),
+            plugins
+                .iter()
+                .map(|p| format!("{}:{}", p.id(), p.resolved.clone().unwrap_or_default()))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let key = (harness.to_string(), cwd.clone());
+        let hit = lock_recovering(&self.command_cache)
+            .get(&key)
+            .filter(|c| c.stamp == stamp && !c.stale)
+            .map(|c| (c.catalog.clone(), c.error.clone()));
+        let (catalog, error) = match hit {
+            Some(hit) => hit,
+            None => {
+                let (catalog, error) = match backend.commands(&cwd, &plugin_dirs).await {
+                    Ok(catalog) => (catalog, None),
+                    // A failed ask keeps what an earlier one found: an old
+                    // list beats none. Marked stale, the next ask retries.
+                    Err(e) => {
+                        let earlier = lock_recovering(&self.command_cache)
+                            .get(&key)
+                            .and_then(|c| c.catalog.clone());
+                        (earlier, Some(e.to_string()))
+                    }
+                };
+                lock_recovering(&self.command_cache).insert(
+                    key,
+                    CachedCommands {
+                        catalog: catalog.clone(),
+                        stamp,
+                        stale: error.is_some(),
+                        error: error.clone(),
+                    },
+                );
+                (catalog, error)
+            }
+        };
+        let settings_servers: Vec<String> = self.mcp_servers().into_iter().map(|s| s.id).collect();
+        Ok(build_view(
+            harness,
+            runs_plugins,
+            catalog.unwrap_or_default(),
+            &folders,
+            settings_servers,
+            error,
+        ))
+    }
+
+    /// A running chat listed its commands as it started: a name the cached
+    /// list doesn't have means the list is behind, so the next ask asks
+    /// the harness again.
+    pub(super) fn note_command_names(&self, id: &SessionId, names: &[String]) {
+        let Ok(session) = self.session(id) else {
+            return;
+        };
+        let key = (
+            session.harness.clone(),
+            session.workspace.clone().unwrap_or_else(Self::home_dir),
+        );
+        let mut cache = lock_recovering(&self.command_cache);
+        let Some(entry) = cache.get_mut(&key) else {
+            return;
+        };
+        let known: BTreeSet<&str> = entry
+            .catalog
+            .iter()
+            .flat_map(|c| c.commands.iter())
+            .flat_map(|c| {
+                std::iter::once(c.name.as_str()).chain(c.aliases.iter().map(String::as_str))
+            })
+            .collect();
+        if names.iter().any(|n| !known.contains(n.as_str())) {
+            entry.stale = true;
+        }
+    }
+
+    /// The user pointed this chat at other chats with @: remember them, so
+    /// its agent may read those - and only those.
+    pub fn note_mentions(
+        &self,
+        id: &SessionId,
+        chats: &[SessionId],
+    ) -> Result<(), SupervisorError> {
+        if chats.is_empty() {
+            return Ok(());
+        }
+        let mut session = self.session(id)?;
+        let mut changed = false;
+        for chat in chats {
+            if chat != id && !session.mentioned_chats.contains(chat) {
+                session.mentioned_chats.push(*chat);
+                changed = true;
+            }
+        }
+        if changed {
+            session.updated_at = now_ms();
+            self.emit_all(id, vec![EventPayload::SessionUpdated { session }])?;
+        }
+        Ok(())
+    }
+
+    /// Rename a chat: the name every device shows, in place of the first
+    /// line of its first prompt.
+    pub fn rename(&self, id: &SessionId, title: &str) -> Result<Session, SupervisorError> {
+        let title = title.trim();
+        if title.is_empty() {
+            return Err(SupervisorError::Conflict(
+                "a chat's name can't be empty".into(),
+            ));
+        }
+        let mut session = self.session(id)?;
+        session.title = Some(title.chars().take(200).collect());
+        session.updated_at = now_ms();
+        self.emit_all(
+            id,
+            vec![EventPayload::SessionUpdated {
+                session: session.clone(),
+            }],
+        )?;
+        self.session(id)
+    }
+
+    /// The read-a-chat tool's answer: a chat this one was pointed at,
+    /// named by its id (or the start of it), condensed to its messages.
+    pub fn read_mentioned(
+        &self,
+        reader: &SessionId,
+        wanted: &str,
+    ) -> Result<String, SupervisorError> {
+        let session = self.session(reader)?;
+        let wanted = wanted.trim().trim_start_matches("chat:");
+        let target = session
+            .mentioned_chats
+            .iter()
+            .find(|c| {
+                let id = c.to_string();
+                id == wanted || (wanted.len() >= 6 && id.starts_with(wanted))
+            })
+            .copied()
+            .ok_or_else(|| {
+                SupervisorError::Conflict(format!(
+                    "this chat was not pointed at {wanted}; the user points a chat at another with @"
+                ))
+            })?;
+        let chat = self.session(&target)?;
+        let events = self
+            .with_store(|s| s.events_after(&target, None))
+            .map_err(store_error)?;
+        Ok(condensed(&chat, &events))
+    }
+}
+
+/// The / and @ lists: the harness's own entries (a plugin's when its name
+/// carries an installed plugin's prefix), then each enabled plugin's own
+/// parts the harness didn't list - dimmed where the harness runs no
+/// plugins - and the MCP servers that ride.
+fn build_view(
+    harness: &str,
+    runs_plugins: bool,
+    catalog: CommandCatalog,
+    folders: &[(String, PathBuf, String)],
+    settings_servers: Vec<String>,
+    error: Option<String>,
+) -> CommandsView {
+    let owner = |name: &str| {
+        folders
+            .iter()
+            .find(|(_, _, prefix)| name.starts_with(&format!("{prefix}:")))
+            .map(|(id, _, _)| id.clone())
+    };
+    let unavailable = (!runs_plugins).then(|| NOT_HERE.to_string());
+    let mut seen_commands = BTreeSet::new();
+    let mut commands = Vec::new();
+    for c in catalog.commands {
+        seen_commands.insert(c.name.clone());
+        let plugin = owner(&c.name);
+        commands.push(CommandEntry {
+            source: if plugin.is_some() {
+                "plugin"
+            } else {
+                "harness"
+            },
+            plugin,
+            available: true,
+            why: None,
+            name: c.name,
+            description: c.description,
+            argument_hint: c.argument_hint,
+            aliases: c.aliases,
+        });
+    }
+    let mut seen_agents = BTreeSet::new();
+    let mut agents = Vec::new();
+    for a in catalog.agents {
+        seen_agents.insert(a.name.clone());
+        let plugin = owner(&a.name);
+        agents.push(AgentEntry {
+            source: if plugin.is_some() {
+                "plugin"
+            } else {
+                "harness"
+            },
+            plugin,
+            available: true,
+            why: None,
+            name: a.name,
+            description: a.description,
+        });
+    }
+    let mut mcp_servers: Vec<McpServerName> = settings_servers
+        .into_iter()
+        .filter(|name| name != "openremote")
+        .map(|name| McpServerName {
+            name,
+            source: "settings",
+            plugin: None,
+        })
+        .collect();
+    for (id, dir, prefix) in folders {
+        let parts = crate::plugins::plugin_parts(dir, prefix);
+        for c in parts.commands {
+            if seen_commands.insert(c.name.clone()) {
+                commands.push(CommandEntry {
+                    source: "plugin",
+                    plugin: Some(id.clone()),
+                    available: runs_plugins,
+                    why: unavailable.clone(),
+                    name: c.name,
+                    description: c.description,
+                    argument_hint: c.argument_hint,
+                    aliases: c.aliases,
+                });
+            }
+        }
+        for a in parts.agents {
+            if seen_agents.insert(a.name.clone()) {
+                agents.push(AgentEntry {
+                    source: "plugin",
+                    plugin: Some(id.clone()),
+                    available: runs_plugins,
+                    why: unavailable.clone(),
+                    name: a.name,
+                    description: a.description,
+                });
+            }
+        }
+        for name in parts.mcp_servers {
+            mcp_servers.push(McpServerName {
+                name,
+                source: "plugin",
+                plugin: Some(id.clone()),
+            });
+        }
+    }
+    CommandsView {
+        harness: harness.to_string(),
+        runs_plugins,
+        commands,
+        agents,
+        mcp_servers,
+        error,
+    }
+}
+
+/// A chat as the read-a-chat tool hands it to an agent: its name and
+/// harness, then its messages in order, each tool call a one-line note.
+/// Past the limit the oldest part is cut - the end of a chat is the part
+/// an agent pointed at it most likely needs.
+fn condensed(chat: &Session, events: &[Event]) -> String {
+    let mut body = String::new();
+    for event in events {
+        match &event.payload {
+            EventPayload::MessageAdded { message } => {
+                let who = match message.role {
+                    MessageRole::User => "User",
+                    MessageRole::Assistant => "Assistant",
+                };
+                body.push_str(&format!("\n{who}: {}\n", message.text.trim()));
+            }
+            EventPayload::ToolStarted { name, .. } => {
+                body.push_str(&format!("[tool: {name}]\n"));
+            }
+            _ => {}
+        }
+    }
+    if body.len() > READ_LIMIT {
+        let mut cut = body.len() - READ_LIMIT;
+        while !body.is_char_boundary(cut) {
+            cut += 1;
+        }
+        body = format!("[earlier messages cut]\n{}", &body[cut..]);
+    }
+    format!(
+        "Chat \"{}\" ({}{}), id {}\n{}",
+        chat.title.as_deref().unwrap_or("untitled"),
+        chat.harness,
+        chat.model
+            .as_deref()
+            .map(|m| format!(", {m}"))
+            .unwrap_or_default(),
+        chat.id,
+        body
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use openremote_harness::{AgentDescriptor, CommandDescriptor};
+
+    fn plugin_folder() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let write = |path: &str, body: &str| {
+            let p = dir.path().join(path);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, body).unwrap();
+        };
+        write(".claude-plugin/plugin.json", r#"{"name": "notes"}"#);
+        write(
+            "skills/jot/SKILL.md",
+            "---\nname: jot\ndescription: Jot a note\n---\n# jot",
+        );
+        write("commands/clean.md", "---\ndescription: Clean up\n---\nbody");
+        write(
+            "agents/scribe.md",
+            "---\nname: scribe\ndescription: Writes\n---\n",
+        );
+        write(
+            ".mcp.json",
+            r#"{"mcpServers": {"notes-db": {"command": "x"}}}"#,
+        );
+        dir
+    }
+
+    #[test]
+    fn a_harness_that_runs_plugins_lists_theirs_and_one_that_cannot_dims_them() {
+        let folder = plugin_folder();
+        let folders = vec![(
+            "notes@local".to_string(),
+            folder.path().to_path_buf(),
+            "notes".to_string(),
+        )];
+        // claude listed the plugin's skill itself (with its description);
+        // the plugin's other parts fill in.
+        let catalog = CommandCatalog {
+            commands: vec![
+                CommandDescriptor {
+                    name: "compact".into(),
+                    description: Some("Compact".into()),
+                    argument_hint: None,
+                    aliases: vec![],
+                },
+                CommandDescriptor {
+                    name: "notes:jot".into(),
+                    description: Some("(notes) Jot a note".into()),
+                    argument_hint: None,
+                    aliases: vec![],
+                },
+            ],
+            agents: vec![AgentDescriptor {
+                name: "Explore".into(),
+                description: None,
+            }],
+        };
+        let view = build_view(
+            "claude",
+            true,
+            catalog,
+            &folders,
+            vec!["docs@m".into()],
+            None,
+        );
+        let by = |n: &str| view.commands.iter().find(|c| c.name == n).unwrap();
+        assert_eq!(by("compact").source, "harness");
+        assert_eq!(by("notes:jot").source, "plugin");
+        assert_eq!(by("notes:jot").plugin.as_deref(), Some("notes@local"));
+        assert_eq!(
+            by("notes:jot").description.as_deref(),
+            Some("(notes) Jot a note")
+        );
+        assert!(by("notes:clean").available);
+        assert!(
+            view.agents
+                .iter()
+                .any(|a| a.name == "notes:scribe" && a.available)
+        );
+        assert_eq!(
+            view.mcp_servers,
+            vec![
+                McpServerName {
+                    name: "docs@m".into(),
+                    source: "settings",
+                    plugin: None
+                },
+                McpServerName {
+                    name: "notes-db".into(),
+                    source: "plugin",
+                    plugin: Some("notes@local".into())
+                },
+            ]
+        );
+
+        let dimmed = build_view(
+            "codex",
+            false,
+            CommandCatalog::default(),
+            &folders,
+            vec![],
+            None,
+        );
+        let jot = dimmed
+            .commands
+            .iter()
+            .find(|c| c.name == "notes:jot")
+            .unwrap();
+        assert!(!jot.available);
+        assert_eq!(jot.why.as_deref(), Some(NOT_HERE));
+    }
+}

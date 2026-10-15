@@ -133,6 +133,10 @@ pub struct Session {
     /// resumes it (or steers one message out of it).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub queue_paused: bool,
+    /// The other chats the user pointed this one at with @ - the only ones
+    /// its agent may read through OpenRemote's read-a-chat tool.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mentioned_chats: Vec<SessionId>,
 }
 
 /// One message in a chat's queue: sent on its own when the turn before it

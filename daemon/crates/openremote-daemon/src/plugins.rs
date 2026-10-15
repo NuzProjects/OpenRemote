@@ -258,6 +258,164 @@ pub fn plugin_dir(data_dir: &Path, marketplace: &str, name: &str) -> PathBuf {
     data_dir.join("plugins").join(marketplace).join(name)
 }
 
+/// What a plugin offers a composer, read from its own folder the way
+/// Claude Code names it: skills and command files as `plugin:name`,
+/// agents as `plugin:name`, and its MCP servers by their keys.
+#[derive(Default, Debug, PartialEq, Eq)]
+pub struct PluginParts {
+    pub commands: Vec<openremote_harness::CommandDescriptor>,
+    pub agents: Vec<openremote_harness::AgentDescriptor>,
+    pub mcp_servers: Vec<String>,
+}
+
+/// Read a plugin folder's commands, agents and MCP server names. `prefix`
+/// is the name its commands carry (the manifest's name).
+pub fn plugin_parts(dir: &Path, prefix: &str) -> PluginParts {
+    let mut parts = PluginParts::default();
+    // skills/<name>/SKILL.md: one command each, unless the skill is for
+    // the model alone (`user-invocable: false`).
+    if let Ok(entries) = std::fs::read_dir(dir.join("skills")) {
+        let mut found: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+        found.sort();
+        for skill in found {
+            let Ok(text) = std::fs::read_to_string(skill.join("SKILL.md")) else {
+                continue;
+            };
+            let meta = frontmatter(&text);
+            if meta.get("user-invocable").map(String::as_str) == Some("false") {
+                continue;
+            }
+            let name = meta.get("name").cloned().unwrap_or_else(|| {
+                skill
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            });
+            parts.commands.push(openremote_harness::CommandDescriptor {
+                name: format!("{prefix}:{name}"),
+                description: meta.get("description").cloned(),
+                argument_hint: meta.get("argument-hint").cloned(),
+                aliases: Vec::new(),
+            });
+        }
+    }
+    // commands/<name>.md, a folder deeper joined with ':' as Claude does.
+    let mut files = Vec::new();
+    markdown_files(&dir.join("commands"), &mut files);
+    for file in files {
+        let Ok(relative) = file.strip_prefix(dir.join("commands")) else {
+            continue;
+        };
+        let name = relative
+            .with_extension("")
+            .to_string_lossy()
+            .replace(['\\', '/'], ":");
+        let meta = std::fs::read_to_string(&file)
+            .map(|t| frontmatter(&t))
+            .unwrap_or_default();
+        parts.commands.push(openremote_harness::CommandDescriptor {
+            name: format!("{prefix}:{name}"),
+            description: meta.get("description").cloned(),
+            argument_hint: meta.get("argument-hint").cloned(),
+            aliases: Vec::new(),
+        });
+    }
+    let mut agents = Vec::new();
+    markdown_files(&dir.join("agents"), &mut agents);
+    for file in agents {
+        let meta = std::fs::read_to_string(&file)
+            .map(|t| frontmatter(&t))
+            .unwrap_or_default();
+        let name = meta.get("name").cloned().unwrap_or_else(|| {
+            file.file_stem()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        });
+        parts.agents.push(openremote_harness::AgentDescriptor {
+            name: format!("{prefix}:{name}"),
+            description: meta.get("description").cloned(),
+        });
+    }
+    // .mcp.json (Claude's own file: `mcpServers` or the map itself) and
+    // plugin.json's `mcpServers`.
+    let mut servers = std::collections::BTreeSet::new();
+    for (file, pointer) in [
+        (dir.join(".mcp.json"), ""),
+        (
+            dir.join(".claude-plugin").join("plugin.json"),
+            "/mcpServers",
+        ),
+    ] {
+        let Ok(Some(value)) = read_json::<Value>(&file) else {
+            continue;
+        };
+        let map = if pointer.is_empty() {
+            value.get("mcpServers").unwrap_or(&value)
+        } else {
+            match value.pointer(pointer) {
+                Some(v) => v,
+                None => continue,
+            }
+        };
+        if let Some(map) = map.as_object() {
+            servers.extend(map.keys().cloned());
+        }
+    }
+    parts.mcp_servers = servers.into_iter().collect();
+    parts
+}
+
+/// Every `.md` under `dir`, in order.
+fn markdown_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+    paths.sort();
+    for path in paths {
+        if path.is_dir() {
+            markdown_files(&path, out);
+        } else if path.extension().is_some_and(|e| e == "md") {
+            out.push(path);
+        }
+    }
+}
+
+/// A markdown file's YAML frontmatter, read for the plain `key: value`
+/// lines (and `>`/`|` blocks) the skill and command formats use.
+pub fn frontmatter(text: &str) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    let mut lines = text.lines();
+    if lines.next().map(str::trim) != Some("---") {
+        return out;
+    }
+    let body: Vec<&str> = lines.take_while(|l| l.trim() != "---").collect();
+    let mut i = 0;
+    while i < body.len() {
+        let line = body[i];
+        i += 1;
+        if line.starts_with(' ') || line.starts_with('\t') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let value = value.trim();
+        let value = if value == ">" || value == "|" || value == ">-" || value == "|-" {
+            let mut block = Vec::new();
+            while i < body.len() && (body[i].starts_with(' ') || body[i].trim().is_empty()) {
+                block.push(body[i].trim());
+                i += 1;
+            }
+            block.join(if value.starts_with('|') { "\n" } else { " " })
+        } else {
+            value.trim_matches('"').trim_matches('\'').to_string()
+        };
+        out.insert(key.trim().to_string(), value.trim().to_string());
+    }
+    out
+}
+
 /// Where the user asked to install from.
 #[derive(Deserialize, Clone, Debug)]
 #[serde(tag = "kind", rename_all = "snake_case")]

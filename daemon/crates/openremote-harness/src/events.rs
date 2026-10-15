@@ -42,6 +42,12 @@ pub enum DriverEvent {
         model: Option<String>,
         permission_mode: Option<String>,
     },
+    /// The command names the harness listed as the chat started (claude's
+    /// `system/init` `slash_commands`) - how a running chat tells the
+    /// daemon its cached command list is behind.
+    CommandsListed {
+        names: Vec<String>,
+    },
     /// The harness named the model mid-conversation - a fact it only
     /// reveals when a turn runs (opencode's `session.next.step.started`).
     /// Repeated reports fold idempotently; a None model is never a change.

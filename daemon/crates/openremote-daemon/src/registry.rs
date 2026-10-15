@@ -213,6 +213,46 @@ impl Backend {
     /// failure) - a non-fact the caller must not dress up as an empty
     /// advertisement, the same way `signed_in` keeps `None` for a probe
     /// that could not ask.
+    /// What this harness offers a composer in `cwd`: its commands and its
+    /// agents, in its own words, with the installed plugins loaded where
+    /// it loads them. `Ok(None)` = the harness lists nothing through us
+    /// before a chat runs (grok and Antigravity, until their lists are
+    /// verified on signed-in installs); their own commands still run when
+    /// typed.
+    pub async fn commands(
+        &self,
+        cwd: &std::path::Path,
+        plugin_dirs: &[PathBuf],
+    ) -> Result<Option<openremote_harness::CommandCatalog>, DriverError> {
+        match self {
+            // The SDK's initialize handshake, run in the chat's folder with
+            // the plugins as `--plugin-dir`.
+            Backend::Claude(resolution) => {
+                openremote_claude::driver::commands(resolution, cwd, plugin_dirs)
+                    .await
+                    .map(Some)
+            }
+            // Codex's own skills/list, without starting a thread.
+            Backend::Codex(resolution) => {
+                openremote_codex::commands(resolution, cwd).await.map(Some)
+            }
+            // Pi's own get_commands.
+            Backend::Pi(resolution) => openremote_pi::commands(resolution, cwd).await.map(Some),
+            // OpenCode's own GET /command and GET /agent.
+            Backend::Opencode(resolution) => openremote_opencode::commands(resolution, cwd)
+                .await
+                .map(Some),
+            Backend::Grok(_) | Backend::Agy(_) => Ok(None),
+        }
+    }
+
+    /// Whether this harness loads the installed plugins today (claude, by
+    /// `--plugin-dir`). The others show a plugin's commands dimmed until
+    /// plugins reach every harness.
+    pub fn runs_plugins(&self) -> bool {
+        matches!(self, Backend::Claude(_))
+    }
+
     pub async fn models(&self) -> Result<Option<Vec<ModelDescriptor>>, DriverError> {
         match self {
             Backend::Claude(resolution) => {

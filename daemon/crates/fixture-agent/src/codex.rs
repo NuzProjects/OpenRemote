@@ -189,6 +189,16 @@ impl CodexFixture {
                 );
             }
             ("turn/start", Some(id)) => {
+                // What the driver handed the turn, item by item: the text,
+                // and the skill and mention items it added.
+                crate::record(
+                    "fixture-codex-input",
+                    &params
+                        .get("input")
+                        .cloned()
+                        .unwrap_or(Value::Null)
+                        .to_string(),
+                );
                 self.turn_count += 1;
                 let turn = format!("turn-fixture-{}", self.turn_count);
                 self.active_turn = Some(turn.clone());
@@ -272,6 +282,21 @@ impl CodexFixture {
                     json!({"threadId": self.thread(), "model": model}),
                 );
                 self.respond(id, json!({"model": model}));
+            }
+            // One skill, as the real app-server lists a folder's skills.
+            ("skills/list", Some(id)) => {
+                let cwd = std::env::current_dir().unwrap_or_default();
+                let path = cwd.join("skills").join("fixture-skill").join("SKILL.md");
+                self.respond(
+                    id,
+                    json!({"data": [{"cwd": cwd.to_string_lossy(), "errors": [], "skills": [{
+                        "name": "fixture-skill",
+                        "description": "A fixture skill",
+                        "enabled": true,
+                        "path": path.to_string_lossy(),
+                        "scope": "repo"
+                    }]}]}),
+                );
             }
             (method, Some(id)) => {
                 eprintln!("fixture-codex: unknown call {method}");

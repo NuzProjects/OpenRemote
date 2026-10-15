@@ -26,6 +26,8 @@ pub struct App {
     pub plugins: crate::plugins::PluginHost,
     /// The marketplaces' cached catalogs (Plugins > Discover).
     pub marketplaces: crate::marketplace::MarketplaceHost,
+    /// @ file suggestions, a few seconds' listing per workspace.
+    pub files: crate::files::FileIndex,
 }
 
 pub struct AppOptions {
@@ -73,6 +75,7 @@ impl App {
             data_dir: options.data_dir,
             plugins,
             marketplaces,
+            files: crate::files::FileIndex::default(),
             store,
             supervisor,
             cloud,

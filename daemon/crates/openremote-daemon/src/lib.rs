@@ -4,11 +4,13 @@
 pub mod app;
 pub mod cloud_http;
 pub mod embedded;
+pub mod files;
 pub mod fsdirs;
 pub mod host;
 pub mod http;
 pub mod install;
 pub mod marketplace;
+pub mod mcp_chat;
 pub mod plugins;
 pub mod registry;
 pub mod signin;

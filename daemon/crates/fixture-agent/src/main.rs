@@ -102,6 +102,50 @@ struct FixtureAgent {
     steer_open: Option<(String, String)>,
 }
 
+/// The commands the fixture's claude lists, as the real CLI does in its
+/// initialize answer and its init frame: two built-ins, each plugin's
+/// skills from its `--plugin-dir` as `plugin:skill`, and - so a test can
+/// make the list change between two starts - the name in a
+/// `fixture-extra-command` file in the working folder.
+fn fixture_commands() -> Vec<(String, String)> {
+    let mut commands = vec![
+        (
+            "compact".to_string(),
+            "Compact the conversation".to_string(),
+        ),
+        ("clear".to_string(), "Clear the conversation".to_string()),
+    ];
+    let argv: Vec<String> = std::env::args().collect();
+    for pair in argv.windows(2) {
+        if pair[0] != "--plugin-dir" {
+            continue;
+        }
+        let dir = std::path::Path::new(&pair[1]);
+        let name = std::fs::read_to_string(dir.join(".claude-plugin").join("plugin.json"))
+            .ok()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+            .and_then(|v| v.get("name").and_then(|n| n.as_str()).map(String::from));
+        let (Some(name), Ok(skills)) = (name, std::fs::read_dir(dir.join("skills"))) else {
+            continue;
+        };
+        let mut skills: Vec<String> = skills
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        skills.sort();
+        for skill in skills {
+            commands.push((format!("{name}:{skill}"), format!("({name}) {skill}")));
+        }
+    }
+    if let Ok(extra) = std::fs::read_to_string("fixture-extra-command") {
+        let extra = extra.trim();
+        if !extra.is_empty() {
+            commands.push((extra.to_string(), "an extra command".to_string()));
+        }
+    }
+    commands
+}
+
 impl FixtureAgent {
     fn from_env() -> Self {
         let mut session_id = std::env::var("FIXTURE_AGENT_SESSION_ID")
@@ -225,6 +269,10 @@ impl FixtureAgent {
             "model": "fixture-sonnet",
             "permissionMode": self.permission_mode,
             "tools": ["Read", "Bash", "Edit"],
+            "slash_commands": fixture_commands()
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>(),
             "cwd": "."
         }));
     }
@@ -580,9 +628,21 @@ impl FixtureAgent {
             // names, and the description whose opening versions the row),
             // so the console's catalog path runs against real shapes.
             Some("initialize") => {
+                let commands: Vec<serde_json::Value> = fixture_commands()
+                    .into_iter()
+                    .map(|(name, description)| {
+                        serde_json::json!({"name": name, "description": description, "argumentHint": ""})
+                    })
+                    .collect();
                 self.control_response_ok(
                     &request_id,
-                    serde_json::json!({"models": [
+                    serde_json::json!({
+                    "commands": commands,
+                    "agents": [
+                        {"name": "Explore", "description": "Reads widely, reports back"},
+                        {"name": "Plan", "description": "Plans before editing"}
+                    ],
+                    "models": [
                         {"value": "default",
                          "resolvedModel": "fixture-sonnet",
                          "displayName": "Default (recommended)",

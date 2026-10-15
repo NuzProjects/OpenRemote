@@ -37,6 +37,9 @@ pub struct Driver {
     child: Arc<AsyncMutex<Child>>,
     client: crate::http::HttpClient,
     session_id: String,
+    /// OpenCode's own command names, asked once, the first time a prompt
+    /// starts with `/`.
+    commands: Option<Vec<String>>,
 }
 
 impl Driver {
@@ -62,6 +65,18 @@ impl Driver {
     }
 
     pub async fn send_prompt(&mut self, text: &str) -> Result<(), DriverError> {
+        // A prompt that starts with one of OpenCode's own commands runs it
+        // through OpenCode's command endpoint (its template, its
+        // `$ARGUMENTS`); anything else is a plain prompt.
+        if let Some((name, arguments)) = self.leading_command(text).await {
+            self.client
+                .post(
+                    &format!("/session/{}/command", self.session_id),
+                    json!({"command": name, "arguments": arguments}),
+                )
+                .await?;
+            return Ok(());
+        }
         self.client
             .post(
                 &format!("/api/session/{}/prompt", self.session_id),
@@ -69,6 +84,31 @@ impl Driver {
             )
             .await?;
         Ok(())
+    }
+
+    /// `/name rest` when `name` is one of OpenCode's commands.
+    async fn leading_command(&mut self, text: &str) -> Option<(String, String)> {
+        let rest = text.trim_start().strip_prefix('/')?;
+        let (name, arguments) = rest
+            .split_once(char::is_whitespace)
+            .map(|(n, a)| (n, a.trim()))
+            .unwrap_or((rest.trim(), ""));
+        if self.commands.is_none() {
+            let listed = self.client.get("/command").await.ok()?;
+            self.commands = Some(
+                listed
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|c| c.get("name").and_then(Value::as_str).map(String::from))
+                    .collect(),
+            );
+        }
+        self.commands
+            .iter()
+            .flatten()
+            .any(|known| known == name)
+            .then(|| (name.to_string(), arguments.to_string()))
     }
 
     pub async fn interrupt(&mut self) -> Result<(), DriverError> {
@@ -251,6 +291,7 @@ async fn spawn_serve(
         child: Arc::clone(&child),
         client,
         session_id: session_id.clone(),
+        commands: None,
     };
     // The bus watcher: every event for our session rides the driver
     // channel. A clean server-side close of the event connection is a

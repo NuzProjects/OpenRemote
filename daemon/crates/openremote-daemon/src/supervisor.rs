@@ -28,6 +28,9 @@ use uuid::Uuid;
 
 use crate::registry::{Backend, HarnessRegistry, SessionDriver};
 
+mod composer;
+pub use composer::{AgentEntry, CommandEntry, CommandsView, McpServerName};
+
 /// Store conflicts surface as their own shape, not a generic store error.
 fn store_error(e: openremote_core::store::StoreError) -> SupervisorError {
     match e {
@@ -279,6 +282,13 @@ pub struct Supervisor {
     steer_next: StdMutex<HashMap<SessionId, String>>,
     /// The daemon's own machine - sessions run here, plugins ride from here.
     this_machine: MachineId,
+    /// Each harness's command list per workspace, as the composer's /
+    /// menu shows it (composer.rs).
+    command_cache: StdMutex<HashMap<(String, std::path::PathBuf), composer::CachedCommands>>,
+    /// The read-a-chat MCP server (OpenRemote Controls' first tool): this
+    /// binary in its `mcp-chat` mode, told the API's port. Unset, chats
+    /// run without it (the e2e suites without a daemon binary).
+    controls: std::sync::OnceLock<composer::Controls>,
 }
 
 /// One poisoning policy for every mutex that routes through this helper
@@ -317,6 +327,8 @@ impl Supervisor {
             stderr_ring: StdMutex::new(HashMap::new()),
             steer_next: StdMutex::new(HashMap::new()),
             this_machine,
+            command_cache: StdMutex::new(HashMap::new()),
+            controls: std::sync::OnceLock::new(),
         });
         supervisor.spawn_presence_ticker(this_machine);
         supervisor.spawn_schedule_engine();
@@ -1233,6 +1245,7 @@ impl Supervisor {
             title: None,
             queue: Vec::new(),
             queue_paused: false,
+            mentioned_chats: Vec::new(),
         };
         let id = session.id;
         self.emit_all(&id, vec![EventPayload::SessionCreated { session }])?;
@@ -1256,7 +1269,7 @@ impl Supervisor {
             resume: None,
             include_deltas: true,
             fast: current.fast,
-            mcp_servers: self.mcp_servers(),
+            mcp_servers: self.mcp_servers_for(&id),
             plugin_dirs: self.plugin_dirs(),
         };
         match backend.spawn(opts).await {
@@ -1778,7 +1791,7 @@ impl Supervisor {
             resume: Some(harness_ref),
             include_deltas: true,
             fast: session.fast,
-            mcp_servers: self.mcp_servers(),
+            mcp_servers: self.mcp_servers_for(id),
             plugin_dirs: self.plugin_dirs(),
         };
         let (driver, rx) = match backend.spawn(opts).await {
@@ -2190,6 +2203,9 @@ impl Supervisor {
                         self.emit_all(id, vec![EventPayload::SessionUpdated { session }])?;
                     }
                 }
+            }
+            DriverEvent::CommandsListed { names } => {
+                self.note_command_names(id, &names);
             }
             DriverEvent::ModelReported { model } => {
                 // A mid-conversation model fact (opencode's step-start):
@@ -2608,6 +2624,7 @@ mod tests {
             title: None,
             queue: Vec::new(),
             queue_paused: false,
+            mentioned_chats: Vec::new(),
         };
         let id = session.id;
         supervisor

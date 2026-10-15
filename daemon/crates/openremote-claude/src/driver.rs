@@ -344,6 +344,101 @@ async fn kill_and_reap(
 pub async fn models(
     resolution: &Resolution,
 ) -> Result<Vec<openremote_harness::ModelDescriptor>, DriverError> {
+    let Some(response) = handshake(resolution, None, &[], "models").await? else {
+        return Ok(Vec::new());
+    };
+    let Some(list) = catalog_list(&response) else {
+        return Ok(Vec::new()); // a shape we don't speak; empty beats a guess
+    };
+    Ok(list.iter().filter_map(catalog_entry).collect())
+}
+
+/// The commands and agents a chat in `cwd` would have: the same handshake,
+/// run in that folder (its `.claude/` skills and commands count) with the
+/// installed plugins loaded as a chat loads them. The answer's `commands`
+/// (name, description, argumentHint, aliases) are what a prompt starting
+/// `/name` runs; its `agents` are the subagents a prompt can mention.
+pub async fn commands(
+    resolution: &Resolution,
+    cwd: &std::path::Path,
+    plugin_dirs: &[std::path::PathBuf],
+) -> Result<openremote_harness::CommandCatalog, DriverError> {
+    let mut extra: Vec<std::ffi::OsString> = Vec::new();
+    for dir in plugin_dirs {
+        extra.push("--plugin-dir".into());
+        extra.push(dir.as_os_str().to_owned());
+    }
+    let Some(response) = handshake(resolution, Some(cwd), &extra, "commands").await? else {
+        return Ok(openremote_harness::CommandCatalog::default());
+    };
+    Ok(command_catalog(&response))
+}
+
+/// The handshake's payload: current CLIs nest it under the body's own
+/// `response` key, older ones answered flat.
+fn handshake_body(response: &Value) -> &Value {
+    response.get("response").unwrap_or(response)
+}
+
+/// The commands and agents in a handshake answer, in the CLI's own words.
+fn command_catalog(response: &Value) -> openremote_harness::CommandCatalog {
+    let body = handshake_body(response);
+    let text = |v: &Value, key: &str| {
+        v.get(key)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+    };
+    let commands = body
+        .get("commands")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(|c| {
+                    Some(openremote_harness::CommandDescriptor {
+                        name: text(c, "name")?,
+                        description: text(c, "description"),
+                        argument_hint: text(c, "argumentHint"),
+                        aliases: c
+                            .get("aliases")
+                            .and_then(Value::as_array)
+                            .map(|a| {
+                                a.iter()
+                                    .filter_map(|n| n.as_str().map(String::from))
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let agents = body
+        .get("agents")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(|a| {
+                    Some(openremote_harness::AgentDescriptor {
+                        name: text(a, "name")?,
+                        description: text(a, "description"),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    openremote_harness::CommandCatalog { commands, agents }
+}
+
+/// One `initialize` handshake with a short-lived CLI process: the control
+/// response body for our request id, `None` when the CLI exited cleanly
+/// without answering (a shape we don't speak), an error when it failed.
+async fn handshake(
+    resolution: &Resolution,
+    cwd: Option<&std::path::Path>,
+    extra: &[std::ffi::OsString],
+    what: &str,
+) -> Result<Option<Value>, DriverError> {
     let (program, argv): (std::path::PathBuf, Vec<std::ffi::OsString>) = match resolution {
         Resolution::Executable(path) => (path.clone(), Vec::new()),
         Resolution::NodeScript { node, script } => {
@@ -365,16 +460,20 @@ pub async fn models(
             "--permission-prompt-tool",
             "stdio",
         ])
+        .args(extra)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
     // Windows: no console flash, no Ctrl-C from a shared console; the
     // why lives on openremote_harness::creation_flags.
     #[cfg(windows)]
     command.creation_flags(openremote_harness::creation_flags());
     let mut child = command
         .spawn()
-        .map_err(|e| DriverError::Spawn(format!("claude models: {e}")))?;
+        .map_err(|e| DriverError::Spawn(format!("claude {what}: {e}")))?;
     let mut stdin = child
         .stdin
         .take()
@@ -385,20 +484,15 @@ pub async fn models(
         .ok_or_else(|| DriverError::Spawn("stdout not piped".into()))?;
 
     // Write the handshake, then read lines until our response id comes back.
-    let request_id = "or-models";
+    let request_id = "or-probe";
     let envelope = frames::initialize_envelope(request_id);
-    let catalog = async {
+    let answer = async {
         use tokio::io::AsyncWriteExt;
         stdin.write_all(envelope.as_bytes()).await?;
         stdin.write_all(b"\n").await?;
         stdin.flush().await?;
         drop(stdin);
 
-        let mut models = Vec::new();
-        // Whether the CLI answered our request id at all - even with a
-        // shape we don't speak. An answered handshake is the catalog
-        // whatever the exit; an unanswered one is judged by the exit.
-        let mut answered = false;
         // The probe's line reads carry the same bound as the session
         // reader (harness audit F11): a runaway catalog line is dropped,
         // not buffered.
@@ -413,62 +507,52 @@ pub async fn models(
             if response.get("request_id").and_then(|r| r.as_str()) != Some(request_id) {
                 continue;
             }
-            answered = true;
-            let Some(list) = catalog_list(&response) else {
-                break; // a shape we don't speak; empty beats a guess
-            };
-            for entry in list {
-                if let Some(descriptor) = catalog_entry(entry) {
-                    models.push(descriptor);
-                }
-            }
-            break;
+            return Ok::<_, std::io::Error>(Some(response));
         }
-        Ok::<_, std::io::Error>((models, answered))
+        Ok(None)
     };
-    let ((models, answered), read_err) =
-        match tokio::time::timeout(Duration::from_secs(30), catalog).await {
-            Ok(Ok(pair)) => (pair, None),
-            Ok(Err(e)) => ((Vec::new(), false), Some(e)),
-            // A CLI that never answers the handshake is a failed probe, not
-            // an empty advertisement: an empty list reads as "no models" end
-            // to end, and the console would hold it as the harness's answer.
-            Err(_) => (
-                (Vec::new(), false),
-                Some(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "the handshake never answered",
-                )),
-            ),
-        };
+    let (answer, read_err) = match tokio::time::timeout(Duration::from_secs(30), answer).await {
+        Ok(Ok(answer)) => (answer, None),
+        Ok(Err(e)) => (None, Some(e)),
+        // A CLI that never answers the handshake is a failed probe, not
+        // an empty advertisement: an empty list reads as "nothing" end to
+        // end, and the console would hold it as the harness's answer.
+        Err(_) => (
+            None,
+            Some(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "the handshake never answered",
+            )),
+        ),
+    };
     let _ = child.start_kill();
     if let Some(e) = read_err {
-        return Err(DriverError::Spawn(format!("claude models: {e}")));
+        return Err(DriverError::Spawn(format!("claude {what}: {e}")));
     }
-    if !answered {
+    if answer.is_none() {
         // No handshake answer landed, so the CLI's own exit is the only
         // verdict left: a nonzero exit (not signed in, a broken install)
         // or a wire it closed without answering is a failed probe -
-        // never an advertisement of no models. A clean exit without an
-        // answer keeps the old lenient reading (a shape we don't speak,
+        // never an advertisement of nothing. A clean exit without an
+        // answer keeps the lenient reading (a shape we don't speak,
         // empty beats a guess).
         let status = match tokio::time::timeout(Duration::from_secs(10), child.wait()).await {
             Ok(Ok(status)) => status,
-            Ok(Err(e)) => return Err(DriverError::Spawn(format!("claude models: {e}"))),
+            Ok(Err(e)) => return Err(DriverError::Spawn(format!("claude {what}: {e}"))),
             Err(_) => {
-                return Err(DriverError::Spawn(
-                    "claude models: the CLI never exited".into(),
-                ));
+                return Err(DriverError::Spawn(format!(
+                    "claude {what}: the CLI never exited"
+                )));
             }
         };
         if !status.success() {
             return Err(DriverError::Spawn(format!(
-                "claude models: exited with {}",
+                "claude {what}: exited with {}",
                 status.code().unwrap_or(-1)
             )));
         }
     }
-    Ok(models)
+    Ok(answer)
 }
 
 /// The `models` array inside a control response body. Current CLIs nest
@@ -635,11 +719,25 @@ async fn read_stdout(
                 session_id,
                 model,
                 permission_mode,
-            } => Some(DriverEvent::Initialized {
-                session_ref: session_id,
-                model,
-                permission_mode,
-            }),
+                slash_commands,
+            } => {
+                if tx
+                    .send(DriverEvent::Initialized {
+                        session_ref: session_id,
+                        model,
+                        permission_mode,
+                    })
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                // The names the chat can run now: the daemon compares them
+                // with its cached command list.
+                (!slash_commands.is_empty()).then_some(DriverEvent::CommandsListed {
+                    names: slash_commands,
+                })
+            }
             Frame::Assistant { content, .. } => {
                 for text in frames::block_texts(&content) {
                     if tx.send(DriverEvent::AssistantText { text }).await.is_err() {

@@ -217,6 +217,7 @@ async fn read_prompt(
                 session_id,
                 model,
                 permission_mode,
+                ..
             } => {
                 // The first init names the conversation - that fact rides
                 // to the supervisor. Every init refreshes the resume ref

@@ -704,6 +704,7 @@ mod tests {
             title: None,
             queue: Vec::new(),
             queue_paused: false,
+            mentioned_chats: Vec::new(),
         };
         let private = session(None);
         let mut synced = session(Some(DeviceId::new()));

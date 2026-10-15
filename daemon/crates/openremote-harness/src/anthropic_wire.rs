@@ -15,6 +15,9 @@ pub enum Frame {
         session_id: String,
         model: Option<String>,
         permission_mode: Option<String>,
+        /// The commands this session can run (claude's `slash_commands`):
+        /// names only; the descriptions come from `initialize`.
+        slash_commands: Vec<String>,
     },
     /// `assistant` message - content blocks (text / tool_use).
     Assistant {
@@ -131,6 +134,16 @@ pub fn parse_frame(line: &str) -> Option<Frame> {
                     .get("permissionMode")
                     .and_then(|m| m.as_str())
                     .map(String::from),
+                slash_commands: raw
+                    .get("slash_commands")
+                    .and_then(|c| c.as_array())
+                    .map(|names| {
+                        names
+                            .iter()
+                            .filter_map(|n| n.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
             }),
             Some("compact_boundary") => Some(Frame::CompactBoundary),
             _ => Some(Frame::Other { kind, raw }),
@@ -293,7 +306,7 @@ mod tests {
     #[test]
     fn parses_init_frames() {
         let frame = parse_frame(
-            r#"{"type":"system","subtype":"init","session_id":"abc","model":"sonnet","permissionMode":"default"}"#,
+            r#"{"type":"system","subtype":"init","session_id":"abc","model":"sonnet","permissionMode":"default","slash_commands":["compact","notes:jot"]}"#,
         )
         .unwrap();
         match frame {
@@ -301,10 +314,12 @@ mod tests {
                 session_id,
                 model,
                 permission_mode,
+                slash_commands,
             } => {
                 assert_eq!(session_id, "abc");
                 assert_eq!(model.as_deref(), Some("sonnet"));
                 assert_eq!(permission_mode.as_deref(), Some("default"));
+                assert_eq!(slash_commands, vec!["compact", "notes:jot"]);
             }
             other => panic!("unexpected {other:?}"),
         }

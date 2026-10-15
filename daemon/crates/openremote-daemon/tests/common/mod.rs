@@ -262,6 +262,12 @@ pub async fn start_cloud_daemon(
         .await
         .expect("bind");
     let addr = listener.local_addr().expect("addr");
+    // Chats get the read-a-chat MCP server from this package's own daemon
+    // binary, as a real daemon hands it its own path.
+    app.supervisor.set_controls(
+        PathBuf::from(env!("CARGO_BIN_EXE_openremote-daemon")),
+        addr.port(),
+    );
     tokio::spawn(app::serve(app, listener));
     TestDaemon {
         token,

@@ -11,6 +11,8 @@
 //!   that minted the install code.
 //! - `openremote-daemon status`: exits 0 when this computer is in Cloud.
 //! - `openremote-daemon unenroll`: leaves Cloud (keeps private chats).
+//! - `openremote-daemon mcp-chat --session <id> --port <p> --data-dir <d>`:
+//!   the read-a-chat MCP server a chat's harness starts over stdio.
 //! - `openremote-daemon --version`.
 
 use std::process::ExitCode;
@@ -38,6 +40,9 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         },
+        // A chat's read-a-chat MCP server (OpenRemote Controls), started by
+        // the chat's harness over stdio.
+        Some("mcp-chat") => runtime.block_on(openremote_daemon::mcp_chat::run(&args[1..])),
         Some("status") => status(),
         Some("unenroll") => runtime.block_on(unenroll()),
         Some("--version" | "-V") => {
@@ -46,7 +51,7 @@ fn main() -> ExitCode {
         }
         Some(other) => {
             eprintln!(
-                "openremote-daemon: unknown command '{other}' (agent, enroll, status, unenroll, --version)"
+                "openremote-daemon: unknown command '{other}' (agent, enroll, status, unenroll, mcp-chat, --version)"
             );
             ExitCode::from(2)
         }
@@ -84,6 +89,11 @@ async fn serve(agent: bool) -> ExitCode {
         cloud,
     })
     .await;
+    // Chats start OpenRemote's read-a-chat MCP server from this binary,
+    // calling back on this port.
+    if let Ok(exe) = std::env::current_exe() {
+        app.supervisor.set_controls(exe, addr.port());
+    }
 
     if agent {
         // A service is stopped with SIGTERM (or Ctrl-C when run by hand).
