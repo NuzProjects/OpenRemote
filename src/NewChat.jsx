@@ -4,7 +4,7 @@ import PickerMenu from './PickerMenu.jsx'
 import { usePrivacyMode } from './privacy.js'
 import { useHint, useModelSwitches, usePaletteSource, useShortcut } from './keyboard.jsx'
 import FolderPickerModal from './FolderPickerModal.jsx'
-import { machinePickerItems, platformLabel } from './cloud.js'
+import { machinePickerItems, platformLabel, signedIn } from './cloud.js'
 import { HarnessMark } from './brand-marks.jsx'
 import SignInModal from './SignInModal.jsx'
 import HarnessManagerModal from './HarnessManagerModal.jsx'
@@ -17,6 +17,8 @@ import { SIGNIN_HARNESSES, pickable } from './harness-manager.js'
 import { loadDefaults } from './defaults.js'
 import { projectName } from './projects.js'
 import { clashes } from './plugins.js'
+import { useComposerMenus } from './useComposerMenus.jsx'
+import { mentionedChats, ownCommands, takeCommands } from './composer-menus.js'
 import { isMobile } from './platform.js'
 import './newchat.css'
 import './composer.css'
@@ -38,7 +40,7 @@ export default function NewChat({
   const privacy = usePrivacyMode()
   const {
     connection, capabilities, sessions, chats, createChat, modelsFor, devices, thisDevice,
-    capabilitiesFor, apiFor, projects, addProject, plugins,
+    capabilitiesFor, apiFor, projects, addProject, plugins, cloud, renameChat,
   } = useConsole()
   // Plugins of one name both on: said here too, where chats start.
   const clashing = mode === 'local' ? clashes(plugins?.installed) : []
@@ -258,6 +260,26 @@ export default function NewChat({
   // its key fall through.
   const boxRef = useRef(null)
   const inputRef = useRef(null)
+  // The / and @ menus for the chat this screen will start: its harness,
+  // its folder, the machine it will run on.
+  const cloudReady = signedIn(cloud)
+  const menus = useComposerMenus({
+    text,
+    setText,
+    inputRef,
+    harness: currentHarness?.id,
+    workspace,
+    deviceId: target,
+    inChat: false,
+    cloudReady,
+    choicesFor: (arg) => {
+      if (arg === 'model') return models.map((m) => ({ id: m.model, name: m.display_name ?? m.model }))
+      if (arg === 'effort') return effortTiers.map((e) => ({ id: e }))
+      if (arg === 'fast') return [{ id: 'on' }, { id: 'off' }]
+      if (arg === 'permission') return permissionWords.map((w) => ({ id: w }))
+      return []
+    },
+  })
   const openPickerAt = (kind) => {
     const el = boxRef.current?.querySelector(`[data-picker="${kind}"]`)
     if (!el) return false
@@ -355,16 +377,36 @@ export default function NewChat({
     setBusy(true)
     setError(null)
     try {
+      // OpenRemote's commands set this chat's start (model, effort, fast,
+      // permissions), its name, and whether it goes on Cloud; the rest is
+      // the first message.
+      const { run, text: message } = takeCommands(text.trim(), ownCommands({ inChat: false, cloud: cloudReady }))
+      const picked = Object.fromEntries(run.map((c) => [c.name, c.arg]))
+      const fastPicked = 'fast' in picked ? (picked.fast ? picked.fast.toLowerCase() === 'on' : !fast) : fast
+      if (!message) {
+        // Only commands: they set this screen's pickers.
+        if (picked.model) setModel(picked.model)
+        if (picked.effort) setEffort(picked.effort)
+        if ('fast' in picked) setFast(fastPicked)
+        if (picked.permissions) setPermission(picked.permissions)
+        setText('')
+        return
+      }
       const id = await createChat(
-        text.trim(),
+        message,
         workspace,
         currentHarness.id,
-        startModel ?? undefined,
-        fast || undefined,
-        chosenEffort ?? undefined,
-        chosenPermission ?? undefined,
-        { deviceId: target, synced: cloudMode },
+        picked.model ?? startModel ?? undefined,
+        fastPicked || undefined,
+        picked.effort ?? chosenEffort ?? undefined,
+        picked.permissions ?? chosenPermission ?? undefined,
+        {
+          deviceId: target,
+          synced: cloudMode || 'sync' in picked || 'cloud' in picked,
+          mentionedChats: mentionedChats(message, chats),
+        },
       )
+      if (picked.rename) await renameChat(id, picked.rename)
       setText('')
       onOpen(id)
     } catch (err) {
@@ -437,10 +479,18 @@ export default function NewChat({
         </div>
       )}
       <div className="nc-box" ref={boxRef}>
+        {menus.element}
         <textarea
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value)
+            menus.track(e)
+          }}
+          onKeyUp={menus.track}
+          onClick={menus.track}
           onKeyDown={(e) => {
+            // The / and @ menus take their keys first.
+            if (menus.onKeyDown(e)) return
             // A phone's keyboard Enter is a new line; the send button sends.
             if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !isMobile) {
               e.preventDefault()

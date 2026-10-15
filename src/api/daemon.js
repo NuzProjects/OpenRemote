@@ -297,8 +297,40 @@ export class DaemonApi {
     return this.call('GET', `/fs/dirs${path ? `?path=${encodeURIComponent(path)}` : ''}`, null, { signal })
   }
 
-  prompt(id, text) {
-    return this.call('POST', `/sessions/${id}/prompts`, { request_id: newRequestId(), text })
+  // `mentionedChats`: the chats this message points at with @ - from now
+  // on the chat's agent may read them, and only them.
+  prompt(id, text, mentionedChats = []) {
+    return this.call('POST', `/sessions/${id}/prompts`, {
+      request_id: newRequestId(),
+      text,
+      ...(mentionedChats.length ? { mentioned_chats: mentionedChats } : {}),
+    })
+  }
+
+  // Rename a chat (the composer's /rename).
+  rename(id, title) {
+    return this.call('POST', `/sessions/${id}/title`, { request_id: newRequestId(), title })
+  }
+
+  // What a composer's / and @ menus offer: a chat's own, or a harness's in
+  // a folder before the chat exists. The first ask in a folder starts the
+  // harness briefly to list them - the longer budget.
+  commands({ harness, workspace, session } = {}) {
+    const query = new URLSearchParams()
+    if (session) query.set('session', session)
+    else {
+      if (harness) query.set('harness', harness)
+      if (workspace) query.set('workspace', workspace)
+    }
+    return this.call('GET', `/commands?${query}`, null, { timeoutMs: 60_000 })
+  }
+
+  // @ file suggestions in a chat's workspace, or a named folder.
+  files({ workspace, session, q = '' } = {}, { signal = null } = {}) {
+    const query = new URLSearchParams({ q })
+    if (session) query.set('session', session)
+    else if (workspace) query.set('workspace', workspace)
+    return this.call('GET', `/files?${query}`, null, { signal })
   }
 
   // Model, effort, and fast on a live chat. A harness that only accepts the
@@ -327,8 +359,12 @@ export class DaemonApi {
 
   // The chat's queue - the daemon keeps it, so every device sees the same
   // one. A queued message runs as its own turn when the running one ends.
-  queue(id, text) {
-    return this.call('POST', `/sessions/${id}/queue`, { request_id: newRequestId(), text })
+  queue(id, text, mentionedChats = []) {
+    return this.call('POST', `/sessions/${id}/queue`, {
+      request_id: newRequestId(),
+      text,
+      ...(mentionedChats.length ? { mentioned_chats: mentionedChats } : {}),
+    })
   }
 
   queueRemove(id, item) {
@@ -350,8 +386,13 @@ export class DaemonApi {
   }
 
   // A message straight into the running turn, never through the queue.
-  steer(id, text) {
-    return this.call('POST', `/sessions/${id}/steer`, { request_id: newRequestId(), text }, { timeoutMs: BOOT_TIMEOUT_MS })
+  steer(id, text, mentionedChats = []) {
+    return this.call(
+      'POST',
+      `/sessions/${id}/steer`,
+      { request_id: newRequestId(), text, ...(mentionedChats.length ? { mentioned_chats: mentionedChats } : {}) },
+      { timeoutMs: BOOT_TIMEOUT_MS },
+    )
   }
 
   // Resuming boots the harness again (the same cold-start window as

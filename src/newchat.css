@@ -62,6 +62,8 @@
 }
 
 .nc-box {
+  /* the / and @ menu anchors to the box */
+  position: relative;
   grid-row: 2;
   width: min(620px, 100%);
   max-width: 620px;

@@ -372,17 +372,50 @@ export function ConsoleProvider({ children }) {
   const createChat = useCallback(
     async (
       text, workspace, harness, model, fast, effort, permissionMode,
-      { deviceId = null, synced = false } = {},
+      { deviceId = null, synced = false, mentionedChats = [] } = {},
     ) => {
       const session = await api.createSession({
         harness, workspace, model, effort, fast, permissionMode, deviceId, synced,
       })
       ensureChat(session)
-      if (text.trim()) await api.prompt(session.id, text.trim())
+      if (text.trim()) await api.prompt(session.id, text.trim(), mentionedChats)
       return session.id
     },
     [api, ensureChat],
   )
+
+  // What a composer's / and @ menus offer, kept per chat (or per harness
+  // and folder) for this console's life; a plugin installed, removed or
+  // turned on or off clears it, since the lists carry the plugins.
+  const commandCache = useRef(new Map())
+  useEffect(() => {
+    commandCache.current.clear()
+  }, [plugins])
+  const commandsFor = useCallback(
+    async ({ harness, workspace = null, session = null, deviceId = null }) => {
+      const key = `${deviceId ?? ''}|${session ?? `${harness}|${workspace ?? ''}`}`
+      const cached = commandCache.current.get(key)
+      if (cached) return cached
+      const asked = api
+        .device(deviceId)
+        .commands({ harness, workspace, session })
+        .catch((err) => {
+          commandCache.current.delete(key)
+          throw err
+        })
+      commandCache.current.set(key, asked)
+      return asked
+    },
+    [api],
+  )
+
+  const filesFor = useCallback(
+    async ({ workspace = null, session = null, deviceId = null, q = '', signal = null }) =>
+      api.device(deviceId).files({ workspace, session, q }, { signal }),
+    [api],
+  )
+
+  const renameChat = useCallback(async (chatId, title) => api.rename(chatId, title), [api])
 
   // The API of another of the user's devices, through this daemon.
   const apiFor = useCallback((deviceId) => api.device(deviceId), [api])
@@ -529,8 +562,8 @@ export function ConsoleProvider({ children }) {
   )
 
   const sendPrompt = useCallback(
-    async (chatId, text) => {
-      await api.prompt(chatId, text.trim())
+    async (chatId, text, mentionedChats = []) => {
+      await api.prompt(chatId, text.trim(), mentionedChats)
     },
     [api],
   )
@@ -569,10 +602,16 @@ export function ConsoleProvider({ children }) {
   // The chat's queue (the daemon keeps it; queue.changed folds it here):
   // a message sent while a turn is working waits and runs when the turn
   // ends. Steer puts one into the running turn now.
-  const queueMessage = useCallback(async (chatId, text) => api.queue(chatId, text.trim()), [api])
+  const queueMessage = useCallback(
+    async (chatId, text, mentionedChats = []) => api.queue(chatId, text.trim(), mentionedChats),
+    [api],
+  )
   const removeQueued = useCallback(async (chatId, itemId) => api.queueRemove(chatId, itemId), [api])
   const steerQueued = useCallback(async (chatId, itemId) => api.queueSteer(chatId, itemId), [api])
-  const steerMessage = useCallback(async (chatId, text) => api.steer(chatId, text.trim()), [api])
+  const steerMessage = useCallback(
+    async (chatId, text, mentionedChats = []) => api.steer(chatId, text.trim(), mentionedChats),
+    [api],
+  )
   const resumeQueue = useCallback(async (chatId) => api.queueResume(chatId), [api])
 
   // ---- machines ----
@@ -975,6 +1014,9 @@ export function ConsoleProvider({ children }) {
       devices,
       thisDevice: cloud?.device?.id ?? null,
       apiFor,
+      commandsFor,
+      filesFor,
+      renameChat,
       capabilitiesFor,
       refreshCloud,
       signInCloud,
@@ -1046,6 +1088,9 @@ export function ConsoleProvider({ children }) {
       cloud,
       devices,
       apiFor,
+      commandsFor,
+      filesFor,
+      renameChat,
       capabilitiesFor,
       refreshCloud,
       signInCloud,

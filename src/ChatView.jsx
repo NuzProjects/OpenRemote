@@ -30,6 +30,8 @@ import PickerMenu from './PickerMenu.jsx'
 import { isMobile } from './platform.js'
 import { usePrivacyMode } from './privacy.js'
 import { useHint, useModelSwitches, usePaletteSource, useShortcut } from './keyboard.jsx'
+import { useComposerMenus } from './useComposerMenus.jsx'
+import { mentionedChats, ownCommands, takeCommands } from './composer-menus.js'
 import './chatview.css'
 import './composer.css'
 
@@ -196,6 +198,8 @@ export default function ChatView({ chat, onBack, focused = true }) {
     steerQueued,
     steerMessage,
     resumeQueue,
+    renameChat,
+    chats,
   } = useConsole()
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [confirmSync, setConfirmSync] = useState(false)
@@ -251,6 +255,55 @@ export default function ChatView({ chat, onBack, focused = true }) {
   // the chip's name never changes when the first turn resolves the id.
   const currentModel = findModel(models, chat.model)
   const efforts = currentModel?.reasoning_efforts ?? []
+  // The / and @ menus, asking the machine that runs this chat.
+  const cloudReady = signedIn(cloud)
+  const menus = useComposerMenus({
+    text,
+    setText,
+    inputRef,
+    harness: chat.harness,
+    sessionId: chat.id,
+    deviceId: elsewhere ? chat.executor : null,
+    inChat: true,
+    cloudReady,
+    enabled: alive && reachable,
+    choicesFor: (arg) => {
+      if (arg === 'model') return models.map((m) => ({ id: m.model, name: m.display_name ?? m.model }))
+      if (arg === 'effort') return efforts.map((e) => ({ id: e }))
+      if (arg === 'fast') return [{ id: 'on' }, { id: 'off' }]
+      if (arg === 'permission') return (harness?.permission_modes ?? []).map((w) => ({ id: w }))
+      return []
+    },
+  })
+
+  // An OpenRemote command from the composer, run here before the rest of
+  // the message goes: the same paths the pickers and buttons take.
+  const runCommand = async ({ name, arg }) => {
+    if (name === 'model' || name === 'effort' || name === 'permissions') {
+      if (!arg) throw new Error(`/${name} needs a choice - pick one from its menu`)
+      const key = { model: 'model', effort: 'effort', permissions: 'permissionMode' }[name]
+      await updateChatSettings(chat.id, { [key]: arg })
+    } else if (name === 'fast') {
+      await updateChatSettings(chat.id, { fast: arg ? arg.toLowerCase() === 'on' : !chat.fast })
+    } else if (name === 'stop') {
+      await stopChat(chat.id)
+    } else if (name === 'resume') {
+      await resumeChat(chat.id)
+    } else if (name === 'rename') {
+      if (!arg) throw new Error('/rename needs a name: /rename "New name"')
+      await renameChat(chat.id, arg)
+    } else if (name === 'sync' || name === 'cloud') {
+      await syncChat(chat.id)
+    }
+  }
+
+  // The message as it goes: OpenRemote's commands run and leave it; what
+  // remains goes to the harness with the chats it points at.
+  const prepare = async () => {
+    const { run, text: message } = takeCommands(text.trim(), ownCommands({ inChat: true, cloud: cloudReady }))
+    for (const command of run) await runCommand(command)
+    return { message, pointed: mentionedChats(message, chats) }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -317,8 +370,11 @@ export default function ChatView({ chat, onBack, focused = true }) {
     setBusy(true)
     setError(null)
     try {
-      if (turnOpen) await queueMessage(chat.id, text.trim())
-      else await sendPrompt(chat.id, text.trim())
+      const { message, pointed } = await prepare()
+      if (message) {
+        if (turnOpen) await queueMessage(chat.id, message, pointed)
+        else await sendPrompt(chat.id, message, pointed)
+      }
       setText('')
     } catch (err) {
       setError(err.message ?? String(err))
@@ -456,7 +512,8 @@ export default function ChatView({ chat, onBack, focused = true }) {
     setBusy(true)
     setError(null)
     try {
-      await steerMessage(chat.id, text.trim())
+      const { message, pointed } = await prepare()
+      if (message) await steerMessage(chat.id, message, pointed)
       setText('')
     } catch (err) {
       setError(err.message ?? String(err))
@@ -806,6 +863,7 @@ export default function ChatView({ chat, onBack, focused = true }) {
 
       <div className="cv-composer" ref={composerRef}>
         <div className="cv-box">
+          {menus.element}
           {queue.length > 0 && (
             <div className="cv-queue">
               <div className="cv-queue-head">
@@ -863,8 +921,15 @@ export default function ChatView({ chat, onBack, focused = true }) {
           <textarea
             ref={inputRef}
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => {
+              setText(e.target.value)
+              menus.track(e)
+            }}
+            onKeyUp={menus.track}
+            onClick={menus.track}
             onKeyDown={(e) => {
+              // The / and @ menus take their keys first.
+              if (menus.onKeyDown(e)) return
               // A phone's keyboard Enter is a new line; the send button sends.
               // Ctrl/Cmd+Enter is Steer's (the keyboard catalog's).
               if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !isMobile) {
