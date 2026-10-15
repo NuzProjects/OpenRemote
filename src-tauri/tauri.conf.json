@@ -27,6 +27,7 @@
   },
   "bundle": {
     "active": true,
+    "copyright": "Copyright (C) 2026 moreweb",
     "android": {
       "minSdkVersion": 26,
       "versionCode": 4

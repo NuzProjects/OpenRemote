@@ -69,6 +69,10 @@ stand-in and point the daemon at it:
 cd daemon && cargo run -p fake-cloud   # prints the OPENREMOTE_* exports
 ```
 
+## License
+
+OpenRemote is licensed AGPL-3.0-only - see [LICENSE](LICENSE).
+
 ## Conventions
 
 - Windows first: frameless window with a custom titlebar (Segoe MDL2 glyphs).

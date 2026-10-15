@@ -1,6 +1,7 @@
 [package]
 name = "openremote-ui-desktop"
 version = "0.3.2"
+license = "AGPL-3.0-only"
 edition = "2021"
 
 [build-dependencies]
