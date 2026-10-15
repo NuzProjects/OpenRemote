@@ -348,13 +348,13 @@ export default function AutomationForm({ rule, onClose }) {
                   aria-haspopup="listbox"
                   aria-expanded={picker?.kind === 'machine'}
                 >
-                  {currentMachine?.machine.name ?? 'No machine online'}
+                  {currentMachine ? <span className="pv">{currentMachine.machine.name}</span> : 'No machine online'}
                 </button>
                 {picker?.kind === 'machine' && (
                   <PickerMenu
                     label="Machine"
                     searchPlaceholder="Search machines"
-                    items={online.map((m) => ({ id: m.machine.id, name: m.machine.name }))}
+                    items={online.map((m) => ({ id: m.machine.id, name: m.machine.name, veiled: true }))}
                     groups={null}
                     selectedId={machineId ?? ''}
                     onChoose={(id) => {
@@ -379,14 +379,14 @@ export default function AutomationForm({ rule, onClose }) {
                 aria-haspopup="listbox"
                 aria-expanded={picker?.kind === 'project'}
               >
-                {matchedProject ? projectName(matchedProject) : 'No project yet'}
+                {matchedProject ? <span className="pv">{projectName(matchedProject)}</span> : 'No project yet'}
               </button>
               {picker?.kind === 'project' && (
                 <PickerMenu
                   label="Project"
                   searchPlaceholder="Search projects"
                   wide
-                  items={(projects ?? []).map((p) => ({ id: p.folders[0], name: projectName(p) }))}
+                  items={(projects ?? []).map((p) => ({ id: p.folders[0], name: projectName(p), veiled: true }))}
                   groups={null}
                   selectedId={workspace ?? ''}
                   onChoose={(id) => {
@@ -395,7 +395,7 @@ export default function AutomationForm({ rule, onClose }) {
                   }}
                   onClose={() => setPicker(null)}
                   anchor={{ left: picker.x, top: picker.y }}
-                  renderSubline={(item) => <span className="nc-item-sub">{item.id}</span>}
+                  renderSubline={(item) => <span className="nc-item-sub pv">{item.id}</span>}
                 />
               )}
             </span>

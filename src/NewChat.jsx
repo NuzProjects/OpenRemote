@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ArrowUp, House, FolderOpen, Lightning, Plus } from '@phosphor-icons/react'
 import PickerMenu from './PickerMenu.jsx'
+import { usePrivacyMode } from './privacy.js'
 import FolderPickerModal from './FolderPickerModal.jsx'
 import { machinePickerItems, platformLabel } from './cloud.js'
 import { HarnessMark } from './brand-marks.jsx'
@@ -24,6 +25,7 @@ import './composer.css'
 
 
 export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false, onAddProjectDone }) {
+  const privacy = usePrivacyMode()
   const {
     connection, capabilities, sessions, chats, createChat, modelsFor, devices, thisDevice,
     capabilitiesFor, apiFor, projects, addProject,
@@ -517,10 +519,10 @@ export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false
               onClick={openPicker('project')}
               aria-haspopup="listbox"
               aria-expanded={picker?.kind === 'project'}
-              title={chosenProject ? workspace : 'A chat can run in a project, or in no folder at all'}
+              title={chosenProject ? (privacy ? 'The project this chat runs in' : workspace) : 'A chat can run in a project, or in no folder at all'}
             >
               <FolderOpen size={13} weight="light" />
-              {chosenProject ? projectName(chosenProject) : 'No project'}
+              {chosenProject ? <span className="pv">{projectName(chosenProject)}</span> : 'No project'}
             </button>
             {picker?.kind === 'project' && (
               <PickerMenu
@@ -529,7 +531,7 @@ export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false
                 wide
                 items={[
                   { id: '__none__', name: 'No project' },
-                  ...targetProjects.map((p) => ({ id: p.id, name: projectName(p) })),
+                  ...targetProjects.map((p) => ({ id: p.id, name: projectName(p), veiled: true })),
                 ]}
                 groups={null}
                 selectedId={chosenProject?.id ?? '__none__'}
@@ -541,7 +543,7 @@ export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false
                 anchor={{ left: picker.x, top: picker.y }}
                 renderSubline={(item) =>
                   item.id === '__none__' ? null : (
-                    <span className="nc-item-sub">
+                    <span className="nc-item-sub pv">
                       {targetProjects.find((p) => p.id === item.id)?.folders[0]}
                     </span>
                   )
@@ -571,13 +573,13 @@ export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false
                 title="Where the chat runs"
               >
                 <span className={`nc-dev-dot nc-dev-dot--${targetOffline ? 'offline' : 'online'}`} />
-                {targetItem?.name ?? (isMobile ? 'Pick a machine' : 'This computer')}
+                {targetItem ? <span className={targetItem.here ? undefined : 'pv'}>{targetItem.name}</span> : isMobile ? 'Pick a machine' : 'This computer'}
               </button>
               {picker?.kind === 'machine' && (
                 <PickerMenu
                   label="Run on"
                   searchPlaceholder="Search machines"
-                  items={machines.map((m) => ({ ...m, id: m.id ?? 'here' }))}
+                  items={machines.map((m) => ({ ...m, id: m.id ?? 'here', veiled: !m.here }))}
                   groups={null}
                   selectedId={target ?? 'here'}
                   onChoose={(id) => chooseTarget(id === 'here' ? null : id)}
@@ -606,7 +608,7 @@ export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false
           )}
         </div>
         {addProjectError && <p className="nc-error">{addProjectError}</p>}
-        {targetOffline && <p className="nc-error">{targetItem.name} is offline.</p>}
+        {targetOffline && <p className="nc-error"><span className="pv">{targetItem.name}</span> is offline.</p>}
         {isMobile && cloudMode && machines.length === 0 && (
           <div className="nc-signin">
             <div className="nc-signin-note">

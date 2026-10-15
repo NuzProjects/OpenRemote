@@ -85,7 +85,7 @@ export default function AddMachineModal({ onClose }) {
         </div>
         {joined ? (
           <p className="dv-modal-hint">
-            {joined.name} joined your Cloud. Your devices can run chats on it now.
+            <span className="pv">{joined.name}</span> joined your Cloud. Your devices can run chats on it now.
           </p>
         ) : (
           <>

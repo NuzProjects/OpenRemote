@@ -193,13 +193,13 @@ export default function AutomationsView({ onOpenChat }) {
             <div key={rule.id} className={`am-rule${rule.enabled ? '' : ' off'}`}>
               <div className="am-rule-main">
                 <div className="am-rule-body">
-                  <div className="am-name">{rule.name}</div>
+                  <div className="am-name pv">{rule.name}</div>
                   <div className="am-line">
                     {whenSentence(rule.trigger)} · {harnessName(rule.harness)}
-                    {oneMachine ? '' : ` on ${machineName(rule.machine)}`} · {ranLabel(rule)}
+                    {oneMachine ? '' : <> on <span className="pv">{machineName(rule.machine)}</span></>} · {ranLabel(rule)}
                   </div>
                   {rule.trigger.kind === 'webhook' && api?.url && (
-                    <code className="am-hook">
+                    <code className="am-hook pv">
                       {api.url}/hooks/{rule.id}?key={rule.trigger.key}
                     </code>
                   )}
@@ -244,7 +244,7 @@ export default function AutomationsView({ onOpenChat }) {
               {rule.enabled && missing && (
                 <p className="am-note">
                   {harnessName(rule.harness)} is not installed
-                  {oneMachine ? '.' : ` on ${machineName(rule.machine)}.`}
+                  {oneMachine ? '.' : <> on <span className="pv">{machineName(rule.machine)}</span>.</>}
                 </p>
               )}
             </div>
@@ -263,14 +263,14 @@ export default function AutomationsView({ onOpenChat }) {
           {thread.map((item, index) => {
             if (item.role === 'user') {
               return (
-                <div key={index} className="pt-user">
+                <div key={index} className="pt-user pv">
                   {item.text}
                 </div>
               )
             }
             if (item.role === 'reply' || item.role === 'note') {
               return (
-                <p key={index} className="pt-reply">
+                <p key={index} className="pt-reply pv">
                   {item.text}
                 </p>
               )
@@ -278,7 +278,7 @@ export default function AutomationsView({ onOpenChat }) {
             if (item.role === 'done') {
               return (
                 <p key={index} className="pt-done">
-                  <Check size={12} weight="bold" /> {item.text}{' '}
+                  <Check size={12} weight="bold" /> <span className="pv">{item.text}</span>{' '}
                   <button className="pt-undo" onClick={() => undoCreate(item.ruleId)}>
                     Undo
                   </button>
@@ -295,15 +295,15 @@ export default function AutomationsView({ onOpenChat }) {
                 <div className="pt-card-head">
                   <Lightning size={11} weight="fill" /> CREATE RULE
                 </div>
-                <div className="pt-card-name">{draft.name}</div>
+                <div className="pt-card-name pv">{draft.name}</div>
                 <div className="pt-card-chips">
                   <span className="pt-chip">{harnessName(draft.harness)}</span>
-                  {!oneMachine && <span className="pt-chip">{machineName(draft.machineId)}</span>}
+                  {!oneMachine && <span className="pt-chip"><span className="pv">{machineName(draft.machineId)}</span></span>}
                   <span className="pt-chip">
                     {hookKind ? 'webhook' : `every day at ${draft.trigger.time}`}
                   </span>
                 </div>
-                <div className="pt-card-task">“{draft.task}”</div>
+                <div className="pt-card-task pv">“{draft.task}”</div>
                 {connectorKind && (
                   <p className="pt-card-note">
                     That trigger needs a connector that isn’t built yet - a schedule or a webhook
@@ -312,7 +312,7 @@ export default function AutomationsView({ onOpenChat }) {
                 )}
                 {!oneMachine && offlineMachine && (
                   <p className="pt-card-note">
-                    {machineName(draft.machineId)} hasn’t checked in - rules run where the agent
+                    <span className="pv">{machineName(draft.machineId)}</span> hasn’t checked in - rules run where the agent
                     is online.
                   </p>
                 )}

@@ -9,10 +9,12 @@ import { X } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
 import { HarnessMark } from './brand-marks.jsx'
 import { harnessRows } from './harness-manager.js'
+import { usePrivacyMode } from './privacy.js'
 import './devices.css'
 import { useBack } from './use-back.js'
 
 export default function HarnessManagerModal({ onClose, onSignIn }) {
+  const privacy = usePrivacyMode()
   useBack(true, onClose)
   const { capabilities, machines, installHarness } = useConsole()
   const [busy, setBusy] = useState(null)
@@ -90,7 +92,7 @@ export default function HarnessManagerModal({ onClose, onSignIn }) {
                   // Mono is for technical content (DESIGN.md): the
                   // daemon's probe words are mono, prose is plain text.
                   (row.detailKind === 'mono' ? (
-                    <code className="dv-hm-detail" title={row.detail}>
+                    <code className="dv-hm-detail pv" title={privacy ? undefined : row.detail}>
                       {row.detail}
                     </code>
                   ) : (

@@ -18,8 +18,10 @@ import {
   savePrefs,
   applyReduceMotion,
   applyDensity,
+  applyPrivacyMode,
 } from './settings.js'
 import { hasTauri } from './pick-folder.js'
+import { usePrivacyMode } from './privacy.js'
 import { version } from '../package.json'
 import './devices.css'
 import './panels.css'
@@ -47,6 +49,7 @@ const SECTIONS = [
 const PHONE_SECTIONS = new Set(['appearance', 'cloud', 'this-install'])
 
 export default function SettingsView({ onReplay, onOpenChat }) {
+  const privacy = usePrivacyMode()
   const {
     connection,
     capabilities,
@@ -130,6 +133,12 @@ export default function SettingsView({ onReplay, onOpenChat }) {
     const value = !prefs.reduce_motion
     setPref({ reduce_motion: value })
     applyReduceMotion(document, value)
+  }
+
+  const togglePrivacy = () => {
+    const value = !prefs.privacy_mode
+    setPref({ privacy_mode: value })
+    applyPrivacyMode(document, value)
   }
 
   // The Windows startup toggle: the shell's autostart plugin writes the
@@ -424,10 +433,10 @@ export default function SettingsView({ onReplay, onOpenChat }) {
                 key={p.id}
                 type="button"
                 className="pn-btn"
-                title={`Remove the project - its chats stay. Folder: ${p.folders[0]}`}
+                title={privacy ? 'Remove the project - its chats stay' : `Remove the project - its chats stay. Folder: ${p.folders[0]}`}
                 onClick={() => removeProject(p.id)}
               >
-                {p.folders[0].split(/[\\/]/).filter(Boolean).pop()} ✕
+                <span className="pv">{p.folders[0].split(/[\\/]/).filter(Boolean).pop()}</span> ✕
               </button>
             ))}
           </div>
@@ -467,6 +476,22 @@ export default function SettingsView({ onReplay, onOpenChat }) {
             onClick={toggleReduce}
           >
             {prefs.reduce_motion ? 'On' : 'Off'}
+          </button>
+        </div>
+        <div className="pn-row">
+          <div>
+            <div className="pn-name">Privacy mode</div>
+            <div className="pn-detail">
+              For recordings and streams: blurs chat titles, projects, paths, device names, your
+              email and the transcript. What you type stays readable.
+            </div>
+          </div>
+          <button
+            type="button"
+            className={prefs.privacy_mode ? 'pn-btn on' : 'pn-btn'}
+            onClick={togglePrivacy}
+          >
+            {prefs.privacy_mode ? 'On' : 'Off'}
           </button>
         </div>
       </div>
@@ -545,7 +570,17 @@ export default function SettingsView({ onReplay, onOpenChat }) {
       <div className="pn-list pn-list--tight">
         <div className="pn-row">
           <div>
-            <div className="pn-name">{inCloud ? `Signed in as ${cloud.account?.email ?? 'your account'}` : 'Not signed in'}</div>
+            <div className="pn-name">
+              {inCloud ? (
+                cloud.account?.email ? (
+                  <>Signed in as <span className="pv">{cloud.account.email}</span></>
+                ) : (
+                  'Signed in as your account'
+                )
+              ) : (
+                'Not signed in'
+              )}
+            </div>
             <div className="pn-detail">
               {inCloud
                 ? confirmSignOut
@@ -615,7 +650,9 @@ export default function SettingsView({ onReplay, onOpenChat }) {
           <div className="pn-row">
             <div>
               <div className="pn-name">{daemonDetail.url.replace(/^https?:\/\//, '')}</div>
-              <div className="pn-detail">{daemonDetail.data_dir ?? 'The local address the console talks to.'}</div>
+              <div className="pn-detail">
+                {daemonDetail.data_dir ? <span className="pv">{daemonDetail.data_dir}</span> : 'The local address the console talks to.'}
+              </div>
             </div>
           </div>
         )}
@@ -648,7 +685,7 @@ export default function SettingsView({ onReplay, onOpenChat }) {
           <div className="pn-row" key={h.id}>
             <div>
               <div className="pn-name">{harnessName(h.id)}</div>
-              <div className="pn-detail">{h.available ? h.path : 'Not found on this machine.'}</div>
+              <div className="pn-detail">{h.available ? <span className="pv">{h.path}</span> : 'Not found on this machine.'}</div>
             </div>
             {h.available && h.signed_in === false && SIGNIN_HARNESSES.has(h.id) ? (
               <button type="button" className="pn-btn" onClick={() => setSignInFor(h.id)}>
@@ -678,10 +715,10 @@ export default function SettingsView({ onReplay, onOpenChat }) {
           archivedRows.map((s) => (
             <div className="pn-row" key={s.id}>
               <div>
-                <div className="pn-name">{chats[s.id]?.title ?? s.title ?? 'A new task'}</div>
+                <div className="pn-name pv">{chats[s.id]?.title ?? s.title ?? 'A new task'}</div>
                 <div className="pn-detail">
                   {harnessName(s.harness)}
-                  {s.workspace ? ` · ${s.workspace}` : ''}
+                  {s.workspace ? <> · <span className="pv">{s.workspace}</span></> : ''}
                 </div>
               </div>
               <button type="button" className="pn-btn" onClick={() => onOpenChat(s.id)}>Open</button>

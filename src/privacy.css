@@ -1,0 +1,12 @@
+/* Privacy mode (Settings > Appearance): anything that would identify the
+   user or their work - chat titles, projects, paths, device names, the
+   account email, the transcript - wears the `pv` class and is blurred
+   past reading while the mode is on. The blur keeps each element's
+   shape, so the layout reads the same on a recording. There is no
+   hover-to-peek on purpose: a stray pointer on a stream must never
+   reveal anything. The composer stays readable - typing blind helps no
+   one. No transition, so reduced motion has nothing to cover. */
+
+html[data-privacy] .pv {
+  filter: blur(7px);
+}

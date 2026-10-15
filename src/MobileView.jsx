@@ -8,6 +8,7 @@ import { DeviceMobile } from '@phosphor-icons/react'
 import MachineModal from './MachineModal.jsx'
 import CloudStateRow from './CloudStateRow.jsx'
 import { useConsole } from './state/console.jsx'
+import { usePrivacyMode } from './privacy.js'
 import { isPhone, platformLabel, selfLabel, signedIn } from './cloud.js'
 import './devices.css'
 import './panels.css'
@@ -17,6 +18,7 @@ function detail(device) {
 }
 
 export default function MobileView({ onOpenChat }) {
+  const privacy = usePrivacyMode()
   const { devices, thisDevice, cloud } = useConsole()
   const [openId, setOpenId] = useState(null)
   const inCloud = signedIn(cloud)
@@ -53,13 +55,13 @@ export default function MobileView({ onOpenChat }) {
                 key={device.id}
                 className="dv-card"
                 onClick={() => setOpenId(device.id)}
-                title={device.name}
+                title={privacy ? undefined : device.name}
               >
                 <span className="dv-icon">
                   <DeviceMobile size={19} weight="light" />
                 </span>
                 <span className="dv-name">
-                  {device.name}
+                  <span className="pv">{device.name}</span>
                   {device.id === thisDevice && <span className="dv-badge">{selfLabel(device)}</span>}
                 </span>
                 <span className="dv-detail">{detail(device)}</span>

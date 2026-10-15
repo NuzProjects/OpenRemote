@@ -8,7 +8,14 @@ import { useConsole } from './state/console.jsx'
 import { signedIn } from './cloud.js'
 import './panels.css'
 
-const signedName = (email) => (email ? `Signed in as ${email}` : 'Signed in')
+const signedName = (email) =>
+  email ? (
+    <>
+      Signed in as <span className="pv">{email}</span>
+    </>
+  ) : (
+    'Signed in'
+  )
 
 // What the row says for each state. CloudMode says the same things on
 // its door; this is the quiet, in-list version.

@@ -16,6 +16,7 @@ const {
   savePrefs,
   applyReduceMotion,
   applyDensity,
+  applyPrivacyMode,
   restoreBootPrefs,
   hashWriteReady,
   loadRecentWorkspaces,
@@ -84,6 +85,33 @@ test('restoreBootPrefs applies the persisted look before first paint', () => {
   assert.equal(doc.attrs.get('data-density'), 'compact')
   // startup_view defaults to 'new' - the hash stays untouched.
   assert.equal(loc.hash, '')
+})
+
+test('privacy mode is off unless saved as exactly true, and survives a restart', () => {
+  localStorage.clear()
+  assert.equal(loadPrefs().privacy_mode, false)
+  // Only a real boolean turns it on - a stray truthy value never blurs
+  // the app by accident.
+  localStorage.setItem('openremote-prefs', JSON.stringify({ privacy_mode: 'yes' }))
+  assert.equal(loadPrefs().privacy_mode, false)
+  localStorage.clear()
+  savePrefs({ privacy_mode: true })
+  // Saving another pref keeps it.
+  savePrefs({ density: 'compact' })
+  assert.equal(loadPrefs().privacy_mode, true)
+  // Restored before first paint, so a stream that starts private never
+  // shows one readable frame.
+  const doc = stubDoc()
+  restoreBootPrefs(doc, { hash: '' })
+  assert.ok(doc.attrs.has('data-privacy'))
+})
+
+test('applyPrivacyMode sets and clears its html attribute', () => {
+  const doc = stubDoc()
+  applyPrivacyMode(doc, true)
+  assert.ok(doc.attrs.has('data-privacy'))
+  applyPrivacyMode(doc, false)
+  assert.ok(!doc.attrs.has('data-privacy'))
 })
 
 test('restoreBootPrefs seeds the hash only when asked and only when empty', () => {

@@ -28,7 +28,7 @@ export default function AccountView({ onOpenMachines }) {
         <div>
           <h1 className="dv-title">Account</h1>
           <p className="dv-meta">
-            {inCloud ? (cloud.account?.email ?? 'Signed in') : 'Not signed in'}
+            {inCloud ? (cloud.account?.email ? <span className="pv">{cloud.account.email}</span> : 'Signed in') : 'Not signed in'}
           </p>
         </div>
       </header>
@@ -47,7 +47,7 @@ export default function AccountView({ onOpenMachines }) {
           <div className="pn-list pn-list--tight">
             <div className="pn-row">
               <div>
-                <div className="pn-name">{me.name}</div>
+                <div className="pn-name pv">{me.name}</div>
                 <div className="pn-detail">{meDetail}</div>
               </div>
             </div>

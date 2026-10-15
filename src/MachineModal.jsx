@@ -125,7 +125,7 @@ export default function MachineModal({ device, onOpenChat, onClose }) {
     >
       <div className="dv-modal dv-devmodal" role="dialog" aria-modal="true" aria-label={device.name}>
         <div className="dv-modal-head">
-          <h2 className="dv-modal-title">{device.name}</h2>
+          <h2 className="dv-modal-title pv">{device.name}</h2>
           <button className="dv-modal-close" onClick={onClose} title="Close">
             <X size={14} weight="bold" />
           </button>
@@ -161,7 +161,7 @@ export default function MachineModal({ device, onOpenChat, onClose }) {
               <span className={`dv-agent-dot${LIVE.includes(s.status) ? '' : ' idle'}`} />
               <div className="dv-agent-body">
                 <div className="dv-agent-top">
-                  <span className="dv-agent-name">{s.title ?? harnessName(s.harness)}</span>
+                  <span className={s.title ? 'dv-agent-name pv' : 'dv-agent-name'}>{s.title ?? harnessName(s.harness)}</span>
                   <span className="dv-agent-status">{STATUS_LABEL[s.status] ?? s.status}</span>
                 </div>
                 <div className="dv-agent-sub">{harnessName(s.harness)}</div>
@@ -267,7 +267,7 @@ export default function MachineModal({ device, onOpenChat, onClose }) {
               ? 'This phone leaves your Cloud and deletes its copies of synced chats.'
               : isMe
               ? 'This computer leaves your Cloud and deletes its copies of synced chats. Its Local chats stay.'
-              : `${device.name} leaves your Cloud and deletes its copies of synced chats the next time it connects. Its Local chats stay.`}
+              : <><span className="pv">{device.name}</span> leaves your Cloud and deletes its copies of synced chats the next time it connects. Its Local chats stay.</>}
           </p>
         )}
       </div>

@@ -25,6 +25,7 @@ export function loadPrefs() {
     reduce_motion: reduce === true,
     density: DENSITIES.includes(raw.density) ? raw.density : 'comfortable',
     startup_view: raw.startup_view === 'last' ? 'last' : 'new',
+    privacy_mode: raw.privacy_mode === true,
   }
 }
 
@@ -47,6 +48,15 @@ export function applyDensity(doc, value) {
   doc.documentElement.setAttribute('data-density', value)
 }
 
+// Privacy mode blurs what would identify the user or their work on a
+// recording or a stream - titles, projects, paths, device names, the
+// account email, the transcript. Every element that carries such text
+// wears the `pv` class; privacy.css keys the blur on this attribute.
+export function applyPrivacyMode(doc, value) {
+  if (value) doc.documentElement.setAttribute('data-privacy', '')
+  else doc.documentElement.removeAttribute('data-privacy')
+}
+
 // Run once before first React paint: restores the persisted look and,
 // when the user asked to reopen their last view, seeds the hash the
 // router already knows how to validate. A garbage last-view is left
@@ -55,6 +65,7 @@ export function restoreBootPrefs(doc, loc = window.location) {
   const prefs = loadPrefs()
   applyReduceMotion(doc, prefs.reduce_motion)
   applyDensity(doc, prefs.density)
+  applyPrivacyMode(doc, prefs.privacy_mode)
   if (prefs.startup_view === 'last' && !loc.hash) {
     let last = null
     try {

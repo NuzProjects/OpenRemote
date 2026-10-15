@@ -76,7 +76,7 @@ export default function PluginsView() {
                   <div className="pn-name">{p.name}</div>
                   <div className="pn-detail">
                     {p.detail}
-                    {oneMachine ? '' : ` · ${host}`}
+                    {oneMachine ? '' : <> · <span className="pv">{host}</span></>}
                   </div>
                 </div>
                 <div className="pn-actions">
@@ -106,10 +106,10 @@ export default function PluginsView() {
                   </button>
                 </div>
               </div>
-              <code className="pn-command">{p.command}</code>
+              <code className="pn-command pv">{p.command}</code>
               {state === 'needs-key' && (
                 <p className="pn-note">
-                  The key stays on {oneMachine ? 'this computer' : host}. Adding it here only records that {oneMachine ? 'it has' : 'the machine has'} one.
+                  The key stays on {oneMachine ? 'this computer' : <span className="pv">{host}</span>}. Adding it here only records that {oneMachine ? 'it has' : 'the machine has'} one.
                 </p>
               )}
             </div>

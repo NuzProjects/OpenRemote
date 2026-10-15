@@ -15,6 +15,7 @@ import { capLines, capRows, MAX_RENDER_LINES, MAX_RENDER_ROWS, shouldRenderLive 
 import ContextRing from './ContextRing.jsx'
 import PickerMenu from './PickerMenu.jsx'
 import { isMobile } from './platform.js'
+import { usePrivacyMode } from './privacy.js'
 import './chatview.css'
 import './composer.css'
 
@@ -64,7 +65,7 @@ function ReasoningBlock({ text, live }) {
         {label}
       </button>
       {(open || live) && (
-        <MarkdownBody text={text} live={live} className={`cv-reasoning-body${live ? ' live' : ''}`} />
+        <MarkdownBody text={text} live={live} className={`cv-reasoning-body pv${live ? ' live' : ''}`} />
       )}
     </div>
   )
@@ -103,9 +104,9 @@ function DecisionCard({ item, onAnswer }) {
   const keepBody = item.pending || leaving || Boolean(question)
   return (
     <div className={`cv-decision${item.pending ? ' pending' : ''}`}>
-      {question && <p className="cv-decision-ask">{question}</p>}
+      {question && <p className="cv-decision-ask pv">{question}</p>}
       {keepBody && command && (
-        <div className="cv-cmd">
+        <div className="cv-cmd pv">
           {command.description && (
             <span className="cv-cmd-desc">{command.description}</span>
           )}
@@ -113,7 +114,7 @@ function DecisionCard({ item, onAnswer }) {
         </div>
       )}
       {keepBody && item.input && !question && !command && (
-        <div className="cv-decision-io">
+        <div className="cv-decision-io pv">
           <span className="cv-io-label">In</span>
           <code>{typeof item.input === 'string' ? item.input : JSON.stringify(item.input, null, 2)}</code>
         </div>
@@ -132,7 +133,9 @@ function DecisionCard({ item, onAnswer }) {
               className={index === 0 ? 'primary' : ''}
               onClick={() => onAnswer(item.id, option.id)}
             >
-              {option.label}
+              {/* a question's options are the user's content; an
+                  approval's words are the harness's, and stay readable */}
+              {question ? <span className="pv">{option.label}</span> : option.label}
             </button>
           ))}
         </div>
@@ -153,6 +156,7 @@ const LIVE_SETTINGS = {
 }
 
 export default function ChatView({ chat, onBack }) {
+  const privacy = usePrivacyMode()
   const {
     capabilities,
     connection,
@@ -321,12 +325,12 @@ export default function ChatView({ chat, onBack }) {
   return (
     <div className="chatview">
       <header className="cv-head">
-        <h1>{chat.title ?? 'A new task'}</h1>
+        <h1 className="pv">{chat.title ?? 'A new task'}</h1>
         <p className="cv-facts">
           {chat.status !== 'idle' && <span className={`cv-dot cv-dot--${chat.status}`} />}
-          <span className="cv-where">{chat.workspace}</span>
+          <span className="cv-where pv">{chat.workspace}</span>
           <span className="cv-fact">{harnessName(chat.harness)}</span>
-          {elsewhere && <span className="cv-fact">on {where}</span>}
+          {elsewhere && <span className="cv-fact">on <span className="pv">{where}</span></span>}
           {chat.model && (
             <span className="cv-fact" title={chat.model}>
               {modelDisplayName(models, chat.model)}
@@ -350,7 +354,7 @@ export default function ChatView({ chat, onBack }) {
           )}
           {chat.approvedTools?.length > 0 && (
             <span className="cv-fact">
-              {chat.approvedTools.join(' · ')} allowed for this chat
+              <span className="pv">{chat.approvedTools.join(' · ')}</span> allowed for this chat
             </span>
           )}
           <span className="cv-fact">{STATUS_LABEL[chat.status] ?? chat.status}</span>
@@ -358,9 +362,9 @@ export default function ChatView({ chat, onBack }) {
             <button
               className="cv-fact-btn"
               onClick={() => control(() => setDeviceKind(chat.executor, 'machine'))}
-              title={`Let your other devices run chats on ${where}`}
+              title={privacy ? 'Let your other devices run chats on it' : `Let your other devices run chats on ${where}`}
             >
-              Make {where} a machine
+              Make <span className="pv">{where}</span> a machine
             </button>
           )}
           {reachable && chat.running && (
@@ -439,7 +443,7 @@ export default function ChatView({ chat, onBack }) {
             )
           )}
         </p>
-        {chat.lastError && chat.status === 'failed' && <p className="cv-facts cv-error">{chat.lastError}</p>}
+        {chat.lastError && chat.status === 'failed' && <p className="cv-facts cv-error pv">{chat.lastError}</p>}
       </header>
       <div className="cv-scroll" ref={scrollRef}>
         <div className="cv-thread">
@@ -463,18 +467,18 @@ export default function ChatView({ chat, onBack }) {
                   key={item.id}
                   text={item.text}
                   live
-                  className="cv-node cv-agent"
+                  className="cv-node cv-agent pv"
                   tail='<span class="cv-caret"></span>'
                 />
               )
             }
             if (item.kind === 'message') {
-              if (item.role === 'user') return <div key={item.id} className="cv-user">{item.text}</div>
-              if (item.role === 'note') return <p key={item.id} className="cv-node cv-note">{item.text}</p>
+              if (item.role === 'user') return <div key={item.id} className="cv-user pv">{item.text}</div>
+              if (item.role === 'note') return <p key={item.id} className="cv-node cv-note pv">{item.text}</p>
               // Agent messages are markdown - the harness's own output
               // shape - rendered through the escape-first mini renderer,
               // parsed once per message (MarkdownBody's cache).
-              return <MarkdownBody key={item.id} text={item.text} className="cv-node cv-agent" />
+              return <MarkdownBody key={item.id} text={item.text} className="cv-node cv-agent pv" />
             }
             if (item.kind === 'tool') {
               // While the ask for this very call is pending, the decision
@@ -537,7 +541,7 @@ export default function ChatView({ chat, onBack }) {
                     )}
                   </div>
                   {diff && (
-                    <div className="cv-diff">
+                    <div className="cv-diff pv">
                       <div className="cv-diff-file">{item.input.file_path}</div>
                       <div className="cv-diff-grid">
                         {diff.rows.map((row, i) => (
@@ -553,7 +557,7 @@ export default function ChatView({ chat, onBack }) {
                     </div>
                   )}
                   {command && (
-                    <div className="cv-cmd">
+                    <div className="cv-cmd pv">
                       {/* the description leads - what this is, in plain
                           words - then the command itself in mono */}
                       {command.description && (
@@ -563,7 +567,7 @@ export default function ChatView({ chat, onBack }) {
                     </div>
                   )}
                   {(shownIn || shownOut) && !edit && (
-                    <div className="cv-io">
+                    <div className="cv-io pv">
                       {shownIn && (
                         <>
                           <div className="cv-io-row">
@@ -613,9 +617,13 @@ export default function ChatView({ chat, onBack }) {
                 <div className="cv-tool-line">
                   <span className="cv-tool-name">{item.toolName ?? 'Decision'}</span>
                   <span className="cv-tool-state">
-                    {item.pending
-                      ? 'Needs a decision'
-                      : `Answered: ${decisionAnswer(item)}`}
+                    {item.pending ? (
+                      'Needs a decision'
+                    ) : isQuestion ? (
+                      <>Answered: <span className="pv">{decisionAnswer(item)}</span></>
+                    ) : (
+                      `Answered: ${decisionAnswer(item)}`
+                    )}
                   </span>
                 </div>
                 <DecisionCard item={item} onAnswer={answer} />
@@ -624,7 +632,7 @@ export default function ChatView({ chat, onBack }) {
           })}
           {chat.running && !pendingDecision && (
             <p className="cv-node cv-node--run cv-running">
-              With {harnessName(chat.harness)} · {where}
+              With {harnessName(chat.harness)} · <span className="pv">{where}</span>
             </p>
           )}
         </div>

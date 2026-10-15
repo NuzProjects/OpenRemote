@@ -94,8 +94,8 @@ export default function CloudNotices() {
         <div key={device.id} className="cn-row">
           <span className="cn-text">
             {confirming === device.id
-              ? `Remove ${device.name}? It loses access to your machines and chats.`
-              : `New device: ${device.name} joined your Cloud. Not you?`}
+              ? <>Remove <span className="pv">{device.name}</span>? It loses access to your machines and chats.</>
+              : <>New device: <span className="pv">{device.name}</span> joined your Cloud. Not you?</>}
           </span>
           {confirming === device.id ? (
             <>

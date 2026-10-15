@@ -175,7 +175,9 @@ export default function PickerMenu({
                 >
                   <span className="nc-item-main">
                     {renderIcon?.(item)}
-                    <span className="nc-item-name">{item.name}</span>
+                    {/* an item marked veiled carries the user's own name for a thing
+                        (a project, a machine): privacy mode blurs it */}
+                    <span className={item.veiled ? 'nc-item-name pv' : 'nc-item-name'}>{item.name}</span>
                     {renderTrailing?.(item)}
                     {item.id === selectedId && <Check size={13} className="nc-check" />}
                   </span>

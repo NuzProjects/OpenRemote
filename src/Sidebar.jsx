@@ -30,10 +30,12 @@ import { isMobile } from './platform.js'
 import { HarnessMark } from './brand-marks.jsx'
 import ContextMenu from './ContextMenu.jsx'
 import DeleteChatModal from './DeleteChatModal.jsx'
+import { usePrivacyMode } from './privacy.js'
 import './sidebar.css'
 
 export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit, onAddProject }) {
   const { connection, sessions, chats, devices, thisDevice, projects, removeProject, archived, setChatArchived, deleteChat } = useConsole()
+  const privacy = usePrivacyMode()
   const [query, setQuery] = useState('')
   const [collapsed, setCollapsed] = useState({})
   const [menu, setMenu] = useState(null)
@@ -146,16 +148,16 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
             the status dot at the right edge so every status scans in
             one column */}
         {row.harness && <HarnessMark harness={row.harness} size={15} />}
-        <span className="chat-title">{row.title}</span>
+        <span className="chat-title pv">{row.title}</span>
         {mode === 'cloud' && row.device && (
-          <span className="chat-device">{row.device}</span>
+          <span className="chat-device pv">{row.device}</span>
         )}
         {mode === 'local' && row.synced && (
           <Cloud size={11} className="chat-synced" aria-label="Synced to your devices" />
         )}
         <span
           className={`dot dot--${row.offline ? 'offline' : row.status}`}
-          title={row.offline ? `${row.device} is offline` : undefined}
+          title={row.offline ? (privacy ? 'Offline' : `${row.device} is offline`) : undefined}
         />
       </button>
       {/* Archive hides the chat from this list; Settings keeps it. */}
@@ -279,7 +281,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
                 <span className={`project-caret${isCollapsed ? ' closed' : ''}`}>
                   <CaretDown size={12} />
                 </span>
-                <span className="project-name">{project.folders[0].split(/[\\/]/).filter(Boolean).pop()}</span>
+                <span className="project-name pv">{project.folders[0].split(/[\\/]/).filter(Boolean).pop()}</span>
                 <span className="project-count">{items.length}</span>
               </button>
               {/* Unregistering keeps the chats - they fall to the flat

@@ -7,6 +7,7 @@ import { Desktop, DeviceMobile, HardDrives, Plus } from '@phosphor-icons/react'
 import MachineModal from './MachineModal.jsx'
 import AddMachineModal from './AddMachineModal.jsx'
 import { useConsole } from './state/console.jsx'
+import { usePrivacyMode } from './privacy.js'
 import { isPhone, kindLabel, platformLabel, selfLabel } from './cloud.js'
 import './devices.css'
 
@@ -16,6 +17,7 @@ function detail(device) {
 }
 
 export default function MachinesView({ onOpenChat }) {
+  const privacy = usePrivacyMode()
   const { devices, thisDevice, setDeviceKind } = useConsole()
   const [adding, setAdding] = useState(false)
   const [openId, setOpenId] = useState(null)
@@ -69,7 +71,7 @@ export default function MachinesView({ onOpenChat }) {
             key={device.id}
             className="dv-card"
             onClick={() => setOpenId(device.id)}
-            title={device.name}
+            title={privacy ? undefined : device.name}
           >
             <span className="dv-icon">
               {isPhone(device) ? (
@@ -81,7 +83,7 @@ export default function MachinesView({ onOpenChat }) {
               )}
             </span>
             <span className="dv-name">
-              {device.name}
+              <span className="pv">{device.name}</span>
               {device.id === thisDevice && <span className="dv-badge">{selfLabel(device)}</span>}
             </span>
             <span className="dv-detail">{detail(device)}</span>

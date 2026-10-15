@@ -7,8 +7,10 @@ import { ArrowUp, Folder, House, X } from '@phosphor-icons/react'
 import './devices.css'
 import './folders.css'
 import { useBack } from './use-back.js'
+import { usePrivacyMode } from './privacy.js'
 
 export default function FolderPickerModal({ api, where, start, onChoose, onClose }) {
+  const privacy = usePrivacyMode()
   useBack(true, onClose)
   const [listing, setListing] = useState(null)
   const [error, setError] = useState(null)
@@ -75,8 +77,8 @@ export default function FolderPickerModal({ api, where, start, onChoose, onClose
             <X size={14} weight="bold" />
           </button>
         </div>
-        <p className="dv-modal-hint">The folder on {where} the harness will work in.</p>
-        <div className="fb-path" title={listing?.path}>
+        <p className="dv-modal-hint">The folder on <span className="pv">{where}</span> the harness will work in.</p>
+        <div className="fb-path pv" title={privacy ? undefined : listing?.path}>
           {listing?.path ?? ' '}
         </div>
         <div className="fb-list" aria-busy={loading}>
@@ -95,7 +97,7 @@ export default function FolderPickerModal({ api, where, start, onChoose, onClose
           {(listing?.dirs ?? []).map((dir) => (
             <button type="button" key={dir.path} className="fb-row" onClick={() => open(dir.path)}>
               <Folder size={13} />
-              {dir.name}
+              <span className="pv">{dir.name}</span>
             </button>
           ))}
           {listing && listing.dirs.length === 0 && <p className="fb-empty">No folders inside.</p>}
