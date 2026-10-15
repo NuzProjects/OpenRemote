@@ -83,6 +83,9 @@ struct FixtureAgent {
     next_tool_id: u64,
     prompt_count: u64,
     pending_approval: Option<PendingApproval>,
+    /// The `steer` scenario's open turn: its tool's id and the message
+    /// that started it, waiting for the message that lands mid-turn.
+    steer_open: Option<(String, String)>,
 }
 
 impl FixtureAgent {
@@ -125,6 +128,7 @@ impl FixtureAgent {
             next_tool_id: 1,
             prompt_count: 0,
             pending_approval: None,
+            steer_open: None,
         }
     }
 
@@ -317,6 +321,7 @@ impl FixtureAgent {
         match self.scenario.as_str() {
             "approve" | "deny" => self.scenario_approve(&prompt),
             "question" => self.scenario_question(&prompt),
+            "steer" => self.scenario_steer(&prompt),
             "fail" => {
                 self.assistant_text("the fixture is about to fail");
                 self.result("error_during_execution", "fixture failure", "api_error");
@@ -436,6 +441,30 @@ impl FixtureAgent {
             tool_name: "Bash".to_string(),
             prompt: prompt.to_string(),
         });
+    }
+
+    /// What the real CLI does with a message that arrives while a turn is
+    /// still working (claude 2.1.300, seen live): it folds the message
+    /// into the turn that is running. The first message starts a tool and
+    /// leaves the turn open; the next one lands inside it, the tool
+    /// finishes, and one reply and one result close the whole turn -
+    /// both messages answered at once.
+    fn scenario_steer(&mut self, prompt: &str) {
+        match self.steer_open.take() {
+            None => {
+                let tool_id = format!("toolu_{}", self.next_tool_id);
+                self.next_tool_id += 1;
+                let input = serde_json::json!({"command": "echo fixture", "description": "a fixture command"});
+                self.assistant_tool_use(&tool_id, "Bash", input);
+                self.steer_open = Some((tool_id, prompt.to_string()));
+            }
+            Some((tool_id, first)) => {
+                self.tool_result(&tool_id, "fixture", false);
+                let reply = format!("done: {first} + {prompt}");
+                self.assistant_text(&reply);
+                self.result("success", &reply, "completed");
+            }
+        }
     }
 
     /// The structured-question stand-in: the real CLI asks AskUserQuestion

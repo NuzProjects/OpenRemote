@@ -156,6 +156,17 @@ impl SessionDriver {
     pub fn per_prompt_process(&self) -> bool {
         matches!(self, SessionDriver::Grok(_) | SessionDriver::Agy(_))
     }
+
+    /// Whether a message sent while a turn is working lands inside that
+    /// turn: the harness folds it into the run in progress and closes the
+    /// whole thing with one result. Claude does (seen live on 2.1.300);
+    /// codex does by design (`turn/steer`). The supervisor files such a
+    /// message under the running turn instead of opening a new one that
+    /// would never complete. Pi and opencode stay out until their own
+    /// mid-turn behavior is verified on a real install.
+    pub fn steers_mid_turn(&self) -> bool {
+        matches!(self, SessionDriver::Claude(_) | SessionDriver::Codex(_))
+    }
 }
 
 impl Backend {

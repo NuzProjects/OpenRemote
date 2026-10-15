@@ -1259,13 +1259,15 @@ impl Supervisor {
         // Stdin-carrying harnesses (claude/codex/pi/opencode) answer false
         // and keep their behavior - the harness queues or interleaves on
         // its own wire, as it always has.
-        let per_prompt_process = entry.driver.lock().await.per_prompt_process();
-        if per_prompt_process
-            && matches!(
-                self.session(id)?.status,
-                SessionStatus::Working | SessionStatus::Waiting
-            )
-        {
+        let (per_prompt_process, steers_mid_turn) = {
+            let driver = entry.driver.lock().await;
+            (driver.per_prompt_process(), driver.steers_mid_turn())
+        };
+        let turn_open = matches!(
+            self.session(id)?.status,
+            SessionStatus::Working | SessionStatus::Waiting
+        );
+        if per_prompt_process && turn_open {
             return Err(SupervisorError::Conflict(
                 "a turn is still running on this chat - this harness takes \
                  one prompt at a time; wait for the turn to finish or stop \
@@ -1273,25 +1275,38 @@ impl Supervisor {
                     .into(),
             ));
         }
-        let turn = self.with_store(|s| s.bump_turn(id))?;
-        self.emit_all(
-            id,
+        // A message that steers a working turn belongs to that turn: the
+        // harness folds it into the run in progress and answers once, so a
+        // new turn here would never complete - and every frame after it
+        // (the tool results of the turn still running) would be filed
+        // under the wrong turn.
+        let steering = steers_mid_turn && turn_open;
+        let turn = if steering {
+            self.current_turn(id)
+        } else {
+            self.with_store(|s| s.bump_turn(id))?
+        };
+        let message = EventPayload::MessageAdded {
+            message: openremote_core::ChatMessage {
+                id: Uuid::new_v4().to_string(),
+                turn,
+                role: openremote_core::MessageRole::User,
+                text: text.to_string(),
+            },
+        };
+        let payloads = if steering {
+            vec![message]
+        } else {
             vec![
                 EventPayload::SessionStatusChanged {
                     status: SessionStatus::Working,
                     reason: None,
                 },
                 EventPayload::TurnStarted { turn },
-                EventPayload::MessageAdded {
-                    message: openremote_core::ChatMessage {
-                        id: Uuid::new_v4().to_string(),
-                        turn,
-                        role: openremote_core::MessageRole::User,
-                        text: text.to_string(),
-                    },
-                },
-            ],
-        )?;
+                message,
+            ]
+        };
+        self.emit_all(id, payloads)?;
         drop(_order);
         if let Err(e) = entry.driver.lock().await.send_prompt(text).await {
             // The turn's existence is already durable: a write that
