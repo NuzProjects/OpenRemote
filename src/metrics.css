@@ -1,0 +1,58 @@
+/* Metrics' two quiet grids: the 14-day strip of new chats and the 24h
+   presence band. No new colors - green is life, faint cells are rest,
+   and both honor density and reduced motion. */
+
+.mx-strip {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  margin-top: 12px;
+  width: min(640px, 100%);
+}
+
+.mx-bar {
+  flex: 1 1 0;
+  min-width: 0;
+  border-radius: 2px;
+  background: rgba(76, 180, 135, 0.55);
+}
+
+.mx-bar--zero {
+  height: 3px;
+  background: var(--line);
+}
+
+.mx-band {
+  display: grid;
+  grid-template-columns: repeat(48, 1fr);
+  gap: 2px;
+  margin-top: 12px;
+  width: min(640px, 100%);
+}
+
+.mx-cell {
+  aspect-ratio: 1 / 2.4;
+  border-radius: 2px;
+  background: var(--line);
+}
+
+.mx-cell--on {
+  background: rgba(76, 180, 135, 0.55);
+}
+
+.mx-cap {
+  margin: 8px 0 0;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+/* Phone width: the band keeps its shape, the strip keeps its days. */
+@media (max-width: 639px) {
+  .mx-band {
+    gap: 1.5px;
+  }
+
+  .mx-strip {
+    gap: 2px;
+  }
+}
