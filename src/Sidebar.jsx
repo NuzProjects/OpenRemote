@@ -323,7 +323,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
           >
             {/* UserCircle's ink sits inside a thin circle, so it reads
                 smaller than its neighbors - 2px of optical correction. */}
-            <UserCircle size={21} />
+            <UserCircle size={24} />
           </button>
           <button
             type="button"
@@ -333,7 +333,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
             aria-label="Mobile"
             onClick={() => onSelect('mobile')}
           >
-            <DeviceMobile size={19} />
+            <DeviceMobile size={22} />
           </button>
           <button
             type="button"
@@ -343,7 +343,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
             aria-label="Metrics"
             onClick={() => onSelect('metrics')}
           >
-            <ChartBar size={19} />
+            <ChartBar size={22} />
           </button>
           <button
             type="button"
@@ -353,7 +353,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
             aria-label="Settings"
             onClick={() => onSelect('settings')}
           >
-            <GearSix size={19} />
+            <GearSix size={22} />
           </button>
         </div>
       </footer>
