@@ -321,7 +321,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
             aria-label="Account"
             onClick={() => onSelect('account')}
           >
-            <UserCircle size={17} />
+            <UserCircle size={19} />
           </button>
           <button
             type="button"
@@ -331,7 +331,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
             aria-label="Mobile"
             onClick={() => onSelect('mobile')}
           >
-            <DeviceMobile size={17} />
+            <DeviceMobile size={19} />
           </button>
           <button
             type="button"
@@ -341,7 +341,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
             aria-label="Metrics"
             onClick={() => onSelect('metrics')}
           >
-            <ChartBar size={17} />
+            <ChartBar size={19} />
           </button>
           <button
             type="button"
@@ -351,7 +351,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
             aria-label="Settings"
             onClick={() => onSelect('settings')}
           >
-            <GearSix size={17} />
+            <GearSix size={19} />
           </button>
         </div>
       </footer>
