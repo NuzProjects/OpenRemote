@@ -208,8 +208,12 @@ html[data-reduce-motion] .am-row-actions {
   gap: 10px;
 }
 
-/* the name is the form's headline: borderless, title-weight */
-.af-name {
+/* the name is the form's headline: borderless, title-weight. The
+   rules sit on the input itself - styling only the wrapping label
+   left the input at the browser's own defaults. */
+.af-name,
+.af-name input {
+  display: block;
   width: 100%;
   padding: 8px 0 2px;
   border: 0;
@@ -222,7 +226,8 @@ html[data-reduce-motion] .am-row-actions {
   letter-spacing: -0.01em;
 }
 
-.af-name::placeholder {
+.af-name::placeholder,
+.af-name input::placeholder {
   color: var(--text-3);
   font-weight: 500;
 }
