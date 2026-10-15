@@ -9,7 +9,10 @@
   z-index: 20;
   max-height: 300px;
   padding: 6px;
+  /* rows end in an ellipsis, never scroll sideways */
+  overflow-x: hidden;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 12px;
   background: #171b21;
@@ -17,6 +20,21 @@
     0 4px 10px rgba(0, 0, 0, 0.32),
     0 16px 44px rgba(0, 0, 0, 0.44);
   animation: cm-in 0.12s ease-out;
+}
+
+/* the app's thin scrollbar (pickermenu.css), not the system's */
+.cm-menu::-webkit-scrollbar {
+  width: 8px;
+  height: 0;
+}
+
+.cm-menu::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.cm-menu::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.14);
 }
 
 @keyframes cm-in {
@@ -43,6 +61,7 @@
   align-items: baseline;
   gap: 8px;
   min-width: 0;
+  overflow: hidden;
   padding: 6px 8px;
   border-radius: 8px;
   color: var(--text-2);

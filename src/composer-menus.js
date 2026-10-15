@@ -87,12 +87,18 @@ export function chatInsertion(chat) {
 
 const CHAT_POINTER = /@chat "[^"]*" \(([0-9a-fA-F-]{6,})\)/g
 
+// The console keeps its chats keyed by id; a plain list reads the same.
+export function chatList(chats) {
+  if (!chats) return []
+  return Array.isArray(chats) ? chats : Object.values(chats)
+}
+
 // The chats a message points at: each pointer's id start, matched to a
 // chat this console knows.
 export function mentionedChats(text, chats) {
   const ids = new Set()
   for (const match of text.matchAll(CHAT_POINTER)) {
-    const found = (chats ?? []).find((c) => String(c.id).startsWith(match[1]))
+    const found = chatList(chats).find((c) => String(c.id).startsWith(match[1]))
     if (found) ids.add(found.id)
   }
   return [...ids]

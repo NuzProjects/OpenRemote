@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useConsole } from './state/console.jsx'
 import ComposerMenu from './ComposerMenu.jsx'
-import { applyPick, argItems, commandItems, mentionItems, menuAt, ownCommands } from './composer-menus.js'
+import { applyPick, argItems, chatList, commandItems, mentionItems, menuAt, ownCommands } from './composer-menus.js'
 
 export function useComposerMenus({
   text,
@@ -69,7 +69,7 @@ export function useComposerMenus({
   // Other chats to point at: the most recent first, never this one.
   const otherChats = useMemo(
     () =>
-      (chats ?? [])
+      chatList(chats)
         .filter((c) => c.id !== sessionId)
         .slice()
         .sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0))

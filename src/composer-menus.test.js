@@ -59,6 +59,9 @@ test('a message names the chats it points at by their ids', () => {
   const chats = [{ id: '3f2a9c1e-aaaa' }, { id: '9b8c7d6e-bbbb' }]
   const text = 'compare @chat "One" (3f2a9c1e) with @chat "Two" (9b8c7d6e) and @chat "Gone" (00000000)'
   assert.deepEqual(mentionedChats(text, chats), ['3f2a9c1e-aaaa', '9b8c7d6e-bbbb'])
+  // the console's own shape: chats keyed by id
+  const keyed = Object.fromEntries(chats.map((c) => [c.id, c]))
+  assert.deepEqual(mentionedChats(text, keyed), ['3f2a9c1e-aaaa', '9b8c7d6e-bbbb'])
 })
 
 test("OpenRemote's commands run at send and leave the rest of the message", () => {
