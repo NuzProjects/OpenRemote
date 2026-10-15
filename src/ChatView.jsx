@@ -5,6 +5,8 @@ import { chatAccess, deviceName, signedIn } from './cloud.js'
 import { railItems } from './state/reducer.js'
 import { harnessName } from './harness-names.js'
 import { findModel, modelDisplayName } from './model-display.js'
+import { modelMaker } from './model-maker.js'
+import { ModelMark } from './model-marks.jsx'
 import { HarnessMark } from './brand-marks.jsx'
 import { editRows, isFileEdit, writeRows } from './diff.js'
 import { renderMarkdown } from './markdown.js'
@@ -592,6 +594,13 @@ export default function ChatView({ chat, onBack }) {
                   aria-expanded={picker?.kind === 'model'}
                   title="Model - applies to the next turn"
                 >
+                  {(() => {
+                    // The shown model's own maker mark - the chosen
+                    // one, else the harness's default row.
+                    const row = (chat.model && findModel(models, chat.model)) ?? models.find((m) => m.is_default) ?? null
+                    const maker = modelMaker(chat.harness, row?.model, row?.resolved_model)
+                    return maker ? <ModelMark maker={maker} size={14} /> : null
+                  })()}
                   {chat.model ? modelDisplayName(models, chat.model) : 'Model'}
                 </button>
               ) : (
@@ -606,12 +615,19 @@ export default function ChatView({ chat, onBack }) {
                   label="Model"
                   searchPlaceholder="Search models"
                   wide
-                  items={models.map((m) => ({ id: m.model, name: m.display_name ?? m.model }))}
+                  items={models.map((m) => ({
+                    id: m.model,
+                    name: m.display_name ?? m.model,
+                    resolved_model: m.resolved_model,
+                  }))}
                   groups={null}
                   selectedId={chat.model ?? ''}
                   onChoose={(id) => changeSettings({ model: id })}
                   onClose={() => setPicker(null)}
                   anchor={{ left: picker.x, top: picker.y }}
+                  renderIcon={(m) => (
+                    <ModelMark maker={modelMaker(chat.harness, m.id, m.resolved_model)} size={14} />
+                  )}
                 />
               )}
               {canChange.effort && efforts.length > 0 && (

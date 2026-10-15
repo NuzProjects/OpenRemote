@@ -7,7 +7,9 @@ import { useEffect, useState } from 'react'
 import { X } from '@phosphor-icons/react'
 import PickerMenu from './PickerMenu.jsx'
 import { useConsole } from './state/console.jsx'
-import { modelDisplayName } from './model-display.js'
+import { findModel, modelDisplayName } from './model-display.js'
+import { modelMaker } from './model-maker.js'
+import { ModelMark } from './model-marks.jsx'
 import { projectName } from './projects.js'
 import './devices.css'
 import './automations.css'
@@ -257,13 +259,25 @@ export default function AutomationForm({ rule, onClose }) {
                   aria-haspopup="listbox"
                   aria-expanded={picker?.kind === 'model'}
                 >
+                  {(() => {
+                    // The shown model's own maker mark - the chosen
+                    // one, else the harness's default row.
+                    const row =
+                      (model && findModel(models, model)) ?? models.find((m) => m.is_default) ?? null
+                    const maker = modelMaker(harness, row?.model, row?.resolved_model)
+                    return maker ? <ModelMark maker={maker} size={14} /> : null
+                  })()}
                   {model ? modelDisplayName(models, model) : `${currentHarness?.name} default`}
                 </button>
                 {picker?.kind === 'model' && (
                   <PickerMenu
                     label="Model"
                     searchPlaceholder="Search models"
-                    items={models.map((m) => ({ id: m.model, name: m.display_name ?? m.model }))}
+                    items={models.map((m) => ({
+                      id: m.model,
+                      name: m.display_name ?? m.model,
+                      resolved_model: m.resolved_model,
+                    }))}
                     groups={null}
                     selectedId={model ?? ''}
                     onChoose={(id) => {
@@ -272,6 +286,9 @@ export default function AutomationForm({ rule, onClose }) {
                     }}
                     onClose={() => setPicker(null)}
                     anchor={{ left: picker.x, top: picker.y }}
+                    renderIcon={(m) => (
+                      <ModelMark maker={modelMaker(harness, m.id, m.resolved_model)} size={14} />
+                    )}
                   />
                 )}
               </div>

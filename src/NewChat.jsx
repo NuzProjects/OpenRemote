@@ -9,6 +9,8 @@ import HarnessManagerModal from './HarnessManagerModal.jsx'
 import { useConsole } from './state/console.jsx'
 import { harnessName } from './harness-names.js'
 import { findModel, modelDisplayName } from './model-display.js'
+import { modelMaker } from './model-maker.js'
+import { ModelMark } from './model-marks.jsx'
 import { SIGNIN_HARNESSES } from './harness-manager.js'
 import { loadDefaults } from './defaults.js'
 import { projectName } from './projects.js'
@@ -313,6 +315,14 @@ export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false
                     aria-expanded={picker?.kind === 'model'}
                     title="Model"
                   >
+                    {(() => {
+                      // The shown model's own maker mark - the chosen
+                      // one, else the harness's default row.
+                      const row =
+                        (model && findModel(models, model)) ?? models.find((m) => m.is_default) ?? null
+                      const maker = modelMaker(currentHarness?.id, row?.model, row?.resolved_model)
+                      return maker ? <ModelMark maker={maker} size={14} /> : null
+                    })()}
                     {model ? modelDisplayName(models, model) : defaultLabel}
                   </button>
                 ) : (
@@ -331,6 +341,7 @@ export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false
                     items={models.map((m) => ({
                       id: m.model,
                       name: m.display_name ?? m.model,
+                      resolved_model: m.resolved_model,
                     }))}
                     groups={null}
                     selectedId={model ?? ''}
@@ -341,6 +352,9 @@ export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false
                     }}
                     onClose={() => setPicker(null)}
                     anchor={{ left: picker.x, top: picker.y }}
+                    renderIcon={(m) => (
+                      <ModelMark maker={modelMaker(currentHarness?.id, m.id, m.resolved_model)} size={14} />
+                    )}
                   />
                 )}
                 {effortTiers.length > 0 && (

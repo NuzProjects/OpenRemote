@@ -10,7 +10,9 @@ import { archivedSessions } from './archive.js'
 import { harnessName } from './harness-names.js'
 import { SIGNIN_HARNESSES } from './harness-manager.js'
 import { loadDefaults, saveDefaults } from './defaults.js'
-import { modelDisplayName } from './model-display.js'
+import { findModel, modelDisplayName } from './model-display.js'
+import { modelMaker } from './model-maker.js'
+import { ModelMark } from './model-marks.jsx'
 import {
   loadPrefs,
   savePrefs,
@@ -292,6 +294,17 @@ export default function SettingsView({ onReplay, onOpenChat }) {
               aria-haspopup="listbox"
               aria-expanded={picker?.kind === 'model'}
             >
+              {(() => {
+                // The chosen model's own maker mark, where the catalog
+                // names one; the harness default row carries the
+                // default model's, not none.
+                const shown = defaults.model && models.some((m) => m.model === defaults.model)
+                  ? findModel(models, defaults.model)
+                  : null
+                const row = shown ?? models.find((m) => m.is_default) ?? null
+                const maker = modelMaker(defaultHarness?.id, row?.model, row?.resolved_model)
+                return maker ? <ModelMark maker={maker} size={14} /> : null
+              })()}
               {defaults.model && models.some((m) => m.model === defaults.model)
                 ? modelDisplayName(models, defaults.model)
                 : `${defaultHarness?.name} default`}
@@ -304,12 +317,16 @@ export default function SettingsView({ onReplay, onOpenChat }) {
                 items={models.map((m) => ({
                   id: m.model,
                   name: m.display_name ?? m.model,
+                  resolved_model: m.resolved_model,
                 }))}
                 groups={null}
                 selectedId={defaults.model ?? ''}
                 onChoose={(id) => set({ model: id })}
                 onClose={() => setPicker(null)}
                 anchor={{ left: picker.x, top: picker.y }}
+                renderIcon={(m) => (
+                  <ModelMark maker={modelMaker(defaultHarness?.id, m.id, m.resolved_model)} size={14} />
+                )}
               />
             )}
           </div>
