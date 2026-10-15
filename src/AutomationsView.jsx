@@ -15,6 +15,7 @@ import { projectName } from './projects.js'
 import './devices.css'
 import './automations.css'
 import './pill.css'
+import { pickable } from './harness-manager.js'
 
 const RAN = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 
@@ -43,7 +44,7 @@ export default function AutomationsView({ onOpenChat }) {
 
   const rules = automations ?? []
   const availableIds = new Set(
-    (capabilities?.harnesses ?? []).filter((h) => h.available).map((h) => h.id),
+    (capabilities?.harnesses ?? []).filter(pickable).map((h) => h.id),
   )
   const machineName = (id) => (machines ?? []).find((m) => m.machine.id === id)?.machine.name ?? id
   // One online machine is the honest local state - hostname chips and the
@@ -91,7 +92,7 @@ export default function AutomationsView({ onOpenChat }) {
     })),
     projects: workspaces.map(([name]) => name),
     defaults: {
-      harness: (capabilities?.harnesses ?? []).find((h) => h.available)?.id ?? 'claude',
+      harness: (capabilities?.harnesses ?? []).find(pickable)?.id ?? 'claude',
       machineId: thisMachine?.machine.id,
     },
   }

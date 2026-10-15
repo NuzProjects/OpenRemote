@@ -193,6 +193,12 @@ fn api_routes() -> Router<Arc<App>> {
             get(list_mcp_servers).post(create_mcp_server),
         )
         .route("/mcp-servers/marketplace", get(mcp_marketplace))
+        .route("/plugins", get(list_plugins))
+        .route("/plugins/stage", post(stage_plugin))
+        .route("/plugins/stage/{id}/install", post(install_staged))
+        .route("/plugins/stage/{id}/cancel", post(cancel_staged))
+        .route("/plugins/{name}/enabled", post(set_plugin_enabled))
+        .route("/plugins/{name}/remove", post(remove_plugin))
         .route(
             "/mcp-servers/{id}",
             axum::routing::delete(remove_mcp_server),
@@ -576,6 +582,265 @@ struct InstallHarnessBody {
     /// Node.js) - never assumed.
     #[serde(default)]
     with_runtime: bool,
+}
+
+// ---- plugins (Plugins): this machine's own - never a peer's ----
+
+/// The receipt flow for an action that belongs to no chat: a replayed
+/// request answers from its receipt; a new one is recorded, run, settled.
+async fn receipted_plain<Fut>(app: &Arc<App>, request_id: String, run: Fut) -> Response
+where
+    Fut: std::future::Future<Output = Result<Value, PluginFailure>>,
+{
+    if let Some(receipt) = app.supervisor.receipt(&request_id) {
+        return receipt_response(&receipt);
+    }
+    app.supervisor.record_receipt(Receipt {
+        request_id: request_id.clone(),
+        session_id: None,
+        status: ReceiptStatus::Accepted,
+        result: None,
+        error: None,
+        updated_at: openremote_core::now_ms(),
+    });
+    match run.await {
+        Ok(result) => {
+            let receipt = Receipt {
+                request_id,
+                session_id: None,
+                status: ReceiptStatus::Completed,
+                result: Some(result),
+                error: None,
+                updated_at: openremote_core::now_ms(),
+            };
+            app.supervisor.record_receipt(receipt.clone());
+            receipt_response(&receipt)
+        }
+        Err(failure) => {
+            app.supervisor.record_receipt(Receipt {
+                request_id,
+                session_id: None,
+                status: ReceiptStatus::Failed,
+                result: None,
+                error: Some(failure.1.clone()),
+                updated_at: openremote_core::now_ms(),
+            });
+            error(failure.0, &failure.1)
+        }
+    }
+}
+
+/// A plugin action's failure: the status it answers with, and its words.
+type PluginFailure = (StatusCode, String);
+
+fn plugin_failure(err: crate::plugins::PluginError) -> PluginFailure {
+    use crate::plugins::PluginError;
+    let status = match &err {
+        PluginError::Invalid(_) | PluginError::Source(_) => StatusCode::BAD_REQUEST,
+        PluginError::NotFound(_) => StatusCode::NOT_FOUND,
+        PluginError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (status, err.to_string())
+}
+
+fn store_failure(err: openremote_core::store::StoreError) -> PluginFailure {
+    match err {
+        openremote_core::store::StoreError::NotFound(what) => {
+            (StatusCode::NOT_FOUND, format!("{what} is not installed"))
+        }
+        other => (StatusCode::INTERNAL_SERVER_ERROR, other.to_string()),
+    }
+}
+
+fn builtin_ids(app: &App) -> Vec<String> {
+    app.supervisor
+        .harnesses()
+        .into_iter()
+        .map(|h| h.id)
+        .collect()
+}
+
+/// The six built-in harness plugins and what the user installed.
+async fn list_plugins(State(app): State<Arc<App>>) -> Response {
+    let builtin: Vec<Value> = app
+        .supervisor
+        .harnesses()
+        .into_iter()
+        .map(|h| {
+            json!({
+                "id": h.id,
+                "name": h.name,
+                "kind": "harness",
+                "available": h.available,
+                "enabled": h.enabled,
+                "version": h.version,
+            })
+        })
+        .collect();
+    let installed: Vec<openremote_core::InstalledPlugin> = {
+        let store = crate::supervisor::lock_recovering(&app.store);
+        store.installed_plugins().into_iter().cloned().collect()
+    };
+    Json(json!({"builtin": builtin, "installed": installed})).into_response()
+}
+
+#[derive(Deserialize)]
+struct StageBody {
+    request_id: String,
+    source: crate::plugins::SourceRequest,
+}
+
+/// Fetch a plugin and read what it is - nothing is installed until the
+/// user approves what the answer shows (name, runtime, powers).
+async fn stage_plugin(State(app): State<Arc<App>>, Json(body): Json<StageBody>) -> Response {
+    let ids = builtin_ids(&app);
+    let task = {
+        let app = Arc::clone(&app);
+        async move {
+            let (stage_id, manifest) = app
+                .plugins
+                .stage(body.source, ids)
+                .await
+                .map_err(plugin_failure)?;
+            let installed_version = {
+                let store = crate::supervisor::lock_recovering(&app.store);
+                store
+                    .installed_plugin(&manifest.name)
+                    .ok()
+                    .map(|p| p.version.clone().unwrap_or_default())
+            };
+            Ok(json!({
+                "stage_id": stage_id,
+                "manifest": manifest,
+                // An install of a name already here replaces it - the
+                // approval screen says so.
+                "replaces": installed_version,
+            }))
+        }
+    };
+    receipted_plain(&app, body.request_id, task).await
+}
+
+/// The user approved: move the staged plugin into place and record it.
+async fn install_staged(
+    State(app): State<Arc<App>>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<RequestBody>,
+) -> Response {
+    let task = {
+        let app = Arc::clone(&app);
+        async move {
+            let staged = app.plugins.take_staged(&id).ok_or_else(|| {
+                (
+                    StatusCode::NOT_FOUND,
+                    "that install is no longer waiting - stage it again".to_string(),
+                )
+            })?;
+            let manifest = staged.manifest.clone();
+            let source = staged.source.clone();
+            app.plugins.install(staged).map_err(plugin_failure)?;
+            let now = openremote_core::now_ms();
+            let mut store = crate::supervisor::lock_recovering(&app.store);
+            let installed_at = store
+                .installed_plugin(&manifest.name)
+                .map(|p| p.installed_at)
+                .unwrap_or(now);
+            let plugin = openremote_core::InstalledPlugin {
+                name: manifest.name,
+                version: manifest.version,
+                description: manifest.description,
+                runtime: manifest.runtime,
+                powers: manifest.powers,
+                source,
+                scope: openremote_core::PluginScope::Machine,
+                enabled: true,
+                installed_at,
+                updated_at: now,
+            };
+            store
+                .put_installed_plugin(plugin.clone())
+                .map_err(store_failure)?;
+            Ok(serde_json::to_value(&plugin).unwrap_or(Value::Null))
+        }
+    };
+    receipted_plain(&app, body.request_id, task).await
+}
+
+async fn cancel_staged(
+    State(app): State<Arc<App>>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<RequestBody>,
+) -> Response {
+    let cancelled = app.plugins.cancel(&id);
+    receipted_plain(&app, body.request_id, async move {
+        Ok(json!({"cancelled": cancelled}))
+    })
+    .await
+}
+
+#[derive(Deserialize)]
+struct PluginEnabledBody {
+    request_id: String,
+    enabled: bool,
+}
+
+/// On or off. A built-in harness plugin that is off hides its harness from
+/// every picker; its chats keep working.
+async fn set_plugin_enabled(
+    State(app): State<Arc<App>>,
+    AxumPath(name): AxumPath<String>,
+    Json(body): Json<PluginEnabledBody>,
+) -> Response {
+    let builtin = builtin_ids(&app).contains(&name);
+    let task = {
+        let app = Arc::clone(&app);
+        async move {
+            let mut store = crate::supervisor::lock_recovering(&app.store);
+            if builtin {
+                store
+                    .set_builtin_enabled(&name, body.enabled)
+                    .map_err(store_failure)?;
+                Ok(json!({"id": name, "enabled": body.enabled}))
+            } else {
+                let plugin = store
+                    .set_installed_plugin_enabled(&name, body.enabled)
+                    .map_err(store_failure)?;
+                Ok(serde_json::to_value(&plugin).unwrap_or(Value::Null))
+            }
+        }
+    };
+    receipted_plain(&app, body.request_id, task).await
+}
+
+/// Uninstall: its folder and its record go. A built-in can only be off.
+async fn remove_plugin(
+    State(app): State<Arc<App>>,
+    AxumPath(name): AxumPath<String>,
+    Json(body): Json<RequestBody>,
+) -> Response {
+    let builtin = builtin_ids(&app).contains(&name);
+    let task = {
+        let app = Arc::clone(&app);
+        async move {
+            if builtin {
+                return Err((
+                    StatusCode::CONFLICT,
+                    format!("{name} is built in - turn it off instead"),
+                ));
+            }
+            {
+                let store = crate::supervisor::lock_recovering(&app.store);
+                store.installed_plugin(&name).map_err(store_failure)?;
+            }
+            app.plugins.uninstall(&name).map_err(plugin_failure)?;
+            let mut store = crate::supervisor::lock_recovering(&app.store);
+            store
+                .remove_installed_plugin(&name)
+                .map_err(store_failure)?;
+            Ok(json!({"removed": name}))
+        }
+    };
+    receipted_plain(&app, body.request_id, task).await
 }
 
 // ---- MCP servers ----

@@ -1,0 +1,118 @@
+/* Plugins: the built-in and installed rows, and the Install dialog's
+   review of what a plugin asks for. Built on the panel family
+   (panels.css) and the modal family (devices.css). */
+
+.pg-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.pg-version {
+  margin-left: 8px;
+  color: var(--text-3);
+  font-family: 'Geist Mono', monospace;
+  font-size: 11.5px;
+  font-weight: 400;
+}
+
+.pg-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.pg-chip {
+  padding: 2px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  color: var(--text-2);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* the honest label: the brand's amber, its attention color */
+.pg-chip.pg-warn {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--accent);
+}
+
+.pg-source {
+  margin-top: 6px;
+  overflow: hidden;
+  color: var(--text-3);
+  font-family: 'Geist Mono', monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pg-mcp-note {
+  margin-top: 18px;
+}
+
+.pg-source-row {
+  display: flex;
+  gap: 8px;
+}
+
+.pg-source-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.pg-note {
+  margin: 0 0 10px;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.pg-review {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 4px 0 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+}
+
+.pg-review-row {
+  display: grid;
+  grid-template-columns: 76px 1fr;
+  gap: 10px;
+  color: var(--text-1);
+  font-size: 13px;
+}
+
+.pg-review-label {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.pg-powers {
+  margin: 0;
+  padding-left: 16px;
+}
+
+.pg-powers li + li {
+  margin-top: 3px;
+}
+
+.pg-warn-block {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  color: var(--accent);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.pg-review-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

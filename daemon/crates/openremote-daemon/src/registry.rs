@@ -298,6 +298,7 @@ fn harness_from(id: &str, name: &str, resolution: &Resolution, version: Option<&
         },
         version: version.map(String::from),
         available: resolution.is_available(),
+        enabled: true,
         fast_supported: fast_supported(id, version),
         signed_in: None,
         default_model: None,

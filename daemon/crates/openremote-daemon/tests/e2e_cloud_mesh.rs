@@ -122,7 +122,13 @@ async fn a_desktop_drives_a_machine_through_the_relay_and_nothing_more() {
 
     // Only what the allowlist names reaches a peer; Cloud's own routes
     // aren't even routed for one.
-    for path in ["mcp-servers", "automations", "sessions", "receipts/x"] {
+    for path in [
+        "plugins",
+        "mcp-servers",
+        "automations",
+        "sessions",
+        "receipts/x",
+    ] {
         let denied = call(&a, "GET", &format!("/devices/{id_b}/{path}"), None).await;
         assert_eq!(denied.status, 403, "{path}: {}", denied.raw);
     }

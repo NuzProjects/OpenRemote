@@ -396,6 +396,34 @@ export class DaemonApi {
     )
   }
 
+  // ---- plugins (Plugins) ----
+
+  plugins() {
+    return this.call('GET', '/plugins')
+  }
+
+  // Reading a plugin fetches it first - a clone or a download can take a
+  // while - and installs nothing; the answer is what it asks for.
+  stagePlugin(source) {
+    return this.call('POST', '/plugins/stage', { request_id: newRequestId(), source }, { timeoutMs: 180_000 })
+  }
+
+  installStagedPlugin(stageId) {
+    return this.call('POST', `/plugins/stage/${stageId}/install`, { request_id: newRequestId() })
+  }
+
+  cancelStagedPlugin(stageId) {
+    return this.call('POST', `/plugins/stage/${stageId}/cancel`, { request_id: newRequestId() })
+  }
+
+  setPluginEnabled(name, enabled) {
+    return this.call('POST', `/plugins/${name}/enabled`, { request_id: newRequestId(), enabled })
+  }
+
+  removePlugin(name) {
+    return this.call('POST', `/plugins/${name}/remove`, { request_id: newRequestId() })
+  }
+
   // ---- MCP servers (Settings > MCP servers) ----
 
   mcpServers() {

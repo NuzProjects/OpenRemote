@@ -9,7 +9,7 @@ import { signedIn } from './cloud.js'
 import { isMobile } from './platform.js'
 import { archivedSessions } from './archive.js'
 import { harnessName } from './harness-names.js'
-import { SIGNIN_HARNESSES } from './harness-manager.js'
+import { SIGNIN_HARNESSES, pickable } from './harness-manager.js'
 import { loadDefaults, saveDefaults } from './defaults.js'
 import { findModel, modelDisplayName } from './model-display.js'
 import { modelMaker } from './model-maker.js'
@@ -77,7 +77,7 @@ export default function SettingsView({ onReplay, onOpenChat }) {
   const [confirmSignOut, setConfirmSignOut] = useState(false)
   const inCloud = signedIn(cloud)
   const harnessList = capabilities?.harnesses ?? []
-  const available = (harnessList ?? []).filter((h) => h.available)
+  const available = (harnessList ?? []).filter(pickable)
   const [defaults, setDefaults] = useState(() => loadDefaults())
   const [models, setModels] = useState([])
   const [picker, setPicker] = useState(null)

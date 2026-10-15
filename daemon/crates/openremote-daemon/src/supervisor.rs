@@ -338,7 +338,13 @@ impl Supervisor {
     }
 
     pub fn harnesses(&self) -> Vec<Harness> {
-        self.registry.read().expect("registry lock").harnesses()
+        let mut list = self.registry.read().expect("registry lock").harnesses();
+        self.with_store(|s| {
+            for harness in &mut list {
+                harness.enabled = s.builtin_enabled(&harness.id);
+            }
+        });
+        list
     }
 
     /// The models a harness advertises, in its own words, with the

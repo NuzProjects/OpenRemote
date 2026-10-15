@@ -11,6 +11,10 @@ import { harnessName } from './harness-names.js'
 // sign in through their own setup.
 export const SIGNIN_HARNESSES = new Set(['claude', 'codex', 'grok'])
 
+// A harness a picker offers: installed, and its built-in plugin on
+// (Plugins). One turned off keeps its chats; it just isn't offered.
+export const pickable = (h) => Boolean(h.available) && h.enabled !== false
+
 // One row per harness the daemon knows, always: the manager is the
 // inventory of all six, not just the installed ones. `installable` is
 // null while the machines list hasn't answered yet - a missing row then

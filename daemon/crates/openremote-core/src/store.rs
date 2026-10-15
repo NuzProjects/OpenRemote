@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
@@ -35,8 +35,8 @@ fn slug(name: &str) -> String {
 use crate::events::{Event, EventPayload};
 use crate::ids::{DecisionId, DeviceId, MachineId, ProjectId, RuleId, SessionId};
 use crate::model::{
-    AutomationRule, Decision, DecisionState, Machine, MachineStatus, McpServerEntry, MessageRole,
-    Project, Receipt, ReceiptStatus, Session, SessionStatus,
+    AutomationRule, Decision, DecisionState, InstalledPlugin, Machine, MachineStatus,
+    McpServerEntry, MessageRole, Project, Receipt, ReceiptStatus, Session, SessionStatus,
 };
 
 #[derive(Debug, Error)]
@@ -111,6 +111,12 @@ struct State {
     /// plugin system took that name.
     #[serde(default, alias = "plugins")]
     mcp_servers: BTreeMap<String, McpServerEntry>,
+    /// The plugins the user installed on this machine, by name.
+    #[serde(default)]
+    installed_plugins: BTreeMap<String, InstalledPlugin>,
+    /// The built-in harness plugins the user turned off.
+    #[serde(default)]
+    disabled_builtins: BTreeSet<String>,
     #[serde(default)]
     rules: BTreeMap<RuleId, AutomationRule>,
     #[serde(default)]
@@ -709,6 +715,64 @@ impl Store {
                 up.is_some_and(|entries| entries.binary_search(&start).is_ok())
             })
             .collect()
+    }
+
+    // ---- plugins ----
+
+    pub fn installed_plugins(&self) -> Vec<&InstalledPlugin> {
+        self.state.installed_plugins.values().collect()
+    }
+
+    pub fn installed_plugin(&self, name: &str) -> Result<&InstalledPlugin, StoreError> {
+        self.state
+            .installed_plugins
+            .get(name)
+            .ok_or_else(|| StoreError::NotFound(format!("plugin {name}")))
+    }
+
+    /// Record an install - a new plugin, or an update of one by name.
+    pub fn put_installed_plugin(&mut self, plugin: InstalledPlugin) -> Result<(), StoreError> {
+        self.state
+            .installed_plugins
+            .insert(plugin.name.clone(), plugin);
+        self.persist()
+    }
+
+    pub fn remove_installed_plugin(&mut self, name: &str) -> Result<(), StoreError> {
+        if self.state.installed_plugins.remove(name).is_none() {
+            return Err(StoreError::NotFound(format!("plugin {name}")));
+        }
+        self.persist()
+    }
+
+    pub fn set_installed_plugin_enabled(
+        &mut self,
+        name: &str,
+        enabled: bool,
+    ) -> Result<InstalledPlugin, StoreError> {
+        let plugin = self
+            .state
+            .installed_plugins
+            .get_mut(name)
+            .ok_or_else(|| StoreError::NotFound(format!("plugin {name}")))?;
+        plugin.enabled = enabled;
+        plugin.updated_at = crate::now_ms();
+        let out = plugin.clone();
+        self.persist()?;
+        Ok(out)
+    }
+
+    pub fn builtin_enabled(&self, id: &str) -> bool {
+        !self.state.disabled_builtins.contains(id)
+    }
+
+    pub fn set_builtin_enabled(&mut self, id: &str, enabled: bool) -> Result<(), StoreError> {
+        if enabled {
+            self.state.disabled_builtins.remove(id);
+        } else {
+            self.state.disabled_builtins.insert(id.to_string());
+        }
+        self.persist()
     }
 
     // ---- MCP servers ----

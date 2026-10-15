@@ -16,6 +16,10 @@ pub struct Harness {
     /// `claude --version` output, when probed.
     pub version: Option<String>,
     pub available: bool,
+    /// The user has its built-in plugin on (Plugins). Off hides the
+    /// harness from every picker; its chats keep working.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
     /// The harness's own fast mode is usable at this version (claude
     /// `fastMode` headless ≥ 2.1.205, codex service tier `fast` ≥ 0.110.0).
     #[serde(default)]
@@ -218,6 +222,74 @@ pub struct McpServerEntry {
 
 fn default_true() -> bool {
     true
+}
+
+/// One plugin installed on this machine (the Plugins page). The six
+/// harnesses are built-in plugins and are never stored here - only whether
+/// the user turned one off.
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct InstalledPlugin {
+    /// The plugin's own name, from its manifest - unique on the machine.
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub runtime: PluginRuntime,
+    /// The powers it declared, which the user approved at install.
+    #[serde(default)]
+    pub powers: Vec<PluginPower>,
+    pub source: PluginSource,
+    pub scope: PluginScope,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    pub installed_at: i64,
+    pub updated_at: i64,
+}
+
+/// How a plugin runs. `content` is a Claude Code plugin with no
+/// OpenRemote part of its own: skills, agents, commands, hooks, MCP.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginRuntime {
+    Process,
+    Js,
+    Wasm,
+    Content,
+}
+
+/// What a plugin may do, declared in its manifest and approved by the
+/// user at install.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginPower {
+    /// Start programs on this machine.
+    RunPrograms,
+    /// Read chats and the project's files.
+    ReadChats,
+    /// Give agents tools; start, steer and stop chats.
+    AgentTools,
+    /// Reach the internet.
+    Network,
+    /// Use the microphone.
+    Microphone,
+}
+
+/// Where an installed plugin came from - what an update fetches again.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PluginSource {
+    Folder { path: String },
+    Git { url: String },
+    Archive { location: String },
+}
+
+/// Who a plugin is installed for. This machine only, for now; Global,
+/// Project-local and Project arrive with the scopes.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginScope {
+    Machine,
 }
 
 /// What makes a rule fire. The kinds with real event sources - the clock

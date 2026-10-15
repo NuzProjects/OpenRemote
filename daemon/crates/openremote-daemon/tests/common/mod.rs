@@ -74,6 +74,11 @@ pub struct TestDaemon {
 }
 
 impl TestDaemon {
+    /// The daemon's data folder - where it keeps its state and plugins.
+    pub fn data_dir(&self) -> &std::path::Path {
+        self._data_dir.path()
+    }
+
     /// The address-and-token view over a daemon this test spawned and
     /// reaps itself (the exit-sweep shape: the child never lives here,
     /// so dropping this kills nothing).

@@ -27,9 +27,9 @@ pub use events::{Event, EventPayload};
 pub use ids::{DecisionId, DeviceId, MachineId, ProjectId, RuleId, SessionId};
 pub use model::{
     AutomationRule, ChatMessage, Decision, DecisionKind, DecisionOption, DecisionState, Harness,
-    InstallSpec, Machine, MachineStatus, MachineView, McpServerEntry, MessageRole, Project,
-    QueuedMessage, Receipt, ReceiptStatus, Session, SessionStatus, Trigger, TriggerKind,
-    TurnOutcome,
+    InstallSpec, InstalledPlugin, Machine, MachineStatus, MachineView, McpServerEntry, MessageRole,
+    PluginPower, PluginRuntime, PluginScope, PluginSource, Project, QueuedMessage, Receipt,
+    ReceiptStatus, Session, SessionStatus, Trigger, TriggerKind, TurnOutcome,
 };
 pub use store::Store;
 

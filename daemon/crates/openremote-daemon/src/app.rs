@@ -21,6 +21,9 @@ pub struct App {
     /// The loopback port the API listens on: the sign-in callback's address.
     pub port: OnceLock<u16>,
     pub sync: crate::sync::SyncState,
+    /// The plugin folders on this machine and the installs awaiting an
+    /// answer (Plugins).
+    pub plugins: crate::plugins::PluginHost,
 }
 
 pub struct AppOptions {
@@ -56,9 +59,11 @@ impl App {
                 let _ = store.set_this_device(id);
             }
         }
+        let plugins = crate::plugins::PluginHost::new(&options.data_dir);
         let app = Arc::new(Self {
             token: options.token,
             data_dir: options.data_dir,
+            plugins,
             store,
             supervisor,
             cloud,

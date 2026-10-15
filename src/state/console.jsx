@@ -31,6 +31,8 @@ export function ConsoleProvider({ children }) {
   const [sessions, setSessions] = useState([])
   const [machines, setMachines] = useState([])
   const [mcpServers, setMcpServers] = useState([])
+  // The Plugins page: the built-in harness plugins and what is installed.
+  const [plugins, setPlugins] = useState(null)
   const [marketplace, setMarketplace] = useState([])
   const [automations, setAutomations] = useState([])
   // The registered projects - daemon-side, the one list every surface
@@ -146,6 +148,7 @@ export function ConsoleProvider({ children }) {
       const list = await api.sessions()
       const machineList = await api.machines()
       const mcpList = await api.mcpServers()
+      const pluginList = await api.plugins().catch(() => null)
       const market = await api.mcpMarketplace()
       const rules = await api.automations()
       const projectList = await api.projects().catch(() => [])
@@ -158,6 +161,7 @@ export function ConsoleProvider({ children }) {
       setSessions(list ?? [])
       setMachines(machineList ?? [])
       setMcpServers(mcpList ?? [])
+      setPlugins(pluginList)
       setMarketplace(market ?? [])
       setAutomations(rules ?? [])
       setProjects(projectList ?? [])
@@ -719,6 +723,46 @@ export function ConsoleProvider({ children }) {
     [api],
   )
 
+  // ---- plugins ----
+
+  const refreshPlugins = useCallback(async () => {
+    try {
+      setPlugins(await api.plugins())
+    } catch {
+      /* the next action refreshes again */
+    }
+  }, [api])
+
+  const stagePlugin = useCallback(async (source) => api.stagePlugin(source), [api])
+  const cancelStagedPlugin = useCallback(async (stageId) => api.cancelStagedPlugin(stageId), [api])
+
+  const installStagedPlugin = useCallback(
+    async (stageId) => {
+      const reply = await api.installStagedPlugin(stageId)
+      await refreshPlugins()
+      return reply
+    },
+    [api, refreshPlugins],
+  )
+
+  // A built-in harness turned off leaves every picker - the pickers read
+  // capabilities, so those refresh too.
+  const setPluginEnabled = useCallback(
+    async (name, enabled) => {
+      await api.setPluginEnabled(name, enabled)
+      await Promise.all([refreshPlugins(), refreshCapabilities()])
+    },
+    [api, refreshPlugins, refreshCapabilities],
+  )
+
+  const removePlugin = useCallback(
+    async (name) => {
+      await api.removePlugin(name)
+      await refreshPlugins()
+    },
+    [api, refreshPlugins],
+  )
+
   // ---- MCP servers ----
 
   const refreshMcpServers = useCallback(async () => {
@@ -852,6 +896,12 @@ export function ConsoleProvider({ children }) {
       sessions,
       machines,
       mcpServers,
+      plugins,
+      stagePlugin,
+      installStagedPlugin,
+      cancelStagedPlugin,
+      setPluginEnabled,
+      removePlugin,
       marketplace,
       automations,
       projects,
@@ -913,6 +963,12 @@ export function ConsoleProvider({ children }) {
       sessions,
       machines,
       mcpServers,
+      plugins,
+      stagePlugin,
+      installStagedPlugin,
+      cancelStagedPlugin,
+      setPluginEnabled,
+      removePlugin,
       marketplace,
       automations,
       projects,

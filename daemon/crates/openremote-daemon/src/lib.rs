@@ -9,6 +9,7 @@ pub mod host;
 pub mod http;
 pub mod install;
 pub mod mcp_catalog;
+pub mod plugins;
 pub mod registry;
 pub mod signin;
 pub mod supervisor;

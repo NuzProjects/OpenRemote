@@ -14,6 +14,7 @@ import { projectName } from './projects.js'
 import './devices.css'
 import './automations.css'
 import { useBack } from './use-back.js'
+import { pickable } from './harness-manager.js'
 
 const TRIGGERS = [
   { id: 'schedule', name: 'On a schedule' },
@@ -43,7 +44,7 @@ export default function AutomationForm({ rule, onClose }) {
   // A saved rule carries its id (an edit); a prefilled draft from the
   // starter or the pill carries only fields.
   const editing = rule?.id != null
-  const available = (capabilities?.harnesses ?? []).filter((h) => h.available)
+  const available = (capabilities?.harnesses ?? []).filter(pickable)
   const online = (machines ?? []).filter((m) => m.machine.status === 'online')
 
   const [name, setName] = useState(rule?.name ?? '')

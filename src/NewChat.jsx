@@ -13,7 +13,7 @@ import { harnessName } from './harness-names.js'
 import { findModel, modelDisplayName } from './model-display.js'
 import { modelMaker } from './model-maker.js'
 import { ModelMark } from './model-marks.jsx'
-import { SIGNIN_HARNESSES } from './harness-manager.js'
+import { SIGNIN_HARNESSES, pickable } from './harness-manager.js'
 import { loadDefaults } from './defaults.js'
 import { projectName } from './projects.js'
 import { isMobile } from './platform.js'
@@ -158,7 +158,7 @@ export default function NewChat({
   }, [target, targetOnline, connection.state])
 
   // Only what the machine reports installed - no dead UI.
-  const available = ((target ? targetCaps : capabilities)?.harnesses ?? []).filter((h) => h.available)
+  const available = ((target ? targetCaps : capabilities)?.harnesses ?? []).filter(pickable)
   const currentHarness = available.find((h) => h.id === harness) ?? available[0] ?? null
   // The picked harness's own sign-in fact: a harness that isn't signed in
   // says so right here - the task is about to run on it.
