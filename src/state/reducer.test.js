@@ -430,3 +430,29 @@ test('non-finite cost and token payloads never poison the running totals', () =>
   assert.equal(chat.costUsd, 0.42)
   assert.equal(chat.thinkingTokens, 42)
 })
+
+test('the queue folds from the session and from queue.changed, and an empty one is never held', () => {
+  const chat = chatFromSession({
+    id: 's1',
+    harness: 'claude',
+    status: 'working',
+    queue: [{ id: 'q1', text: 'second', at: 1 }],
+    queue_paused: false,
+  })
+  assert.deepEqual(chat.queue.map((m) => m.text), ['second'])
+  assert.equal(chat.queuePaused, false)
+  foldEvent(chat, {
+    seq: 1,
+    type: 'queue.changed',
+    queue: [{ id: 'q1', text: 'second', at: 1 }],
+    paused: true,
+  })
+  assert.equal(chat.queuePaused, true)
+  foldEvent(chat, { seq: 2, type: 'queue.changed', queue: [], paused: true })
+  assert.deepEqual(chat.queue, [])
+  assert.equal(chat.queuePaused, false)
+  // A session.updated never rewinds the queue.
+  foldEvent(chat, { seq: 3, type: 'queue.changed', queue: [{ id: 'q2', text: 'third', at: 2 }], paused: false })
+  foldEvent(chat, { seq: 4, type: 'session.updated', session: { id: 's1', harness: 'claude', status: 'working' } })
+  assert.deepEqual(chat.queue.map((m) => m.text), ['third'])
+})

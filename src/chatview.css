@@ -988,3 +988,107 @@ html[data-reduce-motion] .cv-tool-actions button {
     right: 8px;
   }
 }
+
+/* The queue: messages waiting for the running turn, stacked on top of
+   the composer box. Actions show on hover or keyboard focus. */
+.cv-queue {
+  margin: -4px -6px 10px;
+  padding: 4px 6px 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.cv-queue-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 22px;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.cv-queue-resume {
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+}
+
+.cv-queue-resume:hover:not(:disabled) {
+  color: var(--text-1);
+}
+
+.cv-queue-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 2px 4px 2px 8px;
+  border-radius: 8px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.cv-queue-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.cv-queue-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cv-queue-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cv-queue-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--text-3);
+}
+
+.cv-queue-icon:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-1);
+}
+
+/* Steer: the row's main action, a real button with its own words */
+.cv-queue-steer {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-1);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.cv-queue-steer:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.cv-queue-steer:disabled {
+  opacity: 0.5;
+}

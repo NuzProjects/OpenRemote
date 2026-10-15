@@ -456,6 +456,11 @@ pub async fn create_remote(
 
 const FORWARDED: &[&str] = &[
     "/sessions/{id}/prompts",
+    "/sessions/{id}/queue",
+    "/sessions/{id}/queue/resume",
+    "/sessions/{id}/queue/{item}/remove",
+    "/sessions/{id}/queue/{item}/steer",
+    "/sessions/{id}/steer",
     "/sessions/{id}/settings",
     "/sessions/{id}/interrupt",
     "/sessions/{id}/stop",

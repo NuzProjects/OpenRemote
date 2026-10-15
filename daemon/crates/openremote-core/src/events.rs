@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::ids::DecisionId;
-use crate::model::{ChatMessage, Decision, Session, SessionStatus, TurnOutcome};
+use crate::model::{ChatMessage, Decision, QueuedMessage, Session, SessionStatus, TurnOutcome};
 
 /// One append-only session event. The console renders only from these.
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -96,6 +96,14 @@ pub enum EventPayload {
     },
     #[serde(rename = "daemon.error")]
     DaemonError { message: String },
+    /// The chat's queue as it now stands - the whole list and whether it
+    /// is held. The only writer of the session's queue fields; a device
+    /// that predates the queue keeps the event and skips it.
+    #[serde(rename = "queue.changed")]
+    QueueChanged {
+        queue: Vec<QueuedMessage>,
+        paused: bool,
+    },
 }
 
 impl Event {
@@ -120,6 +128,7 @@ impl Event {
             EventPayload::DecisionRequested { .. } => "decision.requested",
             EventPayload::DecisionResponded { .. } => "decision.responded",
             EventPayload::DaemonError { .. } => "daemon.error",
+            EventPayload::QueueChanged { .. } => "queue.changed",
         }
     }
 }

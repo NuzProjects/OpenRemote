@@ -558,6 +558,15 @@ export function ConsoleProvider({ children }) {
     [api],
   )
 
+  // The chat's queue (the daemon keeps it; queue.changed folds it here):
+  // a message sent while a turn is working waits and runs when the turn
+  // ends. Steer puts one into the running turn now.
+  const queueMessage = useCallback(async (chatId, text) => api.queue(chatId, text.trim()), [api])
+  const removeQueued = useCallback(async (chatId, itemId) => api.queueRemove(chatId, itemId), [api])
+  const steerQueued = useCallback(async (chatId, itemId) => api.queueSteer(chatId, itemId), [api])
+  const steerMessage = useCallback(async (chatId, text) => api.steer(chatId, text.trim()), [api])
+  const resumeQueue = useCallback(async (chatId) => api.queueResume(chatId), [api])
+
   // ---- machines ----
 
   const refreshMachines = useCallback(async () => {
@@ -874,6 +883,11 @@ export function ConsoleProvider({ children }) {
       answerDecision,
       stopChat,
       interruptChat,
+      queueMessage,
+      removeQueued,
+      steerQueued,
+      steerMessage,
+      resumeQueue,
       resumeChat,
       createMachine,
       removeMachine,
@@ -929,6 +943,11 @@ export function ConsoleProvider({ children }) {
       answerDecision,
       stopChat,
       interruptChat,
+      queueMessage,
+      removeQueued,
+      steerQueued,
+      steerMessage,
+      resumeQueue,
       resumeChat,
       createMachine,
       removeMachine,

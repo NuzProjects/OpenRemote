@@ -43,6 +43,7 @@ export const ACTIONS = [
   { id: 'view-mobile', group: 'navigation', label: 'Mobile', keys: null },
   { id: 'view-metrics', group: 'navigation', label: 'Metrics', keys: null },
   { id: 'focus-composer', group: 'chat', label: 'Focus the composer', keys: 'Mod+L' },
+  { id: 'steer', group: 'chat', label: 'Steer', keys: 'Mod+Enter' },
   { id: 'interrupt', group: 'chat', label: 'Interrupt the turn', keys: 'Esc' },
   { id: 'stop', group: 'chat', label: 'Stop the session', keys: 'Mod+Shift+X' },
   { id: 'archive', group: 'chat', label: 'Archive the chat', keys: 'Mod+Shift+A' },

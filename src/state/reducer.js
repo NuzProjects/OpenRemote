@@ -62,6 +62,10 @@ export function chatFromSession(session) {
     title: session.title ?? null,
     // The device that runs a synced chat; none for a private one.
     executor: session.executor ?? null,
+    // Messages waiting for the running turn to end (the daemon's queue),
+    // and whether an interrupt, a stop or a failure is holding them.
+    queue: session.queue ?? [],
+    queuePaused: Boolean(session.queue_paused) && (session.queue ?? []).length > 0,
     timeline: [],
     pendingDecisionId: null,
     // The highest event seq already folded into the timeline - reopening
@@ -145,6 +149,11 @@ export function foldEvent(chat, event) {
       if (payload.reason != null) chat.lastError = payload.reason
       else if (payload.status !== 'failed') chat.lastError = null
       chat.running = ['starting', 'working', 'waiting'].includes(payload.status)
+      break
+    }
+    case 'queue.changed': {
+      chat.queue = payload.queue ?? []
+      chat.queuePaused = Boolean(payload.paused) && chat.queue.length > 0
       break
     }
     case 'session.updated': {

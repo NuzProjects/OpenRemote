@@ -1,5 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowUp, Check, Lightning, Stop, Play, HandPalm, Brain, Trash, CloudArrowUp } from '@phosphor-icons/react'
+import {
+  ArrowUp,
+  ArrowUpRight,
+  Check,
+  Lightning,
+  Stop,
+  Play,
+  HandPalm,
+  Brain,
+  Trash,
+  CloudArrowUp,
+  PencilSimple,
+  X,
+} from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
 import { chatAccess, deviceName, signedIn } from './cloud.js'
 import { railItems } from './state/reducer.js'
@@ -19,6 +32,10 @@ import { usePrivacyMode } from './privacy.js'
 import { useHint, useModelSwitches, usePaletteSource, useShortcut } from './keyboard.jsx'
 import './chatview.css'
 import './composer.css'
+
+// The harnesses that run one process per prompt cannot take a message
+// mid-turn: Steer interrupts the turn and runs the message next there.
+const INTERRUPT_STEER = new Set(['grok', 'agy'])
 
 const STATUS_LABEL = {
   starting: 'Starting',
@@ -174,6 +191,11 @@ export default function ChatView({ chat, onBack, focused = true }) {
     setDeviceKind,
     deleteChat,
     syncChat,
+    queueMessage,
+    removeQueued,
+    steerQueued,
+    steerMessage,
+    resumeQueue,
   } = useConsole()
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [confirmSync, setConfirmSync] = useState(false)
@@ -210,7 +232,11 @@ export default function ChatView({ chat, onBack, focused = true }) {
   // need Resume first. Gating on `running` dead-locked the composer
   // after the first turn completed.
   const alive = !['stopped', 'failed'].includes(chat.status)
-  const canSend = text.trim().length > 0 && !pendingDecision && alive && !busy && reachable
+  // While a turn is working (or waiting on a decision) a message queues in
+  // the daemon and runs as its own turn when this one ends.
+  const turnOpen = chat.status === 'running' || chat.status === 'waiting'
+  const queue = chat.queue ?? []
+  const canSend = text.trim().length > 0 && alive && !busy && reachable
   const harness = (capabilities?.harnesses ?? []).find((h) => h.id === chat.harness)
   const live = LIVE_SETTINGS[chat.harness] ?? { model: false, effort: false, fast: false }
   // A stopped chat can change anything the harness accepts at start. A
@@ -291,7 +317,8 @@ export default function ChatView({ chat, onBack, focused = true }) {
     setBusy(true)
     setError(null)
     try {
-      await sendPrompt(chat.id, text.trim())
+      if (turnOpen) await queueMessage(chat.id, text.trim())
+      else await sendPrompt(chat.id, text.trim())
       setText('')
     } catch (err) {
       setError(err.message ?? String(err))
@@ -418,6 +445,42 @@ export default function ChatView({ chat, onBack, focused = true }) {
         : null,
     focused,
   )
+  // Steer (Ctrl+Enter): into the running turn now; with nothing running
+  // it is an ordinary send.
+  const steerNow = async () => {
+    if (!text.trim() || !alive || !reachable || busy) return false
+    if (!turnOpen) {
+      send()
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      await steerMessage(chat.id, text.trim())
+      setText('')
+    } catch (err) {
+      setError(err.message ?? String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+  useShortcut('steer', steerNow, focused)
+  // Edit: a queued message comes back to the composer (in front of
+  // anything already typed) and leaves the queue; Enter queues it again.
+  const pullBack = (message) => {
+    setText((typed) => (typed.trim() ? `${message.text}\n${typed}` : message.text))
+    control(() => removeQueued(chat.id, message.id))
+    inputRef.current?.focus()
+  }
+  const steerLabel = turnOpen
+    ? INTERRUPT_STEER.has(chat.harness)
+      ? 'Interrupt + send'
+      : 'Steer into the running turn'
+    : 'Send now'
+  // The row's Steer button says what it will do: steer, interrupt and
+  // send (one process per prompt), or simply send when nothing runs.
+  const steerButton = turnOpen ? (INTERRUPT_STEER.has(chat.harness) ? 'Interrupt + send' : 'Steer') : 'Send now'
+  const hintSteer = useHint('steer')
   const hintInterrupt = useHint('interrupt')
   const hintStop = useHint('stop')
   const hintModel = useHint('pick-model')
@@ -743,30 +806,90 @@ export default function ChatView({ chat, onBack, focused = true }) {
 
       <div className="cv-composer" ref={composerRef}>
         <div className="cv-box">
+          {queue.length > 0 && (
+            <div className="cv-queue">
+              <div className="cv-queue-head">
+                {chat.queuePaused ? (
+                  <>
+                    <span>Queue paused</span>
+                    <button
+                      type="button"
+                      className="cv-queue-resume"
+                      disabled={!reachable}
+                      onClick={() => control(() => resumeQueue(chat.id))}
+                    >
+                      Resume
+                    </button>
+                  </>
+                ) : (
+                  <span>{queue.length} queued</span>
+                )}
+              </div>
+              {queue.map((message) => (
+                <div key={message.id} className="cv-queue-row">
+                  <span className="cv-queue-text pv">{message.text}</span>
+                  <span className="cv-queue-actions">
+                    <button
+                      type="button"
+                      className="cv-queue-icon"
+                      title="Edit - back to the composer"
+                      onClick={() => pullBack(message)}
+                    >
+                      <PencilSimple size={16} />
+                    </button>
+                    <button
+                      type="button"
+                      className="cv-queue-icon"
+                      title="Remove"
+                      onClick={() => control(() => removeQueued(chat.id, message.id))}
+                    >
+                      <X size={16} />
+                    </button>
+                    <button
+                      type="button"
+                      className="cv-queue-steer"
+                      title={hintSteer(steerLabel)}
+                      disabled={!reachable}
+                      onClick={() => control(() => steerQueued(chat.id, message.id))}
+                    >
+                      <ArrowUpRight size={14} weight="bold" />
+                      {steerButton}
+                    </button>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
           <textarea
             ref={inputRef}
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
               // A phone's keyboard Enter is a new line; the send button sends.
-              if (e.key === 'Enter' && !e.shiftKey && !isMobile) {
+              // Ctrl/Cmd+Enter is Steer's (the keyboard catalog's).
+              if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !isMobile) {
                 e.preventDefault()
                 send()
+              }
+              // Up on an empty composer brings the last queued message back.
+              if (e.key === 'ArrowUp' && !text && queue.length > 0 && !isMobile) {
+                e.preventDefault()
+                pullBack(queue[queue.length - 1])
               }
             }}
             placeholder={
               blocked ??
-              (pendingDecision
-                ? 'Decide above to continue'
-                : alive
-                  ? chat.running
-                    ? 'Steer the session'
+              (alive
+                ? pendingDecision
+                  ? 'Decide above - or queue a message'
+                  : turnOpen
+                    ? 'Queue a message'
                     : 'Send a message'
-                  : chat.resumable
-                    ? 'Resume the session to continue'
-                    : 'This chat never started')
+                : chat.resumable
+                  ? 'Resume the session to continue'
+                  : 'This chat never started')
             }
-            disabled={pendingDecision || !alive || !reachable}
+            disabled={!alive || !reachable}
             spellCheck={false}
           />
           <div className="cv-foot">
@@ -927,7 +1050,12 @@ export default function ChatView({ chat, onBack, focused = true }) {
                   nominal={chat.context?.window == null}
                 />
               )}
-              <button className="nc-send" onClick={send} disabled={!canSend} title="Send">
+              <button
+                className="nc-send"
+                onClick={send}
+                disabled={!canSend}
+                title={turnOpen ? `Queue (Enter) - ${hintSteer(steerLabel)}` : 'Send'}
+              >
                 <ArrowUp size={15} weight="bold" />
               </button>
             </div>

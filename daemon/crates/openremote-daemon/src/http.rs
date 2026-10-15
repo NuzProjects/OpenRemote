@@ -113,6 +113,11 @@ const PEER_ROUTES: &[(&str, &str, Tier)] = &[
     ("POST", "/projects", Tier::Machine),
     ("DELETE", "/projects/{id}", Tier::Machine),
     ("POST", "/sessions/{id}/prompts", Tier::Chat),
+    ("POST", "/sessions/{id}/queue", Tier::Chat),
+    ("POST", "/sessions/{id}/queue/resume", Tier::Chat),
+    ("POST", "/sessions/{id}/queue/{item}/remove", Tier::Chat),
+    ("POST", "/sessions/{id}/queue/{item}/steer", Tier::Chat),
+    ("POST", "/sessions/{id}/steer", Tier::Chat),
     ("POST", "/sessions/{id}/settings", Tier::Chat),
     ("POST", "/sessions/{id}/interrupt", Tier::Chat),
     ("POST", "/sessions/{id}/stop", Tier::Chat),
@@ -199,6 +204,14 @@ fn api_routes() -> Router<Arc<App>> {
         .route("/sessions/{id}/events", get(session_events))
         .route("/sessions/{id}/decisions", get(list_decisions))
         .route("/sessions/{id}/prompts", post(post_prompt))
+        .route("/sessions/{id}/queue", post(post_queue))
+        .route("/sessions/{id}/queue/resume", post(post_queue_resume))
+        .route(
+            "/sessions/{id}/queue/{item}/remove",
+            post(post_queue_remove),
+        )
+        .route("/sessions/{id}/queue/{item}/steer", post(post_queue_steer))
+        .route("/sessions/{id}/steer", post(post_steer))
         .route("/sessions/{id}/settings", post(post_settings))
         .route("/sessions/{id}/interrupt", post(post_interrupt))
         .route("/sessions/{id}/stop", post(post_stop))
@@ -1530,6 +1543,123 @@ async fn post_prompt(
             supervisor_error(err)
         }
     }
+}
+
+/// The receipt flow every queue action shares: a replayed request answers
+/// from its receipt; a new one is recorded as accepted, run, and settled.
+async fn receipted<F, Fut>(app: &Arc<App>, request_id: String, id: &str, run: F) -> Response
+where
+    F: FnOnce(SessionId) -> Fut,
+    Fut: std::future::Future<Output = Result<Value, crate::supervisor::SupervisorError>>,
+{
+    if let Some(receipt) = app.supervisor.receipt(&request_id) {
+        return receipt_response(&receipt);
+    }
+    let Some(session_id) = SessionId::parse(id) else {
+        return error(StatusCode::BAD_REQUEST, "bad session id");
+    };
+    app.supervisor.record_receipt(Receipt {
+        request_id: request_id.clone(),
+        session_id: Some(session_id),
+        status: ReceiptStatus::Accepted,
+        result: None,
+        error: None,
+        updated_at: openremote_core::now_ms(),
+    });
+    match run(session_id).await {
+        Ok(result) => {
+            let receipt = Receipt {
+                request_id,
+                session_id: Some(session_id),
+                status: ReceiptStatus::Completed,
+                result: Some(result),
+                error: None,
+                updated_at: openremote_core::now_ms(),
+            };
+            app.supervisor.record_receipt(receipt.clone());
+            receipt_response(&receipt)
+        }
+        Err(err) => {
+            let receipt = Receipt {
+                request_id,
+                session_id: Some(session_id),
+                status: ReceiptStatus::Failed,
+                result: None,
+                error: Some(err.to_string()),
+                updated_at: openremote_core::now_ms(),
+            };
+            app.supervisor.record_receipt(receipt.clone());
+            supervisor_error(err)
+        }
+    }
+}
+
+/// Queue a message behind the running turn.
+async fn post_queue(
+    State(app): State<Arc<App>>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<PromptBody>,
+) -> Response {
+    let sup = Arc::clone(&app.supervisor);
+    receipted(&app, body.request_id, &id, |sid| async move {
+        let session = sup.queue_add(&sid, &body.text).await?;
+        Ok(serde_json::to_value(&session).unwrap_or(Value::Null))
+    })
+    .await
+}
+
+async fn post_queue_remove(
+    State(app): State<Arc<App>>,
+    AxumPath((id, item)): AxumPath<(String, String)>,
+    Json(body): Json<RequestBody>,
+) -> Response {
+    let sup = Arc::clone(&app.supervisor);
+    receipted(&app, body.request_id, &id, |sid| async move {
+        let session = sup.queue_remove(&sid, &item).await?;
+        Ok(serde_json::to_value(&session).unwrap_or(Value::Null))
+    })
+    .await
+}
+
+async fn post_queue_steer(
+    State(app): State<Arc<App>>,
+    AxumPath((id, item)): AxumPath<(String, String)>,
+    Json(body): Json<RequestBody>,
+) -> Response {
+    let sup = Arc::clone(&app.supervisor);
+    receipted(&app, body.request_id, &id, |sid| async move {
+        sup.queue_steer(&sid, &item).await?;
+        Ok(json!({"steered": true}))
+    })
+    .await
+}
+
+async fn post_queue_resume(
+    State(app): State<Arc<App>>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<RequestBody>,
+) -> Response {
+    let sup = Arc::clone(&app.supervisor);
+    receipted(&app, body.request_id, &id, |sid| async move {
+        let session = sup.queue_resume(&sid).await?;
+        Ok(serde_json::to_value(&session).unwrap_or(Value::Null))
+    })
+    .await
+}
+
+/// Steer a message straight into the running turn (the composer's
+/// Ctrl+Enter), never through the queue.
+async fn post_steer(
+    State(app): State<Arc<App>>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<PromptBody>,
+) -> Response {
+    let sup = Arc::clone(&app.supervisor);
+    receipted(&app, body.request_id, &id, |sid| async move {
+        sup.steer(&sid, &body.text).await?;
+        Ok(json!({"steered": true}))
+    })
+    .await
 }
 
 async fn post_interrupt(

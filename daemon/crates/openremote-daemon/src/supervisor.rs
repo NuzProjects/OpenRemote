@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 
 use openremote_core::{
     AutomationRule, Decision, DecisionId, DecisionState, Event, EventPayload, Harness, Machine,
-    MachineId, MachineStatus, MachineView, Plugin, Project, ProjectId, Receipt, RuleId, Session,
-    SessionId, SessionStatus, Store, TriggerKind, TurnOutcome, now_ms,
+    MachineId, MachineStatus, MachineView, Plugin, Project, ProjectId, QueuedMessage, Receipt,
+    RuleId, Session, SessionId, SessionStatus, Store, TriggerKind, TurnOutcome, now_ms,
 };
 use openremote_harness::{DriverEvent, Resolution};
 use serde_json::Value;
@@ -273,6 +273,10 @@ pub struct Supervisor {
     /// Entries ride with the session map entry - created at spawn, gone
     /// at removal - so the map never outlives the session it explains.
     stderr_ring: StdMutex<HashMap<SessionId, VecDeque<String>>>,
+    /// A message steered into a harness that cannot take input mid-turn
+    /// (one process per prompt): the turn was interrupted for it, and the
+    /// turn's end sends it before anything queued.
+    steer_next: StdMutex<HashMap<SessionId, String>>,
     /// The daemon's own machine - sessions run here, plugins ride from here.
     this_machine: MachineId,
 }
@@ -311,6 +315,7 @@ impl Supervisor {
             fired: StdMutex::new(HashMap::new()),
             webhooks: StdMutex::new(WebhookMemory::default()),
             stderr_ring: StdMutex::new(HashMap::new()),
+            steer_next: StdMutex::new(HashMap::new()),
             this_machine,
         });
         supervisor.spawn_presence_ticker(this_machine);
@@ -1190,6 +1195,8 @@ impl Supervisor {
             approved_tools: Vec::new(),
             executor,
             title: None,
+            queue: Vec::new(),
+            queue_paused: false,
         };
         let id = session.id;
         self.emit_all(&id, vec![EventPayload::SessionCreated { session }])?;
@@ -1243,7 +1250,21 @@ impl Supervisor {
     pub async fn prompt(&self, id: &SessionId, text: &str) -> Result<(), SupervisorError> {
         self.ensure_here(id)?;
         let entry = self.entry(id).await?;
-        let _order = entry.order.lock().await;
+        let order = entry.order.lock().await;
+        self.open_prompt_locked(id, &entry, text).await?;
+        drop(order);
+        self.send_prompt_text(id, &entry, text).await
+    }
+
+    /// A prompt's turn and message events, written under the session's
+    /// order lock the caller holds - so taking a message off the queue
+    /// and opening its turn is one step no other prompt can split.
+    async fn open_prompt_locked(
+        &self,
+        id: &SessionId,
+        entry: &SessionEntry,
+        text: &str,
+    ) -> Result<(), SupervisorError> {
         // The Working gate (harness audit F8): a driver that runs one
         // process per prompt cannot take a second while a turn is open -
         // `send_prompt` would spawn a second process, replace the first
@@ -1307,7 +1328,17 @@ impl Supervisor {
             ]
         };
         self.emit_all(id, payloads)?;
-        drop(_order);
+        Ok(())
+    }
+
+    /// Write a prompt whose turn is already open to the harness. A failed
+    /// write settles that turn (and the session, when the process died).
+    async fn send_prompt_text(
+        &self,
+        id: &SessionId,
+        entry: &SessionEntry,
+        text: &str,
+    ) -> Result<(), SupervisorError> {
         if let Err(e) = entry.driver.lock().await.send_prompt(text).await {
             // The turn's existence is already durable: a write that
             // failed must not leave it open forever. The boundary rides
@@ -1417,6 +1448,12 @@ impl Supervisor {
     pub async fn interrupt(&self, id: &SessionId) -> Result<(), SupervisorError> {
         self.ensure_here(id)?;
         let entry = self.entry(id).await?;
+        // An interrupt usually means "wait, not that": the queue holds
+        // until the user resumes it, instead of firing the next message.
+        {
+            let _order = entry.order.lock().await;
+            self.hold_queue(id)?;
+        }
         entry.driver.lock().await.interrupt().await?;
         Ok(())
     }
@@ -1428,6 +1465,10 @@ impl Supervisor {
     pub async fn stop(&self, id: &SessionId) -> Result<Session, SupervisorError> {
         self.ensure_here(id)?;
         let entry = self.entry(id).await?;
+        {
+            let _order = entry.order.lock().await;
+            self.hold_queue(id)?;
+        }
         entry.stopping.store(true, AtomicOrdering::SeqCst);
         let (tx, rx) = oneshot::channel();
         {
@@ -1800,6 +1841,220 @@ impl Supervisor {
         })
     }
 
+    // ---- the queue: messages that wait for the running turn to end ----
+
+    /// The event that holds a waiting queue, when there is one to hold.
+    fn hold_payload(&self, id: &SessionId) -> Option<EventPayload> {
+        let session = self.session(id).ok()?;
+        (!session.queue.is_empty() && !session.queue_paused).then(|| EventPayload::QueueChanged {
+            queue: session.queue,
+            paused: true,
+        })
+    }
+
+    fn hold_queue(&self, id: &SessionId) -> Result<(), SupervisorError> {
+        match self.hold_payload(id) {
+            Some(payload) => self.emit_all(id, vec![payload]).map(|_| ()),
+            None => Ok(()),
+        }
+    }
+
+    /// Write the queue as it now stands. An empty queue is never held.
+    fn emit_queue(
+        &self,
+        id: &SessionId,
+        queue: Vec<QueuedMessage>,
+        paused: bool,
+    ) -> Result<(), SupervisorError> {
+        let paused = paused && !queue.is_empty();
+        self.emit_all(id, vec![EventPayload::QueueChanged { queue, paused }])
+            .map(|_| ())
+    }
+
+    /// The session's order lock while a driver is live. A stopped chat
+    /// has no pump to race, so its queue changes need none.
+    async fn order_of(&self, id: &SessionId) -> Option<Arc<AsyncMutex<()>>> {
+        self.sessions
+            .lock()
+            .await
+            .get(id)
+            .map(|e| Arc::clone(&e.order))
+    }
+
+    /// Queue a message behind the running turn. A chat with no turn
+    /// running takes it at once.
+    pub async fn queue_add(&self, id: &SessionId, text: &str) -> Result<Session, SupervisorError> {
+        self.ensure_here(id)?;
+        {
+            let order = self.order_of(id).await;
+            let _guard = match &order {
+                Some(o) => Some(o.lock().await),
+                None => None,
+            };
+            let session = self.session(id)?;
+            let mut queue = session.queue;
+            queue.push(QueuedMessage {
+                id: Uuid::new_v4().to_string(),
+                text: text.to_string(),
+                at: now_ms(),
+            });
+            self.emit_queue(id, queue, session.queue_paused)?;
+        }
+        self.drain_queue(id).await?;
+        self.session(id)
+    }
+
+    /// Take one message out of the queue. Already gone is fine: two
+    /// devices removing the same message agree.
+    pub async fn queue_remove(
+        &self,
+        id: &SessionId,
+        item: &str,
+    ) -> Result<Session, SupervisorError> {
+        self.ensure_here(id)?;
+        {
+            let order = self.order_of(id).await;
+            let _guard = match &order {
+                Some(o) => Some(o.lock().await),
+                None => None,
+            };
+            let session = self.session(id)?;
+            if session.queue.iter().any(|m| m.id == item) {
+                let queue = session.queue.into_iter().filter(|m| m.id != item).collect();
+                self.emit_queue(id, queue, session.queue_paused)?;
+            }
+        }
+        self.session(id)
+    }
+
+    /// Steer: put a message into the running turn now. Claude and codex
+    /// fold it into the turn; pi and opencode take it on their own wire.
+    /// A harness that runs one process per prompt cannot take input
+    /// mid-turn, so the turn is interrupted and the message runs next.
+    /// With nothing running it simply sends - starting a stopped chat
+    /// first.
+    pub async fn steer(
+        self: &Arc<Self>,
+        id: &SessionId,
+        text: &str,
+    ) -> Result<(), SupervisorError> {
+        self.ensure_here(id)?;
+        if !self.session(id)?.status.is_alive() {
+            self.resume(id).await?;
+        }
+        let entry = self.entry(id).await?;
+        let per_prompt = entry.driver.lock().await.per_prompt_process();
+        let turn_open = matches!(
+            self.session(id)?.status,
+            SessionStatus::Working | SessionStatus::Waiting
+        );
+        if per_prompt && turn_open {
+            lock_recovering(&self.steer_next).insert(*id, text.to_string());
+            entry.driver.lock().await.interrupt().await?;
+            return Ok(());
+        }
+        self.prompt(id, text).await
+    }
+
+    /// Steer one queued message: it leaves the queue and goes in now. If
+    /// it could not go in, it goes back to the front of the queue.
+    pub async fn queue_steer(
+        self: &Arc<Self>,
+        id: &SessionId,
+        item: &str,
+    ) -> Result<(), SupervisorError> {
+        self.ensure_here(id)?;
+        let message = {
+            let order = self.order_of(id).await;
+            let _guard = match &order {
+                Some(o) => Some(o.lock().await),
+                None => None,
+            };
+            let session = self.session(id)?;
+            let Some(message) = session.queue.iter().find(|m| m.id == item).cloned() else {
+                return Err(SupervisorError::NotFound(format!("queued message {item}")));
+            };
+            let queue = session.queue.into_iter().filter(|m| m.id != item).collect();
+            self.emit_queue(id, queue, session.queue_paused)?;
+            message
+        };
+        if let Err(err) = self.steer(id, &message.text).await {
+            let order = self.order_of(id).await;
+            let _guard = match &order {
+                Some(o) => Some(o.lock().await),
+                None => None,
+            };
+            if let Ok(session) = self.session(id) {
+                let mut queue = session.queue;
+                queue.insert(0, message);
+                let _ = self.emit_queue(id, queue, session.queue_paused);
+            }
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    /// Release a held queue and send its next message. A stopped or
+    /// failed chat starts again first.
+    pub async fn queue_resume(
+        self: &Arc<Self>,
+        id: &SessionId,
+    ) -> Result<Session, SupervisorError> {
+        self.ensure_here(id)?;
+        if !self.session(id)?.status.is_alive() {
+            self.resume(id).await?;
+        }
+        {
+            let order = self.order_of(id).await;
+            let _guard = match &order {
+                Some(o) => Some(o.lock().await),
+                None => None,
+            };
+            let session = self.session(id)?;
+            self.emit_queue(id, session.queue, false)?;
+        }
+        self.drain_queue(id).await?;
+        self.session(id)
+    }
+
+    /// Send the next queued message when nothing is running and the queue
+    /// isn't held. Taking it off the queue and opening its turn happen
+    /// under one lock, so two turn ends never fire the same slot twice.
+    pub async fn drain_queue(&self, id: &SessionId) -> Result<(), SupervisorError> {
+        let Ok(entry) = self.entry(id).await else {
+            return Ok(());
+        };
+        let order = entry.order.lock().await;
+        let session = self.session(id)?;
+        if session.queue_paused
+            || session.queue.is_empty()
+            || !matches!(
+                session.status,
+                SessionStatus::Idle | SessionStatus::Starting
+            )
+        {
+            return Ok(());
+        }
+        let mut queue = session.queue;
+        let next = queue.remove(0);
+        self.emit_queue(id, queue, false)?;
+        self.open_prompt_locked(id, &entry, &next.text).await?;
+        drop(order);
+        self.send_prompt_text(id, &entry, &next.text).await
+    }
+
+    /// A turn ended: a steered message goes first, then the queue.
+    async fn after_turn(&self, id: &SessionId) {
+        let steered = lock_recovering(&self.steer_next).remove(id);
+        let sent = match steered {
+            Some(text) => self.prompt(id, &text).await,
+            None => self.drain_queue(id).await,
+        };
+        if let Err(err) = sent {
+            eprintln!("session {id}: queue: {err}");
+        }
+    }
+
     // ---- the pump: driver events → store events → broadcast ----
 
     fn spawn_pump(self: &Arc<Self>, id: SessionId, mut rx: mpsc::Receiver<DriverEvent>) {
@@ -1817,9 +2072,19 @@ impl Supervisor {
                 if matches!(event, DriverEvent::StdoutClosed) {
                     saw_close = true;
                 }
-                let _guard = order.lock().await;
+                let turn_ended = matches!(event, DriverEvent::TurnCompleted { .. });
+                let guard = order.lock().await;
                 if let Err(err) = supervisor.pump_one(&id, event).await {
                     eprintln!("session {id}: pump error: {err}");
+                }
+                drop(guard);
+                // What waits for the turn's end goes next - a steered
+                // message first, then the queue. Its own task: sending
+                // takes the order lock the pump just released, and the
+                // pump must keep reading the harness meanwhile.
+                if turn_ended {
+                    let supervisor = Arc::clone(&supervisor);
+                    tokio::spawn(async move { supervisor.after_turn(&id).await });
                 }
             }
             // The channel ended (harness audit F10): the driver dropped
@@ -1965,6 +2230,8 @@ impl Supervisor {
                 error_message,
             } => {
                 let turn = self.current_turn(id);
+                let failed = matches!(coarse, TurnOutcome::Failed);
+                let steering = lock_recovering(&self.steer_next).contains_key(id);
                 let mut payloads = vec![
                     EventPayload::TurnCompleted {
                         turn,
@@ -1980,6 +2247,11 @@ impl Supervisor {
                 // lands in the transcript as a note.
                 if let Some(message) = error_message {
                     payloads.push(EventPayload::DaemonError { message });
+                }
+                // A failed turn holds the queue, like an interrupt does -
+                // unless the turn ended because a message was steered in.
+                if failed && !steering {
+                    payloads.extend(self.hold_payload(id));
                 }
                 self.emit_all(id, payloads)?;
             }
@@ -2050,6 +2322,7 @@ impl Supervisor {
         stopping: bool,
     ) -> Result<(), SupervisorError> {
         let mut payloads: Vec<EventPayload> = self.open_turn_boundary(id);
+        payloads.extend(self.hold_payload(id));
         let alive = self
             .session(id)
             .map(|s| s.status.is_alive())
@@ -2279,6 +2552,8 @@ mod tests {
             approved_tools: Vec::new(),
             executor: None,
             title: None,
+            queue: Vec::new(),
+            queue_paused: false,
         };
         let id = session.id;
         supervisor

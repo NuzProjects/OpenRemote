@@ -322,6 +322,22 @@ impl FixtureAgent {
             "approve" | "deny" => self.scenario_approve(&prompt),
             "question" => self.scenario_question(&prompt),
             "steer" => self.scenario_steer(&prompt),
+            // A turn that keeps working for a moment, then finishes on its
+            // own: long enough for the e2e to queue or interrupt inside
+            // it, short enough not to slow the suite down.
+            "slow" => {
+                let tool_id = format!("toolu_{}", self.next_tool_id);
+                self.next_tool_id += 1;
+                self.assistant_tool_use(
+                    &tool_id,
+                    "Bash",
+                    serde_json::json!({"command": "echo fixture", "description": "a fixture command"}),
+                );
+                std::thread::sleep(std::time::Duration::from_millis(700));
+                self.tool_result(&tool_id, "fixture", false);
+                self.assistant_text(&format!("done: {prompt}"));
+                self.result("success", &format!("done: {prompt}"), "completed");
+            }
             "fail" => {
                 self.assistant_text("the fixture is about to fail");
                 self.result("error_during_execution", "fixture failure", "api_error");

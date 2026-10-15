@@ -119,6 +119,24 @@ pub struct Session {
     /// device without replaying its log.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Messages waiting for the running turn to end, oldest first. Only
+    /// `queue.changed` writes these two fields - a `session.updated`
+    /// carries them but never changes them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queue: Vec<QueuedMessage>,
+    /// An interrupt, a stop, or a failure holds the queue until the user
+    /// resumes it (or steers one message out of it).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub queue_paused: bool,
+}
+
+/// One message in a chat's queue: sent on its own when the turn before it
+/// ends, or steered into the running turn by hand.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub struct QueuedMessage {
+    pub id: String,
+    pub text: String,
+    pub at: i64,
 }
 
 /// One computer that can run agent chats. The daemon's own machine is

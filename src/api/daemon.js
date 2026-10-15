@@ -325,6 +325,35 @@ export class DaemonApi {
     return this.call('POST', `/sessions/${id}/interrupt`, { request_id: newRequestId() })
   }
 
+  // The chat's queue - the daemon keeps it, so every device sees the same
+  // one. A queued message runs as its own turn when the running one ends.
+  queue(id, text) {
+    return this.call('POST', `/sessions/${id}/queue`, { request_id: newRequestId(), text })
+  }
+
+  queueRemove(id, item) {
+    return this.call('POST', `/sessions/${id}/queue/${item}/remove`, { request_id: newRequestId() })
+  }
+
+  // Steer may start a stopped chat first - the boot budget, like resume.
+  queueSteer(id, item) {
+    return this.call(
+      'POST',
+      `/sessions/${id}/queue/${item}/steer`,
+      { request_id: newRequestId() },
+      { timeoutMs: BOOT_TIMEOUT_MS },
+    )
+  }
+
+  queueResume(id) {
+    return this.call('POST', `/sessions/${id}/queue/resume`, { request_id: newRequestId() }, { timeoutMs: BOOT_TIMEOUT_MS })
+  }
+
+  // A message straight into the running turn, never through the queue.
+  steer(id, text) {
+    return this.call('POST', `/sessions/${id}/steer`, { request_id: newRequestId(), text }, { timeoutMs: BOOT_TIMEOUT_MS })
+  }
+
   // Resuming boots the harness again (the same cold-start window as
   // creating) - the boot budget.
   resume(id) {

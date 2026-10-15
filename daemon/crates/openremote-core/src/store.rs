@@ -1415,6 +1415,12 @@ impl Store {
                         .get(&session.id)
                         .and_then(|s| s.title.clone());
                 }
+                // The queue is queue.changed's alone: an update carries the
+                // session's other facts and never rewinds the queue.
+                if let Some(existing) = self.state.sessions.get(&session.id) {
+                    session.queue = existing.queue.clone();
+                    session.queue_paused = existing.queue_paused;
+                }
                 self.state.sessions.insert(session.id, session);
             }
             EventPayload::MessageAdded { message } => {
@@ -1451,6 +1457,13 @@ impl Store {
                             answered_at: now,
                         });
                     }
+                }
+            }
+            EventPayload::QueueChanged { queue, paused } => {
+                if let Some(session) = self.state.sessions.get_mut(&event.session_id) {
+                    session.queue = queue.clone();
+                    session.queue_paused = *paused;
+                    session.updated_at = now;
                 }
             }
             EventPayload::TurnStarted { .. }
@@ -1511,6 +1524,8 @@ mod tests {
             approved_tools: Vec::new(),
             executor: None,
             title: None,
+            queue: Vec::new(),
+            queue_paused: false,
         }
     }
 

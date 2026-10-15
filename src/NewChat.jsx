@@ -272,6 +272,15 @@ export default function NewChat({
     },
     focused,
   )
+  // Steer with nothing running is an ordinary send: Ctrl+Enter starts the chat.
+  useShortcut(
+    'steer',
+    () => {
+      if (!canSend) return false
+      start()
+    },
+    focused,
+  )
   useShortcut('pick-model', () => openPickerAt('model'), focused)
   useShortcut('pick-effort', () => openPickerAt('effort'), focused)
   useShortcut('pick-permission', () => openPickerAt('permission'), focused)
@@ -416,7 +425,7 @@ export default function NewChat({
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
             // A phone's keyboard Enter is a new line; the send button sends.
-            if (e.key === 'Enter' && !e.shiftKey && !isMobile) {
+            if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !isMobile) {
               e.preventDefault()
               start()
             }

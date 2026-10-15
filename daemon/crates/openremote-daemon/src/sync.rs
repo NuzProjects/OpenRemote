@@ -702,6 +702,8 @@ mod tests {
             approved_tools: Vec::new(),
             executor,
             title: None,
+            queue: Vec::new(),
+            queue_paused: false,
         };
         let private = session(None);
         let mut synced = session(Some(DeviceId::new()));
