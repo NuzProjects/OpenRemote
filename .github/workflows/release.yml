@@ -80,6 +80,15 @@ jobs:
               die(`release-notes/${tag}.md is missing`);
             }
 
+            // The notices ride with every artifact - the bundles read
+            // them from bundle.resources, the daemon embeds them, and
+            // the release lists the file itself.
+            try {
+              readFileSync("THIRD-PARTY_NOTICES.md", "utf8");
+            } catch {
+              die("THIRD-PARTY_NOTICES.md is missing");
+            }
+
             // The Android versionCode must strictly exceed the
             // versionCode of the previous v* tag; an equal code
             // makes Android refuse the update install. A previous tag
@@ -114,7 +123,7 @@ jobs:
                 die(`Android versionCode ${code} does not exceed ${prevCode} (previous tag ${prev}); Android would refuse the update install`);
               }
             }
-            console.log(`preflight: ${tag} agrees with the manifests, release-notes/${tag}.md exists, Android versionCode ${code} is good`);
+            console.log(`preflight: ${tag} agrees with the manifests, release-notes/${tag}.md and THIRD-PARTY_NOTICES.md exist, Android versionCode ${code} is good`);
           '
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -222,14 +231,16 @@ jobs:
       # The machine installer's download: the daemon alone, named as
       # install.sh expects, with the checksum file it verifies against.
       # The plain triple's artifacts are the sidecar's; the glibc-pinned
-      # build lands under its own target dir.
+      # build lands under its own target dir. The notices ride beside
+      # the binary - the daemon also embeds them, but the release page
+      # and a plain download carry the readable file.
       - name: the daemon asset
         run: |
           set -euo pipefail
           ( cd daemon && cargo zigbuild -p openremote-daemon --locked --release --target x86_64-unknown-linux-gnu.2.28 )
           cp daemon/target/x86_64-unknown-linux-gnu/release/openremote-daemon openremote-daemon-linux-x86_64
-          sha256sum openremote-daemon-linux-x86_64 > SHA256SUMS
-          gh release upload "$GITHUB_REF_NAME" openremote-daemon-linux-x86_64 SHA256SUMS --clobber
+          sha256sum openremote-daemon-linux-x86_64 THIRD-PARTY_NOTICES.md > SHA256SUMS
+          gh release upload "$GITHUB_REF_NAME" openremote-daemon-linux-x86_64 THIRD-PARTY_NOTICES.md SHA256SUMS --clobber
         env:
           GH_TOKEN: ${{ github.token }}
 

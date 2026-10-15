@@ -36,6 +36,10 @@
       "msi",
       "nsis"
     ],
+    "resources": [
+      "../LICENSE",
+      "../THIRD-PARTY_NOTICES.md"
+    ],
     "externalBin": [
       "binaries/openremote-daemon"
     ],
