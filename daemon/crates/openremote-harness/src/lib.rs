@@ -120,6 +120,11 @@ pub struct SessionSettings {
     /// The harness's own fast mode. `Some(false)` returns to its standard
     /// speed tier.
     pub fast: Option<bool>,
+    /// The harness's own permission/approval word (claude
+    /// `--permission-mode`, codex `approvalPolicy`). Start-time on every
+    /// harness - no driver changes it live, so a live change is an error
+    /// and a stopped chat's change lands on resume.
+    pub permission_mode: Option<String>,
 }
 
 /// A model a harness advertises, in the harness's own words. Backs the

@@ -76,6 +76,9 @@ struct PendingApproval {
 struct FixtureAgent {
     session_id: String,
     scenario: String,
+    /// The `--permission-mode` word the real driver passed - echoed in
+    /// init so e2e can see a chosen mode survive the round trip.
+    permission_mode: String,
     next_request_id: u64,
     next_tool_id: u64,
     prompt_count: u64,
@@ -86,10 +89,21 @@ impl FixtureAgent {
     fn from_env() -> Self {
         let mut session_id = std::env::var("FIXTURE_AGENT_SESSION_ID")
             .unwrap_or_else(|_| format!("fixture-session-{}", std::process::id()));
-        for arg in std::env::args().skip(1) {
-            if let Some(id) = arg.strip_prefix("--resume=") {
+        let mut permission_mode = String::from("default");
+        let argv: Vec<String> = std::env::args().skip(1).collect();
+        let mut i = 0;
+        while i < argv.len() {
+            // The equals form is one argv word (`--resume=<id>`); the
+            // mode flag is two (`--permission-mode <word>`).
+            if let Some(id) = argv[i].strip_prefix("--resume=") {
                 session_id = id.to_string();
+            } else if argv[i] == "--permission-mode" {
+                if let Some(mode) = argv.get(i + 1) {
+                    permission_mode = mode.clone();
+                    i += 1;
+                }
             }
+            i += 1;
         }
         // Scenario resolution: env first, then a `fixture-scenario` file in
         // the cwd - the per-session channel the e2e suite uses without
@@ -106,6 +120,7 @@ impl FixtureAgent {
         Self {
             session_id,
             scenario,
+            permission_mode,
             next_request_id: 1,
             next_tool_id: 1,
             prompt_count: 0,
@@ -182,7 +197,7 @@ impl FixtureAgent {
             "subtype": "init",
             "session_id": self.session_id,
             "model": "fixture-sonnet",
-            "permissionMode": "default",
+            "permissionMode": self.permission_mode,
             "tools": ["Read", "Bash", "Edit"],
             "cwd": "."
         }));

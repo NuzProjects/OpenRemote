@@ -34,6 +34,19 @@ pub struct Harness {
     /// (grok's `default_reasoning_effort`), when one was read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_effort: Option<String>,
+    /// The permission words the harness's own CLI takes (claude
+    /// `--permission-mode`, codex `approvalPolicy`, grok
+    /// `--permission-mode`) - its vocabulary, so the console's picker
+    /// offers only what the harness understands. Empty where the
+    /// harness has no enumerable words (agy, pi, opencode): no picker,
+    /// no dead UI.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permission_modes: Vec<String>,
+    /// The word the harness runs when none is picked - its own default
+    /// (claude `default`, codex `on-request`), `None` where the harness
+    /// has no words at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_permission: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]

@@ -291,6 +291,8 @@ fn harness_from(id: &str, name: &str, resolution: &Resolution, version: Option<&
         signed_in: None,
         default_model: None,
         default_effort: None,
+        permission_modes: permission_modes(id).iter().map(|s| s.to_string()).collect(),
+        default_permission: default_permission(id).map(String::from),
     }
 }
 
@@ -480,6 +482,40 @@ fn fast_supported(id: &str, version: Option<&str>) -> bool {
         ("claude", Some(v)) => version_at_least(v, (2, 1, 205)),
         ("codex", Some(v)) => version_at_least(v, (0, 110, 0)),
         _ => false,
+    }
+}
+
+/// The permission words each harness's own CLI takes, in its spelling -
+/// terminology parity: claude `--permission-mode default …`, codex
+/// `approvalPolicy untrusted …` (the app-server's thread words), grok
+/// `--permission-mode` (the six its own docs name). Agy, pi, and opencode
+/// have no enumerable words their drivers pass - empty, so the console
+/// renders no picker for them.
+fn permission_modes(id: &str) -> &'static [&'static str] {
+    match id {
+        "claude" => &["default", "acceptEdits", "bypassPermissions", "plan"],
+        "codex" => &["untrusted", "on-failure", "on-request", "never"],
+        "grok" => &[
+            "default",
+            "acceptEdits",
+            "auto",
+            "dontAsk",
+            "bypassPermissions",
+            "plan",
+        ],
+        _ => &[],
+    }
+}
+
+/// The word the harness runs when nothing is picked - its own default,
+/// not ours: claude and grok run `default`, codex's app-server thread
+/// starts `on-request`. `None` where the harness has no words at all.
+fn default_permission(id: &str) -> Option<&'static str> {
+    match id {
+        "claude" => Some("default"),
+        "codex" => Some("on-request"),
+        "grok" => Some("default"),
+        _ => None,
     }
 }
 
@@ -686,5 +722,50 @@ mod tests {
         assert!(!fast_supported("pi", Some("9.9.9")));
         assert!(!fast_supported("opencode", Some("9.9.9")));
         assert!(!fast_supported("agy", Some("9.9.9")));
+    }
+
+    #[test]
+    fn permission_words_come_from_each_harnesss_own_vocab() {
+        // claude's own --permission-mode words
+        assert_eq!(
+            permission_modes("claude"),
+            &["default", "acceptEdits", "bypassPermissions", "plan"]
+        );
+        assert_eq!(default_permission("claude"), Some("default"));
+        // codex's own approvalPolicy words - the app-server's thread
+        // vocabulary, `on-request` its default
+        assert_eq!(
+            permission_modes("codex"),
+            &["untrusted", "on-failure", "on-request", "never"]
+        );
+        assert_eq!(default_permission("codex"), Some("on-request"));
+        // grok's own --permission-mode words, as its docs spell them
+        assert_eq!(
+            permission_modes("grok"),
+            &[
+                "default",
+                "acceptEdits",
+                "auto",
+                "dontAsk",
+                "bypassPermissions",
+                "plan"
+            ]
+        );
+        assert_eq!(default_permission("grok"), Some("default"));
+        // the drivers pass no flag the others would read: no words, no
+        // default, no picker in the console
+        for id in ["pi", "opencode", "agy"] {
+            assert!(permission_modes(id).is_empty(), "{id} has no words");
+            assert_eq!(default_permission(id), None);
+        }
+        // every default must be one of its own words - a default outside
+        // the vocabulary would be a picker that can't render it
+        for id in ["claude", "codex", "grok"] {
+            let default = default_permission(id).expect("words but no default");
+            assert!(
+                permission_modes(id).contains(&default),
+                "{id}'s default {default} is not one of its words"
+            );
+        }
     }
 }

@@ -137,11 +137,16 @@ impl CodexFixture {
                     .get("model")
                     .and_then(Value::as_str)
                     .unwrap_or("gpt-5.1-codex");
+                let approval = params
+                    .get("approvalPolicy")
+                    .and_then(Value::as_str)
+                    .unwrap_or("on-request");
                 self.respond(
                     id,
                     json!({
                         "thread": {"id": THREAD_ID, "path": "/fixture/thread-1"},
-                        "model": model
+                        "model": model,
+                        "approvalPolicy": approval
                     }),
                 );
             }
@@ -158,11 +163,20 @@ impl CodexFixture {
                         "status": {"type": "active", "activeFlags": []}
                     }),
                 );
+                let model = params
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .unwrap_or("gpt-5.1-codex");
+                let approval = params
+                    .get("approvalPolicy")
+                    .and_then(Value::as_str)
+                    .unwrap_or("on-request");
                 self.respond(
                     id,
                     json!({
                         "thread": {"id": resumed, "path": "/fixture/thread-1"},
-                        "model": "gpt-5.1-codex"
+                        "model": model,
+                        "approvalPolicy": approval
                     }),
                 );
             }

@@ -55,6 +55,7 @@ pub fn main_grok(argv: &[String]) {
     let mut prompt = String::new();
     let mut resume: Option<String> = None;
     let mut model = String::from("grok-4.7-fixture");
+    let mut permission_mode = String::from("default");
     let mut positional = false;
     let mut i = 0;
     while i < argv.len() {
@@ -79,6 +80,12 @@ pub fn main_grok(argv: &[String]) {
                     i += 1;
                 }
             }
+            "--permission-mode" => {
+                if let Some(mode) = argv.get(i + 1) {
+                    permission_mode = mode.clone();
+                    i += 1;
+                }
+            }
             _ => {}
         }
         i += 1;
@@ -97,7 +104,7 @@ pub fn main_grok(argv: &[String]) {
         "subtype": "init",
         "session_id": session_id,
         "model": model,
-        "permissionMode": "default",
+        "permissionMode": permission_mode,
         "cwd": "."
     }));
     if scenario == "die" {

@@ -550,12 +550,16 @@ impl Store {
 
     /// Record a live model, effort, or fast change. A `None` field is left
     /// as it was; fast is only written when the caller changed it.
+    /// Permission is start-time everywhere - the write lands on the next
+    /// resume, never on a live process.
+    #[allow(clippy::too_many_arguments)]
     pub fn update_session_settings(
         &mut self,
         id: &SessionId,
         model: Option<String>,
         effort: Option<String>,
         fast: Option<bool>,
+        permission_mode: Option<String>,
     ) -> Result<Session, StoreError> {
         let session = self
             .state
@@ -570,6 +574,9 @@ impl Store {
         }
         if let Some(fast) = fast {
             session.fast = fast;
+        }
+        if permission_mode.is_some() {
+            session.permission_mode = permission_mode;
         }
         session.updated_at = crate::now_ms();
         let updated = session.clone();

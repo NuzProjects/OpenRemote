@@ -1335,17 +1335,41 @@ impl Supervisor {
         id: &SessionId,
         settings: openremote_harness::SessionSettings,
     ) -> Result<Session, SupervisorError> {
-        if settings.model.is_none() && settings.effort.is_none() && settings.fast.is_none() {
+        if settings.model.is_none()
+            && settings.effort.is_none()
+            && settings.fast.is_none()
+            && settings.permission_mode.is_none()
+        {
             return self.session(id);
+        }
+        // Permission is start-time on every harness - no driver can take
+        // the word on a live process. Refuse before the driver call so the
+        // stopped chat's change lands as a store write only (resume passes
+        // it), exactly like the model on a start-time harness.
+        if settings.permission_mode.is_some() {
+            let entry_alive = self.entry(id).await.is_ok();
+            let status_alive = self
+                .session(id)
+                .map(|s| s.status.is_alive())
+                .unwrap_or(false);
+            if entry_alive || status_alive {
+                return Err(SupervisorError::Conflict(
+                    "permission is set when the chat starts - stop the chat to change it".into(),
+                ));
+            }
         }
         self.ensure_here(id)?;
         let session = self.session(id)?;
         if let Ok(entry) = self.entry(id).await {
+            // Strip the start-time field before the driver sees it: the
+            // live wire carries only what a harness can apply now.
+            let mut live = settings.clone();
+            live.permission_mode = None;
             entry
                 .driver
                 .lock()
                 .await
-                .apply_settings(&settings)
+                .apply_settings(&live)
                 .await
                 .map_err(SupervisorError::from)?;
         } else if session.status.is_alive() {
@@ -1360,6 +1384,7 @@ impl Supervisor {
                     settings.model.clone(),
                     settings.effort.clone(),
                     settings.fast,
+                    settings.permission_mode.clone(),
                 )
             })
             .map_err(store_error)?;

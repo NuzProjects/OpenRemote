@@ -1428,6 +1428,8 @@ struct SettingsBody {
     effort: Option<String>,
     #[serde(default)]
     fast: Option<bool>,
+    #[serde(default)]
+    permission_mode: Option<String>,
 }
 
 /// Model, effort, and fast on a live chat. A harness that only accepts the
@@ -1447,6 +1449,7 @@ async fn post_settings(
         model: body.model.filter(|m| !m.trim().is_empty()),
         effort: body.effort.filter(|e| !e.trim().is_empty()),
         fast: body.fast,
+        permission_mode: body.permission_mode.filter(|p| !p.trim().is_empty()),
     };
     match app.supervisor.update_settings(&session_id, settings).await {
         Ok(session) => {

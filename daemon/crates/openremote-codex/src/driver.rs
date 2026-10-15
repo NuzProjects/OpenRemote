@@ -846,6 +846,17 @@ mod tests {
     }
 
     #[test]
+    fn a_picked_permission_word_rides_the_thread_verbatim() {
+        let opts = SpawnOptions {
+            cwd: PathBuf::from("/w"),
+            permission_mode: Some("never".into()),
+            ..Default::default()
+        };
+        let params = thread_params(&opts);
+        assert_eq!(params["approvalPolicy"].as_str(), Some("never"));
+    }
+
+    #[test]
     fn plugins_ride_codexs_own_config_overrides() {
         let opts = SpawnOptions {
             cwd: PathBuf::from("/w"),

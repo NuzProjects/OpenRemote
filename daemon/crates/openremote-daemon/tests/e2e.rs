@@ -653,6 +653,140 @@ async fn resume_runs_a_new_process_on_the_same_conversation() {
 }
 
 #[tokio::test]
+async fn a_picked_permission_word_survives_the_init_echo_and_resume() {
+    let daemon = start_daemon(&[("claude", fixture_agent())]).await;
+    let ws = workspace(Some("plain"));
+    // Create with the harness's own word for "run everything": the argv
+    // carries it, the harness's init frame echoes it back, and the store
+    // must keep the user's word - never the echo's default.
+    let created = call(
+        &daemon,
+        "POST",
+        "/sessions",
+        Some(json!({
+            "request_id": "r-create",
+            "harness": "claude",
+            "workspace": ws.path(),
+            "permission_mode": "bypassPermissions",
+        })),
+    )
+    .await;
+    assert_eq!(created.status, 201, "raw: {}", created.raw);
+    let id = created.body["id"].as_str().expect("session id").to_string();
+    until_kinds(
+        &daemon,
+        &format!("/sessions/{id}/events"),
+        &["session.status_changed"],
+    )
+    .await;
+    let after_init = call(&daemon, "GET", &format!("/sessions/{id}"), None).await;
+    assert_eq!(
+        after_init.body["permission_mode"].as_str(),
+        Some("bypassPermissions"),
+        "the init echo must not overwrite the chosen word; raw: {}",
+        after_init.raw
+    );
+
+    // A full turn, stop, resume: the stored word rides the new process's
+    // argv (the fixture echoes it in init again) and survives.
+    call(
+        &daemon,
+        "POST",
+        &format!("/sessions/{id}/prompts"),
+        Some(json!({"request_id": "r-prompt", "text": "first"})),
+    )
+    .await;
+    until_count(
+        &daemon,
+        &format!("/sessions/{id}/events"),
+        "turn.completed",
+        1,
+    )
+    .await;
+    let stopped = call(
+        &daemon,
+        "POST",
+        &format!("/sessions/{id}/stop"),
+        Some(json!({"request_id": "r-stop"})),
+    )
+    .await;
+    assert_eq!(stopped.status, 200, "raw: {}", stopped.raw);
+
+    // A stopped chat can change the word through settings - start-time
+    // only, so the change lands on resume.
+    let changed = call(
+        &daemon,
+        "POST",
+        &format!("/sessions/{id}/settings"),
+        Some(json!({"request_id": "r-settings", "permission_mode": "plan"})),
+    )
+    .await;
+    assert_eq!(changed.status, 200, "raw: {}", changed.raw);
+    assert_eq!(
+        changed.body["permission_mode"].as_str(),
+        Some("plan"),
+        "a stopped chat's settings write the word; raw: {}",
+        changed.raw
+    );
+
+    let resumed = call(
+        &daemon,
+        "POST",
+        &format!("/sessions/{id}/resume"),
+        Some(json!({"request_id": "r-resume"})),
+    )
+    .await;
+    assert_eq!(resumed.status, 200, "raw: {}", resumed.raw);
+    until_kinds(
+        &daemon,
+        &format!("/sessions/{id}/events"),
+        &["session.status_changed"],
+    )
+    .await;
+    let after_resume = call(&daemon, "GET", &format!("/sessions/{id}"), None).await;
+    assert_eq!(
+        after_resume.body["permission_mode"].as_str(),
+        Some("plan"),
+        "resume must re-pass the stored word; raw: {}",
+        after_resume.raw
+    );
+}
+
+#[tokio::test]
+async fn permission_settings_on_a_live_chat_conflict() {
+    let daemon = start_daemon(&[("claude", fixture_agent())]).await;
+    let ws = workspace(Some("plain"));
+    let created = call(
+        &daemon,
+        "POST",
+        "/sessions",
+        Some(json!({
+            "request_id": "r-create",
+            "harness": "claude",
+            "workspace": ws.path(),
+        })),
+    )
+    .await;
+    let id = created.body["id"].as_str().expect("session id").to_string();
+    until_kinds(
+        &daemon,
+        &format!("/sessions/{id}/events"),
+        &["session.status_changed"],
+    )
+    .await;
+    // The chat is alive (idle): no harness takes the word on a live
+    // process, so the change refuses - stop first.
+    let live = call(
+        &daemon,
+        "POST",
+        &format!("/sessions/{id}/settings"),
+        Some(json!({"request_id": "r-live", "permission_mode": "bypassPermissions"})),
+    )
+    .await;
+    assert_eq!(live.status, 409, "raw: {}", live.raw);
+}
+
+#[tokio::test]
 async fn sse_resume_after_seq_gets_only_the_tail() {
     let daemon = start_daemon(&[("claude", fixture_agent())]).await;
     let ws = workspace(Some("plain"));
