@@ -95,10 +95,16 @@ function DecisionCard({ item, onAnswer }) {
       ? item.input.questions[0]?.question ?? null
       : null
   const command = !question && isCommandRun(item.input) ? item.input : null
+  // An approval's input rides its tool card once the answer settles it -
+  // the run card is the one full record, so the settled card keeps the
+  // answer line alone (never the same command twice). The 0.3s fade
+  // holds the tile through the settle; a question card always keeps its
+  // body - nothing else carries the question.
+  const keepBody = item.pending || leaving || Boolean(question)
   return (
     <div className={`cv-decision${item.pending ? ' pending' : ''}`}>
       {question && <p className="cv-decision-ask">{question}</p>}
-      {command && (
+      {keepBody && command && (
         <div className="cv-cmd">
           {command.description && (
             <span className="cv-cmd-desc">{command.description}</span>
@@ -106,7 +112,7 @@ function DecisionCard({ item, onAnswer }) {
           <code className="cv-cmd-text">{command.command}</code>
         </div>
       )}
-      {item.input && !question && !command && (
+      {keepBody && item.input && !question && !command && (
         <div className="cv-decision-io">
           <span className="cv-io-label">In</span>
           <code>{typeof item.input === 'string' ? item.input : JSON.stringify(item.input, null, 2)}</code>
