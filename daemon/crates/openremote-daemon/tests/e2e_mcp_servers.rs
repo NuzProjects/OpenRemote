@@ -38,7 +38,7 @@ async fn a_hand_written_plugin_lives_its_lifecycle() {
     let machine = this_machine_id(&daemon).await;
 
     // No curated catalog. The route stays so a client can ask; it answers empty.
-    let market = call(&daemon, "GET", "/plugins/marketplace", None).await;
+    let market = call(&daemon, "GET", "/mcp-servers/marketplace", None).await;
     assert_eq!(market.status, 200, "raw: {}", market.raw);
     assert_eq!(market.body.as_array().map(Vec::len), Some(0));
 
@@ -46,7 +46,7 @@ async fn a_hand_written_plugin_lives_its_lifecycle() {
     let installed = call(
         &daemon,
         "POST",
-        "/plugins",
+        "/mcp-servers",
         Some(install_body(
             &machine,
             json!({
@@ -68,7 +68,7 @@ async fn a_hand_written_plugin_lives_its_lifecycle() {
     let needs_key = call(
         &daemon,
         "POST",
-        "/plugins",
+        "/mcp-servers",
         Some(install_body(
             &machine,
             json!({
@@ -87,7 +87,7 @@ async fn a_hand_written_plugin_lives_its_lifecycle() {
     let dup = call(
         &daemon,
         "POST",
-        "/plugins",
+        "/mcp-servers",
         Some(install_body(
             &machine,
             json!({
@@ -105,7 +105,7 @@ async fn a_hand_written_plugin_lives_its_lifecycle() {
     let off = call(
         &daemon,
         "POST",
-        &format!("/plugins/{github_id}/enabled"),
+        &format!("/mcp-servers/{github_id}/enabled"),
         Some(json!({"request_id": "p-off", "enabled": false})),
     )
     .await;
@@ -117,7 +117,7 @@ async fn a_hand_written_plugin_lives_its_lifecycle() {
     let key = call(
         &daemon,
         "POST",
-        &format!("/plugins/{gitlab_id}/key"),
+        &format!("/mcp-servers/{gitlab_id}/key"),
         Some(json!({"request_id": "p-key"})),
     )
     .await;
@@ -128,7 +128,7 @@ async fn a_hand_written_plugin_lives_its_lifecycle() {
     let no_key = call(
         &daemon,
         "POST",
-        &format!("/plugins/{github_id}/key"),
+        &format!("/mcp-servers/{github_id}/key"),
         Some(json!({"request_id": "p-nokey"})),
     )
     .await;
@@ -139,13 +139,13 @@ async fn a_hand_written_plugin_lives_its_lifecycle() {
         let removed = call(
             &daemon,
             "DELETE",
-            &format!("/plugins/{id}?request_id=p-remove-{id}"),
+            &format!("/mcp-servers/{id}?request_id=p-remove-{id}"),
             None,
         )
         .await;
         assert_eq!(removed.status, 200, "raw: {}", removed.raw);
     }
-    let list = call(&daemon, "GET", "/plugins", None).await;
+    let list = call(&daemon, "GET", "/mcp-servers", None).await;
     assert_eq!(
         list.body.as_array().map(Vec::len),
         Some(0),
@@ -162,7 +162,7 @@ async fn custom_plugins_carry_their_own_command_and_dedup() {
     let custom = call(
         &daemon,
         "POST",
-        "/plugins",
+        "/mcp-servers",
         Some(install_body(
             &machine,
             json!({
@@ -187,7 +187,7 @@ async fn custom_plugins_carry_their_own_command_and_dedup() {
     let dup = call(
         &daemon,
         "POST",
-        "/plugins",
+        "/mcp-servers",
         Some(install_body(
             &machine,
             json!({"name": "Notes", "detail": "again", "command": "npx -y other", "needs_key": false}),
@@ -200,7 +200,7 @@ async fn custom_plugins_carry_their_own_command_and_dedup() {
     let bare = call(
         &daemon,
         "POST",
-        "/plugins",
+        "/mcp-servers",
         Some(install_body(
             &machine,
             json!({"name": "Bare", "detail": "no command"}),
@@ -213,7 +213,7 @@ async fn custom_plugins_carry_their_own_command_and_dedup() {
     let unknown = call(
         &daemon,
         "POST",
-        "/plugins",
+        "/mcp-servers",
         Some(install_body(
             &machine,
             json!({"catalog_id": "no-such-entry"}),
@@ -234,7 +234,7 @@ async fn plugins_ride_sessions_without_breaking_their_spawns() {
     let github = call(
         &daemon,
         "POST",
-        "/plugins",
+        "/mcp-servers",
         Some(install_body(
             &machine,
             json!({
@@ -250,7 +250,7 @@ async fn plugins_ride_sessions_without_breaking_their_spawns() {
     let notes = call(
         &daemon,
         "POST",
-        "/plugins",
+        "/mcp-servers",
         Some(install_body(
             &machine,
             json!({"name": "Notes", "detail": "notes", "command": "npx -y @scope/server", "needs_key": true}),

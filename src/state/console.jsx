@@ -30,7 +30,7 @@ export function ConsoleProvider({ children }) {
   const [capabilities, setCapabilities] = useState(null)
   const [sessions, setSessions] = useState([])
   const [machines, setMachines] = useState([])
-  const [plugins, setPlugins] = useState([])
+  const [mcpServers, setMcpServers] = useState([])
   const [marketplace, setMarketplace] = useState([])
   const [automations, setAutomations] = useState([])
   // The registered projects - daemon-side, the one list every surface
@@ -145,8 +145,8 @@ export function ConsoleProvider({ children }) {
       const caps = await api.capabilities()
       const list = await api.sessions()
       const machineList = await api.machines()
-      const pluginList = await api.plugins()
-      const market = await api.pluginMarketplace()
+      const mcpList = await api.mcpServers()
+      const market = await api.mcpMarketplace()
       const rules = await api.automations()
       const projectList = await api.projects().catch(() => [])
       // Cloud is optional: a daemon without it still connects.
@@ -157,7 +157,7 @@ export function ConsoleProvider({ children }) {
       setCapabilities(caps)
       setSessions(list ?? [])
       setMachines(machineList ?? [])
-      setPlugins(pluginList ?? [])
+      setMcpServers(mcpList ?? [])
       setMarketplace(market ?? [])
       setAutomations(rules ?? [])
       setProjects(projectList ?? [])
@@ -183,7 +183,7 @@ export function ConsoleProvider({ children }) {
   }, [api, connection.state])
 
   // Poll the live lists while a daemon is configured (the sidebar's
-  // truth; machines, plugins, and rules ride the same beat). A single
+  // truth; machines, MCP servers, and rules ride the same beat). A single
   // dropped call is nothing - but three beats with no answer at all
   // means the daemon is gone, and the connection says so instead of
   // freezing quietly on stale data. The poll keeps watching: the first
@@ -192,11 +192,11 @@ export function ConsoleProvider({ children }) {
     if (!api.ready) return
     let misses = 0
     const poll = setInterval(async () => {
-      const [sessionList, machineList, pluginList, ruleList, projectList, cloudView, deviceList] =
+      const [sessionList, machineList, mcpList, ruleList, projectList, cloudView, deviceList] =
         await Promise.allSettled([
           api.sessions(),
           api.machines(),
-          api.plugins(),
+          api.mcpServers(),
           api.automations(),
           api.projects(),
           api.cloud(),
@@ -206,10 +206,10 @@ export function ConsoleProvider({ children }) {
       if (deviceList.status === 'fulfilled') setDevices(deviceList.value?.devices ?? [])
       if (sessionList.status === 'fulfilled') setSessions(sessionList.value ?? [])
       if (machineList.status === 'fulfilled') setMachines(machineList.value ?? [])
-      if (pluginList.status === 'fulfilled') setPlugins(pluginList.value ?? [])
+      if (mcpList.status === 'fulfilled') setMcpServers(mcpList.value ?? [])
       if (ruleList.status === 'fulfilled') setAutomations(ruleList.value ?? [])
       if (projectList.status === 'fulfilled') setProjects(projectList.value ?? [])
-      const answered = [sessionList, machineList, pluginList, ruleList].some(
+      const answered = [sessionList, machineList, mcpList, ruleList].some(
         (r) => r.status === 'fulfilled',
       )
       if (answered) {
@@ -719,47 +719,47 @@ export function ConsoleProvider({ children }) {
     [api],
   )
 
-  // ---- plugins ----
+  // ---- MCP servers ----
 
-  const refreshPlugins = useCallback(async () => {
+  const refreshMcpServers = useCallback(async () => {
     try {
-      setPlugins((await api.plugins()) ?? [])
+      setMcpServers((await api.mcpServers()) ?? [])
     } catch {
       /* the poll heals */
     }
   }, [api])
 
-  const installPlugin = useCallback(
+  const addMcpServer = useCallback(
     async (machineId, entry) => {
-      const plugin = await api.installPlugin(machineId, entry)
-      await refreshPlugins()
-      return plugin
+      const added = await api.addMcpServer(machineId, entry)
+      await refreshMcpServers()
+      return added
     },
-    [api, refreshPlugins],
+    [api, refreshMcpServers],
   )
 
-  const removePlugin = useCallback(
-    async (pluginId) => {
-      await api.removePlugin(pluginId)
-      await refreshPlugins()
+  const removeMcpServer = useCallback(
+    async (id) => {
+      await api.removeMcpServer(id)
+      await refreshMcpServers()
     },
-    [api, refreshPlugins],
+    [api, refreshMcpServers],
   )
 
-  const setPluginEnabled = useCallback(
-    async (pluginId, enabled) => {
-      await api.setPluginEnabled(pluginId, enabled)
-      await refreshPlugins()
+  const setMcpServerEnabled = useCallback(
+    async (id, enabled) => {
+      await api.setMcpServerEnabled(id, enabled)
+      await refreshMcpServers()
     },
-    [api, refreshPlugins],
+    [api, refreshMcpServers],
   )
 
-  const acknowledgePluginKey = useCallback(
-    async (pluginId) => {
-      await api.acknowledgePluginKey(pluginId)
-      await refreshPlugins()
+  const acknowledgeMcpServerKey = useCallback(
+    async (id) => {
+      await api.acknowledgeMcpServerKey(id)
+      await refreshMcpServers()
     },
-    [api, refreshPlugins],
+    [api, refreshMcpServers],
   )
 
   // ---- automations ----
@@ -851,7 +851,7 @@ export function ConsoleProvider({ children }) {
       capabilities,
       sessions,
       machines,
-      plugins,
+      mcpServers,
       marketplace,
       automations,
       projects,
@@ -895,10 +895,10 @@ export function ConsoleProvider({ children }) {
       signIn,
       feedSignIn,
       stopSignIn,
-      installPlugin,
-      removePlugin,
-      setPluginEnabled,
-      acknowledgePluginKey,
+      addMcpServer,
+      removeMcpServer,
+      setMcpServerEnabled,
+      acknowledgeMcpServerKey,
       saveAutomation,
       removeAutomation,
       enableAutomation,
@@ -912,7 +912,7 @@ export function ConsoleProvider({ children }) {
       capabilities,
       sessions,
       machines,
-      plugins,
+      mcpServers,
       marketplace,
       automations,
       projects,
@@ -955,10 +955,10 @@ export function ConsoleProvider({ children }) {
       signIn,
       feedSignIn,
       stopSignIn,
-      installPlugin,
-      removePlugin,
-      setPluginEnabled,
-      acknowledgePluginKey,
+      addMcpServer,
+      removeMcpServer,
+      setMcpServerEnabled,
+      acknowledgeMcpServerKey,
       saveAutomation,
       removeAutomation,
       enableAutomation,

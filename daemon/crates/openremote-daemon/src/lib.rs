@@ -8,7 +8,7 @@ pub mod fsdirs;
 pub mod host;
 pub mod http;
 pub mod install;
-pub mod plugins;
+pub mod mcp_catalog;
 pub mod registry;
 pub mod signin;
 pub mod supervisor;

@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 
 use openremote_core::{
     AutomationRule, Decision, DecisionId, DecisionState, Event, EventPayload, Harness, Machine,
-    MachineId, MachineStatus, MachineView, Plugin, Project, ProjectId, QueuedMessage, Receipt,
-    RuleId, Session, SessionId, SessionStatus, Store, TriggerKind, TurnOutcome, now_ms,
+    MachineId, MachineStatus, MachineView, McpServerEntry, Project, ProjectId, QueuedMessage,
+    Receipt, RuleId, Session, SessionId, SessionStatus, Store, TriggerKind, TurnOutcome, now_ms,
 };
 use openremote_harness::{DriverEvent, Resolution};
 use serde_json::Value;
@@ -734,22 +734,22 @@ impl Supervisor {
         *self.registry.write().expect("registry lock") = fresh;
     }
 
-    // ---- plugins ----
+    // ---- MCP servers ----
 
-    pub fn plugins(&self) -> Vec<Plugin> {
-        self.with_store(|s| s.plugins().into_iter().cloned().collect())
+    pub fn mcp_server_entries(&self) -> Vec<McpServerEntry> {
+        self.with_store(|s| s.mcp_servers().into_iter().cloned().collect())
     }
 
     /// Install a plugin from the marketplace (by catalog id) or written by
     /// hand, on a machine that has checked in. The store dedups; the
     /// machine's reachability is ruled here. A custom plugin is
     /// `(name, detail, command, needs_key)`.
-    pub fn install_plugin(
+    pub fn add_mcp_server(
         &self,
         machine_id: &MachineId,
         catalog_id: Option<&str>,
         custom: Option<(&str, &str, &str, bool)>,
-    ) -> Result<Plugin, SupervisorError> {
+    ) -> Result<McpServerEntry, SupervisorError> {
         let machine = self
             .with_store(|s| s.machine(machine_id).cloned())
             .map_err(store_error)?;
@@ -761,10 +761,10 @@ impl Supervisor {
         }
         let plugin = match (catalog_id, custom) {
             (Some(catalog_id), _) => {
-                let entry = crate::plugins::catalog_entry(catalog_id).ok_or_else(|| {
+                let entry = crate::mcp_catalog::catalog_entry(catalog_id).ok_or_else(|| {
                     SupervisorError::NotFound(format!("no marketplace entry '{catalog_id}'"))
                 })?;
-                Plugin {
+                McpServerEntry {
                     id: format!("{catalog_id}@{}", machine.id),
                     catalog_id: Some(entry.id),
                     name: entry.name,
@@ -778,7 +778,7 @@ impl Supervisor {
                     updated_at: now_ms(),
                 }
             }
-            (None, Some((name, detail, command, needs_key))) => Plugin {
+            (None, Some((name, detail, command, needs_key))) => McpServerEntry {
                 id: format!("custom-{}@{}", uuid::Uuid::new_v4(), machine.id),
                 catalog_id: None,
                 name: name.to_string(),
@@ -797,22 +797,26 @@ impl Supervisor {
                 ));
             }
         };
-        self.with_store(|s| s.install_plugin(plugin))
+        self.with_store(|s| s.add_mcp_server(plugin))
             .map_err(store_error)
     }
 
-    pub fn remove_plugin(&self, id: &str) -> Result<(), SupervisorError> {
-        self.with_store(|s| s.remove_plugin(id))
+    pub fn remove_mcp_server(&self, id: &str) -> Result<(), SupervisorError> {
+        self.with_store(|s| s.remove_mcp_server(id))
             .map_err(store_error)
     }
 
-    pub fn set_plugin_enabled(&self, id: &str, enabled: bool) -> Result<Plugin, SupervisorError> {
-        self.with_store(|s| s.set_plugin_enabled(id, enabled))
+    pub fn set_mcp_server_enabled(
+        &self,
+        id: &str,
+        enabled: bool,
+    ) -> Result<McpServerEntry, SupervisorError> {
+        self.with_store(|s| s.set_mcp_server_enabled(id, enabled))
             .map_err(store_error)
     }
 
-    pub fn acknowledge_plugin_key(&self, id: &str) -> Result<Plugin, SupervisorError> {
-        self.with_store(|s| s.acknowledge_plugin_key(id))
+    pub fn acknowledge_mcp_server_key(&self, id: &str) -> Result<McpServerEntry, SupervisorError> {
+        self.with_store(|s| s.acknowledge_mcp_server_key(id))
             .map_err(store_error)
     }
 
@@ -823,7 +827,7 @@ impl Supervisor {
     fn mcp_servers(&self) -> Vec<openremote_harness::McpServer> {
         let machine = self.this_machine;
         self.with_store(|s| {
-            s.plugins()
+            s.mcp_servers()
                 .iter()
                 .filter(|p| p.machine == machine && p.state() == "running")
                 .filter_map(|p| {

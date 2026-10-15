@@ -1,6 +1,7 @@
-//! Plugin catalog. The marketplace was an early list of launch commands
-//! that were never installed for real - it is empty until a catalog is
-//! facts. A plugin is written by hand; a key never crosses this API.
+//! MCP server catalog. The marketplace was an early list of launch
+//! commands that were never installed for real - it is empty until a
+//! catalog is facts. An MCP server is written by hand; a key never
+//! crosses this API.
 
 use serde::Serialize;
 
@@ -14,7 +15,7 @@ pub struct CatalogEntry {
     pub command: String,
 }
 
-/// No curated catalog. Plugins are written by hand.
+/// No curated catalog. MCP servers are written by hand.
 pub fn marketplace() -> Vec<CatalogEntry> {
     Vec::new()
 }

@@ -92,7 +92,7 @@ enum Tier {
     Chat,
 }
 
-/// What another of the user's devices may ask of this one. Plugins,
+/// What another of the user's devices may ask of this one. MCP servers,
 /// automations, webhooks, receipts and Cloud itself never answer a peer.
 const PEER_ROUTES: &[(&str, &str, Tier)] = &[
     ("GET", "/sync/summary", Tier::Sync),
@@ -188,11 +188,17 @@ fn api_routes() -> Router<Arc<App>> {
         .route("/machines", get(list_machines).post(create_machine))
         .route("/machines/{id}", get(get_machine).delete(remove_machine))
         .route("/machines/{id}/harnesses", post(install_harness))
-        .route("/plugins", get(list_plugins).post(create_plugin))
-        .route("/plugins/marketplace", get(plugin_marketplace))
-        .route("/plugins/{id}", axum::routing::delete(remove_plugin))
-        .route("/plugins/{id}/enabled", post(set_plugin_enabled))
-        .route("/plugins/{id}/key", post(acknowledge_plugin_key))
+        .route(
+            "/mcp-servers",
+            get(list_mcp_servers).post(create_mcp_server),
+        )
+        .route("/mcp-servers/marketplace", get(mcp_marketplace))
+        .route(
+            "/mcp-servers/{id}",
+            axum::routing::delete(remove_mcp_server),
+        )
+        .route("/mcp-servers/{id}/enabled", post(set_mcp_server_enabled))
+        .route("/mcp-servers/{id}/key", post(acknowledge_mcp_server_key))
         .route("/automations", get(list_rules).post(save_rule))
         .route("/automations/{id}", axum::routing::delete(remove_rule))
         .route("/automations/{id}/enabled", post(set_rule_enabled))
@@ -572,18 +578,18 @@ struct InstallHarnessBody {
     with_runtime: bool,
 }
 
-// ---- plugins ----
+// ---- MCP servers ----
 
-async fn list_plugins(State(app): State<Arc<App>>) -> Response {
-    Json(app.supervisor.plugins()).into_response()
+async fn list_mcp_servers(State(app): State<Arc<App>>) -> Response {
+    Json(app.supervisor.mcp_server_entries()).into_response()
 }
 
-async fn plugin_marketplace() -> Response {
-    Json(crate::plugins::marketplace()).into_response()
+async fn mcp_marketplace() -> Response {
+    Json(crate::mcp_catalog::marketplace()).into_response()
 }
 
 #[derive(Deserialize)]
-struct CreatePluginBody {
+struct CreateMcpServerBody {
     request_id: String,
     machine: String,
     #[serde(default)]
@@ -598,9 +604,9 @@ struct CreatePluginBody {
     needs_key: bool,
 }
 
-async fn create_plugin(
+async fn create_mcp_server(
     State(app): State<Arc<App>>,
-    Json(body): Json<CreatePluginBody>,
+    Json(body): Json<CreateMcpServerBody>,
 ) -> Response {
     if let Some(receipt) = app.supervisor.receipt(&body.request_id) {
         return receipt_response(&receipt);
@@ -620,7 +626,7 @@ async fn create_plugin(
             if name.trim().is_empty() || command.trim().is_empty() {
                 return error(
                     StatusCode::UNPROCESSABLE_ENTITY,
-                    "a custom plugin needs a name and a launch command",
+                    "an MCP server needs a name and a launch command",
                 );
             }
             Some((name.trim(), detail.trim(), command.trim(), body.needs_key))
@@ -628,12 +634,12 @@ async fn create_plugin(
         (true, _, _, _) => {
             return error(
                 StatusCode::UNPROCESSABLE_ENTITY,
-                "a custom plugin needs a name, a detail, and a launch command",
+                "an MCP server needs a name, a detail, and a launch command",
             );
         }
         _ => None,
     };
-    match app.supervisor.install_plugin(
+    match app.supervisor.add_mcp_server(
         &machine_id,
         body.catalog_id.as_deref(),
         custom.as_ref().map(|(n, d, c, k)| (*n, *d, *c, *k)),
@@ -665,7 +671,7 @@ async fn create_plugin(
     }
 }
 
-async fn remove_plugin(
+async fn remove_mcp_server(
     State(app): State<Arc<App>>,
     AxumPath(id): AxumPath<String>,
     axum::extract::Query(query): axum::extract::Query<MachineActionQuery>,
@@ -673,7 +679,7 @@ async fn remove_plugin(
     if let Some(receipt) = app.supervisor.receipt(&query.request_id) {
         return receipt_response(&receipt);
     }
-    match app.supervisor.remove_plugin(&id) {
+    match app.supervisor.remove_mcp_server(&id) {
         Ok(()) => {
             let receipt = Receipt {
                 request_id: query.request_id,
@@ -702,20 +708,20 @@ async fn remove_plugin(
 }
 
 #[derive(Deserialize)]
-struct PluginEnabledBody {
+struct EnabledBody {
     request_id: String,
     enabled: bool,
 }
 
-async fn set_plugin_enabled(
+async fn set_mcp_server_enabled(
     State(app): State<Arc<App>>,
     AxumPath(id): AxumPath<String>,
-    Json(body): Json<PluginEnabledBody>,
+    Json(body): Json<EnabledBody>,
 ) -> Response {
     if let Some(receipt) = app.supervisor.receipt(&body.request_id) {
         return receipt_response(&receipt);
     }
-    match app.supervisor.set_plugin_enabled(&id, body.enabled) {
+    match app.supervisor.set_mcp_server_enabled(&id, body.enabled) {
         Ok(plugin) => {
             let receipt = Receipt {
                 request_id: body.request_id,
@@ -744,19 +750,19 @@ async fn set_plugin_enabled(
 }
 
 #[derive(Deserialize)]
-struct PluginKeyBody {
+struct RequestIdBody {
     request_id: String,
 }
 
-async fn acknowledge_plugin_key(
+async fn acknowledge_mcp_server_key(
     State(app): State<Arc<App>>,
     AxumPath(id): AxumPath<String>,
-    Json(body): Json<PluginKeyBody>,
+    Json(body): Json<RequestIdBody>,
 ) -> Response {
     if let Some(receipt) = app.supervisor.receipt(&body.request_id) {
         return receipt_response(&receipt);
     }
-    match app.supervisor.acknowledge_plugin_key(&id) {
+    match app.supervisor.acknowledge_mcp_server_key(&id) {
         Ok(plugin) => {
             let receipt = Receipt {
                 request_id: body.request_id,
@@ -906,7 +912,7 @@ async fn remove_rule(
 async fn set_rule_enabled(
     State(app): State<Arc<App>>,
     AxumPath(id): AxumPath<String>,
-    Json(body): Json<PluginEnabledBody>,
+    Json(body): Json<EnabledBody>,
 ) -> Response {
     if let Some(receipt) = app.supervisor.receipt(&body.request_id) {
         return receipt_response(&receipt);
@@ -945,7 +951,7 @@ async fn set_rule_enabled(
 async fn run_rule(
     State(app): State<Arc<App>>,
     AxumPath(id): AxumPath<String>,
-    Json(body): Json<PluginKeyBody>,
+    Json(body): Json<RequestIdBody>,
 ) -> Response {
     if let Some(receipt) = app.supervisor.receipt(&body.request_id) {
         return receipt_response(&receipt);

@@ -35,8 +35,8 @@ fn slug(name: &str) -> String {
 use crate::events::{Event, EventPayload};
 use crate::ids::{DecisionId, DeviceId, MachineId, ProjectId, RuleId, SessionId};
 use crate::model::{
-    AutomationRule, Decision, DecisionState, Machine, MachineStatus, MessageRole, Plugin, Project,
-    Receipt, ReceiptStatus, Session, SessionStatus,
+    AutomationRule, Decision, DecisionState, Machine, MachineStatus, McpServerEntry, MessageRole,
+    Project, Receipt, ReceiptStatus, Session, SessionStatus,
 };
 
 #[derive(Debug, Error)]
@@ -107,8 +107,10 @@ struct State {
     /// Per machine: the half-hour starts (ms) the agent was present for.
     #[serde(default)]
     presence: BTreeMap<MachineId, Vec<i64>>,
-    #[serde(default)]
-    plugins: BTreeMap<String, Plugin>,
+    /// Read under its old name too: these were "plugins" before the
+    /// plugin system took that name.
+    #[serde(default, alias = "plugins")]
+    mcp_servers: BTreeMap<String, McpServerEntry>,
     #[serde(default)]
     rules: BTreeMap<RuleId, AutomationRule>,
     #[serde(default)]
@@ -709,79 +711,86 @@ impl Store {
             .collect()
     }
 
-    // ---- plugins ----
+    // ---- MCP servers ----
 
-    pub fn plugins(&self) -> Vec<&Plugin> {
-        self.state.plugins.values().collect()
+    pub fn mcp_servers(&self) -> Vec<&McpServerEntry> {
+        self.state.mcp_servers.values().collect()
     }
 
-    pub fn plugin(&self, id: &str) -> Result<&Plugin, StoreError> {
+    pub fn mcp_server(&self, id: &str) -> Result<&McpServerEntry, StoreError> {
         self.state
-            .plugins
+            .mcp_servers
             .get(id)
-            .ok_or_else(|| StoreError::NotFound(format!("plugin {id}")))
+            .ok_or_else(|| StoreError::NotFound(format!("MCP server {id}")))
     }
 
-    /// Install a plugin on a machine. Marketplace installs dedup by
+    /// Add an MCP server on a machine. Marketplace installs dedup by
     /// `catalog@machine`; custom ones by name per machine. The state
     /// change only - machine reachability is the caller's ruling.
-    pub fn install_plugin(&mut self, mut plugin: Plugin) -> Result<Plugin, StoreError> {
-        let dup = match &plugin.catalog_id {
-            Some(_) => self.state.plugins.contains_key(&plugin.id),
-            None => self.state.plugins.values().any(|p| {
-                p.catalog_id.is_none() && p.machine == plugin.machine && p.name == plugin.name
+    pub fn add_mcp_server(
+        &mut self,
+        mut entry: McpServerEntry,
+    ) -> Result<McpServerEntry, StoreError> {
+        let dup = match &entry.catalog_id {
+            Some(_) => self.state.mcp_servers.contains_key(&entry.id),
+            None => self.state.mcp_servers.values().any(|p| {
+                p.catalog_id.is_none() && p.machine == entry.machine && p.name == entry.name
             }),
         };
         if dup {
             return Err(StoreError::Conflict(format!(
                 "'{}' is already on that machine",
-                plugin.name
+                entry.name
             )));
         }
-        plugin.updated_at = crate::now_ms();
-        let id = plugin.id.clone();
-        self.state.plugins.insert(id, plugin.clone());
+        entry.updated_at = crate::now_ms();
+        let id = entry.id.clone();
+        self.state.mcp_servers.insert(id, entry.clone());
         self.persist()?;
-        Ok(plugin)
+        Ok(entry)
     }
 
-    pub fn remove_plugin(&mut self, id: &str) -> Result<(), StoreError> {
-        if self.state.plugins.remove(id).is_none() {
-            return Err(StoreError::NotFound(format!("plugin {id}")));
+    pub fn remove_mcp_server(&mut self, id: &str) -> Result<(), StoreError> {
+        if self.state.mcp_servers.remove(id).is_none() {
+            return Err(StoreError::NotFound(format!("MCP server {id}")));
         }
         self.persist()
     }
 
-    pub fn set_plugin_enabled(&mut self, id: &str, enabled: bool) -> Result<Plugin, StoreError> {
-        let plugin = self
+    pub fn set_mcp_server_enabled(
+        &mut self,
+        id: &str,
+        enabled: bool,
+    ) -> Result<McpServerEntry, StoreError> {
+        let entry = self
             .state
-            .plugins
+            .mcp_servers
             .get_mut(id)
-            .ok_or_else(|| StoreError::NotFound(format!("plugin {id}")))?;
-        plugin.enabled = enabled;
-        plugin.updated_at = crate::now_ms();
-        let out = plugin.clone();
+            .ok_or_else(|| StoreError::NotFound(format!("MCP server {id}")))?;
+        entry.enabled = enabled;
+        entry.updated_at = crate::now_ms();
+        let out = entry.clone();
         self.persist()?;
         Ok(out)
     }
 
-    /// Record that the machine has the key this plugin needs - the key
+    /// Record that the machine has the key this entry needs - the key
     /// itself never crosses this API.
-    pub fn acknowledge_plugin_key(&mut self, id: &str) -> Result<Plugin, StoreError> {
-        let plugin = self
+    pub fn acknowledge_mcp_server_key(&mut self, id: &str) -> Result<McpServerEntry, StoreError> {
+        let entry = self
             .state
-            .plugins
+            .mcp_servers
             .get_mut(id)
-            .ok_or_else(|| StoreError::NotFound(format!("plugin {id}")))?;
-        if !plugin.needs_key {
+            .ok_or_else(|| StoreError::NotFound(format!("MCP server {id}")))?;
+        if !entry.needs_key {
             return Err(StoreError::Conflict(format!(
                 "'{}' does not need a key",
-                plugin.name
+                entry.name
             )));
         }
-        plugin.has_key = true;
-        plugin.updated_at = crate::now_ms();
-        let out = plugin.clone();
+        entry.has_key = true;
+        entry.updated_at = crate::now_ms();
+        let out = entry.clone();
         self.persist()?;
         Ok(out)
     }
@@ -1552,6 +1561,40 @@ mod tests {
             created_at: 0,
             answer: None,
         }
+    }
+
+    #[test]
+    fn mcp_servers_saved_under_the_old_plugins_name_still_load() {
+        // Before the plugin system took the name, MCP servers were saved
+        // as `plugins` in state.json. Such a file must still load them -
+        // and the next save writes the new name.
+        let dir = tempdir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let machine = MachineId::new();
+        let entry = serde_json::json!({
+            "id": "custom-docs@m",
+            "name": "docs",
+            "detail": "search the docs",
+            "command": "docs-mcp --stdio",
+            "machine": machine,
+            "needs_key": false,
+            "created_at": 0,
+            "updated_at": 0,
+        });
+        let state = serde_json::json!({
+            "sessions": {}, "decisions": {}, "receipts": {},
+            "plugins": {"custom-docs@m": entry},
+        });
+        std::fs::write(dir.join("state.json"), state.to_string()).unwrap();
+        let mut store = Store::open(dir.clone()).unwrap();
+        assert_eq!(store.mcp_servers().len(), 1);
+        assert_eq!(store.mcp_server("custom-docs@m").unwrap().name, "docs");
+        store
+            .set_mcp_server_enabled("custom-docs@m", false)
+            .unwrap();
+        let saved = std::fs::read_to_string(dir.join("state.json")).unwrap();
+        assert!(saved.contains("\"mcp_servers\""), "{saved}");
+        assert!(!saved.contains("\"plugins\""), "{saved}");
     }
 
     #[test]

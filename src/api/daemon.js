@@ -396,37 +396,37 @@ export class DaemonApi {
     )
   }
 
-  // ---- plugins ----
+  // ---- MCP servers (Settings > MCP servers) ----
 
-  plugins() {
-    return this.call('GET', '/plugins')
+  mcpServers() {
+    return this.call('GET', '/mcp-servers')
   }
 
-  pluginMarketplace() {
-    return this.call('GET', '/plugins/marketplace')
+  mcpMarketplace() {
+    return this.call('GET', '/mcp-servers/marketplace')
   }
 
-  installPlugin(machineId, { catalogId, name, detail, command, needsKey }) {
-    return this.call('POST', '/plugins', {
+  addMcpServer(machineId, { catalogId, name, detail, command, needsKey }) {
+    return this.call('POST', '/mcp-servers', {
       request_id: newRequestId(),
       machine: machineId,
       ...(catalogId ? { catalog_id: catalogId } : { name, detail, command, needs_key: needsKey }),
     })
   }
 
-  removePlugin(pluginId) {
-    return this.call('DELETE', `/plugins/${pluginId}?request_id=${encodeURIComponent(newRequestId())}`)
+  removeMcpServer(id) {
+    return this.call('DELETE', `/mcp-servers/${id}?request_id=${encodeURIComponent(newRequestId())}`)
   }
 
-  setPluginEnabled(pluginId, enabled) {
-    return this.call('POST', `/plugins/${pluginId}/enabled`, {
+  setMcpServerEnabled(id, enabled) {
+    return this.call('POST', `/mcp-servers/${id}/enabled`, {
       request_id: newRequestId(),
       enabled,
     })
   }
 
-  acknowledgePluginKey(pluginId) {
-    return this.call('POST', `/plugins/${pluginId}/key`, { request_id: newRequestId() })
+  acknowledgeMcpServerKey(id) {
+    return this.call('POST', `/mcp-servers/${id}/key`, { request_id: newRequestId() })
   }
 
   // ---- automations ----

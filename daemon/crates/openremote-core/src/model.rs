@@ -191,12 +191,12 @@ pub struct InstallSpec {
     pub needs_runtime: bool,
 }
 
-/// One MCP server a session can call, installed on a machine from the
-/// marketplace or written by hand. The launch command is what that machine
+/// One MCP server the user set up on a machine (Settings > MCP servers) -
+/// a session on that machine can call it. The launch command is what that machine
 /// would start; a key, if the plugin needs one, never leaves the machine -
 /// `has_key` only records that the machine has one.
 #[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct Plugin {
+pub struct McpServerEntry {
     /// `catalogId@machine` from the marketplace; `custom-…@machine` when
     /// written by hand.
     pub id: String,
@@ -288,7 +288,7 @@ pub struct Project {
     pub updated_at: i64,
 }
 
-impl Plugin {
+impl McpServerEntry {
     /// The console's state word, derived like the design rules: a
     /// disabled plugin is off; one still waiting on its key acknowledgment
     /// is `needs-key`; otherwise it rides sessions - running.

@@ -1,4 +1,4 @@
-// Add a plugin by hand: a tool that is not in the marketplace. The
+// Add an MCP server by hand (Settings > MCP servers). The
 // command is what that machine would start; a key, if it needs one,
 // stays there.
 
@@ -10,9 +10,9 @@ import { useBack } from './use-back.js'
 
 const STATUS = { online: 'Online', offline: 'Offline', waiting: 'Has not checked in' }
 
-export default function AddPluginModal({ onClose }) {
+export default function AddMcpServerModal({ onClose }) {
   useBack(true, onClose)
-  const { machines, plugins, installPlugin } = useConsole()
+  const { machines, mcpServers, addMcpServer } = useConsole()
   const online = (machines ?? []).find((m) => m.machine.status === 'online')
   const [name, setName] = useState('')
   const [detail, setDetail] = useState('')
@@ -31,7 +31,7 @@ export default function AddPluginModal({ onClose }) {
   const ready = name.trim() && detail.trim() && command.trim() && machine?.status === 'online'
   const duplicate =
     ready &&
-    (plugins ?? []).some(
+    (mcpServers ?? []).some(
       (p) => p.machine === effectiveMachineId && p.name.toLowerCase() === name.trim().toLowerCase(),
     )
 
@@ -55,7 +55,7 @@ export default function AddPluginModal({ onClose }) {
     setBusy(true)
     setError(null)
     try {
-      await installPlugin(effectiveMachineId, {
+      await addMcpServer(effectiveMachineId, {
         name: name.trim(),
         detail: detail.trim(),
         command: command.trim(),
@@ -75,9 +75,9 @@ export default function AddPluginModal({ onClose }) {
         if (e.target === e.currentTarget) onClose()
       }}
     >
-      <div className="dv-modal dv-modal--form" role="dialog" aria-modal="true" aria-label="Add plugin">
+      <div className="dv-modal dv-modal--form" role="dialog" aria-modal="true" aria-label="Add an MCP server">
         <div className="dv-modal-head">
-          <h2 className="dv-modal-title">Add plugin</h2>
+          <h2 className="dv-modal-title">Add an MCP server</h2>
           <button className="dv-modal-close" onClick={onClose} title="Close">
             <X size={14} weight="bold" />
           </button>
@@ -148,7 +148,7 @@ export default function AddPluginModal({ onClose }) {
           disabled={!ready || duplicate || busy}
           onClick={add}
         >
-          {busy ? 'Adding…' : 'Add plugin'}
+          {busy ? 'Adding…' : 'Add MCP server'}
         </button>
       </div>
     </div>
