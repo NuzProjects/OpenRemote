@@ -143,6 +143,7 @@ Compiled into the daemon, which ships as the Windows sidecar, the Android librar
 - rustls-pki-types 1.15.1 - MIT OR Apache-2.0
 - rustls-webpki 0.103.15 - ISC
 - ryu 1.0.23 - Apache-2.0 OR BSL-1.0
+- semver 1.0.28 - MIT OR Apache-2.0
 - serde 1.0.229 - MIT OR Apache-2.0
 - serde_core 1.0.229 - MIT OR Apache-2.0
 - serde_json 1.0.151 - MIT OR Apache-2.0
