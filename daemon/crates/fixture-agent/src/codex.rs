@@ -125,6 +125,10 @@ impl CodexFixture {
             ),
             ("initialized", _) => {}
             ("thread/start", Some(id)) => {
+                crate::record(
+                    "fixture-codex-starts",
+                    &format!("thread/start effort={}", start_effort(&params)),
+                );
                 self.thread_id = Some(THREAD_ID.to_string());
                 self.notify(
                     "thread/status/changed",
@@ -151,6 +155,10 @@ impl CodexFixture {
                 );
             }
             ("thread/resume", Some(id)) => {
+                crate::record(
+                    "fixture-codex-starts",
+                    &format!("thread/resume effort={}", start_effort(&params)),
+                );
                 let resumed = params
                     .get("threadId")
                     .and_then(Value::as_str)
@@ -440,4 +448,15 @@ impl CodexFixture {
         stdout.write_all(b"\n").ok();
         stdout.flush().ok();
     }
+}
+
+/// The effort a thread start or resume set through its config overrides
+/// (`model_reasoning_effort`, Codex's own config.toml key), or `-`.
+fn start_effort(params: &Value) -> String {
+    params
+        .get("config")
+        .and_then(|c| c.get("model_reasoning_effort"))
+        .and_then(Value::as_str)
+        .unwrap_or("-")
+        .to_string()
 }

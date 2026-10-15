@@ -557,6 +557,10 @@ fn build_argv(opts: &SpawnOptions) -> Vec<std::ffi::OsString> {
         argv.push("--permission-mode".into());
         argv.push(mode.into());
     }
+    if let Some(effort) = &opts.effort {
+        argv.push("--effort".into());
+        argv.push(effort.into());
+    }
     if opts.fast {
         // Claude's own headless fast-mode form: `--settings '{"fastMode":
         // true}'` (v2.1.205+). Not a model switch - the CLI keeps Opus and
@@ -793,6 +797,7 @@ mod tests {
     #[test]
     fn argv_orders_flags_the_sdk_way_and_resume_is_equals_form() {
         let opts = SpawnOptions {
+            effort: None,
             cwd: std::path::PathBuf::from("/w"),
             model: Some("sonnet".into()),
             permission_mode: Some("default".into()),

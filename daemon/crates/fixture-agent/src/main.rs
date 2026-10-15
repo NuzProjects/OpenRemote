@@ -30,6 +30,20 @@ mod pi;
 
 use std::io::{BufRead, Write};
 
+/// Append one line to a file in the working directory (the session's
+/// workspace): how a fixture tells the e2e suite what the real driver
+/// handed it - an argv, a start-time setting - without a wire of its own.
+pub fn record(file: &str, line: &str) {
+    use std::io::Write as _;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(file)
+    {
+        let _ = writeln!(f, "{line}");
+    }
+}
+
 fn main() {
     // Protocol inference from the real driver's argv. `--version` is the
     // registry's catalog probe - answered before any protocol dispatch.
@@ -94,6 +108,14 @@ impl FixtureAgent {
             .unwrap_or_else(|_| format!("fixture-session-{}", std::process::id()));
         let mut permission_mode = String::from("default");
         let argv: Vec<String> = std::env::args().skip(1).collect();
+        // Only a chat's own start (stream-json): the daemon's probes run
+        // this binary too (`auth status`, the models handshake), from
+        // wherever the daemon was started.
+        if argv.iter().any(|a| a == "--input-format")
+            && argv.iter().any(|a| a == "--permission-prompt-tool")
+        {
+            record("fixture-claude-argv", &argv.join(" "));
+        }
         let mut i = 0;
         while i < argv.len() {
             // The equals form is one argv word (`--resume=<id>`); the

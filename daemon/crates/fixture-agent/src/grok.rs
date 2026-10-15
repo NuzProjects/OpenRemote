@@ -15,8 +15,6 @@ use std::io::{BufRead, Write};
 
 use serde_json::{Value, json};
 
-const SESSION_ID: &str = "grok-fixture-1";
-
 pub fn main_grok(argv: &[String]) {
     let scenario = std::env::var("FIXTURE_AGENT_SCENARIO")
         .ok()
@@ -91,7 +89,9 @@ pub fn main_grok(argv: &[String]) {
         i += 1;
     }
 
-    let session_id = resume.unwrap_or_else(|| SESSION_ID.to_string());
+    // A fresh conversation unless resumed: a fixed id would make a resume
+    // the driver dropped look exactly like one it kept.
+    let session_id = resume.unwrap_or_else(|| format!("grok-fixture-{}", std::process::id()));
     let out = |value: Value| {
         let mut stdout = std::io::stdout().lock();
         serde_json::to_writer(&mut stdout, &value).ok();
@@ -114,7 +114,7 @@ pub fn main_grok(argv: &[String]) {
     }
     out(json!({
         "type": "assistant",
-        "session_id": SESSION_ID,
+        "session_id": session_id,
         "message": {
             "id": "msg_fixture",
             "role": "assistant",
@@ -127,7 +127,7 @@ pub fn main_grok(argv: &[String]) {
     out(json!({
         "type": "result",
         "subtype": "success",
-        "session_id": SESSION_ID,
+        "session_id": session_id,
         "result": format!("done: {prompt}"),
         "is_error": false,
         "num_turns": 1,

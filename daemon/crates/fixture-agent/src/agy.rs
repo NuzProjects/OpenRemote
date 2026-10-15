@@ -12,8 +12,6 @@ use std::io::{BufRead, Write};
 
 use serde_json::{Value, json};
 
-const CONVERSATION: &str = "agy-fixture-conversation-1";
-
 pub fn main_agy(argv: &[String]) {
     // The models subcommand: the TSV catalog.
     if argv.first().is_some_and(|a| a == "models") {
@@ -93,7 +91,9 @@ pub fn main_agy(argv: &[String]) {
         i += 1;
     }
 
-    let conversation = conversation.unwrap_or_else(|| CONVERSATION.to_string());
+    // A fresh conversation unless resumed (see grok.rs).
+    let conversation =
+        conversation.unwrap_or_else(|| format!("agy-fixture-conversation-{}", std::process::id()));
     let out = |value: Value| {
         let mut stdout = std::io::stdout().lock();
         serde_json::to_writer(&mut stdout, &value).ok();

@@ -20,3 +20,8 @@ Thumbs.db
 .pi-sessions/
 # mimosa security-scanner state (session-private, never tracked)
 .mimosa/
+
+# What the e2e fixtures record about how the daemon started them
+fixture-claude-argv
+fixture-codex-starts
+fixture-pi-thinking

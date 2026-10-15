@@ -1205,6 +1205,7 @@ impl Supervisor {
         let opts = openremote_harness::SpawnOptions {
             cwd: current.workspace.clone().unwrap_or_else(Self::home_dir),
             model: current.model.clone(),
+            effort: current.effort.clone(),
             permission_mode: current.permission_mode.clone(),
             resume: None,
             include_deltas: true,
@@ -1724,6 +1725,7 @@ impl Supervisor {
         let opts = openremote_harness::SpawnOptions {
             cwd: session.workspace.clone().unwrap_or_else(Self::home_dir),
             model: session.model.clone(),
+            effort: session.effort.clone(),
             permission_mode: session.permission_mode.clone(),
             resume: Some(harness_ref),
             include_deltas: true,

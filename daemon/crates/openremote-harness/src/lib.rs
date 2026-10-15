@@ -71,6 +71,11 @@ pub struct SpawnOptions {
     /// (terminology parity: claude `--permission-mode`, codex
     /// `approvalPolicy`, grok `--permission-mode`, …).
     pub permission_mode: Option<String>,
+    /// The chat's effort in the harness's own word, set at every start -
+    /// the first spawn and each resume (claude `--effort`, codex
+    /// `model_reasoning_effort`, pi `set_thinking_level`). A harness with
+    /// no effort of its own ignores it.
+    pub effort: Option<String>,
     /// Resume the harness's own conversation (claude `--resume=<id>`,
     /// codex `thread/resume`, pi `--session`, …).
     pub resume: Option<String>,

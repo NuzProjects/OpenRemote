@@ -515,15 +515,20 @@ fn thread_params(opts: &SpawnOptions) -> Value {
     if opts.fast {
         params["serviceTier"] = json!("fast");
     }
-    if !opts.mcp_servers.is_empty() {
-        // Codex's own wire: the config-override map, dotted keyPaths -
-        // `mcp_servers.<id>.command` / `.args` (verified against the real
-        // app-server: the injected server shows up connected on the thread).
-        let mut config = json!({});
-        for server in &opts.mcp_servers {
-            config[format!("mcp_servers.{}.command", server.id)] = json!(server.command);
-            config[format!("mcp_servers.{}.args", server.id)] = json!(server.args);
-        }
+    // Codex's own wire for start-time settings: the config-override map,
+    // dotted keyPaths (config.toml keys).
+    let mut config = json!({});
+    // `mcp_servers.<id>.command` / `.args` (verified against the real
+    // app-server: the injected server shows up connected on the thread).
+    for server in &opts.mcp_servers {
+        config[format!("mcp_servers.{}.command", server.id)] = json!(server.command);
+        config[format!("mcp_servers.{}.args", server.id)] = json!(server.args);
+    }
+    // The chat's effort, on every start and resume.
+    if let Some(effort) = &opts.effort {
+        config["model_reasoning_effort"] = json!(effort);
+    }
+    if config.as_object().is_some_and(|c| !c.is_empty()) {
         params["config"] = config;
     }
     params

@@ -219,6 +219,17 @@ impl Driver {
                     permission_mode: None,
                 })
                 .await;
+            // The chat's effort rides every start: pi takes it over rpc,
+            // its own thinking level.
+            if let Some(effort) = &opts.effort {
+                race_child_death(
+                    &shared,
+                    "set_thinking_level",
+                    driver.call("set_thinking_level", json!({"level": effort})),
+                )
+                .await
+                .map_err(|e| DriverError::Protocol(format!("pi set_thinking_level failed: {e}")))?;
+            }
             Ok(())
         };
         if let Err(e) = boot.await {

@@ -55,7 +55,10 @@ impl Driver {
                 shared: Arc::new(Shared {
                     child: Arc::new(AsyncMutex::new(None)),
                     reason: StdMutex::new(EofReason::Completed),
-                    conversation: StdMutex::new(None),
+                    // A resumed chat continues its own conversation: the
+                    // first prompt's process starts on the id the resume
+                    // handed over, never on a fresh one.
+                    conversation: StdMutex::new(opts.resume.clone()),
                 }),
                 session_tx: tx,
                 resolution: resolution.clone(),

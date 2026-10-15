@@ -117,6 +117,14 @@ impl PiFixture {
                 self.respond(&id, "prompt", json!({"accepted": true}));
                 self.run_turn(message);
             }
+            "set_thinking_level" => {
+                let level = frame
+                    .get("level")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                crate::record("fixture-pi-thinking", level);
+                self.respond(&id, "set_thinking_level", json!({}));
+            }
             "abort" => {
                 self.respond(&id, "abort", json!({"aborted": true}));
                 if let Some(pending) = self.pending_dialog.take() {

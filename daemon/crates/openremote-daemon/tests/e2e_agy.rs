@@ -75,9 +75,11 @@ async fn an_agy_prompt_runs_a_real_turn_with_antigravity_words() {
         dump(&events)
     );
     let session = call(&daemon, "GET", &format!("/sessions/{id}"), None).await;
-    assert_eq!(
-        session.body["harness_session_ref"].as_str(),
-        Some("agy-fixture-conversation-1"),
+    assert!(
+        session.body["harness_session_ref"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("agy-fixture-conversation-"),
         "the conversation id is the ref: {}",
         session.raw
     );
@@ -125,10 +127,13 @@ async fn agy_continuations_resume_and_models_speak_antigravity_words() {
         dump(&events)
     );
     let session = call(&daemon, "GET", &format!("/sessions/{id}"), None).await;
-    assert_eq!(
-        session.body["harness_session_ref"].as_str(),
-        Some("agy-fixture-conversation-1"),
-        "resumed prompts ride the same conversation"
+    assert!(
+        session.body["harness_session_ref"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("agy-fixture-conversation-"),
+        "resumed prompts ride the same conversation: {}",
+        session.raw
     );
 
     // The catalog: Antigravity's own ids and display names.
