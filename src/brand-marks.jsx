@@ -132,9 +132,11 @@ export function AntigravityMark() {
 // inside its box so the ink lands visually equal across the set; it is
 // optical balancing only, never a redraw.
 const MARKS = {
-  claude: { M: ClaudeMark, optical: 1 },
+  // The claudecode glyph is airy - its blocks read faint at a distance,
+  // so its ink scales up hardest; grok's four thin slashes follow.
+  claude: { M: ClaudeMark, optical: 1.15 },
   codex: { M: CodexMark, optical: 0.94 },
-  grok: { M: GrokMark, optical: 1 },
+  grok: { M: GrokMark, optical: 1.1 },
   pi: { M: PiMark, optical: 0.9 },
   opencode: { M: OpencodeMark, optical: 1 },
   agy: { M: AntigravityMark, optical: 1.08 },

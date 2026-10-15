@@ -142,9 +142,10 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
       >
         {/* the harness's mark leads - every harness, one
             sidebar, the at-a-glance signal of which agent owns
-            each chat - then the title, with the status dot at
-            the right edge so every status scans in one column */}
-        {row.harness && <HarnessMark harness={row.harness} size={13} />}
+            each chat - sized to read from afar, then the title, with
+            the status dot at the right edge so every status scans in
+            one column */}
+        {row.harness && <HarnessMark harness={row.harness} size={15} />}
         <span className="chat-title">{row.title}</span>
         {mode === 'cloud' && row.device && (
           <span className="chat-device">{row.device}</span>
