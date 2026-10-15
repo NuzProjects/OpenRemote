@@ -9,6 +9,7 @@ import { modelMaker } from './model-maker.js'
 import { ModelMark } from './model-marks.jsx'
 import { HarnessMark } from './brand-marks.jsx'
 import { editRows, isFileEdit, writeRows } from './diff.js'
+import { isCommandRun } from './command-card.js'
 import { renderMarkdown } from './markdown.js'
 import { capLines, capRows, MAX_RENDER_LINES, MAX_RENDER_ROWS, shouldRenderLive } from './render-budget.js'
 import ContextRing from './ContextRing.jsx'
@@ -87,15 +88,25 @@ function DecisionCard({ item, onAnswer }) {
   }, [item.pending])
   // The question the harness actually asked, where it asked one in a
   // structured form (claude's AskUserQuestion); an approval carries its
-  // content in the In row instead - never invent a question for it.
+  // content as a terminal tile instead - the command it wants to run,
+  // never a JSON dump.
   const question =
     item.input && typeof item.input === 'object' && Array.isArray(item.input.questions)
       ? item.input.questions[0]?.question ?? null
       : null
+  const command = !question && isCommandRun(item.input) ? item.input : null
   return (
     <div className={`cv-decision${item.pending ? ' pending' : ''}`}>
       {question && <p className="cv-decision-ask">{question}</p>}
-      {item.input && !question && (
+      {command && (
+        <div className="cv-cmd">
+          {command.description && (
+            <span className="cv-cmd-desc">{command.description}</span>
+          )}
+          <code className="cv-cmd-text">{command.command}</code>
+        </div>
+      )}
+      {item.input && !question && !command && (
         <div className="cv-decision-io">
           <span className="cv-io-label">In</span>
           <code>{typeof item.input === 'string' ? item.input : JSON.stringify(item.input, null, 2)}</code>
@@ -442,6 +453,16 @@ export default function ChatView({ chat, onBack }) {
               return <MarkdownBody key={item.id} text={item.text} className="cv-node cv-agent" />
             }
             if (item.kind === 'tool') {
+              // While the ask for this very call is pending, the decision
+              // card is the one card - it carries the command and the
+              // buttons, and this one saying "Running" would be a lie (the
+              // call is blocked) and a duplicate. It returns once the
+              // answer lands and the run is real.
+              const isThePendingAsk =
+                pendingDecision &&
+                pendingDecision.toolName === item.name &&
+                JSON.stringify(pendingDecision.input) === JSON.stringify(item.input)
+              if (isThePendingAsk) return null
               // A file edit renders as a split diff - the tool card's
               // honest shape, never a JSON dump of its input.
               const edit = isFileEdit(item.input)
@@ -454,7 +475,11 @@ export default function ChatView({ chat, onBack }) {
               // note, not thousands of DOM nodes. Tool inputs and outputs
               // take the same cap on their lines.
               const diff = edit && edit.length > 0 ? capRows(edit) : null
-              const shownIn = item.input
+              // A command run renders as a terminal tile - the command
+              // itself in mono, its description as the caption, never a
+              // JSON dump of the input.
+              const command = !edit && isCommandRun(item.input) ? item.input : null
+              const shownIn = item.input && !command
                 ? capLines(typeof item.input === 'string' ? item.input : JSON.stringify(item.input, null, 2))
                 : null
               const shownOut = item.result ? capLines(item.result) : null
@@ -502,7 +527,17 @@ export default function ChatView({ chat, onBack }) {
                       </div>
                     </div>
                   )}
-                  {(item.input || item.result) && !edit && (
+                  {command && (
+                    <div className="cv-cmd">
+                      {/* the description leads - what this is, in plain
+                          words - then the command itself in mono */}
+                      {command.description && (
+                        <span className="cv-cmd-desc">{command.description}</span>
+                      )}
+                      <code className="cv-cmd-text">{command.command}</code>
+                    </div>
+                  )}
+                  {(item.input || item.result) && !edit && !command && (
                     <div className="cv-io">
                       {shownIn && (
                         <>
