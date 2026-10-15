@@ -787,6 +787,8 @@ struct SaveRuleBody {
     harness: String,
     #[serde(default)]
     model: Option<String>,
+    #[serde(default)]
+    permission_mode: Option<String>,
     workspace: String,
     machine: String,
     task: String,
@@ -810,6 +812,7 @@ async fn save_rule(State(app): State<Arc<App>>, Json(body): Json<SaveRuleBody>) 
         trigger: body.trigger,
         harness: body.harness,
         model: body.model,
+        permission_mode: body.permission_mode,
         workspace: std::path::PathBuf::from(&body.workspace),
         machine: machine_id,
         task: body.task,

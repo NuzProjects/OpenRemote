@@ -51,6 +51,9 @@ export default function AutomationForm({ rule, onClose }) {
   const [time, setTime] = useState(rule?.trigger?.time ?? '09:00')
   const [harness, setHarness] = useState(rule?.harness ?? available[0]?.id ?? null)
   const [model, setModel] = useState(rule?.model ?? null)
+  // The rule's permission word - the harness's own vocabulary, carried to
+  // the chat the rule fires. Unset means the harness's default holds.
+  const [permission, setPermission] = useState(rule?.permission_mode ?? null)
   // A draft or saved rule may name a machine that isn't online - the
   // form preselects one that can actually run the rule.
   const [machineId, setMachineId] = useState(
@@ -72,6 +75,9 @@ export default function AutomationForm({ rule, onClose }) {
   useEffect(() => {
     let cancelled = false
     setModel(null)
+    // Permission words belong to the harness - a switch resets the
+    // choice, the new harness's own default holds.
+    setPermission(null)
     if (!harness) {
       setModels([])
       return
@@ -122,6 +128,7 @@ export default function AutomationForm({ rule, onClose }) {
         },
         harness,
         model: model ?? undefined,
+        permission_mode: permission ?? undefined,
         workspace: workspace.trim(),
         machine: machineId,
         task: task.trim(),
@@ -251,6 +258,45 @@ export default function AutomationForm({ rule, onClose }) {
                 />
               )}
             </div>
+            {(currentHarness?.permission_modes ?? []).length > 0 && (
+              <div className="af-then-cell">
+                <button
+                  className="af-pick"
+                  data-unset={!permission || undefined}
+                  onClick={openPicker('permission')}
+                  aria-haspopup="listbox"
+                  aria-expanded={picker?.kind === 'permission'}
+                  title="What the harness may do without asking when the rule fires"
+                >
+                  {permission ?? 'Permission'}
+                </button>
+                {picker?.kind === 'permission' && (
+                  <PickerMenu
+                    label="Permission"
+                    searchPlaceholder="Search permission words"
+                    items={(currentHarness?.permission_modes ?? []).map((word) => ({
+                      id: word,
+                      name: word,
+                    }))}
+                    groups={null}
+                    selectedId={permission ?? ''}
+                    onChoose={(id) => {
+                      setPermission(id)
+                      setPicker(null)
+                    }}
+                    onClose={() => setPicker(null)}
+                    anchor={{ left: picker.x, top: picker.y }}
+                    renderSubline={(item) =>
+                      item.id === currentHarness?.default_permission ? (
+                        <span className="nc-item-sub">
+                          {currentHarness?.name} runs this by default
+                        </span>
+                      ) : null
+                    }
+                  />
+                )}
+              </div>
+            )}
             {models.length > 0 && (
               <div className="af-then-cell">
                 <button

@@ -6,21 +6,23 @@ const KEY = 'openremote-defaults'
 export function loadDefaults() {
   try {
     const raw = JSON.parse(localStorage.getItem(KEY) ?? '{}')
-    const efforts =
-      raw.efforts && typeof raw.efforts === 'object' && !Array.isArray(raw.efforts)
+    const harness = typeof raw.harness === 'string' ? raw.harness : null
+    const wordMap = (value) =>
+      value && typeof value === 'object' && !Array.isArray(value)
         ? Object.fromEntries(
-            Object.entries(raw.efforts).filter(
-              ([id, tier]) => typeof id === 'string' && typeof tier === 'string',
+            Object.entries(value).filter(
+              ([id, word]) => typeof id === 'string' && typeof word === 'string',
             ),
           )
         : {}
     return {
-      harness: typeof raw.harness === 'string' ? raw.harness : null,
+      harness,
       model: typeof raw.model === 'string' ? raw.model : null,
-      efforts,
+      efforts: wordMap(raw.efforts),
+      permissions: wordMap(raw.permissions),
     }
   } catch {
-    return { harness: null, model: null, efforts: {} }
+    return { harness: null, model: null, efforts: {}, permissions: {} }
   }
 }
 

@@ -154,6 +154,10 @@ export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false
     const defaults = loadDefaults()
     setModel(currentHarness?.id === defaults.harness ? defaults.model : null)
     setFast(false)
+    // Permission words belong to the harness (claude and grok share
+    // spelling, codex has its own) - a switch resets the choice, the
+    // saved default re-applies only where the new harness offers it.
+    setPermission(null)
     if (!currentHarness) {
       setModels([])
       setModelsPending(false)
@@ -204,6 +208,18 @@ export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false
   const [effort, setEffort] = useState(null)
   const savedEffort = effort ?? defaults.efforts?.[currentHarness?.id] ?? null
   const chosenEffort = effortTiers.includes(savedEffort) ? savedEffort : null
+  // The permission slot: only where the harness has its own words (claude,
+  // codex, grok). The picker offers the harness's vocabulary; the
+  // harness's own default row is marked. Unset sends nothing - the
+  // harness's default holds. A saved default that the harness no longer
+  // offers is dropped, like the effort slot's.
+  const permissionWords = currentHarness?.permission_modes ?? []
+  const [permission, setPermission] = useState(null)
+  const savedPermission =
+    permission ?? defaults.permissions?.[currentHarness?.id] ?? null
+  const chosenPermission = permissionWords.includes(savedPermission)
+    ? savedPermission
+    : null
   // The model the chat runs from its first breath: the user's pick, else
   // the catalog's default where the harness's config names none. The
   // daemon resolves the config case itself at create (pairing grok's
@@ -226,6 +242,7 @@ export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false
         startModel ?? undefined,
         fast || undefined,
         chosenEffort ?? undefined,
+        chosenPermission ?? undefined,
         { deviceId: target, synced: cloudMode },
       )
       setText('')
@@ -411,6 +428,7 @@ export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false
                   // Effort words belong to the harness's own catalog - a
                   // switch resets the choice to the new harness's default.
                   setEffort(null)
+                  setPermission(null)
                   setPicker(null)
                 }}
                 onClose={() => setPicker(null)}
@@ -430,6 +448,41 @@ export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false
                   >
                     Manage harnesses…
                   </button>
+                }
+              />
+            )}
+            {permissionWords.length > 0 && (
+              <button
+                type="button"
+                className="nc-meta"
+                data-unset={!chosenPermission || undefined}
+                onClick={openPicker('permission')}
+                aria-haspopup="listbox"
+                aria-expanded={picker?.kind === 'permission'}
+                title="What the harness may do without asking"
+              >
+                {chosenPermission ?? 'Permission'}
+              </button>
+            )}
+            {picker?.kind === 'permission' && (
+              <PickerMenu
+                label="Permission"
+                searchPlaceholder="Search permission words"
+                items={permissionWords.map((word) => ({ id: word, name: word }))}
+                groups={null}
+                selectedId={chosenPermission ?? ''}
+                onChoose={(id) => {
+                  setPermission(id)
+                  setPicker(null)
+                }}
+                onClose={() => setPicker(null)}
+                anchor={{ left: picker.x, top: picker.y }}
+                renderSubline={(item) =>
+                  item.id === currentHarness?.default_permission ? (
+                    <span className="nc-item-sub">
+                      {harnessName(currentHarness?.id)} runs this by default
+                    </span>
+                  ) : null
                 }
               />
             )}

@@ -208,8 +208,12 @@ export default function ChatView({ chat, onBack }) {
   const harness = (capabilities?.harnesses ?? []).find((h) => h.id === chat.harness)
   const live = LIVE_SETTINGS[chat.harness] ?? { model: false, effort: false, fast: false }
   // A stopped chat can change anything the harness accepts at start. A
-  // running one only where the wire accepts it now.
-  const canChange = chat.running ? live : { model: true, effort: true, fast: Boolean(harness?.fast_supported) }
+  // running one only where the wire accepts it now - permission never:
+  // every harness takes the word at process start only, so a running
+  // chat shows the word as a fact, a stopped one can change it.
+  const canChange = chat.running
+    ? { ...live, permission: false }
+    : { model: true, effort: true, fast: Boolean(harness?.fast_supported), permission: true }
   // The catalog row for the chat's model, matched by pick word or by the
   // resolved id a running session reports back - the row either way, so
   // the chip's name never changes when the first turn resolves the id.
@@ -329,6 +333,14 @@ export default function ChatView({ chat, onBack }) {
             </span>
           )}
           {chat.effort && <span className="cv-fact">{chat.effort}</span>}
+          {chat.permissionMode && (
+            <span
+              className="cv-fact"
+              title={`The harness's permission word for this chat (${harnessName(chat.harness)}'s own spelling)`}
+            >
+              {chat.permissionMode}
+            </span>
+          )}
           {chat.fast && <span className="cv-fact">Fast</span>}
           {chat.costUsd > 0 && (
             <span className="cv-fact">${chat.costUsd < 0.01 ? chat.costUsd.toFixed(4) : chat.costUsd.toFixed(2)}</span>
@@ -725,6 +737,55 @@ export default function ChatView({ chat, onBack }) {
                 <HarnessMark harness={chat.harness} size={16} />
                 {harnessName(chat.harness)}
               </span>
+              {/* The harness's own permission word for this chat. It is
+                  start-time on every harness - the chip changes it only
+                  on a stopped chat (resume lands it); on a running one
+                  it stays the quiet fact the facts row already shows. */}
+              {(harness?.permission_modes ?? []).length > 0 &&
+                (canChange.permission && !chat.running ? (
+                  <button
+                    type="button"
+                    className="nc-meta"
+                    data-unset={!chat.permissionMode || undefined}
+                    onClick={openPicker('permission')}
+                    aria-haspopup="listbox"
+                    aria-expanded={picker?.kind === 'permission'}
+                    title="What the harness may do without asking - lands when the chat next starts"
+                  >
+                    {chat.permissionMode ?? 'Permission'}
+                  </button>
+                ) : (
+                  chat.permissionMode && (
+                    <span
+                      className="nc-meta nc-static"
+                      title={`The harness's permission word for this chat (${harnessName(chat.harness)}'s own spelling)`}
+                    >
+                      {chat.permissionMode}
+                    </span>
+                  )
+                ))}
+              {picker?.kind === 'permission' && (
+                <PickerMenu
+                  label="Permission"
+                  searchPlaceholder="Search permission words"
+                  items={(harness?.permission_modes ?? []).map((word) => ({
+                    id: word,
+                    name: word,
+                  }))}
+                  groups={null}
+                  selectedId={chat.permissionMode ?? ''}
+                  onChoose={(id) => changeSettings({ permissionMode: id })}
+                  onClose={() => setPicker(null)}
+                  anchor={{ left: picker.x, top: picker.y }}
+                  renderSubline={(item) =>
+                    item.id === harness?.default_permission ? (
+                      <span className="nc-item-sub">
+                        {harnessName(chat.harness)} runs this by default
+                      </span>
+                    ) : null
+                  }
+                />
+              )}
               {canChange.fast && harness?.fast_supported && (
                 <button
                   type="button"

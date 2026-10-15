@@ -45,9 +45,33 @@ test('garbage storage falls back to empty, non-string efforts dropped', () => {
   const d = loadDefaults()
   assert.equal(d.harness, null)
   assert.deepEqual(d.efforts, {})
+  assert.deepEqual(d.permissions, {})
   localStorage.setItem(
     'openremote-defaults',
     JSON.stringify({ efforts: { claude: 'high', bad: 3, 'x y': null } }),
   )
   assert.deepEqual(loadDefaults().efforts, { claude: 'high' })
+})
+
+test('the per-harness permission map survives partial saves', () => {
+  localStorage.clear()
+  saveDefaults({ permissions: { claude: 'bypassPermissions', codex: 'never' } })
+  saveDefaults({ model: 'opus' })
+  const d = loadDefaults()
+  assert.deepEqual(d.permissions, {
+    claude: 'bypassPermissions',
+    codex: 'never',
+  })
+  // Writing one harness's word keeps the other's.
+  saveDefaults({ permissions: { ...d.permissions, claude: 'plan' } })
+  assert.deepEqual(loadDefaults().permissions, {
+    claude: 'plan',
+    codex: 'never',
+  })
+  // A non-string word is dropped on load, like the effort map's tiers.
+  localStorage.setItem(
+    'openremote-defaults',
+    JSON.stringify({ permissions: { claude: 'default', bad: 3 } }),
+  )
+  assert.deepEqual(loadDefaults().permissions, { claude: 'default' })
 })

@@ -111,6 +111,13 @@ export default function SettingsView({ onReplay, onOpenChat }) {
   const effortTiers = defaultModel?.reasoning_efforts ?? []
   const savedEffort = defaults.efforts?.[defaultHarness?.id] ?? null
   const chosenEffort = effortTiers.includes(savedEffort) ? savedEffort : null
+  // The permission row offers only the default harness's own words -
+  // the same rule the composer holds. No words, no row.
+  const permissionWords = defaultHarness?.permission_modes ?? []
+  const savedPermission = defaults.permissions?.[defaultHarness?.id] ?? null
+  const chosenPermission = permissionWords.includes(savedPermission)
+    ? savedPermission
+    : null
 
   const setPref = (partial) => {
     savePrefs(partial)
@@ -358,6 +365,46 @@ export default function SettingsView({ onReplay, onOpenChat }) {
                 }
                 onClose={() => setPicker(null)}
                 anchor={{ left: picker.x, top: picker.y }}
+              />
+            )}
+          </div>
+        )}
+        {permissionWords.length > 0 && (
+          <div className="pn-row">
+            <div>
+              <div className="pn-name">Permission</div>
+              <div className="pn-detail">
+                What {defaultHarness?.name} may do without asking, in its own words.
+              </div>
+            </div>
+            <button
+              type="button"
+              className="pn-btn"
+              onClick={openPicker('permission')}
+              aria-haspopup="listbox"
+              aria-expanded={picker?.kind === 'permission'}
+            >
+              {chosenPermission ?? `${defaultHarness?.name} default`}
+            </button>
+            {picker?.kind === 'permission' && (
+              <PickerMenu
+                label="Permission"
+                searchPlaceholder="Search permission words"
+                items={permissionWords.map((word) => ({ id: word, name: word }))}
+                groups={null}
+                selectedId={chosenPermission ?? ''}
+                onChoose={(id) =>
+                  set({ permissions: { ...defaults.permissions, [defaultHarness.id]: id } })
+                }
+                onClose={() => setPicker(null)}
+                anchor={{ left: picker.x, top: picker.y }}
+                renderSubline={(item) =>
+                  item.id === defaultHarness?.default_permission ? (
+                    <span className="nc-item-sub">
+                      {defaultHarness?.name} runs this by default
+                    </span>
+                  ) : null
+                }
               />
             )}
           </div>

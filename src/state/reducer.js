@@ -40,6 +40,7 @@ export function chatFromSession(session) {
     project: workspaceName(session.workspace),
     model: session.model ?? null,
     effort: session.effort ?? null,
+    permissionMode: session.permission_mode ?? null,
     fast: session.fast ?? false,
     approvedTools: session.approved_tools ?? [],
     // The harness's own context numbers, when it reports them.
@@ -160,6 +161,7 @@ export function foldEvent(chat, event) {
       else if (session.status !== 'failed') chat.lastError = null
       if (session.model) chat.model = session.model
       if (session.effort) chat.effort = session.effort
+      if (session.permission_mode) chat.permissionMode = session.permission_mode
       if (session.harness_session_ref) chat.resumable = true
       chat.fast = session.fast ?? chat.fast
       chat.approvedTools = session.approved_tools ?? chat.approvedTools

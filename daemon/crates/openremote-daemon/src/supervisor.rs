@@ -1057,7 +1057,7 @@ impl Supervisor {
                 Some(rule.workspace.clone()),
                 rule.model.clone(),
                 None,
-                None,
+                rule.permission_mode.clone(),
                 false,
                 None,
             )
@@ -2159,6 +2159,7 @@ mod tests {
             },
             harness: "claude".into(),
             model: None,
+            permission_mode: None,
             workspace: ws,
             machine,
             task: "a task".into(),

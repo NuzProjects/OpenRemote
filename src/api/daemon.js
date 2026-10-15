@@ -302,13 +302,16 @@ export class DaemonApi {
   }
 
   // Model, effort, and fast on a live chat. A harness that only accepts the
-  // change when the chat starts answers 409 - the composer says so.
-  updateSettings(id, { model, effort, fast }) {
+  // change when the chat starts answers 409 - the composer says so. The
+  // permission word is the same shape: start-time only, so a live chat's
+  // change conflicts and a stopped chat's lands on resume.
+  updateSettings(id, { model, effort, fast, permissionMode }) {
     return this.call('POST', `/sessions/${id}/settings`, {
       request_id: newRequestId(),
       ...(model ? { model } : {}),
       ...(effort ? { effort } : {}),
       ...(fast != null ? { fast } : {}),
+      ...(permissionMode ? { permission_mode: permissionMode } : {}),
     })
   }
 
@@ -411,6 +414,7 @@ export class DaemonApi {
       trigger: rule.trigger,
       harness: rule.harness,
       ...(rule.model ? { model: rule.model } : {}),
+      ...(rule.permission_mode ? { permission_mode: rule.permission_mode } : {}),
       workspace: rule.workspace,
       machine: rule.machine,
       task: rule.task,

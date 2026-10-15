@@ -145,6 +145,25 @@ test('session.updated folds the session-scoped grant into the chat', () => {
   assert.equal(chat.running, true)
 })
 
+test('the permission word rides the session both ways', () => {
+  // A session created with the harness's own word carries it from the
+  // start; a stopped chat's settings change folds through session.updated.
+  const chat = chatFromSession(session({ permission_mode: 'bypassPermissions' }))
+  assert.equal(chat.permissionMode, 'bypassPermissions')
+  let changed = chatFromSession(session())
+  changed = foldEvent(
+    changed,
+    event(8, {
+      type: 'session.updated',
+      session: session({ status: 'stopped', permission_mode: 'plan' }),
+    }),
+  )
+  assert.equal(changed.permissionMode, 'plan')
+  // Old sessions and wordless harnesses fold to null - the chip never
+  // renders a word the harness didn't say.
+  assert.equal(chatFromSession(session()).permissionMode, null)
+})
+
 test('resumable follows the harness conversation: present, absent, arrived late', () => {
   // A chat that ran a turn has the harness's own conversation to resume.
   assert.equal(chatFromSession(session({ harness_session_ref: 'c-42' })).resumable, true)

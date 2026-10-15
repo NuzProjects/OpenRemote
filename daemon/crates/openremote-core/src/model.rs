@@ -235,6 +235,11 @@ pub struct AutomationRule {
     pub harness: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// The harness's own permission word the rule's chat opens with
+    /// (claude `--permission-mode`, codex `approvalPolicy`). Unset means
+    /// the harness's own default holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<String>,
     /// The chat's workspace - absolute, validated at save time.
     pub workspace: PathBuf,
     pub machine: MachineId,
