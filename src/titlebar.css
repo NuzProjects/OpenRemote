@@ -136,3 +136,9 @@
   font-size: 15px;
   color: var(--text-1);
 }
+
+/* The split-editor glyph (VS Code's own shape): one page divided down
+   the middle, sized to sit beside the 15px Phosphor toggles. */
+.tb-split {
+  display: block;
+}

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ArrowLeft, ArrowRight, Columns, Info, SidebarSimple } from '@phosphor-icons/react'
+import { ArrowLeft, ArrowRight, Info, SidebarSimple } from '@phosphor-icons/react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import AboutModal from './AboutModal.jsx'
 import { useConsole } from './state/console.jsx'
@@ -24,6 +24,19 @@ function CaptionGlyph({ kind }) {
         </>
       )}
       {kind === 'close' && <path d="M0.5 0.5l9 9M9.5 0.5l-9 9" />}
+    </svg>
+  )
+}
+
+// VS Code's own split-editor shape: one flat page divided down the
+// middle - sharp corners, even 1px strokes, nothing else. Phosphor has
+// no frame-yes divider-yes glyph, so it is drawn here like the caption
+// glyphs are.
+function SplitGlyph() {
+  return (
+    <svg className="tb-split" width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <rect x="1.75" y="2.75" width="12.5" height="10.5" stroke="currentColor" strokeWidth="1.2" />
+      <path d="M8 2.75v10.5" stroke="currentColor" strokeWidth="1.2" />
     </svg>
   )
 }
@@ -117,7 +130,7 @@ export default function TitleBar({
             window (Ctrl+\; Ctrl+Shift+\ splits downward). */}
         {onSplit && (
           <button className="tb-toggle" onClick={onSplit} title="Split view (Ctrl+\)">
-            <Columns size={15} />
+            <SplitGlyph />
           </button>
         )}
       </div>
