@@ -119,17 +119,12 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
     ]
   }
 
-  // The phone badge's fact: the phones of this Cloud and whether one
-  // is reachable. No phones, no badge - the tile stays a plain icon.
+  // The Mobile tile's phone fact: the phones of this Cloud and whether
+  // one is reachable. The status is color, not words - a reachable phone
+  // turns the tile green with a black glyph, away phones leave a hollow
+  // corner dot. No phones, no mark at all.
   const phones = (devices ?? []).filter(isPhone)
   const phoneOnline = phones.some((d) => d.online)
-  const phoneStatus = !phones.length
-    ? null
-    : phones.length === 1
-      ? phones[0].online
-        ? 'phone online'
-        : 'phone offline'
-      : `${phones.filter((d) => d.online).length} of ${phones.length} phones online`
 
   const chatRow = (row) => (
     <div
@@ -339,21 +334,24 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
           </button>
           <button
             type="button"
-            className={`sb-icon-btn sb-icon-btn--badge${active === 'mobile' ? ' on' : ''}`}
+            className={`sb-icon-btn${phones.length ? (phoneOnline ? ' sb-phone--online' : ' sb-phone--offline') : ''}${active === 'mobile' ? ' on' : ''}`}
             aria-pressed={active === 'mobile'}
-            title="Mobile"
+            title={
+              !phones.length
+                ? 'Mobile'
+                : phoneOnline
+                  ? `Phone online${phones.length > 1 ? ` (${phones.filter((d) => d.online).length} of ${phones.length})` : ''}`
+                  : 'Phone away'
+            }
             aria-label="Mobile"
             onClick={() => onSelect('mobile')}
           >
             <DeviceMobile size={20} />
-            {/* The badge extends the tile when a phone is in the Cloud:
-                the connection dot and its word, the same vocabulary the
-                chat rows and device cards use. */}
-            {phoneStatus && (
-              <span className="sb-badge">
-                <span className={`sb-badge-dot sb-badge-dot--${phoneOnline ? 'online' : 'offline'}`} />
-                {phoneStatus}
-              </span>
+            {/* The status is color, not words: a reachable phone tints
+                the tile green with a black glyph; an away one leaves a
+                hollow dot in the tile's corner. */}
+            {phones.length > 0 && !phoneOnline && (
+              <span className="sb-phone-dot" aria-hidden="true" />
             )}
           </button>
           <button
