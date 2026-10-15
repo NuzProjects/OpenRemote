@@ -321,7 +321,9 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
             aria-label="Account"
             onClick={() => onSelect('account')}
           >
-            <UserCircle size={19} />
+            {/* UserCircle's ink sits inside a thin circle, so it reads
+                smaller than its neighbors - 2px of optical correction. */}
+            <UserCircle size={21} />
           </button>
           <button
             type="button"
