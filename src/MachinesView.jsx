@@ -2,7 +2,7 @@
 // the other devices; a desktop that isn't one only syncs. This computer
 // comes first, with the switch that makes it a machine.
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Desktop, DeviceMobile, HardDrives, Plus } from '@phosphor-icons/react'
 import MachineModal from './MachineModal.jsx'
 import AddMachineModal from './AddMachineModal.jsx'
@@ -16,11 +16,15 @@ function detail(device) {
   return [platform, kindLabel(device), device.app_version].filter(Boolean).join(' · ')
 }
 
-export default function MachinesView({ onOpenChat }) {
+export default function MachinesView({ onOpenChat, openDevice = null }) {
   const privacy = usePrivacyMode()
   const { devices, thisDevice, setDeviceKind } = useConsole()
   const [adding, setAdding] = useState(false)
   const [openId, setOpenId] = useState(null)
+  // The command palette's machine row lands here with that machine open.
+  useEffect(() => {
+    if (openDevice) setOpenId(openDevice.id)
+  }, [openDevice?.nonce])
   const [error, setError] = useState(null)
   const list = [...(devices ?? [])].sort(
     (a, b) => Number(b.id === thisDevice) - Number(a.id === thisDevice) || a.name.localeCompare(b.name),

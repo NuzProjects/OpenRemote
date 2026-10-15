@@ -16,6 +16,7 @@ import ContextRing from './ContextRing.jsx'
 import PickerMenu from './PickerMenu.jsx'
 import { isMobile } from './platform.js'
 import { usePrivacyMode } from './privacy.js'
+import { useHint, useModelSwitches, usePaletteSource, useShortcut } from './keyboard.jsx'
 import './chatview.css'
 import './composer.css'
 
@@ -155,7 +156,7 @@ const LIVE_SETTINGS = {
   pi: { model: true, effort: true, fast: false },
 }
 
-export default function ChatView({ chat, onBack }) {
+export default function ChatView({ chat, onBack, focused = true }) {
   const privacy = usePrivacyMode()
   const {
     capabilities,
@@ -195,6 +196,7 @@ export default function ChatView({ chat, onBack }) {
   const [modelsPending, setModelsPending] = useState(true)
   const scrollRef = useRef(null)
   const composerRef = useRef(null)
+  const inputRef = useRef(null)
   const rail = railItems(chat)
   const pendingDecision = rail.find((item) => item.kind === 'decision' && item.pending)
   // Every tool call riding the rail, keyed the way the duplicate checks
@@ -322,6 +324,107 @@ export default function ChatView({ chat, onBack }) {
     }
   }
 
+  // The keyboard acts on the focused pane's chat (keyboard.jsx). A key
+  // whose action can't happen here - no running turn to interrupt, no
+  // model list - falls through untouched.
+  const openPickerAt = (kind) => {
+    const el = composerRef.current?.querySelector(`[data-picker="${kind}"]`)
+    if (!el) return false
+    const r = el.getBoundingClientRect()
+    setPicker({ kind, x: r.left + r.width / 2, y: r.top + r.height / 2 })
+  }
+  const permissionWords = harness?.permission_modes ?? []
+  const canPickPermission = permissionWords.length > 0 && canChange.permission && !chat.running
+  useShortcut(
+    'focus-composer',
+    () => {
+      const el = inputRef.current
+      if (!el || el.disabled) return false
+      el.focus()
+    },
+    focused,
+  )
+  useShortcut(
+    'interrupt',
+    () => {
+      if (!reachable || !chat.running) return false
+      control(() => interruptChat(chat.id))
+    },
+    focused,
+  )
+  useShortcut(
+    'stop',
+    () => {
+      if (!reachable || !chat.running) return false
+      control(() => stopChat(chat.id))
+    },
+    focused,
+  )
+  useShortcut('pick-model', () => openPickerAt('model'), focused)
+  useShortcut('pick-effort', () => openPickerAt('effort'), focused)
+  useShortcut('pick-permission', () => openPickerAt('permission'), focused)
+  useShortcut(
+    'toggle-fast',
+    () => {
+      if (!canChange.fast || !harness?.fast_supported) return false
+      changeSettings({ fast: !chat.fast })
+    },
+    focused,
+  )
+  useModelSwitches((i) => {
+    if (!canChange.model || !models[i]) return false
+    changeSettings({ model: models[i].model })
+  }, focused)
+  usePaletteSource(
+    'model',
+    () =>
+      canChange.model && models.length
+        ? {
+            title: 'Switch model',
+            items: models.map((m) => ({
+              id: m.model,
+              name: m.display_name ?? m.model,
+              icon: <ModelMark maker={modelMaker(chat.harness, m.model, m.resolved_model)} size={14} />,
+            })),
+            selectedId: currentModel?.model ?? chat.model,
+            choose: (id) => changeSettings({ model: id }),
+          }
+        : null,
+    focused,
+  )
+  usePaletteSource(
+    'effort',
+    () =>
+      canChange.effort && efforts.length
+        ? {
+            title: 'Set effort',
+            items: efforts.map((e) => ({ id: e, name: e })),
+            selectedId: chat.effort,
+            choose: (id) => changeSettings({ effort: id }),
+          }
+        : null,
+    focused,
+  )
+  usePaletteSource(
+    'permission',
+    () =>
+      canPickPermission
+        ? {
+            title: 'Set permission',
+            items: permissionWords.map((w) => ({ id: w, name: w })),
+            selectedId: chat.permissionMode,
+            choose: (id) => changeSettings({ permissionMode: id }),
+          }
+        : null,
+    focused,
+  )
+  const hintInterrupt = useHint('interrupt')
+  const hintStop = useHint('stop')
+  const hintModel = useHint('pick-model')
+  const hintEffort = useHint('pick-effort')
+  const hintPermission = useHint('pick-permission')
+  const hintFast = useHint('toggle-fast')
+
   return (
     <div className="chatview">
       <header className="cv-head">
@@ -369,11 +472,11 @@ export default function ChatView({ chat, onBack }) {
           )}
           {reachable && chat.running && (
             <>
-              <button className="cv-fact-btn" onClick={() => control(() => interruptChat(chat.id))} title="Interrupt the running turn - the session stays alive">
+              <button className="cv-fact-btn" onClick={() => control(() => interruptChat(chat.id))} title={hintInterrupt('Interrupt the running turn - the session stays alive')}>
                 <HandPalm size={11} weight="fill" />
                 Interrupt
               </button>
-              <button className="cv-fact-btn" onClick={() => control(() => stopChat(chat.id))} title="Stop the session">
+              <button className="cv-fact-btn" onClick={() => control(() => stopChat(chat.id))} title={hintStop('Stop the session')}>
                 <Stop size={11} weight="fill" />
                 Stop
               </button>
@@ -641,6 +744,7 @@ export default function ChatView({ chat, onBack }) {
       <div className="cv-composer" ref={composerRef}>
         <div className="cv-box">
           <textarea
+            ref={inputRef}
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
@@ -676,7 +780,8 @@ export default function ChatView({ chat, onBack }) {
                   onClick={openPicker('model')}
                   aria-haspopup="listbox"
                   aria-expanded={picker?.kind === 'model'}
-                  title="Model - applies to the next turn"
+                  data-picker="model"
+                  title={hintModel('Model - applies to the next turn')}
                 >
                   {(() => {
                     // The shown model's own maker mark - the chosen
@@ -721,7 +826,8 @@ export default function ChatView({ chat, onBack }) {
                   onClick={openPicker('effort')}
                   aria-haspopup="listbox"
                   aria-expanded={picker?.kind === 'effort'}
-                  title="The harness's own effort"
+                  data-picker="effort"
+                  title={hintEffort("The harness's own effort")}
                 >
                   {chat.effort ?? 'Effort'}
                 </button>
@@ -758,7 +864,8 @@ export default function ChatView({ chat, onBack }) {
                     onClick={openPicker('permission')}
                     aria-haspopup="listbox"
                     aria-expanded={picker?.kind === 'permission'}
-                    title="What the harness may do without asking - lands when the chat next starts"
+                    data-picker="permission"
+                    title={hintPermission('What the harness may do without asking - lands when the chat next starts')}
                   >
                     {chat.permissionMode ?? 'Permission'}
                   </button>
@@ -800,7 +907,7 @@ export default function ChatView({ chat, onBack }) {
                   className={`nc-meta nc-fast${chat.fast ? ' on' : ''}`}
                   onClick={() => changeSettings({ fast: !chat.fast })}
                   aria-pressed={Boolean(chat.fast)}
-                  title="The harness's own fast mode"
+                  title={hintFast("The harness's own fast mode")}
                 >
                   <Lightning size={13} weight={chat.fast ? 'fill' : 'light'} />
                   Fast

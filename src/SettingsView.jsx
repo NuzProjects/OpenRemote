@@ -26,6 +26,9 @@ import { version } from '../package.json'
 import './devices.css'
 import './panels.css'
 import './settings.css'
+import './keyboard.css'
+import { useKeyboard, isMac } from './keyboard.jsx'
+import { ACTIONS, GROUPS, comboFromEvent, comboLabel, isOverridden } from './shortcuts.js'
 
 // The harnesses whose own login command the daemon can relay - the
 // Sign-in action renders only there (no dead UI elsewhere).
@@ -37,6 +40,7 @@ const SECTIONS = [
   { id: 'new-tasks', label: 'New tasks' },
   { id: 'appearance', label: 'Appearance' },
   { id: 'startup', label: 'Startup' },
+  { id: 'keyboard', label: 'Keyboard' },
   { id: 'cloud', label: 'Cloud' },
   { id: 'daemon', label: 'Daemon' },
   { id: 'harnesses', label: 'Harnesses' },
@@ -79,6 +83,51 @@ export default function SettingsView({ onReplay, onOpenChat }) {
   const [signInFor, setSignInFor] = useState(null)
   const [prefs, setPrefs] = useState(() => loadPrefs())
   const [confirmDisconnect, setConfirmDisconnect] = useState(false)
+  // Keyboard: the action waiting for its new keys, and the last move's
+  // note ("moved from New chat") under the action that took the key.
+  const kb = useKeyboard()
+  const [capturing, setCapturing] = useState(null)
+  const [moved, setMoved] = useState(null)
+
+  // While an action waits for its keys, every keystroke is the binding:
+  // Esc cancels, Backspace or Delete clears the key, a lone modifier
+  // waits for the rest. A click anywhere else cancels too.
+  useEffect(() => {
+    if (!capturing || !kb) return
+    kb.setCapturing(true)
+    const onKey = (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      const bare = !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey
+      if (e.key === 'Escape' && bare) {
+        setCapturing(null)
+        return
+      }
+      if ((e.key === 'Backspace' || e.key === 'Delete') && bare) {
+        kb.unbind(capturing)
+        setMoved(null)
+        setCapturing(null)
+        return
+      }
+      const combo = comboFromEvent(e, isMac)
+      if (!combo) return
+      const displaced = kb.rebind(capturing, combo)
+      setMoved(
+        displaced.length
+          ? { id: capturing, from: displaced.map((id) => ACTIONS.find((a) => a.id === id)?.label ?? id).join(', ') }
+          : null,
+      )
+      setCapturing(null)
+    }
+    const onDown = () => setCapturing(null)
+    window.addEventListener('keydown', onKey, true)
+    window.addEventListener('mousedown', onDown, true)
+    return () => {
+      kb.setCapturing(false)
+      window.removeEventListener('keydown', onKey, true)
+      window.removeEventListener('mousedown', onDown, true)
+    }
+  }, [capturing, kb])
   const defaultHarness = available.find((h) => h.id === defaults.harness) ?? available[0] ?? null
 
   // The model row only renders where the default harness advertises -
@@ -562,6 +611,77 @@ export default function SettingsView({ onReplay, onOpenChat }) {
           </div>
         )}
       </div>
+      </>
+      )}
+
+      {!isMobile && kb && (
+      <>
+      <h2 className="pn-section" id="stg-keyboard">Keyboard</h2>
+      <p className="pn-lead">
+        Click an action, then press its new keys. A key another action holds moves here.
+        Backspace clears a key, Esc cancels.
+      </p>
+      {GROUPS.map((group) => (
+        <div key={group.id} className="pn-list pn-list--tight kb-set">
+          <div className="kb-group-label">{group.label}</div>
+          {ACTIONS.filter((a) => a.group === group.id).map((a) => (
+            <div className="pn-row" key={a.id}>
+              <div>
+                <div className="pn-name">{a.label}</div>
+                {moved?.id === a.id && <div className="pn-detail">Moved from {moved.from}.</div>}
+              </div>
+              <div className="pn-actions">
+                {isOverridden(kb.overrides, a.id) && (
+                  <button
+                    type="button"
+                    className="pn-btn"
+                    onClick={() => {
+                      kb.reset(a.id)
+                      setMoved(null)
+                    }}
+                  >
+                    Reset
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className={capturing === a.id ? 'pn-btn on' : 'pn-btn'}
+                  // Its own mousedown would cancel the capture it starts.
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={() => setCapturing(capturing === a.id ? null : a.id)}
+                >
+                  {capturing === a.id ? (
+                    'Press keys…'
+                  ) : kb.bindings[a.id] ? (
+                    <kbd className="kb-keys">{comboLabel(kb.bindings[a.id], isMac)}</kbd>
+                  ) : (
+                    'No key'
+                  )}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ))}
+      {Object.keys(kb.overrides).length > 0 && (
+        <div className="pn-list pn-list--tight">
+          <div className="pn-row">
+            <div>
+              <div className="pn-name">Every key back to its default</div>
+            </div>
+            <button
+              type="button"
+              className="pn-btn"
+              onClick={() => {
+                kb.resetAll()
+                setMoved(null)
+              }}
+            >
+              Reset all
+            </button>
+          </div>
+        </div>
+      )}
       </>
       )}
 

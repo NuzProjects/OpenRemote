@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import {
   Archive,
   ArrowDown,
@@ -31,9 +31,10 @@ import { HarnessMark } from './brand-marks.jsx'
 import ContextMenu from './ContextMenu.jsx'
 import DeleteChatModal from './DeleteChatModal.jsx'
 import { usePrivacyMode } from './privacy.js'
+import { useHint, useShortcut } from './keyboard.jsx'
 import './sidebar.css'
 
-export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit, onAddProject }) {
+export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit, onAddProject, onReveal }) {
   const { connection, sessions, chats, devices, thisDevice, projects, removeProject, archived, setChatArchived, deleteChat } = useConsole()
   const privacy = usePrivacyMode()
   const [query, setQuery] = useState('')
@@ -76,6 +77,34 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   const toggleProject = (id) => {
     setCollapsed((c) => ({ ...c, [id]: !c[id] }))
   }
+
+  // The keyboard's walk through the list goes in the order it reads:
+  // each open project's chats, then the flat Chats list. A collapsed
+  // project's chats are skipped, like the eye skips them.
+  const searchRef = useRef(null)
+  const order = [
+    ...grouped.projects.flatMap(({ project, items }) => (collapsed[project.id] ? [] : items)),
+    ...grouped.flat,
+  ].map((row) => row.id)
+  const step = (pick) => () => {
+    if (!order.length) return false
+    const at = order.indexOf(active)
+    onSelect(pick(at))
+  }
+  useShortcut('next-chat', step((at) => order[at === -1 ? 0 : Math.min(at + 1, order.length - 1)]))
+  useShortcut('prev-chat', step((at) => order[at === -1 ? order.length - 1 : Math.max(at - 1, 0)]))
+  useShortcut('first-chat', step(() => order[0]))
+  useShortcut('last-chat', step(() => order[order.length - 1]))
+  useShortcut('search-chats', () => {
+    if (!open) onReveal?.()
+    // After the reveal renders, so the field is there to take focus.
+    requestAnimationFrame(() => {
+      searchRef.current?.focus()
+      searchRef.current?.select()
+    })
+  })
+  const hintNew = useHint('new-chat')
+  const hintSearch = useHint('search-chats')
 
   const archive = (id) => {
     setChatArchived(id, true)
@@ -198,16 +227,26 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
           </button>
         </div>
         )}
-        <button className="side-tile" onClick={() => onSelect('new')}>
+        <button className="side-tile" onClick={() => onSelect('new')} title={hintNew('New chat')}>
           <Plus size={17} weight="bold" />
           New chat
         </button>
         <label className="side-tile search">
           <MagnifyingGlass size={17} className="search-icon" />
           <input
+            ref={searchRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              // Esc in the search clears it, then leaves it.
+              if (e.key === 'Escape') {
+                e.preventDefault()
+                if (query) setQuery('')
+                else e.currentTarget.blur()
+              }
+            }}
             placeholder="Search"
+            title={hintSearch('Search chats')}
             spellCheck={false}
           />
           {query && (

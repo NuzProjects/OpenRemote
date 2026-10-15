@@ -4,6 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import AboutModal from './AboutModal.jsx'
 import { useConsole } from './state/console.jsx'
 import { isMobile } from './platform.js'
+import { useHint } from './keyboard.jsx'
 import './titlebar.css'
 
 const hasTauri = typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__
@@ -51,6 +52,8 @@ export default function TitleBar({
   onSplit,
 }) {
   const { capabilities } = useConsole()
+  const hintSidebar = useHint('toggle-sidebar')
+  const hintSplit = useHint('split-right')
   const [maximized, setMaximized] = useState(false)
   const [about, setAbout] = useState(false)
 
@@ -88,7 +91,7 @@ export default function TitleBar({
           <button
             className="tb-toggle"
             onClick={onToggleSidebar}
-            title={sidebarOpen ? 'Close the sidebar' : 'Open the sidebar'}
+            title={hintSidebar(sidebarOpen ? 'Close the sidebar' : 'Open the sidebar')}
             aria-label={sidebarOpen ? 'Close the sidebar' : 'Open the sidebar'}
           >
             <SidebarSimple size={20} />
@@ -115,7 +118,7 @@ export default function TitleBar({
           <button
             className="tb-toggle"
             onClick={onToggleSidebar}
-            title={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+            title={hintSidebar(sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar')}
           >
             <SidebarSimple size={15} />
           </button>
@@ -129,7 +132,7 @@ export default function TitleBar({
         {/* Another pane beside this one, for a second agent in the same
             window (Ctrl+\; Ctrl+Shift+\ splits downward). */}
         {onSplit && (
-          <button className="tb-toggle" onClick={onSplit} title="Split view (Ctrl+\)">
+          <button className="tb-toggle" onClick={onSplit} title={hintSplit('Split view')}>
             <SplitGlyph />
           </button>
         )}

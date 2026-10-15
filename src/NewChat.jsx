@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ArrowUp, House, FolderOpen, Lightning, Plus } from '@phosphor-icons/react'
 import PickerMenu from './PickerMenu.jsx'
 import { usePrivacyMode } from './privacy.js'
+import { useHint, useModelSwitches, usePaletteSource, useShortcut } from './keyboard.jsx'
 import FolderPickerModal from './FolderPickerModal.jsx'
 import { machinePickerItems, platformLabel } from './cloud.js'
 import { HarnessMark } from './brand-marks.jsx'
@@ -24,7 +25,14 @@ import './composer.css'
 // honest words.
 
 
-export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false, onAddProjectDone }) {
+export default function NewChat({
+  onOpen,
+  mode = 'local',
+  addProjectOpen = false,
+  onAddProjectDone,
+  presetProject = null,
+  focused = true,
+}) {
   const privacy = usePrivacyMode()
   const {
     connection, capabilities, sessions, chats, createChat, modelsFor, devices, thisDevice,
@@ -73,6 +81,15 @@ export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false
     if (addProjectOpen) setPicking(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [addProjectOpen])
+
+  // The command palette's project row: New chat, already in that project.
+  // The palette lists this computer's projects, so the chat runs here.
+  useEffect(() => {
+    if (!presetProject) return
+    setTarget(null)
+    setProjectId(presetProject.id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [presetProject?.nonce])
 
   // The registered projects on the machine the chat will run on. A
   // project belongs to the machine that owns its folder, so the list
@@ -232,6 +249,94 @@ export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false
 
   const openPicker = (kind) => (e) => setPicker({ kind, x: e.clientX, y: e.clientY })
 
+  // The keyboard acts on the focused pane's composer (keyboard.jsx); a
+  // picker that isn't on screen (no catalog, no permission words) lets
+  // its key fall through.
+  const boxRef = useRef(null)
+  const inputRef = useRef(null)
+  const openPickerAt = (kind) => {
+    const el = boxRef.current?.querySelector(`[data-picker="${kind}"]`)
+    if (!el) return false
+    const r = el.getBoundingClientRect()
+    setPicker({ kind, x: r.left + r.width / 2, y: r.top + r.height / 2 })
+  }
+  const chooseModel = (id) => {
+    setModel(id)
+    setEffort(null)
+  }
+  useShortcut(
+    'focus-composer',
+    () => {
+      if (!inputRef.current) return false
+      inputRef.current.focus()
+    },
+    focused,
+  )
+  useShortcut('pick-model', () => openPickerAt('model'), focused)
+  useShortcut('pick-effort', () => openPickerAt('effort'), focused)
+  useShortcut('pick-permission', () => openPickerAt('permission'), focused)
+  useShortcut('pick-harness', () => openPickerAt('harness'), focused)
+  useShortcut(
+    'toggle-fast',
+    () => {
+      if (!currentHarness?.fast_supported) return false
+      setFast((v) => !v)
+    },
+    focused,
+  )
+  useModelSwitches((i) => {
+    if (!models[i]) return false
+    chooseModel(models[i].model)
+  }, focused)
+  usePaletteSource(
+    'model',
+    () =>
+      models.length
+        ? {
+            title: 'Switch model',
+            items: models.map((m) => ({
+              id: m.model,
+              name: m.display_name ?? m.model,
+              icon: <ModelMark maker={modelMaker(currentHarness?.id, m.model, m.resolved_model)} size={14} />,
+            })),
+            selectedId: model,
+            choose: chooseModel,
+          }
+        : null,
+    focused,
+  )
+  usePaletteSource(
+    'effort',
+    () =>
+      effortTiers.length
+        ? {
+            title: 'Set effort',
+            items: effortTiers.map((t) => ({ id: t, name: t })),
+            selectedId: chosenEffort,
+            choose: setEffort,
+          }
+        : null,
+    focused,
+  )
+  usePaletteSource(
+    'permission',
+    () =>
+      permissionWords.length
+        ? {
+            title: 'Set permission',
+            items: permissionWords.map((w) => ({ id: w, name: w })),
+            selectedId: chosenPermission,
+            choose: setPermission,
+          }
+        : null,
+    focused,
+  )
+  const hintModel = useHint('pick-model')
+  const hintEffort = useHint('pick-effort')
+  const hintHarness = useHint('pick-harness')
+  const hintPermission = useHint('pick-permission')
+  const hintFast = useHint('toggle-fast')
+
   const start = async () => {
     if (!canSend) return
     setBusy(true)
@@ -305,7 +410,7 @@ export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false
           )}
         </div>
       )}
-      <div className="nc-box">
+      <div className="nc-box" ref={boxRef}>
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -316,6 +421,7 @@ export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false
               start()
             }
           }}
+          ref={inputRef}
           placeholder="Describe the task"
           autoFocus={!isMobile}
           spellCheck={false}
@@ -332,7 +438,8 @@ export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false
                     onClick={openPicker('model')}
                     aria-haspopup="listbox"
                     aria-expanded={picker?.kind === 'model'}
-                    title="Model"
+                    data-picker="model"
+                    title={hintModel('Model')}
                   >
                     {(() => {
                       // The shown model's own maker mark - the chosen
@@ -383,7 +490,8 @@ export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false
                     onClick={openPicker('effort')}
                     aria-haspopup="listbox"
                     aria-expanded={picker?.kind === 'effort'}
-                    title="The harness's own effort tier"
+                    data-picker="effort"
+                    title={hintEffort("The harness's own effort tier")}
                   >
                     {chosenEffort ?? 'Effort'}
                   </button>
@@ -412,7 +520,8 @@ export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false
               onClick={openPicker('harness')}
               aria-haspopup="listbox"
               aria-expanded={picker?.kind === 'harness'}
-              title="Harness"
+              data-picker="harness"
+              title={hintHarness('Harness')}
             >
               <HarnessMark harness={currentHarness?.id} size={16} />
               {currentHarness?.name ?? 'No harness installed'}
@@ -461,7 +570,8 @@ export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false
                 onClick={openPicker('permission')}
                 aria-haspopup="listbox"
                 aria-expanded={picker?.kind === 'permission'}
-                title="What the harness may do without asking"
+                data-picker="permission"
+                title={hintPermission('What the harness may do without asking')}
               >
                 {chosenPermission ?? 'Permission'}
               </button>
@@ -493,7 +603,7 @@ export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false
                 className={`nc-meta nc-fast${fast ? ' on' : ''}`}
                 onClick={() => setFast((v) => !v)}
                 aria-pressed={fast}
-                title="The harness's own fast mode - its speed tier, never a model switch"
+                title={hintFast("The harness's own fast mode - its speed tier, never a model switch")}
               >
                 <Lightning size={13} weight={fast ? 'fill' : 'light'} />
                 Fast

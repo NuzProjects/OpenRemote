@@ -21,6 +21,9 @@ import { Archive, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Copy, X } from '@ph
 import { pushBack, useBack } from './use-back.js'
 import SplitArea from './SplitArea.jsx'
 import ContextMenu from './ContextMenu.jsx'
+import CommandPalette from './CommandPalette.jsx'
+import ShortcutSheet from './ShortcutSheet.jsx'
+import { KeyboardProvider, useKeyboard, useShortcut } from './keyboard.jsx'
 import {
   MAX_PANES,
   closeLeaf,
@@ -158,18 +161,6 @@ function Shell() {
   const view = OTHER_MODE[mode].includes(stored) ? 'new' : stored
   const chat = STATIC_VIEWS.includes(view) ? null : chats[view] ?? null
 
-  // Ctrl+\ splits the focused pane to the right, Ctrl+Shift+\ downward.
-  useEffect(() => {
-    if (isMobile || !onboarded) return
-    const onKey = (e) => {
-      if (!e.ctrlKey || e.altKey || e.metaKey || (e.key !== '\\' && e.key !== '|')) return
-      e.preventDefault()
-      setLayout((l) => splitLeaf(l, l.focus, e.shiftKey ? 'col' : 'row'))
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onboarded])
-
   // Every chat on screen streams live - the primary's and each pane's -
   // but only one that still exists. A chat deleted on another device
   // loses its record on the poll beat that drops it, so it leaves the
@@ -252,13 +243,17 @@ function Shell() {
     if (isMobile) pushBack(goBack)
   }
 
-  const switchMode = (next) => {
+  const keepMode = (next) => {
     setMode(next)
     try {
       localStorage.setItem(MODE_KEY, next)
     } catch {
       /* storage unavailable */
     }
+  }
+
+  const switchMode = (next) => {
+    keepMode(next)
     // With panes open the layout is the user's own; the primary view only
     // falls back when it belongs to the other mode (see `view` above).
     if (paneCount(layout) === 1) navigate('new')
@@ -338,15 +333,15 @@ function Shell() {
     const items = [
       { header: full ? 'New chat split (4 panes is the most)' : 'New chat split' },
       { label: 'To the left', icon: <ArrowLeft size={14} />, disabled: full, onSelect: split('row', true) },
-      { label: 'To the right', icon: <ArrowRight size={14} />, disabled: full, onSelect: split('row', false) },
+      { label: 'To the right', icon: <ArrowRight size={14} />, hint: kb.label('split-right'), disabled: full, onSelect: split('row', false) },
       { label: 'Above', icon: <ArrowUp size={14} />, disabled: full, onSelect: split('col', true) },
-      { label: 'Below', icon: <ArrowDown size={14} />, disabled: full, onSelect: split('col', false) },
+      { label: 'Below', icon: <ArrowDown size={14} />, hint: kb.label('split-down'), disabled: full, onSelect: split('col', false) },
     ]
     const title = chats[v]?.title
     if (isChatView(v) && title) {
       items.push(
         { divider: true },
-        { label: 'Archive chat', icon: <Archive size={14} />, onSelect: () => archiveFrom(leaf, v) },
+        { label: 'Archive chat', icon: <Archive size={14} />, hint: kb.label('archive'), onSelect: () => archiveFrom(leaf, v) },
         {
           label: 'Copy chat title',
           icon: <Copy size={14} />,
@@ -357,7 +352,7 @@ function Shell() {
     if (leaf.view !== null) {
       items.push(
         { divider: true },
-        { label: 'Close pane', icon: <X size={14} />, onSelect: () => setLayout((l) => closeLeaf(l, leafId)) },
+        { label: 'Close pane', icon: <X size={14} />, hint: kb.label('close-pane'), onSelect: () => setLayout((l) => closeLeaf(l, leafId)) },
       )
     }
     return items
@@ -409,6 +404,59 @@ function Shell() {
     navigate('machines')
   }
 
+  // Keyboard actions the shell owns (keyboard.jsx): navigation, views,
+  // the focused chat's archive, and the layout. A view that belongs to
+  // the other mode switches the mode on the way, like Account's
+  // crossover to Machines.
+  const kb = useKeyboard()
+  const desk = onboarded && !isMobile
+  const [palette, setPalette] = useState(false)
+  const [sheet, setSheet] = useState(false)
+  const [presetProject, setPresetProject] = useState(null)
+  const [openDevice, setOpenDevice] = useState(null)
+  const goView = (id) => {
+    const needs = { plugins: 'local', automations: 'local', machines: 'cloud' }[id]
+    if (needs && mode !== needs) keepMode(needs)
+    openInFocus(id)
+  }
+  const focusPrimary = () =>
+    setLayout((l) => focusLeaf(l, leaves(l.root).find((p) => p.view === null).id))
+  useShortcut('new-chat', () => openInFocus('new'), desk)
+  useShortcut('palette', () => setPalette(true), desk)
+  useShortcut('cheat-sheet', () => setSheet(true), desk)
+  useShortcut('view-settings', () => goView('settings'), desk)
+  useShortcut('view-automations', () => goView('automations'), desk)
+  useShortcut('view-plugins', () => goView('plugins'), desk)
+  useShortcut('view-machines', () => goView('machines'), desk)
+  useShortcut('view-account', () => goView('account'), desk)
+  useShortcut('view-mobile', () => goView('mobile'), desk)
+  useShortcut('view-metrics', () => goView('metrics'), desk)
+  useShortcut(
+    'archive',
+    () => {
+      const v = focused?.view ?? view
+      if (!focused || !isChatView(v) || !chats[v]) return false
+      archiveFrom(focused, v)
+    },
+    desk,
+  )
+  useShortcut('toggle-sidebar', () => setSidebarOpen((v) => !v), desk)
+  useShortcut('toggle-mode', () => switchMode(mode === 'local' ? 'cloud' : 'local'), desk)
+  useShortcut('split-right', () => setLayout((l) => splitLeaf(l, l.focus, 'row')), desk)
+  useShortcut('split-down', () => setLayout((l) => splitLeaf(l, l.focus, 'col')), desk)
+  // The primary pane is the window's own view; only a split pane closes.
+  useShortcut(
+    'close-pane',
+    () => {
+      if (!focused || focused.view === null) return false
+      setLayout((l) => closeLeaf(l, focused.id))
+    },
+    desk,
+  )
+  // The palette's recent chats: the navigation history, newest first.
+  const recentChatIds = [...new Set([...history].reverse().filter(isChatView))]
+  const primaryFocused = focused?.view === null
+
   // What the primary pane shows: the view the app's navigation points at.
   // The footer's views - settings, account, mobile, metrics - render
   // before Cloud's sign-in door: each carries its own signed-out state,
@@ -432,14 +480,16 @@ function Shell() {
           mode={mode}
           addProjectOpen={addProjectOpen}
           onAddProjectDone={() => setAddProjectOpen(false)}
+          presetProject={presetProject}
+          focused={primaryFocused}
         />
       )}
-      {view === 'machines' && <MachinesView onOpenChat={openSession} />}
+      {view === 'machines' && <MachinesView onOpenChat={openSession} openDevice={openDevice} />}
       {view === 'plugins' && <PluginsView />}
       {view === 'automations' && <AutomationsView onOpenChat={openSession} />}
       {!STATIC_VIEWS.includes(view) &&
         (chat ? (
-          <ChatView key={chat.id} chat={chat} />
+          <ChatView key={chat.id} chat={chat} focused={primaryFocused} />
         ) : (
           <div className="cv-none">That chat is no longer in this workspace.</div>
         ))}
@@ -463,12 +513,13 @@ function Shell() {
         <NewChat
           onOpen={(id) => setLayout((l) => setLeafView(l, leaf.id, id))}
           mode={mode}
+          focused={leaf.id === layout.focus}
         />
       )
     }
     const paneChat = chats[leaf.view]
     return paneChat ? (
-      <ChatView key={paneChat.id} chat={paneChat} />
+      <ChatView key={paneChat.id} chat={paneChat} focused={leaf.id === layout.focus} />
     ) : (
       <div className="cv-none">That chat is no longer in this workspace.</div>
     )
@@ -503,6 +554,7 @@ function Shell() {
             onSelect={openInFocus}
             onSplit={openBeside}
             onAddProject={addProject}
+            onReveal={() => setSidebarOpen(true)}
           />
           <main className="main" onContextMenu={onMainContextMenu}>
             <CloudNotices />
@@ -525,6 +577,23 @@ function Shell() {
               onClose={() => setPaneMenu(null)}
             />
           )}
+          {palette && (
+            <CommandPalette
+              recentChatIds={recentChatIds}
+              onClose={() => setPalette(false)}
+              onOpenChat={openInFocus}
+              onOpenProject={(id) => {
+                setPresetProject({ id, nonce: Date.now() })
+                focusPrimary()
+                navigate('new')
+              }}
+              onOpenMachine={(id) => {
+                setOpenDevice({ id, nonce: Date.now() })
+                goView('machines')
+              }}
+            />
+          )}
+          {sheet && <ShortcutSheet onClose={() => setSheet(false)} />}
         </div>
       )}
     </>
@@ -536,9 +605,11 @@ function Shell() {
 export default function App() {
   return (
     <ConsoleProvider>
-      <div className="app">
-        <Shell />
-      </div>
+      <KeyboardProvider>
+        <div className="app">
+          <Shell />
+        </div>
+      </KeyboardProvider>
     </ConsoleProvider>
   )
 }
