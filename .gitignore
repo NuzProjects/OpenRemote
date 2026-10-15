@@ -11,6 +11,8 @@ src-tauri/binaries/
 # local knowledge: wayfinder map, research, session plans
 .tasks/
 .zcode/
+# scratch: OpenRemote-only notes and temp, never tracked (.scratch/README.md)
+.scratch/
 # editor / OS noise
 .DS_Store
 Thumbs.db
