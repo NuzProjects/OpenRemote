@@ -383,6 +383,7 @@ export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false
             )}
             <button
               className="nc-meta"
+              data-unset={!currentHarness || undefined}
               onClick={openPicker('harness')}
               aria-haspopup="listbox"
               aria-expanded={picker?.kind === 'harness'}
@@ -504,6 +505,7 @@ export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false
             <div className="nc-device">
               <button
                 className="nc-meta"
+                data-unset={!targetItem || undefined}
                 onClick={openPicker('machine')}
                 aria-haspopup="listbox"
                 aria-expanded={picker?.kind === 'machine'}

@@ -751,3 +751,45 @@ button:focus-visible {
 html[data-reduce-motion] .chat-archive {
   transition: none;
 }
+
+/* A picker with nothing chosen yet carries a small chevron, always on
+   screen - the one mark that says "pick me". Chosen pickers carry no
+   mark at all; hover stays the plain wash. The component stamps
+   data-unset on the buttons whose label is still a placeholder. */
+[aria-haspopup='listbox'] {
+  position: relative;
+}
+
+.pn-btn[aria-haspopup='listbox'][data-unset] {
+  padding-right: 24px;
+}
+
+.af-pick[aria-haspopup='listbox'][data-unset] {
+  padding-right: 26px;
+}
+
+.nc-meta[aria-haspopup='listbox'][data-unset] {
+  padding-right: 18px;
+}
+
+[aria-haspopup='listbox']::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  width: 5px;
+  height: 5px;
+  border-right: 1.3px solid currentColor;
+  border-bottom: 1.3px solid currentColor;
+  transform: translateY(-65%) rotate(45deg);
+  opacity: 0;
+  pointer-events: none;
+}
+
+[aria-haspopup='listbox'][data-unset]::after {
+  opacity: 1;
+}
+
+.nc-meta[aria-haspopup='listbox']::after {
+  right: 7px;
+}

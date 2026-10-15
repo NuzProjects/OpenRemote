@@ -259,6 +259,7 @@ export default function SettingsView({ onReplay, onOpenChat }) {
           <button
             type="button"
             className="pn-btn"
+            data-unset={!defaultHarness || undefined}
             onClick={openPicker('harness')}
             aria-haspopup="listbox"
             aria-expanded={picker?.kind === 'harness'}

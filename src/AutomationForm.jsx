@@ -226,6 +226,7 @@ export default function AutomationForm({ rule, onClose }) {
             <div className="af-then-cell">
               <button
                 className="af-pick"
+                data-unset={!currentHarness || undefined}
                 onClick={openPicker('harness')}
                 aria-haspopup="listbox"
                 aria-expanded={picker?.kind === 'harness'}
@@ -279,6 +280,7 @@ export default function AutomationForm({ rule, onClose }) {
               <div className="af-then-cell">
                 <button
                   className="af-pick"
+                  data-unset={!currentMachine || undefined}
                   onClick={openPicker('machine')}
                   aria-haspopup="listbox"
                   aria-expanded={picker?.kind === 'machine'}
@@ -309,6 +311,7 @@ export default function AutomationForm({ rule, onClose }) {
               <button
                 type="button"
                 className="af-pick"
+                data-unset={noProjects || undefined}
                 onClick={openPicker('project')}
                 aria-haspopup="listbox"
                 aria-expanded={picker?.kind === 'project'}
