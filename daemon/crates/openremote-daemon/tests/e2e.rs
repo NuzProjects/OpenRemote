@@ -24,6 +24,27 @@ async fn healthz_is_open_and_everything_else_needs_the_token() {
 }
 
 #[tokio::test]
+async fn notices_serve_the_embedded_file_and_need_the_token() {
+    let daemon = start_daemon(&[("claude", fixture_agent())]).await;
+    let anon = call_with_token(&daemon, "wrong-token", "GET", "/notices", None).await;
+    assert_eq!(anon.status, 401, "raw: {}", anon.raw);
+    let good = call(&daemon, "GET", "/notices", None).await;
+    assert_eq!(good.status, 200, "raw: {}", good.raw);
+    // The reply is the repo's notices file verbatim (not JSON), so it
+    // begins and ends like the file does.
+    assert!(
+        good.raw.contains("# Third-party notices"),
+        "notices head missing; raw head: {}",
+        &good.raw[..good.raw.len().min(200)]
+    );
+    assert!(
+        good.raw.contains("once_cell polyfill"),
+        "the ring attribution at the file's end is missing; raw tail: {}",
+        &good.raw[good.raw.len().saturating_sub(400)..]
+    );
+}
+
+#[tokio::test]
 async fn a_prompt_runs_a_real_turn_end_to_end() {
     let daemon = start_daemon(&[("claude", fixture_agent())]).await;
     let ws = workspace(Some("plain"));

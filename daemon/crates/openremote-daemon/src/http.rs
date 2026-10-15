@@ -42,6 +42,11 @@ pub fn router(app: Arc<App>) -> Router {
             "/cloud/enrollments",
             post(crate::cloud_http::create_enrollment),
         )
+        // The third-party notices ride in the binary itself: the file is
+        // the same one bundled beside the installers, but the standalone
+        // Linux daemon has no install dir to read - so it serves what it
+        // was built with. Console-only: a peer never needs it.
+        .route("/notices", get(notices))
         // The console reaches another device's API through this one.
         .route(
             "/devices/{id}/{*rest}",
@@ -233,6 +238,17 @@ fn console_cors() -> CorsLayer {
 
 async fn healthz() -> impl IntoResponse {
     Json(json!({"ok": true}))
+}
+
+/// The third-party notices, embedded at build time from the repo's
+/// THIRD-PARTY_NOTICES.md (the repo root, three dirs above this crate's
+/// src). Served as text so the console can show it verbatim; the token
+/// guards it like every other console route.
+async fn notices() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        include_str!("../../../../THIRD-PARTY_NOTICES.md"),
+    )
 }
 
 async fn auth(State(app): State<Arc<App>>, request: Request, next: Next) -> Response {
