@@ -214,9 +214,9 @@ Every screen the design specifies, backed by the real daemon:
   where the harness's own fast mode is usable
   (claude `fastMode` ≥ 2.1.205, codex `fast` service tier ≥ 0.110), the
   project picker (the registered projects on the machine the chat runs
-  on, "No project", and the picker's own Add project row; the Add project
-  button beside the composer opens the in-app folder picker - the same
-  one Cloud uses on another machine's disk), the In-progress list.
+  on, "No project", and the picker's own Add project row - the one way
+  in, which the in-app folder picker serves for every surface that asks:
+  the sidebar's +, the settings rows, itself), the In-progress list.
 - **Chat** - the rail transcript (user cards, agent text, notes, tool
   cards with In/Out, decisions in the harness's own words with its
   affirmative first), the facts row (workspace · harness · model · Fast ·

@@ -552,10 +552,6 @@ export default function NewChat({ onOpen, mode = 'local', addProjectOpen = false
             </span>
           )}
         </div>
-        <button type="button" className="nc-browse" onClick={() => setPicking(true)} title="Register a folder as a project">
-          <Plus size={13} weight="bold" />
-          Add project
-        </button>
         {addProjectError && <p className="nc-error">{addProjectError}</p>}
         {targetOffline && <p className="nc-error">{targetItem.name} is offline.</p>}
         {isMobile && cloudMode && machines.length === 0 && (
