@@ -79,7 +79,8 @@ spacing.
   under it) and the flat Chats list (every chat that belongs to no
   project), each row led by its harness's brand mark with the status dot
   at the row's right edge; the footer is an icon row - Account, Mobile,
-  Metrics, Settings - square ghost buttons, no labels.
+  Metrics, Settings - spaced evenly, the Mobile tile extending into a
+  badge (connection dot + word) while a phone is in the Cloud.
 - **Settings is a view, not a popup:** a slim section rail on the left
   (New tasks, Appearance, Startup, Cloud, Daemon, Harnesses, This install),
   the panel on the right. Phone width stacks the rail into a top scroller.

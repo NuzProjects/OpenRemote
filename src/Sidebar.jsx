@@ -25,7 +25,7 @@ import {
 import { useConsole } from './state/console.jsx'
 import { sections } from './projects.js'
 import { activeSessions } from './archive.js'
-import { deviceName, sessionsForMode } from './cloud.js'
+import { deviceName, isPhone, sessionsForMode } from './cloud.js'
 import { isMobile } from './platform.js'
 import { HarnessMark } from './brand-marks.jsx'
 import ContextMenu from './ContextMenu.jsx'
@@ -118,6 +118,18 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
       },
     ]
   }
+
+  // The phone badge's fact: the phones of this Cloud and whether one
+  // is reachable. No phones, no badge - the tile stays a plain icon.
+  const phones = (devices ?? []).filter(isPhone)
+  const phoneOnline = phones.some((d) => d.online)
+  const phoneStatus = !phones.length
+    ? null
+    : phones.length === 1
+      ? phones[0].online
+        ? 'phone online'
+        : 'phone offline'
+      : `${phones.filter((d) => d.online).length} of ${phones.length} phones online`
 
   const chatRow = (row) => (
     <div
@@ -327,13 +339,22 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
           </button>
           <button
             type="button"
-            className={`sb-icon-btn${active === 'mobile' ? ' on' : ''}`}
+            className={`sb-icon-btn sb-icon-btn--badge${active === 'mobile' ? ' on' : ''}`}
             aria-pressed={active === 'mobile'}
             title="Mobile"
             aria-label="Mobile"
             onClick={() => onSelect('mobile')}
           >
             <DeviceMobile size={20} />
+            {/* The badge extends the tile when a phone is in the Cloud:
+                the connection dot and its word, the same vocabulary the
+                chat rows and device cards use. */}
+            {phoneStatus && (
+              <span className="sb-badge">
+                <span className={`sb-badge-dot sb-badge-dot--${phoneOnline ? 'online' : 'offline'}`} />
+                {phoneStatus}
+              </span>
+            )}
           </button>
           <button
             type="button"
