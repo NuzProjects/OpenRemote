@@ -71,6 +71,7 @@ Reserved Font Names are respected:
 
 Compiled into the daemon, which ships as the Windows sidecar, the Android library and the standalone Linux binary:
 
+- adler2 2.0.1 - 0BSD OR MIT OR Apache-2.0
 - aead 0.5.2 - MIT OR Apache-2.0
 - aes 0.8.4 - MIT OR Apache-2.0
 - aes-gcm 0.10.3 - Apache-2.0 OR MIT
@@ -88,12 +89,16 @@ Compiled into the daemon, which ships as the Windows sidecar, the Android librar
 - chrono 0.4.45 - MIT OR Apache-2.0
 - cipher 0.4.4 - MIT OR Apache-2.0
 - cpufeatures 0.2.17 - MIT OR Apache-2.0
+- crc32fast 1.5.2 - MIT OR Apache-2.0
 - crypto-common 0.1.7 - MIT OR Apache-2.0
 - ctr 0.9.2 - MIT OR Apache-2.0
 - curve25519-dalek 4.1.3 - BSD-3-Clause
 - data-encoding 2.11.1 - MIT
 - digest 0.10.7 - MIT OR Apache-2.0
+- equivalent 1.0.3 - Apache-2.0 OR MIT
 - errno 0.3.14 - MIT OR Apache-2.0
+- filetime 0.2.29 - MIT/Apache-2.0
+- flate2 1.1.10 - MIT OR Apache-2.0
 - form_urlencoded 1.2.2 - MIT OR Apache-2.0
 - futures-channel 0.3.34 - MIT OR Apache-2.0
 - futures-core 0.3.34 - MIT OR Apache-2.0
@@ -103,6 +108,7 @@ Compiled into the daemon, which ships as the Windows sidecar, the Android librar
 - generic-array 0.14.7 - MIT
 - getrandom 0.2.17 / 0.3.4 / 0.4.3 - MIT OR Apache-2.0
 - ghash 0.5.1 - Apache-2.0 OR MIT
+- hashbrown 0.17.1 - MIT OR Apache-2.0
 - http 1.5.0 - MIT OR Apache-2.0
 - http-body 1.1.0 - MIT
 - http-body-util 0.1.5 - MIT
@@ -111,6 +117,7 @@ Compiled into the daemon, which ships as the Windows sidecar, the Android librar
 - hyper 1.11.1 - MIT
 - hyper-util 0.1.21 - MIT
 - iana-time-zone 0.1.65 - MIT OR Apache-2.0
+- indexmap 2.14.2 - Apache-2.0 OR MIT
 - inout 0.1.4 - MIT OR Apache-2.0
 - itoa 1.0.18 - MIT OR Apache-2.0
 - libc 0.2.189 - MIT OR Apache-2.0
@@ -118,6 +125,7 @@ Compiled into the daemon, which ships as the Windows sidecar, the Android librar
 - matchit 0.8.4 - MIT AND BSD-3-Clause
 - memchr 2.8.3 - Unlicense OR MIT
 - mime 0.3.17 - MIT OR Apache-2.0
+- miniz_oxide 0.9.1 - MIT OR Zlib OR Apache-2.0
 - mio 1.2.3 - MIT
 - num-traits 0.2.19 - MIT OR Apache-2.0
 - once_cell 1.21.4 - MIT OR Apache-2.0
@@ -143,12 +151,14 @@ Compiled into the daemon, which ships as the Windows sidecar, the Android librar
 - sha1 0.10.7 - MIT OR Apache-2.0
 - sha2 0.10.9 - MIT OR Apache-2.0
 - signal-hook-registry 1.4.8 - MIT OR Apache-2.0
+- simd-adler32 0.3.10 - MIT
 - slab 0.4.12 - MIT
 - smallvec 1.16.2 - MIT OR Apache-2.0
 - snow 0.10.0 - Apache-2.0 OR MIT
 - socket2 0.6.5 - MIT OR Apache-2.0
 - subtle 2.6.1 - BSD-3-Clause
 - sync_wrapper 1.0.2 - Apache-2.0
+- tar 0.4.46 - MIT OR Apache-2.0
 - thiserror 2.0.21 - MIT OR Apache-2.0
 - tokio 1.53.1 - MIT
 - tokio-rustls 0.26.6 - MIT OR Apache-2.0
@@ -170,15 +180,18 @@ Compiled into the daemon, which ships as the Windows sidecar, the Android librar
 - webpki-roots 1.0.9 - CDLA-Permissive-2.0
 - windows-link 0.2.1 - MIT OR Apache-2.0
 - windows-sys 0.61.2 - MIT OR Apache-2.0
+- xattr 1.6.1 - MIT OR Apache-2.0 (the Linux daemon and the Android library; the
+  Windows build has no extended attributes to read)
 - zerocopy 0.8.61 - BSD-2-Clause OR Apache-2.0 OR MIT
 - zeroize 1.9.1 - Apache-2.0 OR MIT
+- zip 2.4.2 - MIT
 - zmij 1.0.23 - MIT
+- zopfli 0.8.3 - Apache-2.0
 
 ## The Rust crates: the shell, Windows and Android
 
 Compiled into the desktop shell and the Android shell (not the standalone daemon):
 
-- adler2 2.0.1 - 0BSD OR MIT OR Apache-2.0
 - aho-corasick 1.1.5 - Unlicense OR MIT
 - alloc-no-stdlib 3.0.0 - BSD-3-Clause
 - alloc-stdlib 0.3.0 - BSD-3-Clause
@@ -193,7 +206,6 @@ Compiled into the desktop shell and the Android shell (not the standalone daemon
 - cargo_metadata 0.19.2 - MIT
 - cfb 0.14.0 - MIT
 - cookie 0.18.2 - MIT OR Apache-2.0
-- crc32fast 1.5.2 - MIT OR Apache-2.0
 - crossbeam-channel 0.5.17 - MIT OR Apache-2.0
 - crossbeam-utils 0.8.23 - MIT OR Apache-2.0
 - cssparser 0.37.0 - MPL-2.0
@@ -212,11 +224,10 @@ Compiled into the desktop shell and the Android shell (not the standalone daemon
 - erased-serde 0.4.10 - MIT OR Apache-2.0
 - fastrand 2.5.0 - Apache-2.0 OR MIT
 - fdeflate 0.3.7 - MIT OR Apache-2.0
-- flate2 1.1.10 - MIT OR Apache-2.0
 - fnv 1.0.7 - Apache-2.0 / MIT
 - foldhash 0.2.0 - Zlib
 - glob 0.3.4 - MIT OR Apache-2.0
-- hashbrown 0.12.3 / 0.17.1 - MIT OR Apache-2.0
+- hashbrown 0.12.3 - MIT OR Apache-2.0
 - heck 0.5.0 - MIT OR Apache-2.0
 - html5ever 0.39.0 - MIT OR Apache-2.0
 - ico 0.5.0 - MIT
@@ -230,14 +241,14 @@ Compiled into the desktop shell and the Android shell (not the standalone daemon
 - ident_case 1.0.1 - MIT/Apache-2.0
 - idna 1.1.0 - MIT OR Apache-2.0
 - idna_adapter 1.2.2 - Apache-2.0 OR MIT
-- indexmap 1.9.3 / 2.14.2 - Apache-2.0 OR MIT
+- indexmap 1.9.3 - Apache-2.0 OR MIT
 - infer 0.22.0 - MIT
 - json-patch 4.2.0 - MIT/Apache-2.0
 - jsonptr 0.7.1 - MIT OR Apache-2.0
 - litemap 0.8.3 - Unicode-3.0
 - lock_api 0.4.14 - MIT OR Apache-2.0
 - markup5ever 0.39.0 - MIT OR Apache-2.0
-- miniz_oxide 0.8.9 / 0.9.1 - MIT OR Zlib OR Apache-2.0
+- miniz_oxide 0.8.9 - MIT OR Zlib OR Apache-2.0
 - new_debug_unreachable 1.0.6 - MIT
 - num-conv 0.2.2 - MIT OR Apache-2.0
 - open 5.4.4 - MIT
@@ -268,7 +279,6 @@ Compiled into the desktop shell and the Android shell (not the standalone daemon
 - serde_with 3.24.0 - MIT OR Apache-2.0
 - serialize-to-javascript 0.1.2 - MIT OR Apache-2.0
 - servo_arc 0.4.3 - MIT OR Apache-2.0
-- simd-adler32 0.3.10 - MIT
 - siphasher 1.0.4 - MIT OR Apache-2.0
 - stable_deref_trait 1.2.1 - MIT OR Apache-2.0
 - string_cache 0.9.0 - MIT OR Apache-2.0
