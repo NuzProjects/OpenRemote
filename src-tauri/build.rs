@@ -29,6 +29,15 @@ const COMMANDS: &[&str] = &[
     "browser_clear_site",
     "browser_open_external",
     "browser_reveal",
+    "browser_permission",
+    "browser_share",
+    "browser_save_file",
+    "browser_clear_data",
+    // The phone's own: desktop site, a private tab handed to agents, a
+    // link's download from its menu.
+    "browser_desktop_site",
+    "browser_share_with_agents",
+    "browser_download",
 ];
 
 fn main() {
