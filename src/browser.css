@@ -1,0 +1,474 @@
+/* The built-in browser: Chrome's arrangement in the app's own colours.
+   The page area is a placeholder; the shell draws the page over it. */
+
+.bw {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-app);
+}
+
+/* ---- tab strip ---- */
+
+.bw-tabs {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  min-width: 0;
+  padding: 6px 6px 0 8px;
+}
+
+.bw-tabs-scroll {
+  display: flex;
+  flex: 1;
+  align-items: flex-end;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.bw-tabs-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.bw-tab {
+  display: flex;
+  flex: 0 1 230px;
+  align-items: center;
+  gap: 8px;
+  min-width: 72px;
+  height: 34px;
+  padding: 0 6px 0 11px;
+  border-radius: 10px 10px 0 0;
+  color: var(--text-2);
+  font-size: 12.5px;
+  cursor: default;
+  user-select: none;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.bw-tab:hover {
+  background: var(--bg-hover);
+}
+
+.bw-tab.on {
+  background: #171b21;
+  color: var(--text-1);
+}
+
+.bw-tab-icon {
+  flex: none;
+  color: var(--text-3);
+}
+
+.bw-favicon,
+.bw-menu-icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  object-fit: contain;
+}
+
+.bw-menu-icon {
+  width: 14px;
+  height: 14px;
+}
+
+/* Loading: a ring that breathes (the app's one waiting motion); under
+   reduced motion, a still ring. */
+.bw-spinner {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.12);
+  border-top-color: var(--accent);
+  border-right-color: var(--accent);
+  border-radius: 50%;
+  animation: bw-breathe 1.2s ease-in-out infinite;
+}
+
+@keyframes bw-breathe {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.bw-tab-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bw-tab-close {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.bw-tab-close:hover {
+  background: var(--bg-active);
+  color: var(--text-1);
+}
+
+.bw-newtab {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin: 0 0 3px 2px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.bw-newtab:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.bw-tabsearch {
+  margin-bottom: 3px;
+}
+
+/* ---- toolbar ---- */
+
+.bw-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  background: #171b21;
+}
+
+.bw-btn {
+  position: relative;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.bw-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.bw-btn:disabled {
+  color: var(--text-3);
+  cursor: default;
+  opacity: 0.55;
+}
+
+.bw-btn.on {
+  background: var(--bg-active);
+  color: var(--text-1);
+}
+
+/* A download running: a dot on the downloads button. */
+.bw-btn.busy::after {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  content: '';
+}
+
+.bw-address {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 34px;
+  margin: 0 6px;
+  padding: 0 6px 0 4px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--bg-app);
+}
+
+.bw-address:focus-within {
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.bw-address input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  color: var(--text-1);
+  font: inherit;
+  font-size: 13.5px;
+}
+
+.bw-address input::placeholder {
+  color: var(--text-3);
+}
+
+.bw-site {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.bw-site:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.bw-site:disabled {
+  color: var(--text-3);
+  cursor: default;
+}
+
+.bw-site.insecure {
+  color: var(--accent);
+}
+
+.bw-zoom {
+  flex: none;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.bw-zoom:hover {
+  color: var(--text-1);
+}
+
+/* ---- find and device strips (in flow, so no menu covers the page) ---- */
+
+.bw-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--line);
+  background: #171b21;
+  font-size: 12.5px;
+}
+
+.bw-strip-icon {
+  flex: none;
+  color: var(--text-3);
+}
+
+.bw-strip-fill {
+  flex: 1;
+}
+
+.bw-find-input {
+  flex: 0 1 280px;
+  min-width: 0;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  outline: 0;
+  background: var(--bg-app);
+  color: var(--text-1);
+  font: inherit;
+}
+
+.bw-find-input:focus {
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.bw-find-count {
+  min-width: 72px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.bw-strip .bw-btn {
+  width: 28px;
+  height: 28px;
+}
+
+.bw-chip {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.bw-chip:hover {
+  color: var(--text-1);
+}
+
+.bw-chip.on {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: var(--bg-active);
+  color: var(--text-1);
+}
+
+.bw-size {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  color: var(--text-3);
+}
+
+.bw-size input {
+  width: 64px;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  outline: 0;
+  background: var(--bg-app);
+  color: var(--text-1);
+  font: inherit;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- page ---- */
+
+/* No border here: the page and its picture fill exactly this box, so no
+   sliver of it ever shows between them. Dark underneath (a page paints
+   its own white while it loads), so nothing white flashes either. */
+.bw-page {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--bg-app);
+}
+
+/* The page's stand-in while a menu covers it: always in the layout (so
+   its picture is decoded before it shows), visible only when on. */
+.bw-picture {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  visibility: hidden;
+  object-fit: cover;
+  object-position: top left;
+  pointer-events: none;
+}
+
+.bw-picture.on {
+  visibility: visible;
+}
+
+.bw-ntp {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 20vh;
+  background: var(--bg-app);
+}
+
+.bw-ntp-search {
+  position: relative;
+  width: min(600px, 100% - 32px);
+}
+
+.bw-ntp-icon {
+  position: absolute;
+  top: 50%;
+  left: 18px;
+  color: var(--text-3);
+  transform: translateY(-50%);
+}
+
+.bw-ntp-search input {
+  width: 100%;
+  height: 48px;
+  padding: 0 20px 0 48px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  outline: 0;
+  background: #171b21;
+  color: var(--text-1);
+  font: inherit;
+  font-size: 15px;
+}
+
+.bw-ntp-search input:focus {
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.bw-unavailable {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 100%;
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+/* Reduced motion, both ways: the system's setting and the app's own. */
+@media (prefers-reduced-motion: reduce) {
+  .bw-spinner {
+    animation: none;
+  }
+
+  .bw-tab,
+  .bw-btn {
+    transition: none;
+  }
+}
+
+html[data-reduce-motion] .bw-spinner {
+  animation: none;
+}
+
+html[data-reduce-motion] .bw-tab,
+html[data-reduce-motion] .bw-btn {
+  transition: none;
+}

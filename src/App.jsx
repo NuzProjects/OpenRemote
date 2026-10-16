@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import Sidebar from './Sidebar.jsx'
 import TitleBar from './TitleBar.jsx'
 import NewChat from './NewChat.jsx'
@@ -12,6 +12,8 @@ import MachinesView from './MachinesView.jsx'
 import AccountView from './AccountView.jsx'
 import MobileView from './MobileView.jsx'
 import MetricsView from './MetricsView.jsx'
+// Loaded on first use: the browser costs nothing until it is opened.
+const BrowserView = lazy(() => import('./BrowserView.jsx'))
 import { ConsoleProvider, useConsole } from './state/console.jsx'
 import { needsSignIn } from './cloud.js'
 import CloudNotices from './CloudNotices.jsx'
@@ -43,7 +45,7 @@ const OB_KEY = 'openremote-onboarded'
 const STORE_KEY = 'openremote-view-state'
 const MODE_KEY = 'openremote-mode'
 const SPLIT_KEY = 'openremote-split-layout'
-const STATIC_VIEWS = ['new', 'plugins', 'automations', 'machines', 'settings', 'account', 'mobile', 'metrics']
+const STATIC_VIEWS = ['new', 'plugins', 'automations', 'machines', 'settings', 'account', 'mobile', 'metrics', 'browser']
 
 // The mode the user left the app in. Local unless they chose Cloud, so a
 // first launch never asks anyone to sign in. A phone runs no chats of its
@@ -470,6 +472,11 @@ function Shell() {
     <MobileView onOpenChat={openSession} />
   ) : view === 'metrics' ? (
     <MetricsView />
+  ) : view === 'browser' ? (
+    // The browser is this device's, in Local and Cloud alike.
+    <Suspense fallback={null}>
+      <BrowserView />
+    </Suspense>
   ) : mode === 'cloud' && needsSignIn(cloud) ? (
     <CloudMode onBackToLocal={isMobile ? null : () => switchMode('local')} />
   ) : (

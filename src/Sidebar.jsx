@@ -13,6 +13,7 @@ import {
   Desktop,
   DeviceMobile,
   GearSix,
+  Globe,
   House,
   Lightning,
   MagnifyingGlass,
@@ -255,6 +256,11 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
             </button>
           )}
         </label>
+        {/* The browser is this device's own, in Local and Cloud alike. */}
+        <button className={`side-tile${active === 'browser' ? ' on' : ''}`} onClick={() => onSelect('browser')}>
+          <Globe size={17} />
+          Browser
+        </button>
         {/* Plugins and automations act on this computer, so they belong
             to Local; Machines belongs to Cloud. The tiles reveal and
             collapse with the mode switch (the grid-rows transition). */}
