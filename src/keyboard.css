@@ -273,3 +273,8 @@ html[data-reduce-motion] .kb-sheet {
 .kb-set .kb-group-label {
   padding-left: 0;
 }
+
+/* The Browser group says when its keys act. */
+.kb-set .kb-group-note {
+  margin: -6px 0 2px;
+}

@@ -8,6 +8,7 @@ import { chatFromSession, foldEvent, mergeSessionIntoChat, vanishedChatIds } fro
 import { isMobile, openExternal } from '../platform.js'
 import { loadArchived, saveArchived, withArchived } from '../archive.js'
 import { descendantsOf, isAlive } from '../team.js'
+import { learnHarnessNames } from '../harness-names.js'
 
 const ConsoleContext = createContext(null)
 
@@ -81,7 +82,9 @@ export function ConsoleProvider({ children }) {
   // words; a sign-in that settled re-reads them.
   const refreshCapabilities = useCallback(async () => {
     try {
-      setCapabilities((await api.capabilities()) ?? null)
+      const caps = (await api.capabilities()) ?? null
+      learnHarnessNames(caps?.harnesses)
+      setCapabilities(caps)
     } catch {
       /* the poll heals */
     }
@@ -165,6 +168,7 @@ export function ConsoleProvider({ children }) {
       if (cancelled) return
       if (cloudView.status === 'fulfilled') setCloud(cloudView.value)
       if (deviceList.status === 'fulfilled') setDevices(deviceList.value?.devices ?? [])
+      learnHarnessNames(caps?.harnesses)
       setCapabilities(caps)
       setSessions(list ?? [])
       setMachines(machineList ?? [])
@@ -425,6 +429,26 @@ export function ConsoleProvider({ children }) {
 
   const renameChat = useCallback(async (chatId, title) => api.rename(chatId, title), [api])
 
+  // Move a chat into one of its machine's projects (null: out of every
+  // project). The sidebar regroups at once; the open chat and the user's
+  // other devices hear it from the daemon's session.updated.
+  const moveChat = useCallback(
+    async (chatId, projectId) => {
+      const reply = await api.moveChat(chatId, projectId)
+      const session = reply?.result ?? null
+      if (session?.id === chatId) {
+        setSessions((current) => current.map((s) => (s.id === chatId ? session : s)))
+        setChats((current) =>
+          current[chatId]
+            ? { ...current, [chatId]: mergeSessionIntoChat(current[chatId], session) }
+            : current,
+        )
+      }
+      return session
+    },
+    [api],
+  )
+
   // The API of another of the user's devices, through this daemon.
   const apiFor = useCallback((deviceId) => api.device(deviceId), [api])
 
@@ -453,6 +477,7 @@ export function ConsoleProvider({ children }) {
       if (!deviceId) return capabilities
       try {
         const caps = await api.device(deviceId).capabilities()
+        learnHarnessNames(caps?.harnesses)
         setCapabilitiesByDevice((current) => ({ ...current, [deviceId]: caps }))
         return caps
       } catch {
@@ -917,13 +942,16 @@ export function ConsoleProvider({ children }) {
   const stagePlugin = useCallback(async (source) => api.stagePlugin(source), [api])
   const cancelStagedPlugin = useCallback(async (stageId) => api.cancelStagedPlugin(stageId), [api])
 
+  // `where` is who it is for: { scope, project } (the daemon's default is
+  // this machine). A plugin's harness joins or leaves the pickers, so
+  // capabilities refresh too.
   const installStagedPlugin = useCallback(
-    async (stageId) => {
-      const reply = await api.installStagedPlugin(stageId)
-      await refreshPlugins()
+    async (stageId, where) => {
+      const reply = await api.installStagedPlugin(stageId, where)
+      await Promise.all([refreshPlugins(), refreshCapabilities()])
       return reply
     },
-    [api, refreshPlugins],
+    [api, refreshPlugins, refreshCapabilities],
   )
 
   // A built-in harness turned off leaves every picker - the pickers read
@@ -939,9 +967,9 @@ export function ConsoleProvider({ children }) {
   const removePlugin = useCallback(
     async (id) => {
       await api.removePlugin(id)
-      await refreshPlugins()
+      await Promise.all([refreshPlugins(), refreshCapabilities()])
     },
-    [api, refreshPlugins],
+    [api, refreshPlugins, refreshCapabilities],
   )
 
   // ---- MCP servers ----
@@ -1105,6 +1133,7 @@ export function ConsoleProvider({ children }) {
       commandsFor,
       filesFor,
       renameChat,
+      moveChat,
       capabilitiesFor,
       refreshCloud,
       signInCloud,
@@ -1182,6 +1211,7 @@ export function ConsoleProvider({ children }) {
       commandsFor,
       filesFor,
       renameChat,
+      moveChat,
       capabilitiesFor,
       refreshCloud,
       signInCloud,

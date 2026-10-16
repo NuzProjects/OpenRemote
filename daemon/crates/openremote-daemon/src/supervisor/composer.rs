@@ -177,23 +177,21 @@ impl Supervisor {
                 "'{harness}' is not installed on this machine"
             )));
         };
-        let cwd = workspace.unwrap_or_else(Self::home_dir);
-        let (plugins, data_dir) = self.with_store(|s| {
-            let plugins: Vec<openremote_core::InstalledPlugin> = s
-                .installed_plugins()
-                .into_iter()
-                .filter(|p| p.enabled)
-                .cloned()
-                .collect();
-            (plugins, s.dir().to_path_buf())
+        // The plugins a chat here gets: this machine's and, in a project,
+        // that project's.
+        let active = self.with_store(|s| {
+            let data_dir = s.dir().to_path_buf();
+            crate::plugin_runtime::scope::active(s, &data_dir, workspace.as_deref())
         });
-        // Each enabled plugin: its id, its folder, the name its commands carry.
-        let folders: Vec<(String, PathBuf, String)> = plugins
-            .iter()
-            .map(|p| {
-                let dir = crate::plugins::plugin_dir(&data_dir, &p.marketplace, &p.name);
-                let prefix = manifest_name(&dir).unwrap_or_else(|| p.name.clone());
-                (p.id(), dir, prefix)
+        let cwd = workspace.unwrap_or_else(Self::home_dir);
+        let plugins: Vec<openremote_core::InstalledPlugin> =
+            active.iter().map(|a| a.plugin.clone()).collect();
+        // Each plugin: its id, its folder, the name its commands carry.
+        let folders: Vec<(String, PathBuf, String)> = active
+            .into_iter()
+            .map(|a| {
+                let prefix = manifest_name(&a.dir).unwrap_or_else(|| a.plugin.name.clone());
+                (a.plugin.id(), a.dir, prefix)
             })
             .collect();
         let runs_plugins = backend.runs_plugins();
@@ -354,9 +352,15 @@ impl Supervisor {
                     "this chat was not pointed at {wanted}; the user points a chat at another with @"
                 ))
             })?;
-        let chat = self.session(&target)?;
+        self.condensed_chat(&target)
+    }
+
+    /// A chat condensed to its messages, as an agent or a plugin with the
+    /// power to read chats is handed it.
+    pub fn condensed_chat(&self, id: &SessionId) -> Result<String, SupervisorError> {
+        let chat = self.session(id)?;
         let events = self
-            .with_store(|s| s.events_after(&target, None))
+            .with_store(|s| s.events_after(id, None))
             .map_err(store_error)?;
         Ok(condensed(&chat, &events, None))
     }
@@ -535,6 +539,25 @@ fn build_view(
 /// the oldest part is cut - the end of a chat is the part an agent
 /// pointed at it most likely needs.
 pub(super) fn condensed(chat: &Session, events: &[Event], tail: Option<usize>) -> String {
+    format!(
+        "Chat \"{}\" ({}{}), id {}\n{}",
+        chat.title.as_deref().unwrap_or("untitled"),
+        chat.harness,
+        chat.model
+            .as_deref()
+            .map(|m| format!(", {m}"))
+            .unwrap_or_default(),
+        chat.id,
+        transcript(events, READ_LIMIT, tail)
+    )
+}
+
+/// A chat's messages in order, each tool call a one-line note, a message
+/// another agent sent saying so. With `tail`, only the last that many
+/// messages. Past `limit` bytes the oldest part is cut - the end of a chat
+/// is the part a reader most likely needs. Empty when the chat has no
+/// messages.
+pub(super) fn transcript(events: &[Event], limit: usize, tail: Option<usize>) -> String {
     // Each message starts its own part; a tool note belongs to the part
     // before it, so a tail keeps the notes that came with its messages.
     let mut parts: Vec<String> = Vec::new();
@@ -562,24 +585,14 @@ pub(super) fn condensed(chat: &Session, events: &[Event], tail: Option<usize>) -
         parts.drain(..from);
     }
     let mut body = parts.concat();
-    if body.len() > READ_LIMIT {
-        let mut cut = body.len() - READ_LIMIT;
+    if body.len() > limit {
+        let mut cut = body.len() - limit;
         while !body.is_char_boundary(cut) {
             cut += 1;
         }
         body = format!("[earlier messages cut]\n{}", &body[cut..]);
     }
-    format!(
-        "Chat \"{}\" ({}{}), id {}\n{}",
-        chat.title.as_deref().unwrap_or("untitled"),
-        chat.harness,
-        chat.model
-            .as_deref()
-            .map(|m| format!(", {m}"))
-            .unwrap_or_default(),
-        chat.id,
-        body
-    )
+    body
 }
 
 #[cfg(test)]

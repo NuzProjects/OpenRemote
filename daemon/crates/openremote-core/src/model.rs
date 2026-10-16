@@ -57,6 +57,10 @@ pub struct Harness {
     /// has no words at all.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_permission: Option<String>,
+    /// The installed plugin that drives it (`name@marketplace`); none for
+    /// the built-in six.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
@@ -142,6 +146,12 @@ pub struct Session {
     /// its agent may read through OpenRemote's read-a-chat tool.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mentioned_chats: Vec<SessionId>,
+    /// The chat moved to a folder its harness's own conversation couldn't
+    /// follow it to. Its next start opens a fresh conversation there, and
+    /// its next message carries the chat's events before this seq,
+    /// condensed, as context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub carry_transcript: Option<u64>,
     /// Who started this chat, when another chat's agent did: it is a worker
     /// in that chat's team. Set when the chat is created and never changed,
     /// so a copy on another device shows the same tree. A device that
@@ -312,6 +322,13 @@ pub struct InstalledPlugin {
     pub powers: Vec<PluginPower>,
     pub source: PluginSource,
     pub scope: PluginScope,
+    /// The project a Project or Project-local install belongs to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<ProjectId>,
+    /// What it adds to OpenRemote, as approved at install: harnesses,
+    /// agent tools, composer inputs, views, its settings.
+    #[serde(default)]
+    pub contributes: PluginContributions,
     #[serde(default = "default_true")]
     pub enabled: bool,
     pub installed_at: i64,
@@ -328,9 +345,248 @@ pub const LOCAL_MARKETPLACE: &str = "local";
 
 impl InstalledPlugin {
     /// `name@marketplace` - the plugin's id on the machine, in routes and
-    /// in the store.
+    /// in the store. An install for one project carries the project too
+    /// (`name@marketplace~<project>`), so the same plugin can serve two
+    /// projects side by side.
+    pub fn id(&self) -> String {
+        plugin_id(&self.name, &self.marketplace, self.scope, self.project)
+    }
+}
+
+/// A plugin's id from its parts (see `InstalledPlugin::id`).
+pub fn plugin_id(
+    name: &str,
+    marketplace: &str,
+    scope: PluginScope,
+    project: Option<ProjectId>,
+) -> String {
+    match project {
+        Some(project) if scope.is_project() => format!("{name}@{marketplace}~{project}"),
+        _ => format!("{name}@{marketplace}"),
+    }
+}
+
+/// What a plugin adds to OpenRemote - its openremote.json's `contributes`,
+/// read and checked at install. Every list is always present on the wire.
+#[derive(Clone, Serialize, Deserialize, Debug, Default, PartialEq)]
+pub struct PluginContributions {
+    /// Harnesses it drives, which pickers offer beside the built-in six.
+    #[serde(default)]
+    pub harnesses: Vec<HarnessContribution>,
+    /// Tools a chat's agent can call (through OpenRemote's MCP server).
+    #[serde(default)]
+    pub tools: Vec<ToolContribution>,
+    /// Buttons in a composer's bottom row.
+    #[serde(default)]
+    pub composer_inputs: Vec<ComposerInputContribution>,
+    /// Pages of its own: a sidebar tile, a Machines section, a Settings page.
+    #[serde(default)]
+    pub views: Vec<ViewContribution>,
+    /// The values the user sets for it (Settings > Plugins > its name).
+    #[serde(default)]
+    pub settings: Vec<SettingField>,
+}
+
+impl PluginContributions {
+    pub fn is_empty(&self) -> bool {
+        self.harnesses.is_empty()
+            && self.tools.is_empty()
+            && self.composer_inputs.is_empty()
+            && self.views.is_empty()
+            && self.settings.is_empty()
+    }
+}
+
+/// A harness a plugin drives through OpenRemote's plugin protocol. Its
+/// words (models, permission modes) are its own, as with the built-in six.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct HarnessContribution {
+    /// Its id in pickers and in each chat's record; unique on a machine.
+    pub id: String,
+    /// How pickers name it.
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// The models it offers. Empty: the plugin lists them when asked, or
+    /// the model slot stays reserved.
+    #[serde(default)]
+    pub models: Vec<PluginModel>,
+    /// Its own permission words; empty means no permission picker.
+    #[serde(default)]
+    pub permission_modes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_permission: Option<String>,
+    /// It has a fast mode of its own.
+    #[serde(default)]
+    pub fast: bool,
+    /// It runs one prompt at a time (a CLI run per prompt): a message
+    /// sent while a turn runs waits in the queue.
+    #[serde(default)]
+    pub one_prompt_at_a_time: bool,
+    /// A message sent while a turn runs lands inside that turn.
+    #[serde(default)]
+    pub steers_mid_turn: bool,
+}
+
+/// One model a plugin harness offers, in its own words.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct PluginModel {
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    /// Its effort words, when it has any.
+    #[serde(default)]
+    pub efforts: Vec<String>,
+    /// What a fresh chat runs when nothing is picked.
+    #[serde(default)]
+    pub default: bool,
+}
+
+/// One tool a plugin gives a chat's agent. The agent sees it as
+/// `<plugin>__<name>` on OpenRemote's MCP server.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct ToolContribution {
+    pub name: String,
+    pub description: String,
+    /// A JSON Schema object for the tool's arguments (MCP's own spelling,
+    /// `inputSchema`, reads too).
+    #[serde(default = "object_schema", alias = "inputSchema")]
+    pub input_schema: serde_json::Value,
+    /// The plugin says the tool only reads. Shown to the agent as MCP's
+    /// read-only hint; it never skips the chat's own approval.
+    #[serde(default)]
+    pub read_only: bool,
+    /// How long a call may take before the agent is told it timed out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
+}
+
+fn object_schema() -> serde_json::Value {
+    serde_json::json!({"type": "object"})
+}
+
+/// A button a plugin adds to the composer's bottom row. Its `entry` is a
+/// page the console runs in a sandboxed frame.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct ComposerInputContribution {
+    pub id: String,
+    pub label: String,
+    /// A Phosphor icon name, as the console draws its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<String>,
+}
+
+/// A page a plugin adds, run in a sandboxed frame from its own files.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct ViewContribution {
+    pub id: String,
+    pub title: String,
+    /// Where it shows: `sidebar` (a tile under Plugins), `machines` (a
+    /// section of the Machines view) or `settings` (its Settings page).
+    pub place: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// The page, a path inside the plugin's folder.
+    pub entry: String,
+}
+
+/// One value the user sets for a plugin.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct SettingField {
+    pub key: String,
+    #[serde(rename = "type")]
+    pub kind: SettingKind,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub help: Option<String>,
+    /// Never set for a secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<serde_json::Value>,
+    /// The choices of an `enum`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<SettingOption>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<f64>,
+    /// The plugin can't run until this one is set.
+    #[serde(default)]
+    pub required: bool,
+    /// A hint shown in the empty field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placeholder: Option<String>,
+    /// For a secret: the setting holding the one address it may be sent to.
+    /// The daemon writes the secret only into a request to that address, so
+    /// a plugin can't send a key anywhere the user didn't type.
+    #[serde(default, alias = "sendTo", skip_serializing_if = "Option::is_none")]
+    pub send_to: Option<String>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum SettingKind {
+    String,
+    /// Stored privately and never shown again - only whether it is set.
+    Secret,
+    Boolean,
+    Number,
+    Enum,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct SettingOption {
+    pub value: String,
+    pub label: String,
+}
+
+/// A Global plugin as the whole account knows it: installed once with the
+/// user's approval, then on every device. Devices trade these records over
+/// Cloud and keep the latest write; one with `removed` set is an
+/// uninstall that every device follows. Turning a plugin off stays on
+/// the device that did it.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct GlobalPluginRecord {
+    pub name: String,
+    pub marketplace: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub runtime: PluginRuntime,
+    /// What the user approved. A copy that asks for more is refused.
+    #[serde(default)]
+    pub powers: Vec<PluginPower>,
+    #[serde(default)]
+    pub contributes: PluginContributions,
+    pub source: PluginSource,
+    /// The plugin folder's content hash, exactly as approved: every device
+    /// installs these bytes or nothing.
+    pub resolved: String,
+    /// What the approving device fetched (a commit, a digest, a version):
+    /// each device's own record of it, so updates read alike everywhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetched: Option<String>,
+    /// When and where it last changed - the latest write wins.
+    pub at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<crate::ids::DeviceId>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub removed: bool,
+}
+
+impl GlobalPluginRecord {
     pub fn id(&self) -> String {
         format!("{}@{}", self.name, self.marketplace)
+    }
+
+    /// Whether `self` is a later write than `other`: by time, then by
+    /// device, so two devices always agree on the winner.
+    pub fn newer_than(&self, other: &GlobalPluginRecord) -> bool {
+        (self.at, self.by.map(|d| d.to_string())) > (other.at, other.by.map(|d| d.to_string()))
     }
 }
 
@@ -453,12 +709,25 @@ pub enum PluginSource {
     },
 }
 
-/// Who a plugin is installed for. This machine only, for now; Global,
-/// Project-local and Project arrive with the scopes.
+/// Who a plugin is installed for.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginScope {
+    /// Every device of the account: approved once, installed on each.
+    Global,
+    /// This machine only.
     Machine,
+    /// One project on this machine, its files kept outside the repo.
+    ProjectLocal,
+    /// One project, its files in the repo (`.openremote/plugins/`), so
+    /// whoever clones it finds it - and approves it before it runs.
+    Project,
+}
+
+impl PluginScope {
+    pub fn is_project(self) -> bool {
+        matches!(self, PluginScope::ProjectLocal | PluginScope::Project)
+    }
 }
 
 /// What makes a rule fire. The kinds with real event sources - the clock

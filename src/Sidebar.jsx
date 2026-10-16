@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   Archive,
   ArrowDown,
@@ -33,11 +34,19 @@ import ContextMenu from './ContextMenu.jsx'
 import DeleteChatModal from './DeleteChatModal.jsx'
 import { usePrivacyMode } from './privacy.js'
 import { useHint, useShortcut } from './keyboard.jsx'
+import { usePlugins } from './plugins-host.jsx'
+import { PluginIcon } from './plugin-icons.jsx'
+import { useMoveChat } from './useMoveChat.jsx'
+import { useChatDrag } from './useChatDrag.js'
+import { wouldMove } from './move-chat.js'
 import './sidebar.css'
+import './move.css'
 
 export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit, onAddProject, onNewChatIn, onReveal }) {
   const { connection, sessions, chats, devices, thisDevice, projects, removeProject, archived, setChatArchived, deleteChat } = useConsole()
   const privacy = usePrivacyMode()
+  // The views enabled plugins add: the Plugins group's tiles.
+  const pluginViews = usePlugins()?.views ?? []
   const [query, setQuery] = useState('')
   const [collapsed, setCollapsed] = useState({})
   const [menu, setMenu] = useState(null)
@@ -57,6 +66,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
         workspace: session.workspace ?? null,
         updatedAt: session.updated_at ?? 0,
         device: elsewhere ? deviceName(devices, session.executor) : null,
+        executor: session.executor ?? null,
         // A copy's last status is stale while its device is away.
         offline: elsewhere && !device?.online,
         synced: Boolean(session.executor),
@@ -78,6 +88,31 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   const toggleProject = (id) => {
     setCollapsed((c) => ({ ...c, [id]: !c[id] }))
   }
+
+  // Moving chats between projects: from a chat's menu, or by dragging a
+  // chat that runs on this computer onto one of its projects (or onto
+  // Chats, for none). A phone has the menu only.
+  const move = useMoveChat()
+  const listRef = useRef(null)
+  const projectById = (id) => (projects ?? []).find((p) => p.id === id) ?? null
+  const targetOf = (target) => (target === '' ? null : projectById(target))
+  const { drag, label, start } = useChatDrag({
+    scroller: listRef,
+    accepts: (row, target) =>
+      (target === '' || projectById(target) != null) &&
+      wouldMove(projects, row.workspace, targetOf(target)),
+    onDrop: (row, target) => move.moveTo(row, targetOf(target)),
+  })
+  // While a chat is dragged, the projects with no chats yet show too, so
+  // a drop can give one its first chat.
+  const shownProjects = drag
+    ? [
+        ...grouped.projects,
+        ...(projects ?? [])
+          .filter((p) => !grouped.projects.some((g) => g.project.id === p.id))
+          .map((project) => ({ project, items: [] })),
+      ]
+    : grouped.projects
 
   // The keyboard's walk through the list goes in the order it reads:
   // each open project's chats, then the flat Chats list. A collapsed
@@ -130,6 +165,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
           ]
         : []),
       { divider: true },
+      move.menuItem(row),
       { label: 'Archive', icon: <Archive size={14} />, onSelect: () => archive(row.id) },
       // The daemon deletes synced chats only (it removes them from every
       // device); a private chat has no delete.
@@ -151,6 +187,24 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
     ]
   }
 
+  // Right-click on a plugin's tile: open it, or open it in a new split.
+  const viewMenuItems = (item) => {
+    const split = (dir, before) => () => onSplit(item.key, dir, before)
+    return [
+      { label: 'Open', icon: <PluginIcon name={item.icon} size={14} />, onSelect: () => onSelect(item.key) },
+      ...(onSplit && !isMobile
+        ? [
+            { divider: true },
+            { header: 'Open in a new split' },
+            { label: 'To the left', icon: <ArrowLeft size={14} />, onSelect: split('row', true) },
+            { label: 'To the right', icon: <ArrowRight size={14} />, onSelect: split('row', false) },
+            { label: 'Above', icon: <ArrowUp size={14} />, onSelect: split('col', true) },
+            { label: 'Below', icon: <ArrowDown size={14} />, onSelect: split('col', false) },
+          ]
+        : []),
+    ]
+  }
+
   // The Mobile tile's phone fact: the phones of this Cloud and whether
   // one is reachable. The status is color, not words - a reachable phone
   // turns the tile green with a black glyph, away phones leave a hollow
@@ -161,9 +215,11 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   const chatRow = (row) => (
     <div
       key={row.id}
-      className="chat-item"
+      className={`chat-item${drag?.item.id === row.id ? ' sb-dragged' : ''}`}
       onContextMenu={(e) => {
         e.preventDefault()
+        // A chat on another machine moves among that machine's projects.
+        move.prepare(row)
         setMenu({ x: e.clientX, y: e.clientY, row })
       }}
     >
@@ -171,6 +227,11 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
         className={`chat-row${row.id === active ? ' active' : ''}`}
         data-status={row.status}
         onClick={() => onSelect(row.id)}
+        onPointerDown={
+          // Only a chat that runs here can be dropped on this computer's
+          // projects; one on another machine moves from its menu.
+          !isMobile && !row.device ? start(row) : undefined
+        }
       >
         {/* the harness's mark leads - every harness, one
             sidebar, the at-a-glance signal of which agent owns
@@ -291,7 +352,31 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
         </div>
       </div>
 
-      <nav className="sb-list" aria-label="Projects and chats">
+      <nav className="sb-list" aria-label={pluginViews.length > 0 ? 'Plugins, projects and chats' : 'Projects and chats'} ref={listRef}>
+        {/* The views plugins add, each a tile that opens in a pane. A
+            plugin runs in this console, so the group shows in Local and
+            Cloud alike; with no such plugin there is no group. */}
+        {pluginViews.length > 0 && (
+          <div className="sb-plugins" role="group" aria-label="Plugins">
+            <div className="section-title sb-plugins-title">Plugins</div>
+            {pluginViews.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                className={`sb-plugin-row${item.key === active ? ' active' : ''}`}
+                title={item.title === item.pluginName ? item.title : `${item.title} (${item.pluginName})`}
+                onClick={() => onSelect(item.key)}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  setMenu({ x: e.clientX, y: e.clientY, view: item })
+                }}
+              >
+                <PluginIcon name={item.icon} size={15} />
+                <span className="sb-plugin-name">{item.title}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <div className="section-title sb-projects-head">
           Projects
           {/* The one way a folder becomes a project - the same flow the
@@ -305,15 +390,19 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
             <Plus size={12} weight="bold" />
           </button>
         </div>
-        {grouped.projects.length === 0 && (
+        {shownProjects.length === 0 && (
           <p className="sb-empty sb-projects-empty">
             No projects yet. <button className="sb-empty-add" onClick={onAddProject}>Add a project</button> to group its chats here.
           </p>
         )}
-        {grouped.projects.map(({ project, items }) => {
+        {shownProjects.map(({ project, items }) => {
           const isCollapsed = !!collapsed[project.id]
           return (
-            <section key={project.id} className="project">
+            <section
+              key={project.id}
+              className={`project${drag?.over === project.id ? ' sb-drop-target' : ''}`}
+              data-drop={project.id}
+            >
               <button
                 className="project-head"
                 onClick={() => toggleProject(project.id)}
@@ -351,11 +440,15 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
           )
         })}
 
-        <div className="section-title sb-chats-title">Chats</div>
-        {grouped.projects.length > 0 && grouped.flat.length === 0 && (
-          <p className="sb-empty">No chats outside projects.</p>
-        )}
-        {grouped.flat.map(chatRow)}
+        {/* The flat Chats list is a drop target too: a chat dropped here
+            leaves its project and works in the home folder. */}
+        <div className={drag?.over === '' ? 'sb-drop-target' : undefined} data-drop="">
+          <div className="section-title sb-chats-title">Chats</div>
+          {grouped.projects.length > 0 && grouped.flat.length === 0 && (
+            <p className="sb-empty">No chats outside projects.</p>
+          )}
+          {grouped.flat.map(chatRow)}
+        </div>
 
         {rows.length === 0 && (
           <p className="sb-empty">
@@ -443,8 +536,22 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
         </div>
       </footer>
       {menu && (
-        <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.row)} onClose={() => setMenu(null)} />
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={menu.view ? viewMenuItems(menu.view) : menuItems(menu.row)}
+          onClose={() => setMenu(null)}
+        />
       )}
+      {drag &&
+        createPortal(
+          <div ref={label} className="sb-drag-label" style={{ left: drag.x, top: drag.y }} aria-hidden="true">
+            {drag.item.harness && <HarnessMark harness={drag.item.harness} size={13} />}
+            <span className="pv">{drag.item.title}</span>
+          </div>,
+          document.body,
+        )}
+      {move.modal}
       {deleting && (
         <DeleteChatModal
           title={deleting.title}

@@ -24,7 +24,7 @@ import {
 } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
 import { useKeyboard, isMac } from './keyboard.jsx'
-import { ACTIONS, comboFromEvent, comboLabel, rankMatches } from './shortcuts.js'
+import { CATALOG, comboFromEvent, comboLabel, rankMatches } from './shortcuts.js'
 import { activeSessions } from './archive.js'
 import { harnessName } from './harness-names.js'
 import { HarnessMark } from './brand-marks.jsx'
@@ -65,7 +65,7 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
   // Everything the palette can offer right now, as rows.
   const everything = useMemo(() => {
     const keys = (id) => comboLabel(kb.bindings[id], isMac)
-    const actions = ACTIONS.filter((a) => a.id !== 'palette' && kb.available(a.id)).map((a) => ({
+    const actions = CATALOG.filter((a) => a.id !== 'palette' && kb.available(a.id)).map((a) => ({
       key: `action:${a.id}`,
       section: a.id.startsWith('view-') ? 'Views' : 'Actions',
       name: a.label,

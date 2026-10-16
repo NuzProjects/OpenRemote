@@ -708,6 +708,7 @@ mod tests {
             queue_paused: false,
             mentioned_chats: Vec::new(),
             parent: None,
+            carry_transcript: None,
         };
         let private = session(None);
         let mut synced = session(Some(DeviceId::new()));

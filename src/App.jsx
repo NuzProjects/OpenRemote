@@ -14,6 +14,9 @@ import MobileView from './MobileView.jsx'
 import MetricsView from './MetricsView.jsx'
 // Loaded on first use: the browser costs nothing until it is opened.
 const BrowserView = lazy(() => import('./BrowserView.jsx'))
+// The phone's browser is its own layout (Chrome Android's), a chunk of its
+// own so the desktop never loads it and the phone never loads the desktop's.
+const BrowserPhone = lazy(() => import('./BrowserPhone.jsx'))
 import { ConsoleProvider, useConsole } from './state/console.jsx'
 import { needsSignIn } from './cloud.js'
 import CloudNotices from './CloudNotices.jsx'
@@ -28,7 +31,11 @@ import CommandPalette from './CommandPalette.jsx'
 import ShortcutSheet from './ShortcutSheet.jsx'
 import ViewPopup from './ViewPopup.jsx'
 import { POPUP_VIEWS, onPopup } from './popups.js'
+import { useMoveChat } from './useMoveChat.jsx'
 import { KeyboardProvider, useKeyboard, useShortcut } from './keyboard.jsx'
+import { PluginProvider, usePlugins } from './plugins-host.jsx'
+import PluginView from './PluginView.jsx'
+import { isPluginView, settingsAnchor } from './plugin-runtime.js'
 import {
   BROWSER,
   MAX_PANES,
@@ -75,7 +82,10 @@ function loadViewState(sessions) {
   } catch {
     saved = null
   }
-  const known = new Set([...STATIC_VIEWS, ...sessions.map((s) => s.id)])
+  const ids = new Set([...STATIC_VIEWS, ...sessions.map((s) => s.id)])
+  // A plugin's view is known by its shape: the plugin list may not have
+  // answered yet, and its pane says so if the view is gone.
+  const known = { has: (v) => ids.has(v) || isPluginView(v) }
   const hashView = location.hash.replace(/^#/, '')
   const fromHash = known.has(hashView) ? hashView : null
   let history
@@ -102,7 +112,7 @@ function loadLayout() {
   }
 }
 
-const isChatView = (v) => !STATIC_VIEWS.includes(v)
+const isChatView = (v) => !STATIC_VIEWS.includes(v) && !isPluginView(v)
 
 function Shell() {
   const { sessions, chats, connection, ensureChat, cloud, watchChats, setChatArchived } = useConsole()
@@ -295,8 +305,9 @@ function Shell() {
   }
 
   // The sidebar's click goes where the user is looking: the focused pane
-  // when that is a split pane and the target is a chat or New chat; every
-  // other view (plugins, settings, ...) belongs to the primary pane.
+  // when that is a split pane and the target is a chat, a plugin's view or
+  // New chat; every other view (plugins, settings, ...) belongs to the
+  // primary pane.
   const focused = leafById(layout, layout.focus)
   const openInFocus = (id) => {
     // One pane holds the browser: where a split pane has it, that pane
@@ -306,7 +317,7 @@ function Shell() {
       setLayout((l) => focusLeaf(l, holder.id))
       return
     }
-    if (focused?.view !== null && (id === 'new' || isChatView(id))) {
+    if (focused?.view !== null && (id === 'new' || isChatView(id) || isPluginView(id))) {
       const session = (sessions ?? []).find((s) => s.id === id)
       if (session) ensureChat(session)
       setLayout((l) => setLeafView(l, focused.id, id))
@@ -418,6 +429,7 @@ function Shell() {
   // and act on the chat it shows. Text, links and fields keep the
   // browser's own menu (copy, paste, spelling).
   const [paneMenu, setPaneMenu] = useState(null)
+  const move = useMoveChat()
   const onMainContextMenu = (e) => {
     if (isMobile) return
     const t = e.target
@@ -426,6 +438,10 @@ function Shell() {
     const leafId = t.closest?.('[data-leaf-id]')?.dataset.leafId ?? layout.focus
     e.preventDefault()
     setLayout((l) => focusLeaf(l, leafId))
+    // The pane's chat may run on another machine: its projects are asked
+    // for as the menu opens.
+    const shown = leafById(layout, leafId)?.view ?? view
+    if (chats[shown]) move.prepare(chats[shown])
     setPaneMenu({ x: e.clientX, y: e.clientY, leafId })
   }
 
@@ -456,6 +472,7 @@ function Shell() {
     if (isChatView(v) && title) {
       items.push(
         { divider: true },
+        move.menuItem(chats[v]),
         { label: 'Archive chat', icon: <Archive size={14} />, hint: kb.label('archive'), onSelect: () => archiveFrom(leaf, v) },
         {
           label: 'Copy chat title',
@@ -554,6 +571,24 @@ function Shell() {
   }
   const focusPrimary = () =>
     setLayout((l) => focusLeaf(l, leaves(l.root).find((p) => p.view === null).id))
+  // A plugin opens its own view (ui.openView) where the sidebar would, and
+  // its part of Settings (ui.openSettings, the Installed tab's Settings).
+  // Set on every render: the handlers read this render's layout.
+  const setPluginNavigation = usePlugins()?.setNavigation
+  useEffect(() => {
+    setPluginNavigation?.({
+      openView: (key) => openInFocus(key),
+      openSettings: (pluginId) => {
+        goView('settings')
+        // Once Settings is on screen, the plugin's own part scrolls in.
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() =>
+            document.getElementById(settingsAnchor(pluginId))?.scrollIntoView({ block: 'start' }),
+          ),
+        )
+      },
+    })
+  })
   useShortcut('new-chat', () => openInFocus('new'), desk)
   useShortcut('palette', () => setPalette(true), desk)
   useShortcut('cheat-sheet', () => setSheet(true), desk)
@@ -606,13 +641,16 @@ function Shell() {
   ) : view === 'browser' ? (
     // The browser is this device's, in Local and Cloud alike.
     <Suspense fallback={null}>
-      <BrowserView />
+      {isMobile ? <BrowserPhone /> : <BrowserView focused={primaryFocused} />}
     </Suspense>
   ) : view === 'plugins' ? (
     // Plugins and automations are this computer's: no Cloud sign-in needed.
     <PluginsView />
   ) : view === 'automations' ? (
     <AutomationsView onOpenChat={openSession} />
+  ) : isPluginView(view) ? (
+    // A plugin's view runs in this console, in Local and Cloud alike.
+    <PluginView viewKey={view} />
   ) : mode === 'cloud' && needsSignIn(cloud) ? (
     <CloudMode onBackToLocal={isMobile ? null : () => switchMode('local')} />
   ) : (
@@ -639,10 +677,12 @@ function Shell() {
     )
   )
 
+  const pluginViews = usePlugins()?.views
   const paneLabel = (leaf) => {
     const v = leaf.view ?? view
     if (v === 'new') return 'New chat'
     if (STATIC_VIEWS.includes(v)) return v[0].toUpperCase() + v.slice(1)
+    if (isPluginView(v)) return pluginViews?.find((p) => p.key === v)?.title ?? 'Plugin'
     return chats[v]?.title ?? 'Chat'
   }
 
@@ -655,10 +695,11 @@ function Shell() {
       // the same way.
       return (
         <Suspense fallback={null}>
-          <BrowserView />
+          <BrowserView focused={leaf.id === layout.focus} />
         </Suspense>
       )
     }
+    if (isPluginView(leaf.view)) return <PluginView viewKey={leaf.view} />
     if (leaf.view === 'new') {
       return (
         <NewChat
@@ -729,6 +770,7 @@ function Shell() {
               onClose={() => setPaneMenu(null)}
             />
           )}
+          {move.modal}
           {palette && (
             <CommandPalette
               recentChatIds={recentChatIds}
@@ -782,11 +824,13 @@ export default function App() {
   return (
     <ConsoleProvider>
       <KeyboardProvider>
-        <div className="app">
-          <Shell />
-          {/* What becomes of a lead's workers when it is archived or deleted. */}
-          <LeadWorkersModal />
-        </div>
+        <PluginProvider>
+          <div className="app">
+            <Shell />
+            {/* What becomes of a lead's workers when it is archived or deleted. */}
+            <LeadWorkersModal />
+          </div>
+        </PluginProvider>
       </KeyboardProvider>
     </ConsoleProvider>
   )
