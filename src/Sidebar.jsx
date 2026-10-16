@@ -39,8 +39,10 @@ import { PluginIcon } from './plugin-icons.jsx'
 import { useMoveChat } from './useMoveChat.jsx'
 import { useChatDrag } from './useChatDrag.js'
 import { wouldMove } from './move-chat.js'
+import { rolledStatus } from './team.js'
 import './sidebar.css'
 import './move.css'
+import './team.css'
 
 export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit, onAddProject, onNewChatIn, onReveal }) {
   const { connection, sessions, chats, devices, thisDevice, projects, removeProject, archived, setChatArchived, deleteChat } = useConsole()
@@ -51,6 +53,8 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   const [collapsed, setCollapsed] = useState({})
   const [menu, setMenu] = useState(null)
   const [deleting, setDeleting] = useState(null)
+  // The leads whose workers are folded away (open by default).
+  const [folded, setFolded] = useState({})
 
   // Local: everything that runs on this computer. Cloud: every synced chat,
   // named by the device it runs on when that isn't this one.
@@ -70,6 +74,9 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
         // A copy's last status is stale while its device is away.
         offline: elsewhere && !device?.online,
         synced: Boolean(session.executor),
+        // The chat that started this one, when its agent did.
+        parent: session.parent?.chat ?? null,
+        spawnedAt: session.parent?.spawned_at ?? 0,
       }
     })
   }, [sessions, archived, chats, mode, devices, thisDevice])
@@ -81,9 +88,38 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
     return sorted.filter((c) => c.title.toLowerCase().includes(q))
   }, [rows, query])
 
+  // A worker nests under the chat that started it, when that chat is on
+  // the list: the lists below hold the chats that stand on their own, and
+  // each lead carries its workers (oldest first). A worker whose lead is
+  // archived, filtered out or gone stands on its own.
+  const nest = useMemo(() => {
+    const here = new Set(visible.map((r) => r.id))
+    const kids = new Map()
+    const top = []
+    for (const row of visible) {
+      if (row.parent && row.parent !== row.id && here.has(row.parent)) {
+        const list = kids.get(row.parent) ?? []
+        list.push(row)
+        kids.set(row.parent, list)
+      } else {
+        top.push(row)
+      }
+    }
+    for (const list of kids.values()) list.sort((a, b) => a.spawnedAt - b.spawnedAt)
+    return { top, kids }
+  }, [visible])
+
   // The two sections: registered projects with their chats, then the flat
   // Chats list - every chat that belongs to no project.
-  const grouped = useMemo(() => sections(projects, visible), [projects, visible])
+  const grouped = useMemo(() => sections(projects, nest.top), [projects, nest.top])
+
+  // What a lead's dot says of everything under it as well as itself:
+  // waiting beats failed beats running.
+  const rolled = (row) =>
+    rolledStatus(
+      row.status,
+      (nest.kids.get(row.id) ?? []).map((kid) => rolled(kid)),
+    )
 
   const toggleProject = (id) => {
     setCollapsed((c) => ({ ...c, [id]: !c[id] }))
@@ -118,10 +154,16 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   // each open project's chats, then the flat Chats list. A collapsed
   // project's chats are skipped, like the eye skips them.
   const searchRef = useRef(null)
+  const walk = (row) => [
+    row.id,
+    ...(folded[row.id] ? [] : (nest.kids.get(row.id) ?? []).flatMap(walk)),
+  ]
   const order = [
-    ...grouped.projects.flatMap(({ project, items }) => (collapsed[project.id] ? [] : items)),
-    ...grouped.flat,
-  ].map((row) => row.id)
+    ...grouped.projects.flatMap(({ project, items }) =>
+      collapsed[project.id] ? [] : items.flatMap(walk),
+    ),
+    ...grouped.flat.flatMap(walk),
+  ]
   const step = (pick) => () => {
     if (!order.length) return false
     const at = order.indexOf(active)
@@ -142,9 +184,12 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   const hintNew = useHint('new-chat')
   const hintSearch = useHint('search-chats')
 
+  // A lead with workers asks what becomes of them first: the list lets go
+  // of the chat only once it is archived.
   const archive = (id) => {
-    setChatArchived(id, true)
-    if (id === active) onSelect('new')
+    Promise.resolve(setChatArchived(id, true)).then((done) => {
+      if (done !== false && id === active) onSelect('new')
+    })
   }
 
   // Right-click on a chat: the same actions as the hover buttons, plus the
@@ -212,10 +257,21 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   const phones = (devices ?? []).filter(isPhone)
   const phoneOnline = phones.some((d) => d.online)
 
-  const chatRow = (row) => (
+  const chatRow = (row) => {
+    const workers = nest.kids.get(row.id) ?? []
+    const open = workers.length > 0 && !folded[row.id]
+    const dot = row.offline ? 'offline' : rolled(row)
+    return (
+      <div key={row.id} className="chat-branch">
+        {chatItem(row, workers.length, open, dot)}
+        {open && <div className="chat-team">{workers.map(chatRow)}</div>}
+      </div>
+    )
+  }
+
+  const chatItem = (row, workerCount, open, dot) => (
     <div
-      key={row.id}
-      className={`chat-item${drag?.item.id === row.id ? ' sb-dragged' : ''}`}
+      className={`chat-item${drag?.item.id === row.id ? ' sb-dragged' : ''}${workerCount > 0 ? ' chat-item--lead' : ''}`}
       onContextMenu={(e) => {
         e.preventDefault()
         // A chat on another machine moves among that machine's projects.
@@ -247,10 +303,24 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
           <Cloud size={11} className="chat-synced" aria-label="Synced to your devices" />
         )}
         <span
-          className={`dot dot--${row.offline ? 'offline' : row.status}`}
+          className={`dot dot--${dot}`}
           title={row.offline ? (privacy ? 'Offline' : `${row.device} is offline`) : undefined}
         />
       </button>
+      {/* A lead folds its workers away; the dot above keeps saying what
+          is under it. */}
+      {workerCount > 0 && (
+        <button
+          type="button"
+          className="chat-fold"
+          title={open ? 'Fold its workers' : `Show its ${workerCount} worker${workerCount === 1 ? '' : 's'}`}
+          aria-label={open ? 'Fold its workers' : 'Show its workers'}
+          aria-expanded={open}
+          onClick={() => setFolded((f) => ({ ...f, [row.id]: !f[row.id] }))}
+        >
+          <CaretDown size={10} className={`chat-fold-caret${open ? '' : ' closed'}`} />
+        </button>
+      )}
       {/* Archive hides the chat from this list; Settings keeps it. */}
       <button
         type="button"
