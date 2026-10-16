@@ -140,8 +140,13 @@ class Browser(activity: AppCompatActivity) {
   }
 
   private val memory = object : ComponentCallbacks2 {
+    // Only real pressure puts pages to sleep: leaving the screen for a moment
+    // (TRIM_MEMORY_UI_HIDDEN, all newer Android says) keeps them.
+    @Suppress("DEPRECATION")
     override fun onTrimMemory(level: Int) {
-      if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) ui.post { sleepAllBut(1) }
+      if (level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL || level >= ComponentCallbacks2.TRIM_MEMORY_COMPLETE) {
+        ui.post { sleepAllBut(1) }
+      }
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {}
