@@ -20,6 +20,7 @@ import { clashes } from './plugins.js'
 import { useComposerMenus } from './useComposerMenus.jsx'
 import { mentionedChats, ownCommands, takeCommands } from './composer-menus.js'
 import { isMobile } from './platform.js'
+import PluginComposerButtons from './PluginComposerButtons.jsx'
 import './newchat.css'
 import './composer.css'
 
@@ -687,6 +688,9 @@ export default function NewChat({
             )}
           </div>
           <div className="nc-send-group">
+            {/* The buttons plugins add to the composer (dictation's
+                microphone, say), beside the send button. */}
+            <PluginComposerButtons inputRef={inputRef} setText={setText} composer="new" disabled={busy} />
             <button className="nc-send" onClick={start} disabled={!canSend} title="Start task">
               <ArrowUp size={15} weight="bold" />
             </button>

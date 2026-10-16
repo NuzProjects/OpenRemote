@@ -32,6 +32,7 @@ import { usePrivacyMode } from './privacy.js'
 import { useHint, useModelSwitches, usePaletteSource, useShortcut } from './keyboard.jsx'
 import { useComposerMenus } from './useComposerMenus.jsx'
 import { mentionedChats, ownCommands, takeCommands } from './composer-menus.js'
+import PluginComposerButtons from './PluginComposerButtons.jsx'
 import './chatview.css'
 import './composer.css'
 
@@ -1103,6 +1104,14 @@ export default function ChatView({ chat, onBack, focused = true }) {
               )}
             </div>
             <div className="nc-send-group">
+              {/* The buttons plugins add to the composer (dictation's
+                  microphone, say), still while the chat can't take text. */}
+              <PluginComposerButtons
+                inputRef={inputRef}
+                setText={setText}
+                composer={chat.id}
+                disabled={!alive || !reachable}
+              />
               {/* The ring renders wherever usage is known - the composer's
                   one live element; a claude chat carries it from its first
                   breath at zero. Codex reports its window too; claude
