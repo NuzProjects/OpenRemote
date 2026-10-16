@@ -82,8 +82,13 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   }, [rows, query])
 
   // The two sections: registered projects with their chats, then the flat
-  // Chats list - every chat that belongs to no project.
+  // Chats list - every chat that belongs to no project. Every project
+  // shows, empty ones too; a search narrows the list to the projects that
+  // hold a match (an empty one would claim "no chats" about a project
+  // whose chats merely didn't match).
   const grouped = useMemo(() => sections(projects, visible), [projects, visible])
+  const searching = query.trim() !== ''
+  const groups = searching ? grouped.projects.filter((g) => g.items.length > 0) : grouped.projects
 
   const toggleProject = (id) => {
     setCollapsed((c) => ({ ...c, [id]: !c[id] }))
@@ -103,16 +108,6 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
       wouldMove(projects, row.workspace, targetOf(target)),
     onDrop: (row, target) => move.moveTo(row, targetOf(target)),
   })
-  // While a chat is dragged, the projects with no chats yet show too, so
-  // a drop can give one its first chat.
-  const shownProjects = drag
-    ? [
-        ...grouped.projects,
-        ...(projects ?? [])
-          .filter((p) => !grouped.projects.some((g) => g.project.id === p.id))
-          .map((project) => ({ project, items: [] })),
-      ]
-    : grouped.projects
 
   // The keyboard's walk through the list goes in the order it reads:
   // each open project's chats, then the flat Chats list. A collapsed
@@ -390,12 +385,12 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
             <Plus size={12} weight="bold" />
           </button>
         </div>
-        {shownProjects.length === 0 && (
+        {grouped.projects.length === 0 && (
           <p className="sb-empty sb-projects-empty">
             No projects yet. <button className="sb-empty-add" onClick={onAddProject}>Add a project</button> to group its chats here.
           </p>
         )}
-        {shownProjects.map(({ project, items }) => {
+        {groups.map(({ project, items }) => {
           const isCollapsed = !!collapsed[project.id]
           return (
             <section
@@ -412,7 +407,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
                   <CaretDown size={12} />
                 </span>
                 <span className="project-name pv">{project.folders[0].split(/[\\/]/).filter(Boolean).pop()}</span>
-                <span className="project-count">{items.length}</span>
+                {items.length > 0 && <span className="project-count">{items.length}</span>}
               </button>
               {/* A new chat already in this project, straight from its
                   row: no trip through the home screen's project picker. */}
@@ -436,6 +431,11 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
                 <TrashSimple size={11} />
               </button>
               {!isCollapsed && items.map(chatRow)}
+              {/* A project just added has no chats: say so quietly, and
+                  leave its + (and the drop target) in place. */}
+              {!isCollapsed && items.length === 0 && (
+                <p className="sb-empty sb-project-empty">No chats yet</p>
+              )}
             </section>
           )
         })}

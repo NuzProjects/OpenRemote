@@ -23,7 +23,9 @@ export function projectFor(projects, workspace) {
 /**
  * The sidebar's two sections: registered projects (each with the chats
  * that ran in its folders), then the flat chats - every chat that
- * belongs to no project, in one list.
+ * belongs to no project, in one list. A project with no chats keeps its
+ * group: a project just added needs a row to press + on, and a row to
+ * drop a chat onto.
  */
 export function sections(projects, rows) {
   const byProject = new Map((projects ?? []).map((p) => [p.id, { project: p, items: [] }]))
@@ -33,8 +35,5 @@ export function sections(projects, rows) {
     if (project) byProject.get(project.id).items.push(row)
     else flat.push(row)
   }
-  return {
-    projects: [...byProject.values()].filter((g) => g.items.length > 0),
-    flat,
-  }
+  return { projects: [...byProject.values()], flat }
 }

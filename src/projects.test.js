@@ -38,8 +38,16 @@ test('sections splits chats into projects and one flat list', () => {
   assert.deepEqual(out.flat.map((r) => r.id), ['b', 'd'])
 })
 
-test('a project with no chats holds no group', () => {
+test('a project with no chats still has its group, so its + has a row to press', () => {
   const out = sections([P1, P2], [{ id: 'a', workspace: '/home/u/website' }])
-  assert.equal(out.projects.length, 1)
+  assert.deepEqual(
+    out.projects.map((g) => [g.project.id, g.items.length]),
+    [
+      ['p1', 1],
+      ['p2', 0],
+    ],
+  )
   assert.deepEqual(out.flat, [])
+  // No chats at all: every project is still there.
+  assert.equal(sections([P1, P2], []).projects.length, 2)
 })

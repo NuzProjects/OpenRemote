@@ -708,6 +708,12 @@ button:focus-visible {
   line-height: 1.5;
 }
 
+/* A project with no chats yet: one quiet line, level with its name. */
+.sb-empty.sb-project-empty {
+  margin: 0;
+  padding: 2px 8px 8px 28px;
+}
+
 /* ---- phone width: the sidebar overlays instead of pushing ---- */
 .sb-backdrop {
   display: none;
