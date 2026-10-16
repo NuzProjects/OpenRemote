@@ -294,7 +294,14 @@ pub struct Supervisor {
     /// The chats' pictures: what the user attached, what tools answered
     /// with. A chat's go when the chat does (the store releases them).
     blobs: Arc<openremote_core::blobs::Blobs>,
+    /// A short note for the agent added to each message as the harness
+    /// receives it - never to what is stored or shown (the browser's open
+    /// tabs). Set once by whoever assembles the app.
+    prompt_note: std::sync::OnceLock<PromptNote>,
 }
+
+/// Where the note riding each delivered message comes from.
+type PromptNote = Box<dyn Fn() -> Option<String> + Send + Sync>;
 
 /// One poisoning policy for every mutex that routes through this helper
 /// (the store, the sync maps, the schedule's arming, the webhooks'
@@ -335,6 +342,7 @@ impl Supervisor {
             command_cache: StdMutex::new(HashMap::new()),
             controls: std::sync::OnceLock::new(),
             blobs,
+            prompt_note: std::sync::OnceLock::new(),
         });
         supervisor.spawn_presence_ticker(this_machine);
         supervisor.spawn_schedule_engine();
@@ -1382,16 +1390,30 @@ impl Supervisor {
         crate::images::keep(&self.blobs, *id, images).map_err(|e| SupervisorError::Store(e.into()))
     }
 
-    /// A message as its harness receives it: the words, and its pictures
-    /// in the form its wire takes.
+    /// A message as its harness receives it: the words, the open-tabs note
+    /// where this harness has the browser's tools, and its pictures in the
+    /// form its wire takes. The note is never stored or shown.
     async fn harness_prompt(
         &self,
         entry: &SessionEntry,
         text: &str,
         images: &[ImageRef],
     ) -> Result<openremote_harness::Prompt, SupervisorError> {
-        let as_files = entry.driver.lock().await.reads_image_files();
-        let words = text.to_string();
+        let (as_files, rides_mcp) = {
+            let driver = entry.driver.lock().await;
+            (driver.reads_image_files(), driver.rides_mcp())
+        };
+        let mut words = text.to_string();
+        // A message that starts with a command goes without the note, so
+        // the note never becomes that command's arguments.
+        if rides_mcp && self.controls.get().is_some() && !text.trim_start().starts_with('/') {
+            if let Some(note) = self.prompt_note.get().and_then(|note| note()) {
+                if !words.is_empty() {
+                    words.push_str("\n\n");
+                }
+                words.push_str(&note);
+            }
+        }
         let images = images
             .iter()
             .map(|image| crate::images::for_harness(&self.blobs, image, as_files))
@@ -1401,6 +1423,11 @@ impl Supervisor {
             text: words,
             images,
         })
+    }
+
+    /// The note added to each delivered message, from here on.
+    pub fn set_prompt_note(&self, note: impl Fn() -> Option<String> + Send + Sync + 'static) {
+        let _ = self.prompt_note.set(Box::new(note));
     }
 
     /// The chats' pictures.

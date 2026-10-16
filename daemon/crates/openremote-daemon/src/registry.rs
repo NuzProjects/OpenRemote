@@ -59,6 +59,14 @@ impl SessionDriver {
         matches!(self, SessionDriver::Codex(_))
     }
 
+    /// Whether the chat's MCP servers ride this harness (claude's
+    /// `--mcp-config`, codex's config overrides) - OpenRemote's own tools,
+    /// the browser's among them, with them. The others have no wire for
+    /// them yet.
+    pub fn rides_mcp(&self) -> bool {
+        matches!(self, SessionDriver::Claude(_) | SessionDriver::Codex(_))
+    }
+
     /// Apply a live model, effort, or fast change in the harness's own
     /// words. A harness with no wire for a field says so - the console
     /// does not render that control.
