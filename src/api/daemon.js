@@ -467,6 +467,59 @@ export class DaemonApi {
     return this.call('POST', `/plugins/${encodeURIComponent(id)}/remove`, { request_id: newRequestId() })
   }
 
+  // ---- JavaScript plugins (the frames the console hosts) ----
+
+  // One of a plugin's own files, as bytes: its manifest, its page, its
+  // scripts and pictures. The token rides as everywhere else - the frame
+  // never sees it; the console reads the file and hands it over.
+  async pluginFile(id, path) {
+    const segments = String(path).split('/').map(encodeURIComponent).join('/')
+    const response = await fetch(`${this.url}${this.prefix}/plugins/${encodeURIComponent(id)}/files/${segments}`, {
+      headers: { Authorization: `Bearer ${this.token}` },
+      signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+    })
+    if (!response.ok) {
+      let words = null
+      try {
+        words = (await response.json())?.error ?? null
+      } catch {
+        /* not JSON: the status says it */
+      }
+      const error = new Error(words ?? `${path} could not be read (HTTP ${response.status})`)
+      error.status = response.status
+      throw error
+    }
+    return { type: response.headers.get('content-type') ?? '', bytes: await response.arrayBuffer() }
+  }
+
+  // The settings a plugin declares: every value, and for each secret only
+  // whether it is set - a secret never comes back to the console.
+  pluginSettings(id) {
+    return this.call('GET', `/plugins/${encodeURIComponent(id)}/settings`)
+  }
+
+  // A secret is replaced only when `values` names it.
+  savePluginSettings(id, values) {
+    return this.call('POST', `/plugins/${encodeURIComponent(id)}/settings`, { request_id: newRequestId(), values })
+  }
+
+  // A plugin's request, made by the daemon (only for a plugin given the
+  // network). A transcription can take a while: the daemon allows up to
+  // five minutes, and this waits a little longer than that.
+  pluginFetch(id, request) {
+    return this.call(
+      'POST',
+      `/plugins/${encodeURIComponent(id)}/fetch`,
+      { request_id: newRequestId(), ...request },
+      { timeoutMs: 330_000 },
+    )
+  }
+
+  // A chat read for a plugin given reading chats.
+  pluginChat(id, chatId) {
+    return this.call('GET', `/plugins/${encodeURIComponent(id)}/chats/${encodeURIComponent(chatId)}`)
+  }
+
   // ---- marketplaces (Plugins > Discover, Marketplaces) ----
 
   marketplaces() {
