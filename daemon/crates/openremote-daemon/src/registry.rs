@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use openremote_core::Harness;
 use openremote_harness::{
-    DriverError, DriverEvent, ModelDescriptor, Resolution, SessionSettings, SpawnOptions,
+    DriverError, DriverEvent, ModelDescriptor, Prompt, Resolution, SessionSettings, SpawnOptions,
 };
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -39,15 +39,32 @@ pub enum SessionDriver {
 }
 
 impl SessionDriver {
-    pub async fn send_prompt(&mut self, text: &str) -> Result<(), DriverError> {
+    /// One message with its pictures. A harness that reads no pictures
+    /// refuses a message that carries some (each driver says so in its
+    /// own name).
+    pub async fn send_prompt(&mut self, prompt: &Prompt) -> Result<(), DriverError> {
         match self {
-            SessionDriver::Claude(driver) => driver.send_prompt(text).await,
-            SessionDriver::Codex(driver) => driver.send_prompt(text).await,
-            SessionDriver::Grok(driver) => driver.send_prompt(text).await,
-            SessionDriver::Pi(driver) => driver.send_prompt(text).await,
-            SessionDriver::Opencode(driver) => driver.send_prompt(text).await,
-            SessionDriver::Agy(driver) => driver.send_prompt(text).await,
+            SessionDriver::Claude(driver) => driver.send_prompt(prompt).await,
+            SessionDriver::Codex(driver) => driver.send_prompt(prompt).await,
+            SessionDriver::Grok(driver) => driver.send_prompt(prompt).await,
+            SessionDriver::Pi(driver) => driver.send_prompt(prompt).await,
+            SessionDriver::Opencode(driver) => driver.send_prompt(prompt).await,
+            SessionDriver::Agy(driver) => driver.send_prompt(prompt).await,
         }
+    }
+
+    /// Whether this harness reads its pictures from files rather than
+    /// from the message's own bytes (codex's `localImage` items).
+    pub fn reads_image_files(&self) -> bool {
+        matches!(self, SessionDriver::Codex(_))
+    }
+
+    /// Whether the chat's MCP servers ride this harness (claude's
+    /// `--mcp-config`, codex's config overrides) - OpenRemote's own tools,
+    /// the browser's among them, with them. The others have no wire for
+    /// them yet.
+    pub fn rides_mcp(&self) -> bool {
+        matches!(self, SessionDriver::Claude(_) | SessionDriver::Codex(_))
     }
 
     /// Apply a live model, effort, or fast change in the harness's own
@@ -340,6 +357,7 @@ fn harness_from(id: &str, name: &str, resolution: &Resolution, version: Option<&
         available: resolution.is_available(),
         enabled: true,
         fast_supported: fast_supported(id, version),
+        image_input: takes_images(id),
         signed_in: None,
         default_model: None,
         default_effort: None,
@@ -535,6 +553,15 @@ fn fast_supported(id: &str, version: Option<&str>) -> bool {
         ("codex", Some(v)) => version_at_least(v, (0, 110, 0)),
         _ => false,
     }
+}
+
+/// Whether a harness reads pictures sent with a message: claude takes
+/// base64 image blocks in its stream-json user message, codex takes local
+/// image files as turn input. The others' wires carry words alone, so
+/// their composers offer no attaching and the daemon refuses a message
+/// with pictures for them before anything is written.
+pub fn takes_images(id: &str) -> bool {
+    matches!(id, "claude" | "codex")
 }
 
 /// The permission words each harness's own CLI takes, in its spelling -

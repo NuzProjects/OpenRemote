@@ -52,6 +52,44 @@ export function adopt(key, native) {
   patchTab(key, { native, ...said })
 }
 
+// Where a page waits until the view places it: the view shows the active
+// tab's page over its placeholder as soon as it has one.
+const PARKED = { x: -30000, y: 0, width: 1024, height: 768 }
+
+// Open an address in the browser (a chat's "Open beside chat"): in the
+// active tab while it is an empty new tab page, else in a new tab, which
+// becomes the active one.
+export async function openUrl(url) {
+  const blank = getState().tabs.find((t) => t.key === getState().active && !t.native && !t.url)
+  const tab = blank ?? newTab()
+  setState((s) => ({
+    tabs: blank ? s.tabs : [...s.tabs, tab],
+    active: tab.key,
+  }))
+  patchTab(tab.key, { url, loading: true })
+  const native = await call('browser_open', { url, bounds: PARKED, show: false })
+  if (!native) {
+    patchTab(tab.key, { loading: false })
+    return null
+  }
+  adopt(tab.key, native)
+  return native
+}
+
+// Show a page the shell already has (one an agent opened): its tab
+// becomes the active one, added to the strip if the console didn't list
+// it yet.
+export function focusTab(native) {
+  setState((s) => {
+    const known = s.tabs.find((t) => t.native === native)
+    if (known) return { active: known.key }
+    const said = early.get(native) ?? {}
+    early.delete(native)
+    const tab = newTab({ native, ...said })
+    return { tabs: [...s.tabs, tab], active: tab.key }
+  })
+}
+
 function fieldsOf(p) {
   return {
     url: p.url,

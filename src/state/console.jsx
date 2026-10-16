@@ -368,17 +368,19 @@ export function ConsoleProvider({ children }) {
 
   // A new chat. In Cloud it syncs to every device, and with `deviceId` it
   // runs on that machine (created there, copied here); the prompt that
-  // follows reaches it through this daemon either way.
+  // follows reaches it through this daemon either way, with its pictures.
   const createChat = useCallback(
     async (
       text, workspace, harness, model, fast, effort, permissionMode,
-      { deviceId = null, synced = false, mentionedChats = [] } = {},
+      { deviceId = null, synced = false, mentionedChats = [], attachments = [] } = {},
     ) => {
       const session = await api.createSession({
         harness, workspace, model, effort, fast, permissionMode, deviceId, synced,
       })
       ensureChat(session)
-      if (text.trim()) await api.prompt(session.id, text.trim(), mentionedChats)
+      if (text.trim() || attachments.length) {
+        await api.prompt(session.id, text.trim(), mentionedChats, attachments)
+      }
       return session.id
     },
     [api, ensureChat],
@@ -562,8 +564,8 @@ export function ConsoleProvider({ children }) {
   )
 
   const sendPrompt = useCallback(
-    async (chatId, text, mentionedChats = []) => {
-      await api.prompt(chatId, text.trim(), mentionedChats)
+    async (chatId, text, mentionedChats = [], attachments = []) => {
+      await api.prompt(chatId, text.trim(), mentionedChats, attachments)
     },
     [api],
   )
@@ -603,13 +605,15 @@ export function ConsoleProvider({ children }) {
   // a message sent while a turn is working waits and runs when the turn
   // ends. Steer puts one into the running turn now.
   const queueMessage = useCallback(
-    async (chatId, text, mentionedChats = []) => api.queue(chatId, text.trim(), mentionedChats),
+    async (chatId, text, mentionedChats = [], attachments = []) =>
+      api.queue(chatId, text.trim(), mentionedChats, attachments),
     [api],
   )
   const removeQueued = useCallback(async (chatId, itemId) => api.queueRemove(chatId, itemId), [api])
   const steerQueued = useCallback(async (chatId, itemId) => api.queueSteer(chatId, itemId), [api])
   const steerMessage = useCallback(
-    async (chatId, text, mentionedChats = []) => api.steer(chatId, text.trim(), mentionedChats),
+    async (chatId, text, mentionedChats = [], attachments = []) =>
+      api.steer(chatId, text.trim(), mentionedChats, attachments),
     [api],
   )
   const resumeQueue = useCallback(async (chatId) => api.queueResume(chatId), [api])

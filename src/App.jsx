@@ -17,7 +17,8 @@ const BrowserView = lazy(() => import('./BrowserView.jsx'))
 import { ConsoleProvider, useConsole } from './state/console.jsx'
 import { needsSignIn } from './cloud.js'
 import CloudNotices from './CloudNotices.jsx'
-import { isMobile } from './platform.js'
+import { hasTauri, isMobile } from './platform.js'
+import { onBrowserRequest, openedKey, shouldAutoOpen } from './browser-placement.js'
 import { hashWriteReady } from './settings.js'
 import { Archive, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Copy, X } from '@phosphor-icons/react'
 import { pushBack, useBack } from './use-back.js'
@@ -29,16 +30,20 @@ import ViewPopup from './ViewPopup.jsx'
 import { POPUP_VIEWS, onPopup } from './popups.js'
 import { KeyboardProvider, useKeyboard, useShortcut } from './keyboard.jsx'
 import {
+  BROWSER,
   MAX_PANES,
+  browserPane,
   closeLeaf,
   focusLeaf,
   leafById,
   leaves,
   newLayout,
+  openBrowserBeside,
   paneCount,
   restoreLayout,
   secondaryChatIds,
   setLeafView,
+  singleBrowser,
   splitLeaf,
 } from './split.js'
 
@@ -292,6 +297,13 @@ function Shell() {
   // other view (plugins, settings, ...) belongs to the primary pane.
   const focused = leafById(layout, layout.focus)
   const openInFocus = (id) => {
+    // One pane holds the browser: where a split pane has it, that pane
+    // takes focus instead of the main pane opening a second.
+    const holder = id === BROWSER ? browserPane(layout, view) : null
+    if (holder) {
+      setLayout((l) => focusLeaf(l, holder.id))
+      return
+    }
     if (focused?.view !== null && (id === 'new' || isChatView(id))) {
       const session = (sessions ?? []).find((s) => s.id === id)
       if (session) ensureChat(session)
@@ -301,6 +313,70 @@ function Shell() {
     setLayout((l) => focusLeaf(l, leaves(l.root).find((p) => p.view === null).id))
     openSession(id)
   }
+
+  // The browser keeps to one pane: going to it in the main pane (Back
+  // and Forward included) closes a split pane that held it.
+  useEffect(() => {
+    setLayout((l) => singleBrowser(l, view))
+  }, [view])
+
+  // A chat asks for the browser - its Browser button, an "Open beside
+  // chat" chip, the phone's pill, or its agent opening a tab (`focus`
+  // false): beside that chat on the desktop (the pane that holds the
+  // browser, if one does), the Browser view on the phone. With four panes
+  // already open a click shows it in the main pane (Back returns); the
+  // agent's own tab never takes the chat's place.
+  const browserRequest = useRef(null)
+  browserRequest.current = ({ chatId, url = null, tab = null, focus = true }) => {
+    if (url || tab) {
+      import('./browser-store.js').then((store) => (url ? store.openUrl(url) : store.focusTab(tab)))
+    }
+    if (isMobile) {
+      navigate(BROWSER)
+      return
+    }
+    const chatLeaf = leaves(layout.root).find((l) => (l.view ?? view) === chatId) ?? focused
+    let next = openBrowserBeside(layout, chatLeaf.id, view)
+    if (next === layout && !browserPane(layout, view)) {
+      if (!focus) return
+      focusPrimary()
+      navigate(BROWSER)
+      return
+    }
+    // The agent opening a tab never takes the keyboard from the chat.
+    if (!focus) next = focusLeaf(next, chatLeaf.id)
+    setLayout(next)
+  }
+  useEffect(() => onBrowserRequest((request) => browserRequest.current?.(request)), [])
+
+  // The agent of the chat in the main pane opening a tab opens the browser
+  // beside it, showing that tab; another chat's agent never steals the
+  // view (its tab carries its badge in the browser instead).
+  const primaryChat = useRef(null)
+  primaryChat.current = isChatView(view) ? view : null
+  useEffect(() => {
+    if (!hasTauri || isMobile) return undefined
+    const opened = new Set()
+    let stop = null
+    let gone = false
+    import('@tauri-apps/api/event')
+      .then(({ listen }) =>
+        listen('browser:tab', ({ payload }) => {
+          if (!shouldAutoOpen(payload, primaryChat.current, opened)) return
+          opened.add(openedKey(payload))
+          browserRequest.current?.({ chatId: payload.controller.chat, tab: payload.id, focus: false })
+        }),
+      )
+      .then((unlisten) => {
+        if (gone) unlisten()
+        else stop = unlisten
+      })
+      .catch(() => {})
+    return () => {
+      gone = true
+      stop?.()
+    }
+  }, [])
 
   // Open a chat in a new pane beside the focused one.
   const openBeside = (id, dir = 'row', before = false) => {
@@ -543,6 +619,15 @@ function Shell() {
   // composers serve Local and Cloud, so one window mixes both.
   const renderPane = (leaf) => {
     if (leaf.view === null) return primaryContent
+    if (leaf.view === BROWSER) {
+      // The browser beside a chat: the same view the sidebar opens, lazy
+      // the same way.
+      return (
+        <Suspense fallback={null}>
+          <BrowserView />
+        </Suspense>
+      )
+    }
     if (leaf.view === 'new') {
       return (
         <NewChat

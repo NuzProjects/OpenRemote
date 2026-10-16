@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use openremote_core::{DecisionKind, DecisionOption, TurnOutcome};
 use openremote_harness::events::{ApprovalRequest, DecisionSpec};
-use openremote_harness::{DriverError, DriverEvent, Resolution, SpawnOptions};
+use openremote_harness::{DriverError, DriverEvent, Prompt, Resolution, SpawnOptions};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
@@ -64,7 +64,8 @@ impl Driver {
         spawn_serve(command, opts).await
     }
 
-    pub async fn send_prompt(&mut self, text: &str) -> Result<(), DriverError> {
+    pub async fn send_prompt(&mut self, prompt: &Prompt) -> Result<(), DriverError> {
+        let text = prompt.text_only("OpenCode")?;
         // A prompt that starts with one of OpenCode's own commands runs it
         // through OpenCode's command endpoint (its template, its
         // `$ARGUMENTS`); anything else is a plain prompt.
@@ -425,6 +426,7 @@ fn map_event(event: &Value, session_id: &str) -> Option<DriverEvent> {
                     .map(|r| r.to_string())
                     .unwrap_or_default(),
                 is_error: failed,
+                images: Vec::new(),
             })
         }
         // A failed step ends the turn on its own - no `step.ended`
