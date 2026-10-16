@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import AboutModal from './AboutModal.jsx'
 import McpServersSection from './McpServersSection.jsx'
+import BrowserSettings from './BrowserSettings.jsx'
 import DeleteChatModal from './DeleteChatModal.jsx'
 import SignInModal from './SignInModal.jsx'
 import PickerMenu from './PickerMenu.jsx'
@@ -42,6 +43,7 @@ const SECTIONS = [
   { id: 'appearance', label: 'Appearance' },
   { id: 'startup', label: 'Startup' },
   { id: 'keyboard', label: 'Keyboard' },
+  { id: 'browser', label: 'Browser' },
   { id: 'cloud', label: 'Cloud' },
   { id: 'daemon', label: 'Daemon' },
   { id: 'harnesses', label: 'Harnesses' },
@@ -293,7 +295,10 @@ export default function SettingsView({ onReplay, onOpenChat }) {
   return (
     <div className="settings">
       <nav className="stg-nav" aria-label="Settings sections">
-        {(isMobile ? SECTIONS.filter((s) => PHONE_SECTIONS.has(s.id)) : SECTIONS).map((s) => (
+        {(isMobile ? SECTIONS.filter((s) => PHONE_SECTIONS.has(s.id)) : SECTIONS)
+          // The browser lives in the desktop app: no section without it.
+          .filter((s) => s.id !== 'browser' || hasTauri)
+          .map((s) => (
           <a
             key={s.id}
             href={`#stg-${s.id}`}
@@ -690,6 +695,13 @@ export default function SettingsView({ onReplay, onOpenChat }) {
         </div>
       )}
       </>
+      )}
+
+      {!isMobile && hasTauri && (
+        <>
+          <h2 className="pn-section" id="stg-browser">Browser</h2>
+          <BrowserSettings />
+        </>
       )}
 
       <h2 className="pn-section" id="stg-cloud">Cloud</h2>
