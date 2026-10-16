@@ -64,16 +64,18 @@ impl CloudHost for DaemonHost {
         let Some(app) = self.app.upgrade() else {
             return;
         };
-        // A live view's acknowledgements, input and news; everything else
-        // is chat sync.
-        if note["type"]
-            .as_str()
-            .is_some_and(|t| t.starts_with("browser."))
-        {
+        let kind = note["type"].as_str().unwrap_or_default();
+        // A live view's acknowledgements, input and news.
+        if kind.starts_with("browser.") {
             crate::browser::live::on_note(&app, peer, note);
-        } else {
-            crate::sync::on_note(&app, peer, note);
+            return;
         }
+        // The account's Global plugins have notes of their own.
+        if kind.starts_with("plugins.") {
+            crate::plugin_runtime::global::on_note(&app, peer, note);
+            return;
+        }
+        crate::sync::on_note(&app, peer, note);
     }
 
     /// A live view's picture of another device's tab.
@@ -91,7 +93,11 @@ impl CloudHost for DaemonHost {
 
     fn online(&self, peer: DeviceId) {
         if let Some(app) = self.app.upgrade() {
-            tokio::spawn(async move { crate::sync::sync_with(&app, peer).await });
+            tokio::spawn(async move {
+                crate::sync::sync_with(&app, peer).await;
+                // Global plugins catch up the same way chats do.
+                crate::plugin_runtime::global::sync_with(&app, peer).await;
+            });
         }
     }
 

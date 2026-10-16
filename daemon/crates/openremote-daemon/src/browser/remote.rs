@@ -226,7 +226,10 @@ pub async fn call(
             None => Ok(answer.get("ok").cloned().unwrap_or(Value::Null)),
         },
         404 => Err(Failure::Refused(said.unwrap_or_else(|| {
-            format!("there's no such tab on {}; browser_tabs lists them", device.name)
+            format!(
+                "there's no such tab on {}; browser_tabs lists them",
+                device.name
+            )
         }))),
         409 => Err(Failure::Unavailable(format!(
             "{} has no browser open (OpenRemote's app isn't running there)",
@@ -237,9 +240,11 @@ pub async fn call(
             "{} needs a newer OpenRemote to share its browser",
             device.name
         ))),
-        _ => Err(Failure::Unavailable(
-            said.unwrap_or_else(|| format!("{} answered oddly", device.name)),
-        )),
+        _ => {
+            Err(Failure::Unavailable(said.unwrap_or_else(|| {
+                format!("{} answered oddly", device.name)
+            })))
+        }
     }
 }
 

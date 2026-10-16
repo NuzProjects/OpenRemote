@@ -47,9 +47,19 @@ pub fn router(app: Arc<App>) -> Router {
         // Linux daemon has no install dir to read - so it serves what it
         // was built with. Console-only: a peer never needs it.
         .route("/notices", get(notices))
+        // The chats' pictures, by hash: this device's console only. A peer
+        // asks for one chat's picture through the chat's own route.
+        .route("/blobs/{sha}", get(get_blob))
         // The built-in browser: this device's console and its chats' MCP
         // server only, never another device.
         .merge(crate::browser::routes::routes())
+        // The installed plugins' settings, files and tools: this device's
+        // console and its chats' MCP server only.
+        .merge(crate::plugin_runtime::routes::routes())
+        // A JavaScript plugin's frame, through this device's console only:
+        // the network and chats where the user granted them (its settings
+        // and files come from the plugin runtime above).
+        .merge(crate::js_plugins::routes())
         // The console reaches another device's API through this one.
         .route(
             "/devices/{id}/{*rest}",
@@ -95,6 +105,10 @@ enum Tier {
     Machine,
     /// Acting on one chat: a machine, and the chat is synced and runs here.
     Chat,
+    /// Reading one chat's pictures: any of the account's devices, as with
+    /// copying the chat's events, and only a synced chat that runs here -
+    /// the device that keeps its pictures.
+    Read,
     /// Using this device's browser (its tabs, their agents' calls, live
     /// views): any of the account's devices - a phone is a "desktop", so
     /// the machine tier wouldn't let it in - while a browser runs here.
@@ -136,7 +150,15 @@ const PEER_ROUTES: &[(&str, &str, Tier)] = &[
     ("POST", "/sessions/{id}/stop", Tier::Chat),
     ("POST", "/sessions/{id}/resume", Tier::Chat),
     ("POST", "/sessions/{id}/title", Tier::Chat),
+    // Moving a chat between the projects of the machine that runs it.
+    ("POST", "/sessions/{id}/workspace", Tier::Chat),
     ("POST", "/decisions/{id}/answer", Tier::Chat),
+    // A synced chat's pictures, for the devices that show it.
+    ("GET", "/sessions/{id}/blobs/{sha}", Tier::Read),
+    // The account's Global plugins: their records, and the files of one a
+    // device lacks (only a copy that is exactly the approved one).
+    ("GET", "/sync/plugins", Tier::Sync),
+    ("GET", "/sync/plugins/{id}/archive", Tier::Sync),
     // This device's browser: its tabs for another device's agents and
     // lists, their calls, and live views of its tabs.
     ("GET", "/browser/tabs", Tier::Browser),
@@ -163,6 +185,12 @@ async fn peer_gate(
     if *tier == Tier::Sync {
         return next.run(request).await;
     }
+    if *tier == Tier::Read {
+        if !synced_here(&app, request.uri().path(), path) {
+            return error(StatusCode::NOT_FOUND, "no such chat here");
+        }
+        return next.run(request).await;
+    }
     if *tier == Tier::Browser {
         if !app.browser.connected() {
             return crate::browser::peer::no_browser();
@@ -177,25 +205,26 @@ async fn peer_gate(
         )
             .into_response();
     }
-    if *tier == Tier::Chat {
-        let id = request.uri().path().split('/').nth(2).unwrap_or_default();
-        let synced_here = {
-            let store = crate::supervisor::lock_recovering(&app.store);
-            let session = if path.starts_with("/decisions/") {
-                DecisionId::parse(id)
-                    .and_then(|d| store.decision(&d).ok().map(|d| d.session_id))
-                    .and_then(|s| store.session(&s).ok())
-            } else {
-                SessionId::parse(id).and_then(|s| store.session(&s).ok())
-            };
-            session.is_some_and(|s| s.executor.is_some() && store.executes_here(s))
-        };
-        // Private chats are invisible to peers: the same answer as none.
-        if !synced_here {
-            return error(StatusCode::NOT_FOUND, "no such chat here");
-        }
+    // Private chats are invisible to peers: the same answer as none.
+    if *tier == Tier::Chat && !synced_here(&app, request.uri().path(), path) {
+        return error(StatusCode::NOT_FOUND, "no such chat here");
     }
     next.run(request).await
+}
+
+/// Whether the chat a peer's request names (by its own id, or by one of
+/// its decisions) is synced and runs on this device.
+fn synced_here(app: &App, uri_path: &str, matched: &str) -> bool {
+    let id = uri_path.split('/').nth(2).unwrap_or_default();
+    let store = crate::supervisor::lock_recovering(&app.store);
+    let session = if matched.starts_with("/decisions/") {
+        DecisionId::parse(id)
+            .and_then(|d| store.decision(&d).ok().map(|d| d.session_id))
+            .and_then(|s| store.session(&s).ok())
+    } else {
+        SessionId::parse(id).and_then(|s| store.session(&s).ok())
+    };
+    session.is_some_and(|s| s.executor.is_some() && store.executes_here(s))
 }
 
 /// Every route the console and (through the gate) peers share.
@@ -207,6 +236,7 @@ fn api_routes() -> Router<Arc<App>> {
         .route("/files", get(get_files))
         .route("/sessions/{id}/mentions/{chat}", get(get_mentioned_chat))
         .route("/sessions/{id}/title", post(post_title))
+        .route("/sessions/{id}/workspace", post(post_workspace))
         .route("/sync/summary", get(sync_summary))
         .route("/sync/sessions/{id}/events", get(sync_range))
         .route("/harnesses/{id}/models", get(harness_models))
@@ -256,15 +286,26 @@ fn api_routes() -> Router<Arc<App>> {
         .route("/sessions/{id}", get(get_session).delete(delete_session))
         .route("/sessions/{id}/events", get(session_events))
         .route("/sessions/{id}/decisions", get(list_decisions))
-        .route("/sessions/{id}/prompts", post(post_prompt))
-        .route("/sessions/{id}/queue", post(post_queue))
+        // A message can carry pictures: past axum's 2 MB default.
+        .route(
+            "/sessions/{id}/prompts",
+            post(post_prompt).layer(message_body_limit()),
+        )
+        .route(
+            "/sessions/{id}/queue",
+            post(post_queue).layer(message_body_limit()),
+        )
         .route("/sessions/{id}/queue/resume", post(post_queue_resume))
         .route(
             "/sessions/{id}/queue/{item}/remove",
             post(post_queue_remove),
         )
         .route("/sessions/{id}/queue/{item}/steer", post(post_queue_steer))
-        .route("/sessions/{id}/steer", post(post_steer))
+        .route(
+            "/sessions/{id}/steer",
+            post(post_steer).layer(message_body_limit()),
+        )
+        .route("/sessions/{id}/blobs/{sha}", get(get_session_blob))
         .route("/sessions/{id}/settings", post(post_settings))
         .route("/sessions/{id}/interrupt", post(post_interrupt))
         .route("/sessions/{id}/stop", post(post_stop))
@@ -272,6 +313,7 @@ fn api_routes() -> Router<Arc<App>> {
         .route("/sessions/{id}/sync", post(post_sync))
         .route("/decisions/{id}/answer", post(post_answer))
         .route("/receipts/{request_id}", get(get_receipt))
+        .merge(crate::plugin_runtime::routes::peer_routes())
 }
 
 /// The console is a webview on a different origin than the daemon
@@ -693,10 +735,13 @@ fn store_failure(err: openremote_core::store::StoreError) -> PluginFailure {
     }
 }
 
+/// The built-in six's ids - not the harnesses plugins drive, which an
+/// update of their own plugin may name again.
 fn builtin_ids(app: &App) -> Vec<String> {
     app.supervisor
         .harnesses()
         .into_iter()
+        .filter(|h| h.plugin.is_none())
         .map(|h| h.id)
         .collect()
 }
@@ -708,6 +753,7 @@ async fn list_plugins(State(app): State<Arc<App>>) -> Response {
         .supervisor
         .harnesses()
         .into_iter()
+        .filter(|h| h.plugin.is_none())
         .map(|h| {
             json!({
                 "id": h.id,
@@ -719,22 +765,57 @@ async fn list_plugins(State(app): State<Arc<App>>) -> Response {
             })
         })
         .collect();
-    let installed: Vec<Value> = {
+    let (installed, found): (Vec<openremote_core::InstalledPlugin>, Value) = {
         let store = crate::supervisor::lock_recovering(&app.store);
-        store
-            .installed_plugins()
-            .into_iter()
-            .map(installed_json)
-            .collect()
+        let installed = store.installed_plugins().into_iter().cloned().collect();
+        let found = serde_json::to_value(crate::plugin_runtime::scope::found(&store))
+            .unwrap_or(Value::Null);
+        (installed, found)
     };
-    Json(json!({"builtin": builtin, "installed": installed})).into_response()
+    let installed: Vec<Value> = installed.iter().map(|p| installed_json(&app, p)).collect();
+    Json(json!({
+        "builtin": builtin,
+        "installed": installed,
+        // Plugins a project's repo carries that wait for this machine's
+        // review: new ones, and ones whose files changed.
+        "found": found,
+        // The account's Global plugins not on this device yet, and why.
+        "global_pending": app.plugin_runtime.global_pending(),
+    }))
+    .into_response()
 }
 
-/// An installed plugin as the console reads it: its record and its id.
-fn installed_json(plugin: &openremote_core::InstalledPlugin) -> Value {
+/// An installed plugin as the console reads it: its record, its id, the
+/// settings it takes, whether it runs outside a sandbox, and how its
+/// program stands.
+fn installed_json(app: &App, plugin: &openremote_core::InstalledPlugin) -> Value {
     let mut value = serde_json::to_value(plugin).unwrap_or(Value::Null);
     if let Some(fields) = value.as_object_mut() {
         fields.insert("id".into(), Value::String(plugin.id()));
+        fields.insert(
+            "settings_schema".into(),
+            serde_json::to_value(&plugin.contributes.settings).unwrap_or(Value::Null),
+        );
+        fields.insert(
+            "not_sandboxed".into(),
+            Value::Bool(
+                plugin
+                    .powers
+                    .contains(&openremote_core::PluginPower::RunPrograms)
+                    && matches!(
+                        plugin.runtime,
+                        openremote_core::PluginRuntime::Process
+                            | openremote_core::PluginRuntime::Content
+                    ),
+            ),
+        );
+        if plugin.runtime == openremote_core::PluginRuntime::Process {
+            fields.insert(
+                "process".into(),
+                serde_json::to_value(app.plugin_runtime.processes.status(&plugin.id()))
+                    .unwrap_or(Value::Null),
+            );
+        }
     }
     value
 }
@@ -760,6 +841,10 @@ fn resolve_stage(
     source: crate::plugins::SourceRequest,
 ) -> Result<Resolved, PluginFailure> {
     use crate::marketplace::{EntrySource, entry_source, read_catalog};
+    if let crate::plugins::SourceRequest::Project { project, name } = &source {
+        return crate::plugin_runtime::install::project_source(app, project, name)
+            .map(|request| Resolved::Fetch(Box::new(request)));
+    }
     if let Some(direct) = source.direct() {
         return Ok(Resolved::Fetch(Box::new(direct)));
     }
@@ -833,6 +918,13 @@ fn resolve_stage(
 /// user approves what the answer shows (name, runtime, powers).
 async fn stage_plugin(State(app): State<Arc<App>>, Json(body): Json<StageBody>) -> Response {
     let ids = builtin_ids(&app);
+    // A repo plugin read for review belongs to its project.
+    let for_project = match &body.source {
+        crate::plugins::SourceRequest::Project { project, .. } => {
+            openremote_core::ProjectId::parse(project)
+        }
+        _ => None,
+    };
     let task = {
         let app = Arc::clone(&app);
         async move {
@@ -853,7 +945,16 @@ async fn stage_plugin(State(app): State<Arc<App>>, Json(body): Json<StageBody>) 
             let id = format!("{name}@{marketplace}");
             let installed = {
                 let store = crate::supervisor::lock_recovering(&app.store);
-                store.installed_plugin(&id).ok().cloned()
+                let have = match for_project {
+                    Some(project) => openremote_core::plugin_id(
+                        &name,
+                        &marketplace,
+                        openremote_core::PluginScope::Project,
+                        Some(project),
+                    ),
+                    None => id.clone(),
+                };
+                store.installed_plugin(&have).ok().cloned()
             };
             let new_powers: Vec<openremote_core::PluginPower> = match &installed {
                 Some(have) => manifest
@@ -864,7 +965,17 @@ async fn stage_plugin(State(app): State<Arc<App>>, Json(body): Json<StageBody>) 
                     .collect(),
                 None => Vec::new(),
             };
+            let scopes =
+                crate::plugin_runtime::install::allowed_scopes(&manifest, command.is_some());
             Ok(json!({
+                // Where it may install: global, machine, project_local,
+                // project - and where the copy it would replace is.
+                "scopes": scopes,
+                "installed_scope": installed.as_ref().map(|p| p.scope),
+                "installed_project": installed.as_ref().and_then(|p| p.project),
+                // Set when the plugin was read from a project's repo: it
+                // installs for that project.
+                "for_project": for_project,
                 "stage_id": stage_id,
                 "id": id,
                 "name": name,
@@ -882,52 +993,45 @@ async fn stage_plugin(State(app): State<Arc<App>>, Json(body): Json<StageBody>) 
     receipted_plain(&app, body.request_id, task).await
 }
 
-/// The user approved: move the staged plugin into place and record it.
-/// An update keeps the plugin on or off as it was.
+#[derive(Deserialize)]
+struct InstallBody {
+    request_id: String,
+    /// Who it is for: `global`, `machine` (the default), `project_local`
+    /// or `project`.
+    #[serde(default)]
+    scope: Option<openremote_core::PluginScope>,
+    /// The project, for the two project scopes.
+    #[serde(default)]
+    project: Option<String>,
+}
+
+/// The user approved: place the staged plugin where its scope keeps it and
+/// record it. An update keeps the plugin on or off as it was.
 async fn install_staged(
     State(app): State<Arc<App>>,
     AxumPath(id): AxumPath<String>,
-    Json(body): Json<RequestBody>,
+    Json(body): Json<InstallBody>,
 ) -> Response {
     let task = {
         let app = Arc::clone(&app);
         async move {
+            let project = match body.project.as_deref() {
+                Some(raw) => Some(
+                    openremote_core::ProjectId::parse(raw)
+                        .ok_or((StatusCode::BAD_REQUEST, "bad project id".to_string()))?,
+                ),
+                None => None,
+            };
             let staged = app.plugins.take_staged(&id).ok_or_else(|| {
                 (
                     StatusCode::NOT_FOUND,
                     "that install is no longer waiting - stage it again".to_string(),
                 )
             })?;
-            let plugin_id = staged.id();
-            let manifest = staged.manifest.clone();
-            let source = staged.source.clone();
-            let name = staged.name.clone();
-            let marketplace = staged.marketplace.clone();
-            let resolved = staged.resolved.clone();
-            let command = staged.command.clone();
-            app.plugins.install(staged).map_err(plugin_failure)?;
-            let now = openremote_core::now_ms();
-            let mut store = crate::supervisor::lock_recovering(&app.store);
-            let before = store.installed_plugin(&plugin_id).ok().cloned();
-            let plugin = openremote_core::InstalledPlugin {
-                name,
-                marketplace,
-                resolved,
-                command,
-                version: manifest.version,
-                description: manifest.description,
-                runtime: manifest.runtime,
-                powers: manifest.powers,
-                source,
-                scope: openremote_core::PluginScope::Machine,
-                enabled: before.as_ref().is_none_or(|p| p.enabled),
-                installed_at: before.as_ref().map_or(now, |p| p.installed_at),
-                updated_at: now,
-            };
-            store
-                .put_installed_plugin(plugin.clone())
-                .map_err(store_failure)?;
-            Ok(installed_json(&plugin))
+            let scope = body.scope.unwrap_or(openremote_core::PluginScope::Machine);
+            let plugin =
+                crate::plugin_runtime::install::install(&app, staged, scope, project).await?;
+            Ok(installed_json(&app, &plugin))
         }
     };
     receipted_plain(&app, body.request_id, task).await
@@ -967,17 +1071,19 @@ async fn set_plugin_enabled(
     let task = {
         let app = Arc::clone(&app);
         async move {
-            let mut store = crate::supervisor::lock_recovering(&app.store);
             if builtin {
-                store
+                crate::supervisor::lock_recovering(&app.store)
                     .set_builtin_enabled(&id, body.enabled)
                     .map_err(store_failure)?;
                 Ok(json!({"id": id, "enabled": body.enabled}))
             } else {
-                let plugin = store
+                let plugin = crate::supervisor::lock_recovering(&app.store)
                     .set_installed_plugin_enabled(&id, body.enabled)
                     .map_err(store_failure)?;
-                Ok(installed_json(&plugin))
+                // Off stops its program; on or off, the pickers hear of
+                // its harnesses.
+                app.plugin_runtime.changed(&id).await;
+                Ok(installed_json(&app, &plugin))
             }
         }
     };
@@ -1000,18 +1106,7 @@ async fn remove_plugin(
                     format!("{id} is built in - turn it off instead"),
                 ));
             }
-            let plugin = {
-                let store = crate::supervisor::lock_recovering(&app.store);
-                store
-                    .installed_plugin(&id)
-                    .cloned()
-                    .map_err(store_failure)?
-            };
-            app.plugins
-                .uninstall(&plugin.marketplace, &plugin.name)
-                .map_err(plugin_failure)?;
-            let mut store = crate::supervisor::lock_recovering(&app.store);
-            store.remove_installed_plugin(&id).map_err(store_failure)?;
+            crate::plugin_runtime::install::remove(&app, &id).await?;
             Ok(json!({"removed": id}))
         }
     };
@@ -1339,6 +1434,37 @@ async fn post_title(
     let sup = Arc::clone(&app.supervisor);
     receipted(&app, body.request_id, &id, |sid| async move {
         let session = sup.rename(&sid, &body.title)?;
+        Ok(serde_json::to_value(&session).unwrap_or(Value::Null))
+    })
+    .await
+}
+
+#[derive(Deserialize)]
+struct WorkspaceBody {
+    request_id: String,
+    /// One of the projects of the machine that runs the chat; null (or
+    /// absent) moves the chat out of every project, into the home folder.
+    #[serde(default)]
+    project_id: Option<String>,
+}
+
+/// Move a chat to another project: from its next message its agent works
+/// in that project's folder, on every device's copy of the chat alike.
+async fn post_workspace(
+    State(app): State<Arc<App>>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<WorkspaceBody>,
+) -> Response {
+    let project = match body.project_id.as_deref().filter(|p| !p.is_empty()) {
+        None => None,
+        Some(raw) => match openremote_core::ProjectId::parse(raw) {
+            Some(project) => Some(project),
+            None => return error(StatusCode::BAD_REQUEST, "bad project id"),
+        },
+    };
+    let sup = Arc::clone(&app.supervisor);
+    receipted(&app, body.request_id, &id, |sid| async move {
+        let session = sup.move_chat(&sid, project.as_ref()).await?;
         Ok(serde_json::to_value(&session).unwrap_or(Value::Null))
     })
     .await
@@ -2204,11 +2330,17 @@ struct RequestBody {
 #[derive(Deserialize)]
 struct PromptBody {
     request_id: String,
+    /// The words; empty for a message of pictures alone.
+    #[serde(default)]
     text: String,
     /// The chats this message points at with @: from now on this chat's
     /// agent may read them, and only them.
     #[serde(default)]
     mentioned_chats: Vec<String>,
+    /// Pictures riding the message: what was pasted or dropped, a page's
+    /// screenshot, a picked element's picture.
+    #[serde(default)]
+    attachments: Vec<crate::images::Attachment>,
     /// The device the user wrote this from (the console's own, in Cloud):
     /// the chat's agent opens its new browser tabs there.
     #[serde(default)]
@@ -2236,13 +2368,75 @@ fn note_origin(
         return;
     };
     let known = |id: &openremote_core::DeviceId| {
-        app.cloud.mesh().is_some_and(|mesh| mesh.peer(*id).is_some())
+        app.cloud
+            .mesh()
+            .is_some_and(|mesh| mesh.peer(*id).is_some())
     };
     let origin = peer
         .map(|peer| peer.0.0.device_id)
-        .or_else(|| named.and_then(openremote_core::DeviceId::parse).filter(known))
+        .or_else(|| {
+            named
+                .and_then(openremote_core::DeviceId::parse)
+                .filter(known)
+        })
         .or_else(|| app.cloud.device_id());
     app.browser.note_origin(&chat.to_string(), origin);
+}
+
+/// The body limit of the routes a message takes: its pictures ride as
+/// base64.
+fn message_body_limit() -> axum::extract::DefaultBodyLimit {
+    axum::extract::DefaultBodyLimit::max(crate::images::MESSAGE_BODY_LIMIT)
+}
+
+/// A picture from the blob store, for this device's console: an `<img>`
+/// can't send the token, so the console fetches it into an object URL.
+async fn get_blob(State(app): State<Arc<App>>, AxumPath(sha): AxumPath<String>) -> Response {
+    blob_response(&app, sha, None).await
+}
+
+/// One chat's picture - how another device showing a synced chat asks the
+/// device that runs it. Only a picture that chat keeps answers.
+async fn get_session_blob(
+    State(app): State<Arc<App>>,
+    AxumPath((id, sha)): AxumPath<(String, String)>,
+) -> Response {
+    let Some(chat) = SessionId::parse(&id) else {
+        return error(StatusCode::NOT_FOUND, "no such chat");
+    };
+    blob_response(&app, sha, Some(chat)).await
+}
+
+async fn blob_response(app: &App, sha: String, chat: Option<SessionId>) -> Response {
+    let blobs = app.supervisor.blobs();
+    let found = tokio::task::spawn_blocking(move || {
+        if !openremote_core::blobs::Blobs::is_name(&sha) {
+            return Ok(None);
+        }
+        if chat.is_some_and(|chat| !blobs.held_by(&sha, chat)) {
+            return Ok(None);
+        }
+        blobs.get(&sha)
+    })
+    .await;
+    match found {
+        Ok(Ok(Some((mime, bytes)))) => (
+            [
+                (header::CONTENT_TYPE, mime),
+                // Named by its hash, so it never changes.
+                (
+                    header::CACHE_CONTROL,
+                    "private, max-age=31536000, immutable".to_string(),
+                ),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Ok(Ok(None)) => error(StatusCode::NOT_FOUND, "no such picture"),
+        Ok(Err(e)) => error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
 }
 
 #[derive(Deserialize)]
@@ -2318,6 +2512,11 @@ async fn post_prompt(
         return error(StatusCode::BAD_REQUEST, "bad session id");
     };
     note_origin(&app, &id, peer.as_ref(), body.from_device.as_deref());
+    // The pictures are checked before anything is recorded.
+    let images = match crate::images::decode(&body.attachments) {
+        Ok(images) => images,
+        Err(why) => return error(StatusCode::BAD_REQUEST, &why),
+    };
     let accepted = Receipt {
         request_id: body.request_id.clone(),
         session_id: Some(session_id),
@@ -2333,7 +2532,11 @@ async fn post_prompt(
     if let Err(err) = app.supervisor.note_mentions(&session_id, &pointed) {
         return supervisor_error(err);
     }
-    match app.supervisor.prompt(&session_id, &body.text).await {
+    match app
+        .supervisor
+        .prompt_with(&session_id, &body.text, images)
+        .await
+    {
         Ok(()) => {
             let receipt = Receipt {
                 request_id: body.request_id,
@@ -2414,13 +2617,23 @@ where
 async fn post_queue(
     State(app): State<Arc<App>>,
     AxumPath(id): AxumPath<String>,
+    peer: Option<axum::Extension<crate::host::PeerOrigin>>,
     Json(body): Json<PromptBody>,
 ) -> Response {
+    if let Some(receipt) = app.supervisor.receipt(&body.request_id) {
+        return receipt_response(&receipt);
+    }
+    note_origin(&app, &id, peer.as_ref(), body.from_device.as_deref());
+    // The pictures are checked before anything is recorded.
+    let images = match crate::images::decode(&body.attachments) {
+        Ok(images) => images,
+        Err(why) => return error(StatusCode::BAD_REQUEST, &why),
+    };
     let sup = Arc::clone(&app.supervisor);
     let pointed = mentioned(&body);
     receipted(&app, body.request_id, &id, |sid| async move {
         sup.note_mentions(&sid, &pointed)?;
-        let session = sup.queue_add(&sid, &body.text).await?;
+        let session = sup.queue_add_with(&sid, &body.text, images).await?;
         Ok(serde_json::to_value(&session).unwrap_or(Value::Null))
     })
     .await
@@ -2470,13 +2683,23 @@ async fn post_queue_resume(
 async fn post_steer(
     State(app): State<Arc<App>>,
     AxumPath(id): AxumPath<String>,
+    peer: Option<axum::Extension<crate::host::PeerOrigin>>,
     Json(body): Json<PromptBody>,
 ) -> Response {
+    if let Some(receipt) = app.supervisor.receipt(&body.request_id) {
+        return receipt_response(&receipt);
+    }
+    note_origin(&app, &id, peer.as_ref(), body.from_device.as_deref());
+    // The pictures are checked before anything is recorded.
+    let images = match crate::images::decode(&body.attachments) {
+        Ok(images) => images,
+        Err(why) => return error(StatusCode::BAD_REQUEST, &why),
+    };
     let sup = Arc::clone(&app.supervisor);
     let pointed = mentioned(&body);
     receipted(&app, body.request_id, &id, |sid| async move {
         sup.note_mentions(&sid, &pointed)?;
-        sup.steer(&sid, &body.text).await?;
+        sup.steer_with(&sid, &body.text, images).await?;
         Ok(json!({"steered": true}))
     })
     .await

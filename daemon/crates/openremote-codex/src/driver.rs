@@ -15,7 +15,9 @@ use std::time::Duration;
 
 use openremote_core::{DecisionKind, DecisionOption, TurnOutcome};
 use openremote_harness::events::{ApprovalRequest, DecisionSpec};
-use openremote_harness::{DriverError, DriverEvent, Resolution, SessionSettings, SpawnOptions};
+use openremote_harness::{
+    DriverError, DriverEvent, Prompt, Resolution, SessionSettings, SpawnOptions,
+};
 use serde_json::{Value, json};
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
@@ -274,8 +276,15 @@ impl Driver {
 
     /// Send one user message as a turn. If a turn is already running, the
     /// message steers it (Codex's own mechanism, `expectedTurnId`).
-    pub async fn send_prompt(&mut self, text: &str) -> Result<(), DriverError> {
-        let input = self.user_input(text).await;
+    pub async fn send_prompt(&mut self, prompt: &Prompt) -> Result<(), DriverError> {
+        let mut input = self.user_input(&prompt.text).await;
+        if let Value::Array(items) = &mut input {
+            // A message of pictures alone needs no empty text item.
+            if prompt.text.is_empty() && !prompt.images.is_empty() {
+                items.retain(|item| item.get("type").and_then(Value::as_str) != Some("text"));
+            }
+            items.extend(prompt.images.iter().map(image_item));
+        }
         let active = self.shared.active_turn.lock().unwrap().clone();
         if let Some(turn) = active {
             self.call(
@@ -440,6 +449,60 @@ impl Driver {
         self.stdin.write_all(line.as_bytes()).await?;
         self.stdin.flush().await?;
         Ok(())
+    }
+}
+
+/// A picture as Codex's own input item: a `localImage` it reads from disk
+/// where the daemon kept one as a file, else an `image` carrying the bytes
+/// as a data URL - the two picture forms its turn input takes.
+fn image_item(image: &openremote_harness::Image) -> Value {
+    match &image.path {
+        Some(path) => json!({"type": "localImage", "path": path.to_string_lossy()}),
+        None => json!({
+            "type": "image",
+            "url": format!("data:{};base64,{}", image.mime, image.data),
+        }),
+    }
+}
+
+/// An MCP tool call's name in the shape claude gives one
+/// (`mcp__<server>__<tool>`), so a tool reads the same in every chat
+/// whichever harness called it.
+fn mcp_tool_name(item: &Value) -> String {
+    let field = |key: &str| item.get(key).and_then(Value::as_str).unwrap_or_default();
+    format!("mcp__{}__{}", field("server"), field("tool"))
+}
+
+/// A finished MCP tool call as a tool result: the words and pictures of
+/// its content, or its error's words. A call that failed, or answered
+/// with MCP's own error flag, is an error.
+fn mcp_tool_result(item: &Value) -> DriverEvent {
+    let content = item
+        .pointer("/result/content")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let error = item
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .map(String::from);
+    let flagged = item.pointer("/result/isError").and_then(Value::as_bool) == Some(true);
+    let failed = item.get("status").and_then(Value::as_str) == Some("failed");
+    let words = openremote_harness::anthropic_wire::content_text(content);
+    DriverEvent::ToolResult {
+        tool_use_id: item
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        name: mcp_tool_name(item),
+        text: match (&error, words.is_empty()) {
+            (Some(error), true) => error.clone(),
+            (Some(error), false) => format!("{words}\n{error}"),
+            (None, _) => words,
+        },
+        is_error: failed || flagged || error.is_some(),
+        images: openremote_harness::anthropic_wire::content_images(content),
     }
 }
 
@@ -927,6 +990,18 @@ fn notification(method: &str, params: &Value, shared: &Shared) -> Option<DriverE
                     name: "commandExecution".into(),
                     input: item.clone(),
                 }),
+                // A call to one of the chat's MCP servers (OpenRemote's
+                // read-a-chat and browser tools among them): its arguments
+                // are the card's input, as claude's tool_use input is.
+                "mcpToolCall" => Some(DriverEvent::ToolStarted {
+                    tool_use_id: item
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    name: mcp_tool_name(item),
+                    input: item.get("arguments").cloned().unwrap_or(Value::Null),
+                }),
                 // Codex's own reasoning item, on models that emit them -
                 // its words, surfaced dim, never mixed into the reply.
                 "reasoning" => item
@@ -962,8 +1037,10 @@ fn notification(method: &str, params: &Value, shared: &Shared) -> Option<DriverE
                             .unwrap_or_default()
                             .to_string(),
                         is_error: exit != 0,
+                        images: Vec::new(),
                     })
                 }
+                "mcpToolCall" => Some(mcp_tool_result(item)),
                 _ => None,
             }
         }

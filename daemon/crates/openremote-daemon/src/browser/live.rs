@@ -233,7 +233,10 @@ pub async fn start_view(
     Json(body): Json<StartBody>,
 ) -> Response {
     let Some(Extension(PeerOrigin(peer))) = peer else {
-        return bad(StatusCode::FORBIDDEN, "only another of your devices can ask");
+        return bad(
+            StatusCode::FORBIDDEN,
+            "only another of your devices can ask",
+        );
     };
     let browser = &app.browser;
     if !browser.connected() {
@@ -265,7 +268,10 @@ pub async fn start_view(
             },
         );
         // One cast per tab, at the most any of its viewers asks for.
-        let cast = source.casts.entry(body.tab.clone()).or_insert_with(Cast::new);
+        let cast = source
+            .casts
+            .entry(body.tab.clone())
+            .or_insert_with(Cast::new);
         let (quality, max_width) = (cast.quality.max(quality), cast.max_width.max(max_width));
         let restart = !cast.started || quality != cast.quality || max_width != cast.max_width;
         cast.started = true;
@@ -306,7 +312,10 @@ pub async fn stop_view(
     peer: Option<Extension<PeerOrigin>>,
 ) -> Response {
     let Some(Extension(PeerOrigin(peer))) = peer else {
-        return bad(StatusCode::FORBIDDEN, "only another of your devices can ask");
+        return bad(
+            StatusCode::FORBIDDEN,
+            "only another of your devices can ask",
+        );
     };
     if !viewer_of(&app.browser, &id, peer.device_id) {
         return bad(StatusCode::NOT_FOUND, "no such live view");
@@ -330,7 +339,10 @@ pub async fn control_view(
     Json(body): Json<ControlBody>,
 ) -> Response {
     let Some(Extension(PeerOrigin(peer))) = peer else {
-        return bad(StatusCode::FORBIDDEN, "only another of your devices can ask");
+        return bad(
+            StatusCode::FORBIDDEN,
+            "only another of your devices can ask",
+        );
     };
     let browser = &app.browser;
     let (tab, hand_back) = {
@@ -575,7 +587,8 @@ fn pump(browser: &BrowserService, tab: &str) {
             let used: usize = view.bytes.iter().map(|(_, n)| n).sum();
             if used > 0 && used + picture.jpeg.len() > BUDGET {
                 if let Some((oldest, _)) = view.bytes.front() {
-                    wait = wait.max((*oldest + Duration::from_secs(1)).saturating_duration_since(now));
+                    wait =
+                        wait.max((*oldest + Duration::from_secs(1)).saturating_duration_since(now));
                 }
             }
             if !wait.is_zero() {
@@ -842,7 +855,9 @@ async fn watch_tab(State(app): State<Arc<App>>, Json(body): Json<WatchBody>) -> 
         _ => {
             return bad(
                 StatusCode::BAD_GATEWAY,
-                answer["error"].as_str().unwrap_or("the other device answered oddly"),
+                answer["error"]
+                    .as_str()
+                    .unwrap_or("the other device answered oddly"),
             );
         }
     }
@@ -1043,7 +1058,9 @@ async fn take_control(
             let answer: Value = serde_json::from_slice(&response.body).unwrap_or(Value::Null);
             bad(
                 StatusCode::from_u16(response.status).unwrap_or(StatusCode::BAD_GATEWAY),
-                answer["error"].as_str().unwrap_or("the other device said no"),
+                answer["error"]
+                    .as_str()
+                    .unwrap_or("the other device said no"),
             )
         }
         Err(e) => bad(StatusCode::BAD_GATEWAY, &e.to_string()),
@@ -1084,10 +1101,7 @@ async fn list_views(State(app): State<Arc<App>>) -> Response {
             .views
             .iter()
             .map(|(id, v)| {
-                let control = source
-                    .casts
-                    .get(&v.tab)
-                    .and_then(|c| c.control.as_deref())
+                let control = source.casts.get(&v.tab).and_then(|c| c.control.as_deref())
                     == Some(id.as_str());
                 json!({
                     "id": id,
@@ -1201,10 +1215,7 @@ pub fn on_bin(app: &Arc<App>, peer: PeerContext, payload: Vec<u8>) {
     };
     let me = app.cloud.device_id().map(|d| d.to_string());
     let mut watching = lock(&app.browser.live.watching);
-    let Some(view) = watching
-        .get_mut(id)
-        .filter(|v| v.device == peer.device_id)
-    else {
+    let Some(view) = watching.get_mut(id).filter(|v| v.device == peer.device_id) else {
         return;
     };
     if view.latest.as_ref().is_some_and(|l| l.seq >= seq) {
@@ -1234,8 +1245,7 @@ pub fn sweep(app: &Arc<App>) {
             .collect();
         let mut stalled = Vec::new();
         for view in source.views.values_mut() {
-            if view.sent > view.acked && view.sent_at.is_some_and(|at| at.elapsed() > LOST_AFTER)
-            {
+            if view.sent > view.acked && view.sent_at.is_some_and(|at| at.elapsed() > LOST_AFTER) {
                 view.acked = view.sent;
                 stalled.push(view.tab.clone());
             }

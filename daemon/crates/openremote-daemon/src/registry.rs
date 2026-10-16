@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use openremote_core::Harness;
 use openremote_harness::{
-    DriverError, DriverEvent, ModelDescriptor, Resolution, SessionSettings, SpawnOptions,
+    DriverError, DriverEvent, ModelDescriptor, Prompt, Resolution, SessionSettings, SpawnOptions,
 };
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -25,6 +25,8 @@ pub enum Backend {
     Pi(openremote_pi::Resolution),
     Opencode(openremote_opencode::Resolution),
     Agy(openremote_agy::Resolution),
+    /// A harness an installed plugin drives through the plugin protocol.
+    Plugin(crate::plugin_runtime::harness::PluginBackend),
 }
 
 /// A live session's driver, dispatch-only - every method reaches the
@@ -36,18 +38,37 @@ pub enum SessionDriver {
     Pi(openremote_pi::Driver),
     Opencode(openremote_opencode::Driver),
     Agy(openremote_agy::Driver),
+    Plugin(crate::plugin_runtime::harness::PluginDriver),
 }
 
 impl SessionDriver {
-    pub async fn send_prompt(&mut self, text: &str) -> Result<(), DriverError> {
+    /// One message with its pictures. A harness that reads no pictures
+    /// refuses a message that carries some (each driver says so in its
+    /// own name).
+    pub async fn send_prompt(&mut self, prompt: &Prompt) -> Result<(), DriverError> {
         match self {
-            SessionDriver::Claude(driver) => driver.send_prompt(text).await,
-            SessionDriver::Codex(driver) => driver.send_prompt(text).await,
-            SessionDriver::Grok(driver) => driver.send_prompt(text).await,
-            SessionDriver::Pi(driver) => driver.send_prompt(text).await,
-            SessionDriver::Opencode(driver) => driver.send_prompt(text).await,
-            SessionDriver::Agy(driver) => driver.send_prompt(text).await,
+            SessionDriver::Claude(driver) => driver.send_prompt(prompt).await,
+            SessionDriver::Codex(driver) => driver.send_prompt(prompt).await,
+            SessionDriver::Grok(driver) => driver.send_prompt(prompt).await,
+            SessionDriver::Pi(driver) => driver.send_prompt(prompt).await,
+            SessionDriver::Opencode(driver) => driver.send_prompt(prompt).await,
+            SessionDriver::Agy(driver) => driver.send_prompt(prompt).await,
+            SessionDriver::Plugin(driver) => driver.send_prompt(prompt).await,
         }
+    }
+
+    /// Whether this harness reads its pictures from files rather than
+    /// from the message's own bytes (codex's `localImage` items).
+    pub fn reads_image_files(&self) -> bool {
+        matches!(self, SessionDriver::Codex(_))
+    }
+
+    /// Whether the chat's MCP servers ride this harness (claude's
+    /// `--mcp-config`, codex's config overrides) - OpenRemote's own tools,
+    /// the browser's among them, with them. The others have no wire for
+    /// them yet.
+    pub fn rides_mcp(&self) -> bool {
+        matches!(self, SessionDriver::Claude(_) | SessionDriver::Codex(_))
     }
 
     /// Apply a live model, effort, or fast change in the harness's own
@@ -70,6 +91,8 @@ impl SessionDriver {
                 ))
             }
             SessionDriver::Pi(driver) => driver.apply_settings(settings).await,
+            // A plugin harness says itself what it can change live.
+            SessionDriver::Plugin(driver) => driver.apply_settings(settings).await,
         }
     }
 
@@ -81,6 +104,7 @@ impl SessionDriver {
             SessionDriver::Pi(driver) => driver.interrupt().await,
             SessionDriver::Opencode(driver) => driver.interrupt().await,
             SessionDriver::Agy(driver) => driver.interrupt().await,
+            SessionDriver::Plugin(driver) => driver.interrupt().await,
         }
     }
 
@@ -132,6 +156,9 @@ impl SessionDriver {
                 driver.answer(harness_ref, choice, request).await?;
                 Ok(AnswerOutcome::default())
             }
+            // A plugin harness answers with its own semantics (whether the
+            // choice interrupts the turn, what it grants the session).
+            SessionDriver::Plugin(driver) => driver.answer(harness_ref, choice, request).await,
         }
     }
 
@@ -143,6 +170,7 @@ impl SessionDriver {
             SessionDriver::Pi(driver) => driver.shutdown().await,
             SessionDriver::Opencode(driver) => driver.shutdown().await,
             SessionDriver::Agy(driver) => driver.shutdown().await,
+            SessionDriver::Plugin(driver) => driver.shutdown().await,
         }
     }
 
@@ -154,7 +182,10 @@ impl SessionDriver {
     /// (harness audit F8) - the driver advertises its own semantics, so no
     /// call site matches harness ids.
     pub fn per_prompt_process(&self) -> bool {
-        matches!(self, SessionDriver::Grok(_) | SessionDriver::Agy(_))
+        match self {
+            SessionDriver::Plugin(driver) => driver.per_prompt_process(),
+            _ => matches!(self, SessionDriver::Grok(_) | SessionDriver::Agy(_)),
+        }
     }
 
     /// Whether a message sent while a turn is working lands inside that
@@ -165,7 +196,10 @@ impl SessionDriver {
     /// would never complete. Pi and opencode stay out until their own
     /// mid-turn behavior is verified on a real install.
     pub fn steers_mid_turn(&self) -> bool {
-        matches!(self, SessionDriver::Claude(_) | SessionDriver::Codex(_))
+        match self {
+            SessionDriver::Plugin(driver) => driver.steers_mid_turn(),
+            _ => matches!(self, SessionDriver::Claude(_) | SessionDriver::Codex(_)),
+        }
     }
 }
 
@@ -200,6 +234,10 @@ impl Backend {
             Backend::Agy(resolution) => {
                 let (driver, rx) = openremote_agy::Driver::spawn(resolution, opts)?;
                 Ok((SessionDriver::Agy(driver), rx))
+            }
+            Backend::Plugin(backend) => {
+                let (driver, rx) = backend.spawn(opts).await?;
+                Ok((SessionDriver::Plugin(driver), rx))
             }
         }
     }
@@ -243,6 +281,8 @@ impl Backend {
                 .await
                 .map(Some),
             Backend::Grok(_) | Backend::Agy(_) => Ok(None),
+            // The plugin's own list, when it keeps one.
+            Backend::Plugin(backend) => backend.commands(cwd).await,
         }
     }
 
@@ -251,6 +291,35 @@ impl Backend {
     /// plugins reach every harness.
     pub fn runs_plugins(&self) -> bool {
         matches!(self, Backend::Claude(_))
+    }
+
+    /// Make the harness's own conversation `conversation` resumable from
+    /// `folder`, the chat's new folder, where the harness can follow it
+    /// there. `false` means it can't: the chat starts a fresh conversation
+    /// in the new folder, seeded with the chat so far. Reads and copies
+    /// files - run it off the async threads.
+    pub fn follow_conversation(&self, conversation: &str, folder: &std::path::Path) -> bool {
+        match self {
+            // claude files conversations under the folder they ran in; a
+            // copy in the new folder's directory is what `--resume` finds.
+            Backend::Claude(_) => {
+                openremote_claude::conversations::config_dir().is_some_and(|config| {
+                    openremote_claude::conversations::carry(&config, conversation, folder).is_ok()
+                })
+            }
+            // Codex keeps its threads in one place, and thread/resume
+            // takes the chat's new folder as the thread's cwd.
+            Backend::Codex(_) => true,
+            // Pi keeps its sessions inside the chat's own folder (its
+            // `--session-dir`), OpenCode files them by project, and grok's
+            // and Antigravity's own storage is unverified: none of them is
+            // known to find a conversation from another folder.
+            Backend::Pi(_)
+            | Backend::Opencode(_)
+            | Backend::Grok(_)
+            | Backend::Agy(_)
+            | Backend::Plugin(_) => false,
+        }
     }
 
     pub async fn models(&self) -> Result<Option<Vec<ModelDescriptor>>, DriverError> {
@@ -277,6 +346,8 @@ impl Backend {
             Backend::Opencode(_) => Ok(None),
             // Antigravity's `agy models` prints its own catalog (TSV).
             Backend::Agy(resolution) => openremote_agy::driver::models(resolution).await.map(Some),
+            // The manifest's list, else the plugin's own answer.
+            Backend::Plugin(backend) => backend.models().await,
         }
     }
 
@@ -306,6 +377,7 @@ impl Backend {
             // Antigravity's own settings file - the same source its
             // banner shows, verbatim (the effort rides inside the name).
             Backend::Agy(_) => openremote_agy::config::default_model().map(|m| (m, None)),
+            Backend::Plugin(backend) => backend.default_model(),
         }
     }
 }
@@ -317,6 +389,9 @@ struct RegistryEntry {
 
 pub struct HarnessRegistry {
     entries: Vec<RegistryEntry>,
+    /// The harnesses installed plugins drive, set by the plugin runtime
+    /// whenever plugins change (a probe never finds them).
+    plugins: Vec<RegistryEntry>,
     /// The overrides this registry was probed with - an install re-probes
     /// with the same ones.
     overrides: HashMap<String, PathBuf>,
@@ -340,11 +415,13 @@ fn harness_from(id: &str, name: &str, resolution: &Resolution, version: Option<&
         available: resolution.is_available(),
         enabled: true,
         fast_supported: fast_supported(id, version),
+        image_input: takes_images(id),
         signed_in: None,
         default_model: None,
         default_effort: None,
         permission_modes: permission_modes(id).iter().map(|s| s.to_string()).collect(),
         default_permission: default_permission(id).map(String::from),
+        plugin: None,
     }
 }
 
@@ -354,6 +431,7 @@ impl HarnessRegistry {
     pub fn none() -> Self {
         Self {
             entries: Vec::new(),
+            plugins: Vec::new(),
             overrides: HashMap::new(),
             node_version: None,
         }
@@ -446,6 +524,7 @@ impl HarnessRegistry {
 
         Self {
             entries,
+            plugins: Vec::new(),
             overrides: overrides.clone(),
             node_version: v_node,
         }
@@ -469,7 +548,7 @@ impl HarnessRegistry {
     /// install or a sign-in already re-probes, so the harness comes back
     /// the moment it is really there again.
     pub fn mark_unavailable(&mut self, id: &str) {
-        for entry in &mut self.entries {
+        for entry in self.entries.iter_mut().chain(self.plugins.iter_mut()) {
             if entry.harness.id == id {
                 entry.harness.available = false;
                 entry.backend = None;
@@ -485,14 +564,38 @@ impl HarnessRegistry {
     }
 
     pub fn harnesses(&self) -> Vec<Harness> {
-        self.entries.iter().map(|e| e.harness.clone()).collect()
+        self.entries
+            .iter()
+            .chain(self.plugins.iter())
+            .map(|e| e.harness.clone())
+            .collect()
     }
 
     pub fn backend(&self, id: &str) -> Option<&Backend> {
         self.entries
             .iter()
+            .chain(self.plugins.iter())
             .find(|e| e.harness.id == id && e.harness.available)
             .and_then(|e| e.backend.as_ref())
+    }
+
+    /// Replace the plugin harnesses. One whose id a built-in harness holds
+    /// is left out: the built-in six keep their ids.
+    pub fn set_plugins(&mut self, plugins: Vec<(Harness, Option<Backend>)>) {
+        let builtin: Vec<String> = self.entries.iter().map(|e| e.harness.id.clone()).collect();
+        self.plugins = plugins
+            .into_iter()
+            .filter(|(h, _)| !builtin.contains(&h.id))
+            .map(|(harness, backend)| RegistryEntry { harness, backend })
+            .collect();
+    }
+
+    /// The plugin harnesses, to carry into a fresh probe.
+    pub fn plugins(&self) -> Vec<(Harness, Option<Backend>)> {
+        self.plugins
+            .iter()
+            .map(|e| (e.harness.clone(), e.backend.clone()))
+            .collect()
     }
 
     /// Whether this harness slot is fixture-backed - the e2e suite
@@ -535,6 +638,15 @@ fn fast_supported(id: &str, version: Option<&str>) -> bool {
         ("codex", Some(v)) => version_at_least(v, (0, 110, 0)),
         _ => false,
     }
+}
+
+/// Whether a harness reads pictures sent with a message: claude takes
+/// base64 image blocks in its stream-json user message, codex takes local
+/// image files as turn input. The others' wires carry words alone, so
+/// their composers offer no attaching and the daemon refuses a message
+/// with pictures for them before anything is written.
+pub fn takes_images(id: &str) -> bool {
+    matches!(id, "claude" | "codex")
 }
 
 /// The permission words each harness's own CLI takes, in its spelling -
