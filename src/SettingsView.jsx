@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import AboutModal from './AboutModal.jsx'
+import UpdatesRow from './UpdatesRow.jsx'
 import McpServersSection from './McpServersSection.jsx'
 import DeleteChatModal from './DeleteChatModal.jsx'
 import SignInModal from './SignInModal.jsx'
@@ -877,6 +878,7 @@ export default function SettingsView({ onReplay, onOpenChat }) {
           </div>
           <button type="button" className="pn-btn" onClick={() => setAbout(true)}>About</button>
         </div>
+        {!isMobile && <UpdatesRow />}
         {!isMobile && (
           <div className="pn-row">
             <div>

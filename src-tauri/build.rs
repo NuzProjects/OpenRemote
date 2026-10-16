@@ -29,6 +29,8 @@ const COMMANDS: &[&str] = &[
     "browser_clear_site",
     "browser_open_external",
     "browser_reveal",
+    "update_check",
+    "update_install",
     "browser_permission",
     "browser_pick",
     "browser_screencast",

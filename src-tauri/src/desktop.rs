@@ -93,6 +93,7 @@ pub fn run() {
             None,
         ))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
         .manage(DaemonState::default())
         .manage(Sidecar::default())
@@ -124,6 +125,8 @@ pub fn run() {
             browser::browser_clear_site,
             browser::browser_open_external,
             browser::browser_reveal,
+            crate::updates::update_check,
+            crate::updates::update_install,
             browser::browser_permission,
             browser::browser_pick,
             browser::browser_screencast,
