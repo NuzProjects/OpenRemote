@@ -35,6 +35,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/browser/tabs/{tab}/control", post(control))
         .route("/browser/tools", get(tool_list))
         .route("/sessions/{id}/browser/call", post(call_tool))
+        .merge(super::adblock::routes())
 }
 
 fn bad(status: StatusCode, message: &str) -> Response {
@@ -147,9 +148,17 @@ async fn set_settings(
     State(app): State<Arc<App>>,
     Json(body): Json<serde_json::Map<String, Value>>,
 ) -> Response {
+    // Ad blocking acts on its setting: the browser hears it, and turning it
+    // on fetches the lists.
+    let adblock = body
+        .get(super::adblock::SETTING)
+        .map(|on| on.as_bool() == Some(true));
     let mut store = lock(&app.browser.store);
     for (key, value) in body {
         store.set_setting(&key, value);
+    }
+    if let Some(on) = adblock {
+        app.browser.adblock.changed(on);
     }
     Json(store.settings()).into_response()
 }

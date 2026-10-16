@@ -563,6 +563,81 @@ impl BrowserStore {
             self.put("session", &device, session);
         }
     }
+
+    // ---- ad blocking ----
+
+    /// The sites the user allows ads on (`example.com`), sorted. One key
+    /// per site, so two devices allowing different sites both keep theirs.
+    pub fn adblock_sites(&self) -> Vec<String> {
+        let mut sites: Vec<String> = self
+            .all("adblock_allow")
+            .filter(|(_, v)| v.as_bool() == Some(true))
+            .map(|(site, _)| site.to_string())
+            .collect();
+        sites.sort();
+        sites
+    }
+
+    pub fn set_adblock_site(&mut self, site: &str, allow: bool) {
+        let val = if allow { json!(true) } else { Value::Null };
+        self.put("adblock_allow", site, val);
+    }
+
+    // ---- import ----
+
+    /// Brings in another browser's bookmarks and visits in one write. Their
+    /// ids come from the importer and are the same every time, so importing
+    /// the same browser twice changes what changed and adds nothing twice.
+    pub fn import(&mut self, bookmarks: Vec<Bookmark>, visits: Vec<Visit>) {
+        let mut writes = Vec::with_capacity(bookmarks.len() + visits.len());
+        for mark in bookmarks {
+            let mut val = serde_json::to_value(&mark).expect("a bookmark serializes");
+            if let Some(map) = val.as_object_mut() {
+                map.remove("id");
+            }
+            writes.push(("bookmark", mark.id, val));
+        }
+        for visit in visits {
+            writes.push((
+                "visit",
+                visit.id,
+                json!({"url": visit.url, "title": visit.title, "at": visit.at}),
+            ));
+        }
+        self.put_all(writes);
+    }
+
+    /// Writes many keys with one append to the log, not one per key.
+    fn put_all(&mut self, writes: Vec<(&str, String, Value)>) {
+        if writes.is_empty() {
+            return;
+        }
+        let now = openremote_core::now_ms();
+        let mut lines = String::new();
+        let mut ops = Vec::with_capacity(writes.len());
+        for (col, key, val) in writes {
+            let op = Op {
+                at: self.stamp(now),
+                col: col.into(),
+                key,
+                val,
+            };
+            lines.push_str(&serde_json::to_string(&op).expect("an op serializes"));
+            lines.push('\n');
+            ops.push(op);
+        }
+        let path = self.log_path(&self.device);
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
+            let _ = file.write_all(lines.as_bytes());
+        }
+        self.ops_written += ops.len();
+        for op in ops {
+            self.apply(op);
+        }
+        if self.ops_written > self.live_count() + COMPACT_AFTER {
+            self.compact();
+        }
+    }
 }
 
 /// This device's id for the browser's logs: made once, kept in the folder.

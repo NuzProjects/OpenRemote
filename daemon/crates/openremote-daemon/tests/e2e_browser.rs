@@ -48,6 +48,7 @@ fn tab(id: &str, url: &str, title: &str, controller: Option<Controller>) -> TabI
         loading: false,
         opener: None,
         controller,
+        private: false,
     }
 }
 
