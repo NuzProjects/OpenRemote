@@ -14,7 +14,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
+use openremote_browser::Controller;
 use serde::{Deserialize, Serialize};
 use tauri::webview::{DownloadEvent, NewWindowResponse, PageLoadEvent, WebviewBuilder};
 use tauri::{
@@ -22,6 +24,8 @@ use tauri::{
     WebviewUrl,
 };
 
+mod agent;
+pub mod pipe;
 #[cfg(all(windows, debug_assertions))]
 pub mod selftest;
 #[cfg(windows)]
@@ -37,7 +41,13 @@ static DOWNLOADS: AtomicU64 = AtomicU64::new(0);
 pub struct Browser {
     next: AtomicU64,
     tabs: Mutex<HashMap<String, Tab>>,
+    /// Where the console last put a page: an agent's new tab takes its size.
+    last_bounds: Mutex<Option<Bounds>>,
 }
+
+/// A tab nobody has looked at for this long sleeps (background tabs cost
+/// nothing), unless an agent holds it.
+const SLEEP_AFTER: Duration = Duration::from_secs(5 * 60);
 
 /// What the console is told about a tab.
 #[derive(Clone, Debug, Default, Serialize)]
@@ -53,8 +63,28 @@ pub struct Tab {
     /// The tab that opened this one (a link with target=_blank or
     /// window.open), so the console can place it beside its opener.
     pub opener: Option<String>,
+    /// Who holds the tab besides the user: a chat's agent, or the user who
+    /// took it over from one (the tab strip's badge).
+    pub controller: Option<Controller>,
+    /// A private tab: a throwaway profile, no history, hidden from agents.
+    pub private: bool,
+    /// A private tab the user handed to agents.
+    pub shared: bool,
+    /// The page is showing something fullscreen (a video).
+    pub fullscreen: bool,
     #[serde(skip)]
     bounds: Option<Bounds>,
+    /// The console is showing it.
+    #[serde(skip)]
+    pub shown: bool,
+    /// Drawn off screen for an agent while the console shows another tab,
+    /// so its pictures and layout stay real.
+    #[serde(skip)]
+    pub parked: bool,
+    #[serde(skip)]
+    pub suspended: bool,
+    #[serde(skip)]
+    pub hidden_since: Option<Instant>,
 }
 
 /// A download a tab started, as the console lists it.
@@ -124,6 +154,28 @@ fn console() -> EventTarget {
     }
 }
 
+/// Where an agent's tab is drawn while the console isn't showing it: off
+/// screen, at the size pages are shown at.
+pub fn parked_bounds(app: &AppHandle) -> Bounds {
+    let last = *app
+        .state::<Browser>()
+        .last_bounds
+        .lock()
+        .expect("browser lock");
+    let size = last.unwrap_or(Bounds {
+        x: 0.0,
+        y: 0.0,
+        width: 1280.0,
+        height: 800.0,
+    });
+    Bounds {
+        x: -30000.0,
+        y: 0.0,
+        width: size.width.max(320.0),
+        height: size.height.max(240.0),
+    }
+}
+
 fn tab(app: &AppHandle, id: &str) -> Result<Webview, String> {
     app.get_webview(id)
         .filter(|_| id.starts_with("tab-"))
@@ -141,7 +193,36 @@ fn update(app: &AppHandle, id: &str, change: impl FnOnce(&mut Tab)) {
         change(tab);
         tab.clone()
     };
-    let _ = app.emit_to(console(), "browser:tab", snapshot);
+    let _ = app.emit_to(console(), "browser:tab", snapshot.clone());
+    pipe::tab_changed(app, &snapshot);
+}
+
+/// A page went fullscreen (a video's button) or came back: the whole
+/// window follows, and the console hides its chrome.
+pub fn fullscreen_changed(app: &AppHandle, tab: &str, on: bool) {
+    update(app, tab, |t| t.fullscreen = on);
+    if let Some(window) = app.get_window(CONSOLE) {
+        let _ = window.set_fullscreen(on);
+    }
+    let _ = app.emit_to(
+        console(),
+        "browser:fullscreen",
+        serde_json::json!({ "tab": tab, "on": on }),
+    );
+}
+
+/// Close a tab: its page, its record, and what agents knew of it.
+pub fn close_tab(app: &AppHandle, id: &str) -> Result<(), String> {
+    let webview = self::tab(app, id)?;
+    app.state::<Browser>()
+        .tabs
+        .lock()
+        .expect("browser lock")
+        .remove(id);
+    #[cfg(windows)]
+    agent::forget(id);
+    pipe::closed(app, id);
+    webview.close().map_err(|e| e.to_string())
 }
 
 /// Open a tab. It blocks until the window's thread has built the webview
@@ -154,6 +235,7 @@ pub fn open_tab(
     bounds: Bounds,
     show: bool,
     opener: Option<String>,
+    private: bool,
 ) -> Result<String, String> {
     if !allowed(&url, app.config().build.dev_url.as_ref()) {
         return Err(format!("{url} can't be opened here"));
@@ -194,8 +276,16 @@ pub fn open_tab(
                     .expect("browser lock")
                     .get(&opener)
                     .and_then(|tab| tab.bounds);
+                let private = app
+                    .state::<Browser>()
+                    .tabs
+                    .lock()
+                    .expect("browser lock")
+                    .get(&opener)
+                    .is_some_and(|tab| tab.private);
                 if let Some(bounds) = bounds {
-                    let _ = open_tab(app, url, bounds, true, Some(opener));
+                    // A private tab's popups stay private.
+                    let _ = open_tab(app, url, bounds, true, Some(opener), private);
                 }
             });
             NewWindowResponse::Deny
@@ -236,9 +326,13 @@ pub fn open_tab(
                 }
                 _ => return true,
             };
-            let _ = on_download.emit_to(console(), "browser:download", download);
+            let _ = on_download.emit_to(console(), "browser:download", download.clone());
+            pipe::download(&on_download, &download);
             true
-        });
+        })
+        // A private tab keeps nothing: WebView2's InPrivate, WebKit's
+        // non-persistent data store.
+        .incognito(private);
     #[cfg(windows)]
     let builder = builder.additional_browser_args(win::BROWSER_ARGS);
     browser.tabs.lock().expect("browser lock").insert(
@@ -248,7 +342,10 @@ pub fn open_tab(
             url: url.to_string(),
             loading: true,
             opener: opener.clone(),
+            private,
             bounds: Some(bounds),
+            shown: show,
+            hidden_since: (!show).then(Instant::now),
             ..Tab::default()
         },
     );
@@ -266,7 +363,10 @@ pub fn open_tab(
         let _ = webview.hide();
     }
     #[cfg(windows)]
-    win::attach(&app, &webview);
+    {
+        win::attach(&app, &webview);
+        win::watch_requests(&app, &webview);
+    }
     update(&app, &id, |_| {});
     Ok(id)
 }
@@ -277,9 +377,14 @@ pub async fn browser_open(
     url: String,
     bounds: Bounds,
     show: bool,
+    private: Option<bool>,
 ) -> Result<String, String> {
     let url = Url::parse(&url).map_err(|e| e.to_string())?;
-    open_tab(app, url, bounds, show, None)
+    *app.state::<Browser>()
+        .last_bounds
+        .lock()
+        .expect("browser lock") = Some(bounds);
+    open_tab(app, url, bounds, show, None, private.unwrap_or(false))
 }
 
 /// The tabs the shell holds, oldest first: a console that reloaded takes
@@ -298,27 +403,22 @@ pub fn browser_tabs(browser: State<'_, Browser>) -> Vec<Tab> {
 }
 
 #[tauri::command]
-pub fn browser_close(
-    app: AppHandle,
-    browser: State<'_, Browser>,
-    tab: String,
-) -> Result<(), String> {
-    let webview = self::tab(&app, &tab)?;
-    browser.tabs.lock().expect("browser lock").remove(&tab);
-    webview.close().map_err(|e| e.to_string())
+pub fn browser_close(app: AppHandle, tab: String) -> Result<(), String> {
+    close_tab(&app, &tab)
 }
 
 #[tauri::command]
 pub fn browser_set_bounds(app: AppHandle, tab: String, bounds: Bounds) -> Result<(), String> {
     let webview = self::tab(&app, &tab)?;
-    if let Some(known) = app
-        .state::<Browser>()
-        .tabs
-        .lock()
-        .expect("browser lock")
-        .get_mut(&tab)
-    {
+    let browser = app.state::<Browser>();
+    if let Some(known) = browser.tabs.lock().expect("browser lock").get_mut(&tab) {
         known.bounds = Some(bounds);
+        // The console placed it, so it is no longer parked off screen.
+        known.parked = false;
+    }
+    // Off-screen placements (the console's own picture swap) don't count.
+    if bounds.x > -10000.0 {
+        *browser.last_bounds.lock().expect("browser lock") = Some(bounds);
     }
     webview
         .set_bounds(tauri::Rect {
@@ -331,6 +431,22 @@ pub fn browser_set_bounds(app: AppHandle, tab: String, bounds: Bounds) -> Result
 #[tauri::command]
 pub fn browser_show(app: AppHandle, tab: String, focus: bool) -> Result<(), String> {
     let webview = self::tab(&app, &tab)?;
+    let suspended = {
+        let browser = app.state::<Browser>();
+        let mut tabs = browser.tabs.lock().expect("browser lock");
+        tabs.get_mut(&tab).is_some_and(|t| {
+            t.shown = true;
+            t.parked = false;
+            t.hidden_since = None;
+            std::mem::replace(&mut t.suspended, false)
+        })
+    };
+    #[cfg(windows)]
+    if suspended {
+        let _ = win::resume(&webview);
+    }
+    #[cfg(not(windows))]
+    let _ = suspended;
     webview.show().map_err(|e| e.to_string())?;
     if focus {
         let _ = webview.set_focus();
@@ -340,7 +456,19 @@ pub fn browser_show(app: AppHandle, tab: String, focus: bool) -> Result<(), Stri
 
 #[tauri::command]
 pub fn browser_hide(app: AppHandle, tab: String) -> Result<(), String> {
-    self::tab(&app, &tab)?.hide().map_err(|e| e.to_string())
+    let webview = self::tab(&app, &tab)?;
+    if let Some(t) = app
+        .state::<Browser>()
+        .tabs
+        .lock()
+        .expect("browser lock")
+        .get_mut(&tab)
+    {
+        t.shown = false;
+        t.parked = false;
+        t.hidden_since = Some(Instant::now());
+    }
+    webview.hide().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -378,26 +506,55 @@ pub fn browser_reload(app: AppHandle, tab: String) -> Result<(), String> {
     self::tab(&app, &tab)?.reload().map_err(|e| e.to_string())
 }
 
+/// A part of a page, in its own CSS pixels (relative to what's in view).
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct Clip {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
 /// A picture of the tab as it is now, as a data URL: the console shows it
 /// in the tab's place while one of its own menus or dialogs covers the
-/// page (a native webview always draws above the console's HTML).
+/// page (a native webview always draws above the console's HTML), and a
+/// screenshot sent to a chat. `clip` takes a part of what's in view.
 #[tauri::command]
-pub async fn browser_capture(app: AppHandle, tab: String) -> Result<String, String> {
+pub async fn browser_capture(
+    app: AppHandle,
+    tab: String,
+    clip: Option<Clip>,
+) -> Result<String, String> {
     let webview = self::tab(&app, &tab)?;
     #[cfg(windows)]
     {
-        let shot = win::cdp(
-            &webview,
-            "Page.captureScreenshot",
-            serde_json::json!({ "format": "jpeg", "quality": 80 }),
-        )
-        .await?;
+        let mut params = serde_json::json!({ "format": "jpeg", "quality": 80 });
+        if let Some(clip) = clip {
+            // The clip is in the page's coordinates: what's in view plus
+            // how far the page has scrolled.
+            let scrolled = win::cdp(&webview, "Page.getLayoutMetrics", serde_json::json!({}))
+                .await
+                .unwrap_or_default();
+            let (sx, sy) = (
+                scrolled["cssVisualViewport"]["pageX"]
+                    .as_f64()
+                    .unwrap_or(0.0),
+                scrolled["cssVisualViewport"]["pageY"]
+                    .as_f64()
+                    .unwrap_or(0.0),
+            );
+            params["clip"] = serde_json::json!({
+                "x": clip.x + sx, "y": clip.y + sy,
+                "width": clip.width.max(1.0), "height": clip.height.max(1.0), "scale": 1,
+            });
+        }
+        let shot = win::cdp(&webview, "Page.captureScreenshot", params).await?;
         let data = shot["data"].as_str().ok_or("no picture came back")?;
         Ok(format!("data:image/jpeg;base64,{data}"))
     }
     #[cfg(not(windows))]
     {
-        let _ = webview;
+        let _ = (webview, clip);
         Err("not on this platform yet".into())
     }
 }
@@ -634,6 +791,174 @@ pub fn browser_reveal(path: String) -> Result<(), String> {
         .arg(path.parent().unwrap_or(&path))
         .spawn();
     shown.map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// The user's answer to a site's permission request (`browser:permission`).
+#[tauri::command]
+pub fn browser_permission(app: AppHandle, tab: String, id: u64, allow: bool) -> Result<(), String> {
+    let webview = self::tab(&app, &tab)?;
+    #[cfg(windows)]
+    return win::answer_permission(&webview, id, allow);
+    #[cfg(not(windows))]
+    {
+        let _ = (webview, id, allow);
+        Err("not on this platform yet".into())
+    }
+}
+
+/// Start or stop the element picker: the element under the pointer is
+/// outlined and a click picks it (`browser:picked`), Esc gives up.
+#[tauri::command]
+pub async fn browser_pick(app: AppHandle, tab: String, on: bool) -> Result<(), String> {
+    let webview = self::tab(&app, &tab)?;
+    #[cfg(windows)]
+    return agent::pick(&app, &webview, on).await;
+    #[cfg(not(windows))]
+    {
+        let _ = (app, webview, on);
+        Err("not on this platform yet".into())
+    }
+}
+
+/// Start or stop a tab's stream of frames (`browser:frame`), for recording.
+#[tauri::command]
+pub async fn browser_screencast(app: AppHandle, tab: String, on: bool) -> Result<(), String> {
+    let webview = self::tab(&app, &tab)?;
+    #[cfg(windows)]
+    return agent::screencast(&app, &webview, on).await;
+    #[cfg(not(windows))]
+    {
+        let _ = (app, webview, on);
+        Err("not on this platform yet".into())
+    }
+}
+
+/// A file the console made (a recording) saved into Downloads under a
+/// name of its own; answers where it landed.
+#[tauri::command]
+pub fn browser_save_file(app: AppHandle, name: String, data: String) -> Result<String, String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data.as_bytes())
+        .map_err(|_| "the file came through damaged".to_string())?;
+    let dir = app.path().download_dir().map_err(|e| e.to_string())?;
+    // Only a file name: no folders, nothing a name could climb out with.
+    let clean: String = name
+        .chars()
+        .map(|c| {
+            if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+                '-'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let clean = clean.trim().trim_start_matches('.').to_string();
+    let clean = if clean.is_empty() {
+        "download".to_string()
+    } else {
+        clean
+    };
+    let (stem, ext) = match clean.rsplit_once('.') {
+        Some((stem, ext)) => (stem.to_string(), format!(".{ext}")),
+        None => (clean.clone(), String::new()),
+    };
+    let mut path = dir.join(&clean);
+    let mut n = 1;
+    while path.exists() {
+        path = dir.join(format!("{stem} ({n}){ext}"));
+        n += 1;
+    }
+    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    Ok(path.display().to_string())
+}
+
+/// Clear the browser's data for every site: "cookies", "cache",
+/// "storage" or "all". History lives in the daemon and is cleared there.
+#[tauri::command]
+pub async fn browser_clear_data(app: AppHandle, kinds: Vec<String>) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        // Every tab shares the profile, so any page can clear it; with none
+        // open, a blank one is made for the moment.
+        let open = app
+            .state::<Browser>()
+            .tabs
+            .lock()
+            .expect("browser lock")
+            .values()
+            .find(|t| !t.private)
+            .map(|t| t.id.clone());
+        let (id, temporary) = match open {
+            Some(id) => (id, false),
+            None => {
+                let maker = app.clone();
+                let blank = Url::parse("about:blank").expect("a fixed address");
+                let bounds = parked_bounds(&app);
+                let id = tauri::async_runtime::spawn_blocking(move || {
+                    open_tab(maker, blank, bounds, false, None, false)
+                })
+                .await
+                .map_err(|e| e.to_string())??;
+                (id, true)
+            }
+        };
+        let result = win::clear_data(&self::tab(&app, &id)?, &kinds).await;
+        if temporary {
+            let _ = close_tab(&app, &id);
+        }
+        result
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (app, kinds);
+        Err("not on this platform yet".into())
+    }
+}
+
+/// A private tab handed to agents, or taken back (agents see private tabs
+/// only while they're handed over; such tabs never reach history).
+#[tauri::command]
+pub fn browser_share(app: AppHandle, tab: String, on: bool) -> Result<(), String> {
+    self::tab(&app, &tab)?;
+    update(&app, &tab, |t| t.shared = on && t.private);
+    Ok(())
+}
+
+/// Let tabs nobody has looked at for a while sleep, unless an agent holds
+/// them or they're drawn for one.
+pub fn start_sweeper(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            let sleepy: Vec<String> = {
+                let browser = app.state::<Browser>();
+                let mut tabs = browser.tabs.lock().expect("browser lock");
+                tabs.values_mut()
+                    .filter(|t| {
+                        !t.shown
+                            && !t.parked
+                            && !t.suspended
+                            && t.controller.is_none()
+                            && t.hidden_since
+                                .is_some_and(|since| since.elapsed() > SLEEP_AFTER)
+                    })
+                    .map(|t| {
+                        t.suspended = true;
+                        t.id.clone()
+                    })
+                    .collect()
+            };
+            #[cfg(windows)]
+            for id in sleepy {
+                if let Ok(webview) = self::tab(&app, &id) {
+                    let _ = win::suspend(&webview);
+                }
+            }
+            #[cfg(not(windows))]
+            let _ = sleepy;
+        }
+    });
 }
 
 #[cfg(test)]

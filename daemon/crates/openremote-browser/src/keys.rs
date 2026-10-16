@@ -72,7 +72,11 @@ pub fn parse(chord: &str) -> Result<Press, String> {
             "shift" => SHIFT,
             "alt" | "option" => ALT,
             "meta" | "cmd" | "command" | "super" | "win" => META,
-            _ => return Err(format!("'{part}' is not a modifier (Control, Shift, Alt, Meta)")),
+            _ => {
+                return Err(format!(
+                    "'{part}' is not a modifier (Control, Shift, Alt, Meta)"
+                ));
+            }
         };
     }
     let (key, code, key_code, text) = key(last, modifiers & SHIFT != 0)

@@ -240,5 +240,10 @@ async fn call_tool(
             Err(_) => return bad(StatusCode::NOT_FOUND, "no such chat"),
         }
     };
-    Json(app.browser.run_tool(&chat, &body.name, &body.arguments).await).into_response()
+    Json(
+        app.browser
+            .run_tool(&chat, &body.name, &body.arguments)
+            .await,
+    )
+    .into_response()
 }

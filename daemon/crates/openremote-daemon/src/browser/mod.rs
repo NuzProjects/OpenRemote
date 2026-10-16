@@ -182,7 +182,7 @@ impl BrowserService {
     /// History: a page that finished loading is a visit; its title, when it
     /// arrives a moment later, lands on the same visit.
     fn remember_visit(&self, tab: &TabInfo) {
-        if tab.loading || !is_web(&tab.url) {
+        if tab.loading || tab.private || !is_web(&tab.url) {
             return;
         }
         let mut recorded = lock(&self.recorded);
@@ -313,7 +313,9 @@ impl BrowserService {
             }),
             (_, "release") => None,
             (None, _) => return Err("no agent is using this tab".into()),
-            (_, "take_over" | "hand_back") => return Ok(leases.get(tab).map(|l| l.controller.clone())),
+            (_, "take_over" | "hand_back") => {
+                return Ok(leases.get(tab).map(|l| l.controller.clone()));
+            }
             (_, other) => return Err(format!("'{other}' is not take_over, hand_back or release")),
         };
         match &next {
@@ -359,10 +361,15 @@ impl BrowserService {
     fn resolve_tab(&self, chat: &str, named: Option<&str>) -> Result<String, String> {
         let tabs = lock(&self.tabs);
         if let Some(named) = named.filter(|n| !n.trim().is_empty()) {
-            let named = named.trim().trim_start_matches("tab").trim();
+            // "tab-3", "3" and "tab 3" all name the browser's tab-3.
+            let bare = named
+                .trim()
+                .trim_start_matches("tab")
+                .trim_start_matches(['-', ' '])
+                .to_string();
             return tabs
                 .iter()
-                .find(|t| t.id == named)
+                .find(|t| t.id == named.trim() || t.id.trim_start_matches("tab-") == bare)
                 .map(|t| t.id.clone())
                 .ok_or_else(|| format!("there's no tab {named}; browser_tabs lists them"));
         }
@@ -486,10 +493,9 @@ impl BrowserService {
         }
         let field = |k: &str| answer.get(k).and_then(Value::as_str).unwrap_or("");
         match name {
-            "browser_snapshot" => tools::text_result(format!(
-                "{header}\n{}",
-                tools::untrusted(field("text"))
-            )),
+            "browser_snapshot" => {
+                tools::text_result(format!("{header}\n{}", tools::untrusted(field("text"))))
+            }
             "browser_screenshot" => json!({"content": [
                 {"type": "text", "text": header},
                 {"type": "image", "data": field("data"), "mimeType": answer.get("mime").and_then(Value::as_str).unwrap_or("image/jpeg")},
@@ -542,9 +548,7 @@ impl BrowserService {
             out.push_str("- ");
             out.push_str(&tools::header(&t.id, &t.url, &t.title));
             match &t.controller {
-                Some(Controller::Agent { chat: c, .. }) if c == chat => {
-                    out.push_str(" (yours)")
-                }
+                Some(Controller::Agent { chat: c, .. }) if c == chat => out.push_str(" (yours)"),
                 Some(Controller::Agent { title, .. }) => {
                     out.push_str(&format!(" (in use by the chat \"{title}\")"))
                 }
@@ -668,7 +672,11 @@ pub fn start_sweeper(app: &Arc<crate::app::App>) {
 mod tests {
     use super::*;
 
-    fn service() -> (tempfile::TempDir, Arc<BrowserService>, Arc<Mutex<Vec<ToHost>>>) {
+    fn service() -> (
+        tempfile::TempDir,
+        Arc<BrowserService>,
+        Arc<Mutex<Vec<ToHost>>>,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let service = Arc::new(BrowserService::new(dir.path()));
         let sent: Arc<Mutex<Vec<ToHost>>> = Arc::default();
@@ -724,7 +732,10 @@ mod tests {
         service.hold("1", "c1", "Fix login").unwrap();
         assert!(matches!(
             &sent.lock().unwrap().last().unwrap().call,
-            Call::Mark { controller: Some(Controller::Agent { .. }), .. }
+            Call::Mark {
+                controller: Some(Controller::Agent { .. }),
+                ..
+            }
         ));
         service.control("1", "take_over").unwrap();
         assert_eq!(service.hold("1", "c1", "Fix login"), Err(TAKEN_OVER.into()));
@@ -746,11 +757,8 @@ mod tests {
             caps: Caps::default(),
         });
         let answering = Arc::clone(&service);
-        let waiter = tokio::spawn(async move {
-            answering
-                .call(Call::Tabs, Duration::from_secs(5))
-                .await
-        });
+        let waiter =
+            tokio::spawn(async move { answering.call(Call::Tabs, Duration::from_secs(5)).await });
         let id = loop {
             if let Some(m) = sent.lock().unwrap().last() {
                 break m.id;
