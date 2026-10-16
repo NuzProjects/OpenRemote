@@ -4,7 +4,8 @@
 // its place. This decides when. Pure: tested without a DOM.
 
 // The console's floating surfaces: menus, the command palette, dialogs,
-// the narrow layout's sidebar backdrop.
+// the narrow layout's sidebar backdrop, and the browser's own: the address
+// bar's suggestions, the bookmark editor and the region picker.
 export const FLOATING = [
   '.nc-menu',
   '.cm-menu',
@@ -14,6 +15,9 @@ export const FLOATING = [
   '.ab-backdrop',
   '.sb-backdrop',
   '.vp-backdrop',
+  '.bw-suggest',
+  '.bw-pop',
+  '.bw-region',
 ].join(',')
 
 export function overlaps(a, b) {

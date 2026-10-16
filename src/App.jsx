@@ -607,7 +607,7 @@ function Shell() {
   ) : view === 'browser' ? (
     // The browser is this device's, in Local and Cloud alike.
     <Suspense fallback={null}>
-      <BrowserView />
+      <BrowserView focused={primaryFocused} />
     </Suspense>
   ) : view === 'plugins' ? (
     // Plugins and automations are this computer's: no Cloud sign-in needed.
@@ -661,7 +661,7 @@ function Shell() {
       // the same way.
       return (
         <Suspense fallback={null}>
-          <BrowserView />
+          <BrowserView focused={leaf.id === layout.focus} />
         </Suspense>
       )
     }

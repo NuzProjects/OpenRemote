@@ -17,9 +17,10 @@ const SUBMENU_LINGER_MS = 250
  * items: [{ label, icon, onSelect, disabled, hint, danger }], a { header: 'Text' }
  * for a group label, { divider: true }, or { label, icon, submenu: [items] }:
  * a row whose own list opens beside the menu - on hover, a click or a tap,
- * or the right arrow (the left arrow or Esc goes back).
+ * or the right arrow (the left arrow or Esc goes back). `className` adds to
+ * the menu's own (a long menu that scrolls, say).
  */
-export default function ContextMenu({ x, y, items, onClose }) {
+export default function ContextMenu({ x, y, items, onClose, className = '' }) {
   const ref = useRef(null)
   const subRef = useRef(null)
   const rows = useRef([])
@@ -221,7 +222,7 @@ export default function ContextMenu({ x, y, items, onClose }) {
       {createPortal(
         <div
           ref={ref}
-          className="nc-menu ctx-menu"
+          className={`nc-menu ctx-menu${className ? ` ${className}` : ''}`}
           role="menu"
           tabIndex={-1}
           style={{ left: x, top: y }}
