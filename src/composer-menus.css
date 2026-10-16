@@ -124,3 +124,10 @@
 html[data-reduce-motion] .cm-menu {
   animation: none;
 }
+
+/* How much more a search finds: a quiet line, never a row to pick. */
+.cm-note {
+  padding: 7px 12px 8px;
+  color: var(--text-3);
+  font-size: 12px;
+}

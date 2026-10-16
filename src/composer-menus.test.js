@@ -100,14 +100,37 @@ test('the / menu hides harness names OpenRemote takes over and dims what cannot 
     own,
   })
   const labels = items.map((i) => i.label)
-  assert.ok(labels.includes('/compact'))
+  assert.ok(labels.includes('/compact'), 'an everyday command shows before typing')
   assert.equal(items.filter((i) => i.label === '/model').length, 1)
-  assert.equal(items.find((i) => i.label === '/model').badge, 'OpenRemote')
-  const jot = items.find((i) => i.label === '/notes:jot')
+  assert.equal(items.find((i) => i.label === '/model').group, 'OpenRemote')
+  assert.ok(!labels.includes('/notes:jot'), 'skills wait for a search')
+  assert.ok(items.at(-1).note, 'and the menu says how much a search finds')
+  const jot = commandItems('jot', {
+    harnessCommands: [{ name: 'notes:jot', description: 'Jot', source: 'plugin', available: false, why: 'x' }],
+  }).find((i) => i.label === '/notes:jot')
+  assert.equal(jot.group, 'Skills')
   assert.equal(jot.disabled, true)
   assert.equal(jot.badge, 'plugin')
   // a query ranks names that start with it first
   assert.equal(commandItems('com', { harnessCommands: [{ name: 'compact' }, { name: 'recompile' }] })[0].label, '/compact')
+})
+
+test('the / menu leaves out what the harness keeps for itself and keeps rows short', () => {
+  const harnessCommands = [
+    { name: '__remote-workflow', description: 'Internal' },
+    { name: 'agents', description: '(removed) Ask Claude to manage subagents' },
+    { name: 'advisor', description: 'Let Claude consult a stronger model at key moments. More text here.', argument_hint: '[fable|opus|sonnet|off]' },
+    { name: 'auto-mode-setup', description: 'Set up', argument_hint: '[--request-id <uuid>] (--wizard posture=...)' },
+    { name: 'deep-research', description: 'Use this skill when the prompt needs research' },
+  ]
+  const labels = commandItems('a', { harnessCommands }).map((i) => i.label)
+  assert.ok(!labels.includes('/__remote-workflow'))
+  assert.ok(!labels.includes('/agents'))
+  const advisor = commandItems('advisor', { harnessCommands })[0]
+  assert.equal(advisor.detail, 'Let Claude consult a stronger model at key moments.')
+  assert.equal(advisor.hint, '[fable|opus|sonnet|off]', 'a short hint stays')
+  assert.equal(commandItems('auto', { harnessCommands })[0].hint, '', 'a usage line goes')
+  assert.equal(commandItems('deep', { harnessCommands })[0].group, 'Skills')
 })
 
 test('the @ menu groups files, agents, servers and chats', () => {
