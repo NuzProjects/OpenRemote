@@ -136,6 +136,14 @@ spacing.
 - **Reduce motion:** a first-class setting (`data-reduce-motion` attr) kills
   the breathe and update animations; the preference is applied before
   first paint at boot, not just carried within a session.
+- **Live view (browser, 2026-10-16):** another device's browser tab drawn on
+  a canvas in the page's own shape, under a header that names the device
+  and the tab, with a green "Live" mark that breathes while pictures
+  arrive. Take control is the one amber button; Stop viewing and Keyboard
+  are ghosts. Taps, drags and typing reach the page only while this device
+  holds control (a hint says so otherwise), and the pictures stop being
+  asked for whenever the view is hidden or covered. The device with the
+  tab says "Viewed from <device>" in an info bar, and who has control.
 
 ## Motion
 

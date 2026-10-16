@@ -102,12 +102,15 @@ export function useViews(api, on) {
 
 // "Viewed from <device>": another device is showing this tab live, and
 // whether its hand is on the page. Shown on the device with the tab, in
-// the page's flow.
-export function ViewedBar({ views, tab }) {
+// the page's flow, with a way to end the viewing from here.
+export function ViewedBar({ api, views, tab }) {
   const here = (views?.viewed ?? []).filter((v) => v.tab === tab)
   if (!here.length) return null
   const names = [...new Set(here.map((v) => v.viewer))].join(', ')
   const holding = here.find((v) => v.control)
+  const stop = () => {
+    for (const v of here) api?.call('POST', `/browser/views/${v.id}/end`).catch(() => {})
+  }
   return (
     <div className="bw-info" role="status">
       <span className="bw-agent-dot live" />
@@ -115,6 +118,9 @@ export function ViewedBar({ views, tab }) {
         Viewed from <strong className="pv">{names}</strong>
         {holding ? <> - <strong className="pv">{holding.viewer}</strong> has control</> : null}
       </span>
+      <button type="button" className="pn-btn" onClick={stop}>
+        Stop
+      </button>
     </div>
   )
 }
@@ -133,6 +139,14 @@ function coarsePointer() {
   } catch {
     return false
   }
+}
+
+// A reason the daemon gave in a few lowercase words, as a sentence.
+function sentence(text) {
+  const said = String(text ?? '').trim()
+  if (!said) return ''
+  const whole = said.charAt(0).toUpperCase() + said.slice(1)
+  return /[.!?]$/.test(whole) ? whole : whole + '.'
 }
 
 function sameInfo(a, b) {
@@ -476,6 +490,9 @@ export default function BrowserLiveView({ api, device, tab, title, active = true
   const onPointerDown = (e) => {
     stopFling()
     lastKind.current = e.pointerType
+    // The view isn't a place that takes the focus: the hidden textarea
+    // keeps it (and with it a phone's keyboard) through a tap or a drag.
+    e.preventDefault()
     if (e.pointerType === 'mouse') {
       if (e.button !== 0) return
       if (needControl()) return
@@ -710,7 +727,7 @@ export default function BrowserLiveView({ api, device, tab, title, active = true
         {phase === 'starting' && !frame && <div className="bl-cover quiet">Opening {name}'s tab</div>}
         {(phase === 'ended' || phase === 'failed') && (
           <div className="bl-cover" role="status">
-            <p>{message || 'This live view ended.'}</p>
+            <p>{sentence(message) || 'This live view ended.'}</p>
             {message !== 'the tab was closed' && (
               <button type="button" className="bl-btn primary" onClick={() => setRestart((n) => n + 1)}>
                 Show again

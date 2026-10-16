@@ -705,7 +705,7 @@ function BrowserDesktop({ paneFocused }) {
         />
       )}
       {!full && current?.controller && <AgentBar controller={current.controller} onControl={control} />}
-      {!full && current?.native && <ViewedBar views={views} tab={current.native} />}
+      {!full && current?.native && <ViewedBar api={api} views={views} tab={current.native} />}
       {!full && ctx.picking && <PickBar onCancel={pick} />}
       {!full && find && live && (
         <BrowserFindBar find={find} state={findState} inputRef={findRef} onFind={runFind} onClose={closeFind} />

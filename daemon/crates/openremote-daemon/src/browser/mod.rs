@@ -40,6 +40,7 @@ pub type Sender = Arc<dyn Fn(ToHost) + Send + Sync>;
 /// What an agent is told when there's no browser to use.
 pub const NO_BROWSER: &str = "There's no browser on this computer right now: OpenRemote's app isn't running here. Ask the user to open the OpenRemote app on this computer, then try again.";
 pub(crate) const TAKEN_OVER: &str = "The user has taken over this tab, so you can read it but not act in it. Wait for them to hand it back, or ask them in your reply.";
+const CONTROLLED: &str = "The user is controlling this tab from another device, so you can read it but not act in it. Wait for them to let go, or ask them in your reply.";
 
 /// A chat's hold on a tab ends this long after its agent's last action.
 const LEASE_IDLE: Duration = Duration::from_secs(60);
@@ -394,6 +395,11 @@ impl BrowserService {
     /// A chat's agent acting in a tab: the tab is the chat's now (its name
     /// shows on it). Refused while the user has the tab.
     fn hold(&self, tab: &str, chat: &str, title: &str) -> Result<(), String> {
+        // A viewer on another device holding the tab's control is the user's
+        // hand on it, whether or not an agent was using it when they took it.
+        if live::has_control(self, tab) {
+            return Err(CONTROLLED.into());
+        }
         let mut leases = lock(&self.leases);
         if let Some(lease) = leases.get(tab) {
             if matches!(lease.controller, Controller::Paused { .. }) {
@@ -630,7 +636,7 @@ impl BrowserService {
         let app = self.app();
         let app = app.as_ref();
         match name {
-            "browser_tabs" => return Ok(tools::text_result(self.tab_list(app, &chat.id).await)),
+            "browser_tabs" => return self.tab_list(app, &chat.id).await.map(tools::text_result),
             "browser_downloads" => {
                 if !self.connected() {
                     return Err(NO_BROWSER.into());
@@ -858,7 +864,7 @@ impl BrowserService {
 
     /// Every tab an agent can use: this computer's, then each of the
     /// user's other devices' that has a browser open, by device.
-    async fn tab_list(&self, app: Option<&Arc<App>>, chat: &str) -> String {
+    async fn tab_list(&self, app: Option<&Arc<App>>, chat: &str) -> Result<String, String> {
         let current = lock(&self.current).get(chat).cloned();
         let here = self.connected().then(|| self.tabs());
         let elsewhere = match app {
@@ -867,17 +873,17 @@ impl BrowserService {
         };
         if elsewhere.is_empty() {
             let Some(tabs) = here else {
-                return NO_BROWSER.into();
+                return Err(NO_BROWSER.into());
             };
             if tabs.is_empty() {
-                return "No tabs are open. Open one with browser_tab_open.".into();
+                return Ok("No tabs are open. Open one with browser_tab_open.".into());
             }
             let mut out = String::from("Open tabs (titles come from the pages):\n");
             for t in &tabs {
                 let default = current.as_ref() == Some(&TabRef::here(&t.id));
                 out.push_str(&tab_line(&t.id, t, chat, default));
             }
-            return out;
+            return Ok(out);
         }
         let devices = app.map(|app| remote::devices(app)).unwrap_or_default();
         let me = devices
@@ -918,7 +924,7 @@ impl BrowserService {
                 origin.name
             ));
         }
-        out
+        Ok(out)
     }
 
     fn download_list(&self) -> String {

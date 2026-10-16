@@ -442,6 +442,15 @@ fn viewer_of(browser: &BrowserService, id: &str, device: DeviceId) -> bool {
         .is_some_and(|v| v.viewer == device)
 }
 
+/// Whether a viewer on another device holds this tab's control: the user's
+/// hand is on the page, and no agent acts in it meanwhile.
+pub fn has_control(browser: &BrowserService, tab: &str) -> bool {
+    lock(&browser.live.source)
+        .casts
+        .get(tab)
+        .is_some_and(|cast| cast.control.is_some())
+}
+
 /// The name of the device holding a tab's control, if any.
 fn controller_name(browser: &BrowserService, tab: &str) -> Option<String> {
     let source = lock(&browser.live.source);

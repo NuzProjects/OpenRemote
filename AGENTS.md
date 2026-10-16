@@ -119,8 +119,16 @@ an old process is still alive; find it before re-running).
 - What a peer may ask is the allowlist in `http.rs` (`PEER_ROUTES`):
   copying synced chats (any device), driving the computer (machines
   only), acting on one chat (a machine, and the chat is synced and runs
-  there). Private chats never leave the computer. Add to that list with
-  care: everything on it is reachable by every device of the account.
+  there), and using the device's browser (the Browser tier: its tabs,
+  other devices' agents' calls on them, live views - any device while a
+  browser runs there, which is why a phone can use it). Private chats
+  never leave the computer, and neither do private browser tabs or
+  anything about saved passwords. Add to that list with care: everything
+  on it is reachable by every device of the account.
+- Live views of a browser tab ride binary mesh notes (`NOTE_BIN`) of up to
+  4 MB in chunks of 48 KiB, kept to a two-picture window per viewer and
+  about 1 MB a second so chat sync isn't starved. Only the viewer holding
+  control sends input, and taking control pauses an agent using the tab.
 - Secrets (the daemon token, `state.json`, `cloud/`) are owner-only files.
 
 ## Releases
