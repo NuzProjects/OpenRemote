@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import AboutModal from './AboutModal.jsx'
 import UpdatesRow from './UpdatesRow.jsx'
 import McpServersSection from './McpServersSection.jsx'
+import AgentsSection from './AgentsSection.jsx'
 import DeleteChatModal from './DeleteChatModal.jsx'
 import SignInModal from './SignInModal.jsx'
 import PickerMenu from './PickerMenu.jsx'
@@ -46,6 +47,7 @@ const SECTIONS = [
   { id: 'cloud', label: 'Cloud' },
   { id: 'daemon', label: 'Daemon' },
   { id: 'harnesses', label: 'Harnesses' },
+  { id: 'agents', label: 'Agents' },
   { id: 'mcp-servers', label: 'MCP servers' },
   { id: 'archived', label: 'Archived chats' },
   { id: 'this-install', label: 'This install' },
@@ -827,6 +829,8 @@ export default function SettingsView({ onReplay, onOpenChat }) {
 
       {!isMobile && (
         <>
+          <h2 className="pn-section" id="stg-agents">Agents</h2>
+          <AgentsSection />
           <h2 className="pn-section" id="stg-mcp-servers">MCP servers</h2>
           <McpServersSection />
         </>
