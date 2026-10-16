@@ -628,7 +628,7 @@ export default function SettingsView({ onReplay, onOpenChat }) {
         Click an action, then press its new keys. A key another action holds moves here.
         Backspace clears a key, Esc cancels.
       </p>
-      {GROUPS.map((group) => (
+      {GROUPS.filter((group) => group.id !== 'browser' || hasTauri).map((group) => (
         <div key={group.id} className="pn-list pn-list--tight kb-set">
           <div className="kb-group-label">{group.label}</div>
           {group.id === 'browser' && (

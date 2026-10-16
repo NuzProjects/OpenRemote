@@ -88,8 +88,10 @@ async function crop(picture, r, box) {
   }
 }
 
-// The phone gets its own browser layout; this is the desktop's.
-export default function BrowserView() {
+// The phone gets its own browser layout; this is the desktop's. `focused`
+// is false while the browser sits in a split pane the user isn't in (its
+// keys then stay the app's); left out, the browser is the view on screen.
+export default function BrowserView({ focused = true }) {
   if (!hasTauri || isMobile) {
     return (
       <div className="bw-unavailable">
@@ -98,7 +100,7 @@ export default function BrowserView() {
       </div>
     )
   }
-  return <BrowserDesktop />
+  return <BrowserDesktop paneFocused={focused} />
 }
 
 function Waiting({ tab, onRetry }) {
@@ -118,7 +120,7 @@ function Waiting({ tab, onRetry }) {
   )
 }
 
-function BrowserDesktop() {
+function BrowserDesktop({ paneFocused }) {
   const { tabs, active, downloads, finds, closed, prompts, picking, fullscreen, notice, icons } = useSyncExternalStore(
     subscribe,
     getState,
@@ -589,7 +591,7 @@ function BrowserDesktop() {
   // Typed in the browser's own chrome, through the app's keyboard layer
   // (rebindable in Settings > Keyboard). The list is a constant, so these
   // hooks run in the same order every render.
-  const keysOn = focused && !region
+  const keysOn = paneFocused && focused && !region
   for (const a of BROWSER_ACTIONS) {
     // eslint-disable-next-line react-hooks/rules-of-hooks
     useShortcut(a.id, () => handlers.current[a.id]?.(), keysOn)
