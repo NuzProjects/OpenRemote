@@ -256,6 +256,8 @@ export default function BrowserOmnibox({ tab, live, engine, bookmarked, api, ico
         onFocus={(e) => {
           setEditing(true)
           e.target.select()
+          // Suggestions will cover the page: its picture, taken ahead.
+          act.precapture?.()
         }}
         onBlur={() => {
           setEditing(false)

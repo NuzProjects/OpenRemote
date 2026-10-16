@@ -383,6 +383,8 @@ function BrowserDesktop({ paneFocused }) {
   const star = async (el) => {
     const tab = activeTab()
     if (editor || !tab?.url || internalPage(tab.url) === 'newtab') return
+    // The editor will cover the page: its picture, taken while the bookmark saves.
+    precapture()
     const anchor = anchorOf(el ?? document.querySelector('[data-bw-anchor="star"]'))
     let mark = bookmarkFor(getBrowserData().bookmarks, tab.url)
     let fresh = false
@@ -518,6 +520,7 @@ function BrowserDesktop({ paneFocused }) {
 
   const act = {
     go,
+    precapture,
     openTab,
     openTabAfter,
     openPrivate: () => openTab({ private: true }),
