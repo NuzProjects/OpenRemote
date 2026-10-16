@@ -11,6 +11,7 @@ import InstallPluginModal from './InstallPluginModal.jsx'
 import PluginDiscover from './PluginDiscover.jsx'
 import PluginMarketplaces from './PluginMarketplaces.jsx'
 import { POWER_SHORT, RUNTIME_LABEL, clashes, notSandboxed, sourceLabel } from './plugins.js'
+import { usePlugins } from './plugins-host.jsx'
 import './devices.css'
 import './panels.css'
 import './plugins.css'
@@ -67,6 +68,9 @@ export default function PluginsView() {
 
 function InstalledPlugins({ onUpdate }) {
   const { plugins, catalog, marketplaces, setPluginEnabled, removePlugin } = useConsole()
+  // What the console read of each plugin's openremote.json: whether it
+  // has settings to open.
+  const host = usePlugins()
   const [confirmRemove, setConfirmRemove] = useState(null)
   const [error, setError] = useState(null)
   const builtin = plugins?.builtin ?? []
@@ -141,6 +145,11 @@ function InstalledPlugins({ onUpdate }) {
                   <div className="pn-detail">{p.description ?? RUNTIME_LABEL[p.runtime]}</div>
                 </div>
                 <div className="pn-actions">
+                  {host?.records.get(p.id)?.ui.settings.length > 0 && (
+                    <button type="button" className="pn-btn" onClick={() => host.openSettings(p.id)}>
+                      Settings
+                    </button>
+                  )}
                   {entry?.update && (
                     <button type="button" className="pn-btn pg-update" onClick={() => onUpdate(entry)}>
                       Update{entry.version ? ` to ${entry.version}` : ''}
@@ -179,6 +188,13 @@ function InstalledPlugins({ onUpdate }) {
                   </span>
                 ))}
                 {notSandboxed(p) && <span className="pg-chip pg-warn">Runs as you, not sandboxed</span>}
+                {/* Where a JavaScript plugin shows up in the app. */}
+                {p.runtime === 'js' && host?.records.get(p.id)?.ui.inputs.length > 0 && (
+                  <span className="pg-chip">In the composer</span>
+                )}
+                {p.runtime === 'js' && host?.records.get(p.id)?.ui.views.length > 0 && (
+                  <span className="pg-chip">In the sidebar</span>
+                )}
               </div>
               <div className="pg-source pv">{sourceLabel(p.source)}</div>
               {orphaned && (

@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react'
 import AboutModal from './AboutModal.jsx'
 import UpdatesRow from './UpdatesRow.jsx'
 import McpServersSection from './McpServersSection.jsx'
+import PluginSettings from './PluginSettings.jsx'
+import { usePlugins } from './plugins-host.jsx'
+import { settingsAnchor } from './plugin-runtime.js'
 import DeleteChatModal from './DeleteChatModal.jsx'
 import SignInModal from './SignInModal.jsx'
 import PickerMenu from './PickerMenu.jsx'
@@ -47,6 +50,9 @@ const SECTIONS = [
   { id: 'daemon', label: 'Daemon' },
   { id: 'harnesses', label: 'Harnesses' },
   { id: 'mcp-servers', label: 'MCP servers' },
+  // Shown only when an installed plugin declares settings; each such
+  // plugin gets its own entry under it.
+  { id: 'plugins', label: 'Plugins' },
   { id: 'archived', label: 'Archived chats' },
   { id: 'this-install', label: 'This install' },
 ]
@@ -74,6 +80,8 @@ export default function SettingsView({ onReplay, onOpenChat }) {
     deleteChat,
   } = useConsole()
   const [deleting, setDeleting] = useState(null)
+  // The installed plugins that declare settings (Settings > Plugins).
+  const pluginSettings = usePlugins()?.settingsPlugins ?? []
   const archivedRows = archivedSessions(sessions, archived)
   const [confirmSignOut, setConfirmSignOut] = useState(false)
   const inCloud = signedIn(cloud)
@@ -294,25 +302,34 @@ export default function SettingsView({ onReplay, onOpenChat }) {
   return (
     <div className="settings">
       <nav className="stg-nav" aria-label="Settings sections">
-        {(isMobile ? SECTIONS.filter((s) => PHONE_SECTIONS.has(s.id)) : SECTIONS).map((s) => (
-          <a
-            key={s.id}
-            href={`#stg-${s.id}`}
-            className="stg-nav-btn"
-            onClick={
-              // On a phone a hash link would be a history entry, and the
-              // back button would land on it.
-              isMobile
-                ? (e) => {
-                    e.preventDefault()
-                    document.getElementById(`stg-${s.id}`)?.scrollIntoView({ behavior: 'smooth' })
-                  }
-                : undefined
-            }
-          >
-            {s.label}
-          </a>
-        ))}
+        {(isMobile ? SECTIONS.filter((s) => PHONE_SECTIONS.has(s.id)) : SECTIONS)
+          .filter((s) => s.id !== 'plugins' || pluginSettings.length > 0)
+          .flatMap((s) => [
+            { key: s.id, anchor: `stg-${s.id}`, label: s.label, sub: false },
+            // Settings > Plugins > <name>: each plugin's own entry.
+            ...(s.id === 'plugins'
+              ? pluginSettings.map((r) => ({ key: r.plugin.id, anchor: settingsAnchor(r.plugin.id), label: r.name, sub: true }))
+              : []),
+          ])
+          .map((link) => (
+            <a
+              key={link.key}
+              href={`#${link.anchor}`}
+              className={link.sub ? 'stg-nav-btn stg-nav-sub' : 'stg-nav-btn'}
+              onClick={
+                // On a phone a hash link would be a history entry, and the
+                // back button would land on it.
+                isMobile
+                  ? (e) => {
+                      e.preventDefault()
+                      document.getElementById(link.anchor)?.scrollIntoView({ behavior: 'smooth' })
+                    }
+                  : undefined
+              }
+            >
+              {link.label}
+            </a>
+          ))}
       </nav>
       <div className="panel stg-panel">
 
@@ -829,6 +846,17 @@ export default function SettingsView({ onReplay, onOpenChat }) {
         <>
           <h2 className="pn-section" id="stg-mcp-servers">MCP servers</h2>
           <McpServersSection />
+        </>
+      )}
+
+      {!isMobile && pluginSettings.length > 0 && (
+        <>
+          <h2 className="pn-section" id="stg-plugins">Plugins</h2>
+          <p className="pn-lead">
+            Each plugin&apos;s own settings. A secret, like an API key, stays with this computer&apos;s
+            OpenRemote: it is never shown again, and goes only into the plugin&apos;s own requests.
+          </p>
+          <PluginSettings />
         </>
       )}
 

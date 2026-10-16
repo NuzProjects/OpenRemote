@@ -43,6 +43,7 @@ import { ChatImages, chatImageDataUrl } from './chat-images.jsx'
 import { findDevServers, noteDevServers } from './devservers.js'
 import { isBrowsing, requestBrowser } from './browser-placement.js'
 import { browserTool, foldsResult, isBrowserTool } from './browser-tools.js'
+import PluginComposerButtons from './PluginComposerButtons.jsx'
 import './chatview.css'
 import './composer.css'
 
@@ -1299,6 +1300,14 @@ export default function ChatView({ chat, onBack, focused = true }) {
             </div>
             <div className="nc-send-group">
               {attach.button}
+              {/* The buttons plugins add to the composer (dictation's
+                  microphone, say), dimmed while the chat can't take text. */}
+              <PluginComposerButtons
+                inputRef={inputRef}
+                setText={setText}
+                composer={chat.id}
+                disabled={!alive || !reachable}
+              />
               {/* The harness's own permission word for this chat, by the
                   send button: the last thing to check before a message
                   goes. It is start-time on every harness - the chip

@@ -23,6 +23,7 @@ import { isMobile } from './platform.js'
 import { moveAttachments, removeAttachment, setFocusedComposer } from './attachments.js'
 import { AttachmentChips, useAttachInput, useAttachments } from './ComposerAttachments.jsx'
 import { outgoing } from './composer-attachments.js'
+import PluginComposerButtons from './PluginComposerButtons.jsx'
 import './newchat.css'
 import './composer.css'
 
@@ -685,6 +686,9 @@ export default function NewChat({
           </div>
           <div className="nc-send-group">
             {attach.button}
+            {/* The buttons plugins add to the composer (dictation's
+                microphone, say), beside the send button. */}
+            <PluginComposerButtons inputRef={inputRef} setText={setText} composer="new" disabled={busy} />
             {/* What the agent may do without asking sits by the send button:
                 the last thing to check before a message goes. */}
             {permissionWords.length > 0 && (

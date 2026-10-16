@@ -11,6 +11,7 @@ pub mod host;
 pub mod http;
 pub mod images;
 pub mod install;
+pub mod js_plugins;
 pub mod marketplace;
 pub mod mcp_chat;
 pub mod plugins;

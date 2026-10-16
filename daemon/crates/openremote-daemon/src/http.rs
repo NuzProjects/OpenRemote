@@ -53,6 +53,10 @@ pub fn router(app: Arc<App>) -> Router {
         // The built-in browser: this device's console and its chats' MCP
         // server only, never another device.
         .merge(crate::browser::routes::routes())
+        // A JavaScript plugin's frame, through this device's console only:
+        // its files, its settings, and the network and chats where the
+        // user granted them.
+        .merge(crate::js_plugins::routes())
         // The console reaches another device's API through this one.
         .route(
             "/devices/{id}/{*rest}",
@@ -1017,6 +1021,7 @@ async fn remove_plugin(
             app.plugins
                 .uninstall(&plugin.marketplace, &plugin.name)
                 .map_err(plugin_failure)?;
+            crate::js_plugins::forget_settings(&app.data_dir, &plugin.marketplace, &plugin.name);
             let mut store = crate::supervisor::lock_recovering(&app.store);
             store.remove_installed_plugin(&id).map_err(store_failure)?;
             Ok(json!({"removed": id}))

@@ -33,11 +33,15 @@ import ContextMenu from './ContextMenu.jsx'
 import DeleteChatModal from './DeleteChatModal.jsx'
 import { usePrivacyMode } from './privacy.js'
 import { useHint, useShortcut } from './keyboard.jsx'
+import { usePlugins } from './plugins-host.jsx'
+import { PluginIcon } from './plugin-icons.jsx'
 import './sidebar.css'
 
 export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit, onAddProject, onNewChatIn, onReveal }) {
   const { connection, sessions, chats, devices, thisDevice, projects, removeProject, archived, setChatArchived, deleteChat } = useConsole()
   const privacy = usePrivacyMode()
+  // The views enabled plugins add: the Plugins group's tiles.
+  const pluginViews = usePlugins()?.views ?? []
   const [query, setQuery] = useState('')
   const [collapsed, setCollapsed] = useState({})
   const [menu, setMenu] = useState(null)
@@ -148,6 +152,24 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
         icon: <Copy size={14} />,
         onSelect: () => navigator.clipboard?.writeText(row.title).catch(() => {}),
       },
+    ]
+  }
+
+  // Right-click on a plugin's tile: open it, or open it in a new split.
+  const viewMenuItems = (item) => {
+    const split = (dir, before) => () => onSplit(item.key, dir, before)
+    return [
+      { label: 'Open', icon: <PluginIcon name={item.icon} size={14} />, onSelect: () => onSelect(item.key) },
+      ...(onSplit && !isMobile
+        ? [
+            { divider: true },
+            { header: 'Open in a new split' },
+            { label: 'To the left', icon: <ArrowLeft size={14} />, onSelect: split('row', true) },
+            { label: 'To the right', icon: <ArrowRight size={14} />, onSelect: split('row', false) },
+            { label: 'Above', icon: <ArrowUp size={14} />, onSelect: split('col', true) },
+            { label: 'Below', icon: <ArrowDown size={14} />, onSelect: split('col', false) },
+          ]
+        : []),
     ]
   }
 
@@ -291,7 +313,31 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
         </div>
       </div>
 
-      <nav className="sb-list" aria-label="Projects and chats">
+      <nav className="sb-list" aria-label={pluginViews.length > 0 ? 'Plugins, projects and chats' : 'Projects and chats'}>
+        {/* The views plugins add, each a tile that opens in a pane. A
+            plugin runs in this console, so the group shows in Local and
+            Cloud alike; with no such plugin there is no group. */}
+        {pluginViews.length > 0 && (
+          <div className="sb-plugins" role="group" aria-label="Plugins">
+            <div className="section-title sb-plugins-title">Plugins</div>
+            {pluginViews.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                className={`sb-plugin-row${item.key === active ? ' active' : ''}`}
+                title={item.title === item.pluginName ? item.title : `${item.title} (${item.pluginName})`}
+                onClick={() => onSelect(item.key)}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  setMenu({ x: e.clientX, y: e.clientY, view: item })
+                }}
+              >
+                <PluginIcon name={item.icon} size={15} />
+                <span className="sb-plugin-name">{item.title}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <div className="section-title sb-projects-head">
           Projects
           {/* The one way a folder becomes a project - the same flow the
@@ -443,7 +489,12 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
         </div>
       </footer>
       {menu && (
-        <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.row)} onClose={() => setMenu(null)} />
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={menu.view ? viewMenuItems(menu.view) : menuItems(menu.row)}
+          onClose={() => setMenu(null)}
+        />
       )}
       {deleting && (
         <DeleteChatModal
