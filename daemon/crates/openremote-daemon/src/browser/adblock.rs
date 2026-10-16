@@ -211,14 +211,19 @@ impl Keeper {
                 || state.last_try.is_none_or(|at| at.elapsed() > RETRY_AFTER))
     }
 
-    /// What Settings shows.
-    pub fn status(&self, store: &BrowserStore) -> Value {
+    /// What Settings shows. `supported` is whether the browser here can
+    /// block at all (the desktop app on Windows, for now).
+    pub fn status(&self, store: &BrowserStore, supported: bool) -> Value {
         let on = is_on(store);
         let state = lock(&self.state);
+        let mut newest: Option<i64> = None;
         let lists: Vec<Value> = LISTS
             .iter()
             .map(|list| {
                 let disk = self.on_disk(list);
+                if let Some((at, _)) = disk {
+                    newest = newest.max(Some(ms(at)));
+                }
                 json!({
                     "id": list.id,
                     "title": list.title,
@@ -228,23 +233,25 @@ impl Keeper {
                 })
             })
             .collect();
-        let ready = LISTS.iter().all(|list| self.on_disk(list).is_some());
+        let stale = self.stale();
+        // Blocking works from the lists that came with the app until
+        // fresher ones are here, so "updating" and "error" are about the
+        // lists, not about whether anything is blocked.
         let word = if !on {
             "off"
-        } else if state.fetching {
-            "downloading"
-        } else if ready {
-            "ready"
-        } else if state.error.is_some() {
+        } else if state.fetching || (stale && state.error.is_none()) {
+            "updating"
+        } else if stale {
             "error"
         } else {
-            // On, and the keeper is about to fetch.
-            "downloading"
+            "on"
         };
         json!({
             "on": on,
+            "supported": supported,
             "state": word,
             "error": state.error,
+            "updated": newest,
             "lists": lists,
             "sites": store.adblock_sites(),
         })
@@ -265,9 +272,20 @@ fn ms(at: SystemTime) -> i64 {
         .unwrap_or(0)
 }
 
-/// Tells the browser, without waiting: whether there was a browser to tell.
+/// Whether the browser here can block ads and trackers.
+fn supported(service: &BrowserService) -> bool {
+    lock(&service.link)
+        .as_ref()
+        .is_some_and(|link| link.caps.adblock)
+}
+
+/// Tells the browser, without waiting: whether there was a browser able
+/// to hear it.
 fn tell(service: &BrowserService, call: Call) -> bool {
-    let send = lock(&service.link).as_ref().map(|l| l.send.clone());
+    let send = lock(&service.link)
+        .as_ref()
+        .filter(|link| link.caps.adblock)
+        .map(|link| link.send.clone());
     let Some(send) = send else {
         return false;
     };
@@ -279,14 +297,10 @@ fn tell(service: &BrowserService, call: Call) -> bool {
     true
 }
 
-/// One look: fetch lists that need it, then tell the browser what changed.
-async fn keep(app: &App) {
+/// Tells the browser what blocking should be doing, if that changed (or
+/// the browser asked to hear it all again).
+fn inform(app: &App) {
     let keeper = &app.browser.adblock;
-    let on = is_on(&lock(&app.browser.store));
-    if on && keeper.stale() && keeper.may_fetch() {
-        keeper.fetch().await;
-    }
-    // Read again: the user may have changed something while the lists came.
     let (on, allow) = {
         let store = lock(&app.browser.store);
         (is_on(&store), store.adblock_sites())
@@ -296,6 +310,22 @@ async fn keep(app: &App) {
     let changed = lock(&keeper.state).told.as_ref() != Some(&call);
     if (resend || changed) && tell(&app.browser, call.clone()) {
         lock(&keeper.state).told = Some(call);
+    } else if resend {
+        // Nobody could hear it yet: ask again when a browser says hello.
+        keeper.resend.store(true, Ordering::SeqCst);
+    }
+}
+
+/// One look. The browser is told first - it blocks with the lists that
+/// came with the app while fresher ones are fetched - and again when the
+/// fetch changed what it should use.
+async fn keep(app: &App) {
+    let keeper = &app.browser.adblock;
+    inform(app);
+    let on = is_on(&lock(&app.browser.store));
+    if on && keeper.stale() && keeper.may_fetch() {
+        keeper.fetch().await;
+        inform(app);
     }
 }
 
@@ -334,7 +364,7 @@ fn bad(message: &str) -> Response {
 /// Whether blocking is on, the lists' state and the allowed sites.
 async fn status(State(app): State<Arc<App>>) -> Response {
     let store = lock(&app.browser.store);
-    Json(app.browser.adblock.status(&store)).into_response()
+    Json(app.browser.adblock.status(&store, supported(&app.browser))).into_response()
 }
 
 #[derive(Deserialize)]
@@ -353,11 +383,11 @@ async fn set_on(State(app): State<Arc<App>>, Json(body): Json<OnBody>) -> Respon
     }
     keeper.changed(body.on);
     let store = lock(&app.browser.store);
-    let mut status = keeper.status(&store);
+    let mut status = keeper.status(&store, supported(&app.browser));
     if body.on && keeper.stale() {
         // The keeper is waking to fetch them: said now, so the switch
-        // doesn't read "ready" or an old error for a moment.
-        status["state"] = json!("downloading");
+        // doesn't show an old error for a moment.
+        status["state"] = json!("updating");
         status["error"] = Value::Null;
     }
     Json(status).into_response()
@@ -381,7 +411,7 @@ async fn set_site(State(app): State<Arc<App>>, Json(body): Json<SiteBody>) -> Re
     }
     app.browser.adblock.changed(false);
     let store = lock(&app.browser.store);
-    Json(app.browser.adblock.status(&store)).into_response()
+    Json(app.browser.adblock.status(&store, supported(&app.browser))).into_response()
 }
 
 /// A host name or address as the browser names a site: no scheme, path,

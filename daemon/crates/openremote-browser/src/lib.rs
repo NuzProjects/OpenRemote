@@ -76,6 +76,9 @@ pub struct Caps {
     /// Files can be put into a page's file picker.
     #[serde(default)]
     pub upload: bool,
+    /// The browser can block ads and trackers: it answers [`Call::Adblock`].
+    #[serde(default)]
+    pub adblock: bool,
 }
 
 /// One tab, as the daemon and agents see it.
