@@ -38,6 +38,7 @@ export default function NewChat({
   addProjectOpen = false,
   onAddProjectDone,
   presetProject = null,
+  onPresetDone = null,
   focused = true,
   onOpenPlugins = null,
 }) {
@@ -92,14 +93,18 @@ export default function NewChat({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [addProjectOpen])
 
-  // The command palette's project row: New chat, already in that project.
-  // The palette lists this computer's projects, so the chat runs here.
+  // New chat already in a project - the sidebar's + and project menu, its
+  // new-chat-in-this-project key, the palette's project rows. The project
+  // may be one of another machine's (Cloud): the chat then runs there.
+  // A preset is used once: a later visit (the New chat tile, Ctrl+N)
+  // starts clean, and the App forgets it.
   useEffect(() => {
     if (!presetProject) return
-    setTarget(null)
+    setTarget(presetProject.device ?? null)
     setProjectId(presetProject.id)
     // Straight to typing: the project is chosen, the message is next.
     requestAnimationFrame(() => inputRef.current?.focus())
+    onPresetDone?.()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [presetProject?.nonce])
 
@@ -129,8 +134,13 @@ export default function NewChat({
   // The mode switch starts the machine choice over. A chat in Local runs
   // on this computer even when Cloud had the New chat aimed at a machine,
   // and the harness list follows the machine - so the target, and the
-  // project that belongs to it, come back to here.
+  // project that belongs to it, come back to here. Not on mount: a fresh
+  // New chat has nothing to start over, and the effect above has just
+  // chosen its project - this one ran after it and cleared the choice.
+  const shownMode = useRef(mode)
   useEffect(() => {
+    if (shownMode.current === mode) return
+    shownMode.current = mode
     setTarget(null)
     setProjectId(null)
   }, [mode])

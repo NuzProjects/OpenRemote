@@ -31,7 +31,7 @@ import {
   X,
 } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
-import { projectName, sections } from './projects.js'
+import { projectFor, projectName, sections } from './projects.js'
 import { chatStatus } from './state/reducer.js'
 import { activeSessions } from './archive.js'
 import { deviceName, isPhone, sessionsForMode } from './cloud.js'
@@ -40,7 +40,7 @@ import { HarnessMark } from './brand-marks.jsx'
 import ContextMenu from './ContextMenu.jsx'
 import DeleteChatModal from './DeleteChatModal.jsx'
 import { usePrivacyMode } from './privacy.js'
-import { useHint, useShortcut } from './keyboard.jsx'
+import { useHint, useKeyboard, useShortcut } from './keyboard.jsx'
 import { usePlugins } from './plugins-host.jsx'
 import { PluginIcon } from './plugin-icons.jsx'
 import { useMoveChat } from './useMoveChat.jsx'
@@ -233,6 +233,24 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   const hintNew = useHint('new-chat')
   const hintSearch = useHint('search-chats')
 
+  // The project a chat belongs to, with the machine it lives on (null: this
+  // computer's), or null for a chat outside every project.
+  const projectOf = (session) => {
+    const project = projectFor(projects, session.workspace)
+    return project ? { project, device: null } : null
+  }
+  // New chat in this project: the open chat's project, by the same path as
+  // the project's + - the home screen opens with it chosen. With no chat
+  // open, or one outside every project, it is plain New chat (Ctrl+N).
+  const openSession = (sessions ?? []).find((s) => s.id === active)
+  const openProject = openSession ? projectOf(openSession) : null
+  useShortcut('new-chat-in-project', () => {
+    if (openProject) onNewChatIn?.(openProject.project.id, openProject.device)
+    else onSelect('new')
+  })
+  const kb = useKeyboard()
+  const keysHere = isMobile ? '' : (kb?.label('new-chat-in-project') ?? '')
+
   const archive = (id) => {
     setChatArchived(id, true)
     if (id === active) onSelect('new')
@@ -350,7 +368,13 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   const projectMenuItems = (v) => {
     const folder = v.project.folders[0]
     return [
-      { label: 'New chat here', icon: <Plus size={14} />, onSelect: () => onNewChatIn?.(v.project.id, v.device) },
+      {
+        label: 'New chat here',
+        icon: <Plus size={14} />,
+        // The key says what it does only for the open chat's project.
+        hint: openProject?.project.id === v.project.id && !v.device ? keysHere : undefined,
+        onSelect: () => onNewChatIn?.(v.project.id, v.device),
+      },
       // The file manager is the desktop app's, and the folder this
       // computer's: a project of another machine has no folder here.
       ...(hasTauri && !isMobile && !v.device
