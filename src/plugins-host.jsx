@@ -29,6 +29,7 @@ import {
   steerAction,
   toBase64,
   viewKey,
+  withDefaults,
 } from './plugin-runtime.js'
 import './plugin-ui.css'
 
@@ -293,7 +294,9 @@ export function PluginProvider({ children }) {
   // call's params, and answers [result, transfer?]. refusal() has already
   // checked the power.
   const calls = {
-    'settings.get': async ({ plugin }) => [settingsView(await live.current.api.pluginSettings(plugin.id))],
+    'settings.get': async ({ plugin, ui }) => [
+      withDefaults(settingsView(await live.current.api.pluginSettings(plugin.id)), ui.settings),
+    ],
 
     'files.read': async ({ plugin }, { path }) => {
       if (!insidePath(path)) throw new Error(`${path} is not a path inside the plugin's folder`)
@@ -600,8 +603,9 @@ export function PluginProvider({ children }) {
   const saveSettings = useCallback(
     async (pluginId, values) => {
       const view = settingsView(await api.savePluginSettings(pluginId, values))
+      const read = withDefaults(view, live.current.records.get(pluginId)?.ui.settings)
       for (const frame of framesRef.current.values()) {
-        if (frame.pluginId === pluginId) postEvent(frame, 'settings.changed', view)
+        if (frame.pluginId === pluginId) postEvent(frame, 'settings.changed', read)
       }
       return view
     },

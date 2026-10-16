@@ -288,6 +288,19 @@ export function shownValue(setting, values) {
   return saved === undefined || saved === null ? setting.default : saved
 }
 
+// The settings as a plugin reads them: every value it declares (its
+// default where none was saved) and every secret as 'set' or 'unset' -
+// whatever the daemon's answer leaves out.
+export function withDefaults(view, settings) {
+  const values = { ...(view?.values ?? {}) }
+  const secrets = { ...(view?.secrets ?? {}) }
+  for (const setting of settings ?? []) {
+    if (setting.type === 'secret') secrets[setting.key] ??= 'unset'
+    else values[setting.key] = shownValue(setting, values)
+  }
+  return { values, secrets }
+}
+
 // What a field's raw input means for its setting: the value to save (null
 // goes back to the plugin's default), or the words for what is wrong.
 export function parseInput(setting, raw) {
