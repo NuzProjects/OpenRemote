@@ -42,13 +42,17 @@ impl Drop for Moving {
 }
 
 /// Moving needs a quiet chat: a running turn would be cut off mid-work.
-fn refuse_busy(session: &Session) -> Result<(), SupervisorError> {
+/// `live` is whether the harness is up. A chat "starting" with its harness
+/// up is only waiting for its first message (claude, grok and agy name
+/// their conversation then) and moves like an idle one; starting with no
+/// harness yet is a spawn still under way, in the folder it had.
+fn refuse_busy(session: &Session, live: bool) -> Result<(), SupervisorError> {
     match session.status {
         SessionStatus::Working | SessionStatus::Waiting => Err(SupervisorError::Conflict(
             "a turn is running in this chat - wait for it to finish, or stop it, then move the chat"
                 .into(),
         )),
-        SessionStatus::Starting => Err(SupervisorError::Conflict(
+        SessionStatus::Starting if !live => Err(SupervisorError::Conflict(
             "this chat is starting - try again in a moment".into(),
         )),
         _ => Ok(()),
@@ -111,7 +115,6 @@ impl Supervisor {
                 Some(folder)
             }
         };
-        refuse_busy(&session)?;
         let _moving = {
             let mut chats = lock_recovering(moving());
             if !chats.insert(*id) {
@@ -121,11 +124,10 @@ impl Supervisor {
             }
             Moving(*id)
         };
-        // A turn that opened while the project was looked up still wins.
-        refuse_busy(&self.session(id)?)?;
+        let live = self.entry(id).await.is_ok();
+        refuse_busy(&self.session(id)?, live)?;
         // The harness lets go of its conversation, and of its files,
         // before the conversation moves.
-        let live = self.entry(id).await.is_ok();
         if live {
             match self.stop(id).await {
                 // Stopped by someone else meanwhile: just as quiet.

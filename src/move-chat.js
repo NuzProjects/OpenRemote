@@ -32,12 +32,15 @@ export function wouldMove(projects, workspace, project) {
   return project ? here?.id !== project.id : here != null
 }
 
-/** A turn running, or a harness still starting, keeps a chat where it is. */
+/**
+ * A running turn keeps a chat where it is. "Starting" doesn't: a harness
+ * that names its conversation at the first message shows it until then,
+ * and the daemon itself refuses the rare move that lands mid-spawn.
+ */
 export function busyReason(status) {
   if (status === 'running' || status === 'waiting') {
     return 'A turn is running in this chat. Wait for it to finish, or stop it, then move the chat.'
   }
-  if (status === 'starting') return 'This chat is starting. Try again in a moment.'
   return null
 }
 
