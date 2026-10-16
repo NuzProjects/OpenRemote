@@ -1039,10 +1039,26 @@ export default function ChatView({ chat, onBack, focused = true }) {
                 <HarnessMark harness={chat.harness} size={16} />
                 {harnessName(chat.harness)}
               </span>
-              {/* The harness's own permission word for this chat. It is
-                  start-time on every harness - the chip changes it only
-                  on a stopped chat (resume lands it); on a running one
-                  it stays the quiet fact the facts row already shows. */}
+              {canChange.fast && harness?.fast_supported && (
+                <button
+                  type="button"
+                  className={`nc-meta nc-fast${chat.fast ? ' on' : ''}`}
+                  onClick={() => changeSettings({ fast: !chat.fast })}
+                  aria-pressed={Boolean(chat.fast)}
+                  title={hintFast("The harness's own fast mode")}
+                >
+                  <Lightning size={13} weight={chat.fast ? 'fill' : 'light'} />
+                  Fast
+                </button>
+              )}
+            </div>
+            <div className="nc-send-group">
+              {/* The harness's own permission word for this chat, by the
+                  send button: the last thing to check before a message
+                  goes. It is start-time on every harness - the chip
+                  changes it only on a stopped chat (resume lands it); on a
+                  running one it stays the quiet fact the facts row already
+                  shows. */}
               {(harness?.permission_modes ?? []).length > 0 &&
                 (canChange.permission && !chat.running ? (
                   <button
@@ -1089,20 +1105,6 @@ export default function ChatView({ chat, onBack, focused = true }) {
                   }
                 />
               )}
-              {canChange.fast && harness?.fast_supported && (
-                <button
-                  type="button"
-                  className={`nc-meta nc-fast${chat.fast ? ' on' : ''}`}
-                  onClick={() => changeSettings({ fast: !chat.fast })}
-                  aria-pressed={Boolean(chat.fast)}
-                  title={hintFast("The harness's own fast mode")}
-                >
-                  <Lightning size={13} weight={chat.fast ? 'fill' : 'light'} />
-                  Fast
-                </button>
-              )}
-            </div>
-            <div className="nc-send-group">
               {/* The ring renders wherever usage is known - the composer's
                   one live element; a claude chat carries it from its first
                   breath at zero. Codex reports its window too; claude
