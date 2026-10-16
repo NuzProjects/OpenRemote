@@ -23,3 +23,21 @@ export const DOT_WORDS = {
   running: 'Running',
   starting: 'Starting',
 }
+
+// How urgent each dot is, for a project folded over its chats: the row
+// shows the most urgent state inside it, so a folded tree still tells the
+// truth. Waiting on you beats failed beats done-not-seen beats running
+// (a boot counts as running).
+const URGENCY = { waiting: 4, failed: 3, unseen: 2, running: 1, starting: 1 }
+
+/**
+ * The most urgent dot among a project's chats - 'waiting', 'failed',
+ * 'unseen' or 'running' - or null when nothing in it needs a mark. Takes
+ * the chats' dot kinds (see dotKind), so an away device's stale status
+ * never counts.
+ */
+export function rollup(kinds) {
+  let best = null
+  for (const kind of kinds) if ((URGENCY[kind] ?? 0) > (URGENCY[best] ?? 0)) best = kind
+  return best === 'starting' ? 'running' : best
+}

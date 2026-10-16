@@ -42,7 +42,7 @@ import { PluginIcon } from './plugin-icons.jsx'
 import { useMoveChat } from './useMoveChat.jsx'
 import { usePersistedList, useUnseen } from './useSidebarMarks.js'
 import { KEYS, toggled } from './sidebar-marks.js'
-import { DOT_WORDS, dotKind } from './sidebar-groups.js'
+import { DOT_WORDS, dotKind, rollup } from './sidebar-groups.js'
 import { useChatDrag } from './useChatDrag.js'
 import { wouldMove } from './move-chat.js'
 import './sidebar.css'
@@ -240,8 +240,10 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   const phones = (devices ?? []).filter(isPhone)
   const phoneOnline = phones.some((d) => d.online)
 
+  const kindOf = (row) => dotKind({ status: row.status, offline: row.offline, unseen: unseen.has(row.id) })
+
   const chatRow = (row) => {
-    const kind = dotKind({ status: row.status, offline: row.offline, unseen: unseen.has(row.id) })
+    const kind = kindOf(row)
     return (
     <div
       key={row.id}
@@ -429,6 +431,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
         )}
         {groups.map(({ project, items }) => {
           const isCollapsed = isFolded(project.id)
+          const top = isCollapsed ? rollup(items.map(kindOf)) : null
           return (
             <section
               key={project.id}
@@ -444,6 +447,17 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
                   <CaretDown size={12} />
                 </span>
                 <span className="project-name pv">{project.folders[0].split(/[\\/]/).filter(Boolean).pop()}</span>
+                {/* Folded, the project still tells the truth: the most
+                    urgent state among its chats, in the chats' own dot
+                    language. */}
+                {top && (
+                  <span
+                    className={`dot dot--${top}`}
+                    role="img"
+                    aria-label={DOT_WORDS[top]}
+                    title={DOT_WORDS[top]}
+                  />
+                )}
                 {items.length > 0 && <span className="project-count">{items.length}</span>}
               </button>
               {/* A new chat already in this project, straight from its
