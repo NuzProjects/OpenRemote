@@ -12,12 +12,14 @@
 //! Also here, so every engine reads pages the same way: [`AGENT_SCRIPT`],
 //! the page-side helper that turns a page into the text agents read (with a
 //! ref for each element they can act on), and [`keys`], Chrome's key names
-//! for the DevTools protocol.
+//! for the DevTools protocol. [`profile`] carries the cookies and site
+//! storage that sync one profile across the user's devices.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub mod keys;
+pub mod profile;
 
 /// Every browser line on the pipe starts with this.
 pub const LINE_PREFIX: &str = "BROWSER ";
@@ -57,6 +59,9 @@ pub enum FromHost {
     Closed { tab: String },
     /// A download started, moved on or finished.
     Download { download: DownloadInfo },
+    /// Cookies or site storage changed in the profile (only while the
+    /// profile syncs on this device).
+    Profile { news: profile::ProfileNews },
 }
 
 /// What a browser can do beyond the basics, so tools that need more say
@@ -269,13 +274,18 @@ pub enum Call {
         #[serde(default)]
         controller: Option<Controller>,
     },
+    /// Change the profile's cookies or site storage, or say whether it
+    /// syncs here at all.
+    Profile {
+        apply: profile::ProfileApply,
+    },
 }
 
 impl Call {
     /// The tab a call names, if it names one.
     pub fn tab(&self) -> Option<&str> {
         match self {
-            Call::Tabs | Call::Open { .. } => None,
+            Call::Tabs | Call::Open { .. } | Call::Profile { .. } => None,
             Call::Close { tab }
             | Call::Select { tab }
             | Call::Navigate { tab, .. }

@@ -176,6 +176,8 @@ impl BrowserService {
                 downloads.insert(0, download);
                 downloads.truncate(50);
             }
+            // The profile's cookies and storage: nothing listens yet.
+            FromHost::Profile { .. } => {}
         }
     }
 
