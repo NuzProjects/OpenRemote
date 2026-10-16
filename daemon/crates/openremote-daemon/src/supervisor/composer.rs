@@ -472,6 +472,23 @@ fn build_view(
 /// Past the limit the oldest part is cut - the end of a chat is the part
 /// an agent pointed at it most likely needs.
 fn condensed(chat: &Session, events: &[Event]) -> String {
+    format!(
+        "Chat \"{}\" ({}{}), id {}\n{}",
+        chat.title.as_deref().unwrap_or("untitled"),
+        chat.harness,
+        chat.model
+            .as_deref()
+            .map(|m| format!(", {m}"))
+            .unwrap_or_default(),
+        chat.id,
+        transcript(events, READ_LIMIT)
+    )
+}
+
+/// A chat's messages in order, each tool call a one-line note. Past
+/// `limit` bytes the oldest part is cut - the end of a chat is the part a
+/// reader most likely needs. Empty when the chat has no messages.
+pub(super) fn transcript(events: &[Event], limit: usize) -> String {
     let mut body = String::new();
     for event in events {
         match &event.payload {
@@ -488,24 +505,14 @@ fn condensed(chat: &Session, events: &[Event]) -> String {
             _ => {}
         }
     }
-    if body.len() > READ_LIMIT {
-        let mut cut = body.len() - READ_LIMIT;
+    if body.len() > limit {
+        let mut cut = body.len() - limit;
         while !body.is_char_boundary(cut) {
             cut += 1;
         }
         body = format!("[earlier messages cut]\n{}", &body[cut..]);
     }
-    format!(
-        "Chat \"{}\" ({}{}), id {}\n{}",
-        chat.title.as_deref().unwrap_or("untitled"),
-        chat.harness,
-        chat.model
-            .as_deref()
-            .map(|m| format!(", {m}"))
-            .unwrap_or_default(),
-        chat.id,
-        body
-    )
+    body
 }
 
 #[cfg(test)]

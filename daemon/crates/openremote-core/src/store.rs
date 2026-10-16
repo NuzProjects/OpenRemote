@@ -1673,6 +1673,7 @@ mod tests {
             queue: Vec::new(),
             queue_paused: false,
             mentioned_chats: Vec::new(),
+            carry_transcript: None,
         }
     }
 

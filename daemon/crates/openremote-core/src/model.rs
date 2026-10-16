@@ -137,6 +137,12 @@ pub struct Session {
     /// its agent may read through OpenRemote's read-a-chat tool.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mentioned_chats: Vec<SessionId>,
+    /// The chat moved to a folder its harness's own conversation couldn't
+    /// follow it to. Its next start opens a fresh conversation there, and
+    /// its next message carries the chat's events before this seq,
+    /// condensed, as context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub carry_transcript: Option<u64>,
 }
 
 /// One message in a chat's queue: sent on its own when the turn before it
