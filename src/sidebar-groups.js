@@ -41,3 +41,13 @@ export function rollup(kinds) {
   for (const kind of kinds) if ((URGENCY[kind] ?? 0) > (URGENCY[best] ?? 0)) best = kind
   return best === 'starting' ? 'running' : best
 }
+
+/**
+ * The pinned chats among `rows`, in the order they were pinned (not the
+ * order of the list). A pin whose chat is not among the rows - deleted,
+ * archived, or filtered out by a search - is skipped, never an empty row.
+ */
+export function pinnedRows(rows, pinned) {
+  const byId = new Map(rows.map((row) => [row.id, row]))
+  return pinned.map((id) => byId.get(id)).filter(Boolean)
+}

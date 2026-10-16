@@ -70,3 +70,20 @@ export function useUnseen({ statuses, archived, active, alive }) {
   const mark = useCallback((id, on) => setList((current) => toggled(current, id, on)), [setList])
   return { unseen, mark }
 }
+
+/**
+ * The pinned chats, in the order they were pinned: kept on this device
+ * like the other marks, and dropped when the chat is deleted (`alive`, a
+ * Set of the ids that exist, or null until the list of chats has loaded).
+ * There is no cap.
+ */
+export function usePinned(alive) {
+  const [pinned, setPinned] = usePersistedList(KEYS.pinned)
+
+  useEffect(() => {
+    if (alive) setPinned((current) => pruned(current, alive))
+  }, [alive, setPinned])
+
+  const pin = useCallback((id, on) => setPinned((current) => toggled(current, id, on)), [setPinned])
+  return { pinned, pin }
+}

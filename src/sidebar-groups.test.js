@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { dotKind, rollup } from './sidebar-groups.js'
+import { dotKind, pinnedRows, rollup } from './sidebar-groups.js'
 
 test('a chat wears the dot that matters most: waiting, failed, done-not-seen, then its status', () => {
   assert.equal(dotKind({ status: 'waiting', unseen: true }), 'waiting')
@@ -29,4 +29,10 @@ test('a folded project shows the most urgent state inside it', () => {
 test('a project with nothing to say rolls up to no mark at all', () => {
   assert.equal(rollup([]), null)
   assert.equal(rollup(['idle', 'stopped', 'offline']), null)
+})
+
+test('pinned chats keep the order they were pinned in, and a pin without a chat is skipped', () => {
+  const rows = [{ id: 'a' }, { id: 'b' }, { id: 'c' }]
+  assert.deepEqual(pinnedRows(rows, ['c', 'gone', 'a']).map((r) => r.id), ['c', 'a'])
+  assert.deepEqual(pinnedRows(rows, []), [])
 })

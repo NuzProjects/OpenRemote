@@ -22,6 +22,8 @@ import {
   MagnifyingGlass,
   PencilSimple,
   Plus,
+  PushPin,
+  PushPinSlash,
   PuzzlePiece,
   TrashSimple,
   UserCircle,
@@ -41,9 +43,9 @@ import { useHint, useShortcut } from './keyboard.jsx'
 import { usePlugins } from './plugins-host.jsx'
 import { PluginIcon } from './plugin-icons.jsx'
 import { useMoveChat } from './useMoveChat.jsx'
-import { usePersistedList, useUnseen } from './useSidebarMarks.js'
+import { usePersistedList, usePinned, useUnseen } from './useSidebarMarks.js'
 import { KEYS, toggled } from './sidebar-marks.js'
-import { DOT_WORDS, dotKind, rollup } from './sidebar-groups.js'
+import { DOT_WORDS, dotKind, pinnedRows, rollup } from './sidebar-groups.js'
 import SidebarChat from './SidebarChat.jsx'
 import SidebarNote, { useNote } from './SidebarNote.jsx'
 import { useChatDrag } from './useChatDrag.js'
@@ -109,6 +111,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
     [connection.state, sessions],
   )
   const { unseen, mark } = useUnseen({ statuses, archived, active, alive })
+  const { pinned, pin } = usePinned(alive)
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -122,7 +125,24 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   // shows, empty ones too; a search narrows the list to the projects that
   // hold a match (an empty one would claim "no chats" about a project
   // whose chats merely didn't match).
-  const grouped = useMemo(() => sections(projects, visible), [projects, visible])
+  //
+  // Pinned chats sit in their own group above Projects, so a chat is in one
+  // place only: they leave their project's list (and the flat one). A
+  // project knows how many of its chats went there, so it never claims to
+  // have none.
+  const pins = useMemo(() => pinnedRows(visible, pinned), [visible, pinned])
+  const grouped = useMemo(() => {
+    const pinnedIds = new Set(pins.map((row) => row.id))
+    const apart = (items) => items.filter((row) => !pinnedIds.has(row.id))
+    const all = sections(projects, visible)
+    return {
+      projects: all.projects.map((g) => {
+        const items = apart(g.items)
+        return { ...g, items, pinned: g.items.length - items.length }
+      }),
+      flat: apart(all.flat),
+    }
+  }, [projects, visible, pins])
   const searching = query.trim() !== ''
   const groups = searching ? grouped.projects.filter((g) => g.items.length > 0) : grouped.projects
 
@@ -151,6 +171,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   // project's chats are skipped, like the eye skips them.
   const searchRef = useRef(null)
   const order = [
+    ...pins,
     ...grouped.projects.flatMap(({ project, items }) => (isFolded(project.id) ? [] : items)),
     ...grouped.flat,
   ].map((row) => row.id)
@@ -234,6 +255,9 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
           ]
         : []),
       { divider: true },
+      pinned.includes(row.id)
+        ? { label: 'Unpin', icon: <PushPinSlash size={14} />, onSelect: () => pin(row.id, false) }
+        : { label: 'Pin', icon: <PushPin size={14} />, onSelect: () => pin(row.id, true) },
       { label: 'Rename', icon: <PencilSimple size={14} />, onSelect: () => setRenaming(row.id) },
       unseen.has(row.id)
         ? { label: 'Mark as read', icon: <EnvelopeSimpleOpen size={14} />, onSelect: () => mark(row.id, false) }
@@ -428,6 +452,14 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
             ))}
           </div>
         )}
+        {/* Pinned chats, in the order they were pinned: each keeps its
+            harness mark, device and dot. */}
+        {pins.length > 0 && (
+          <div className="sb-pinned" role="group" aria-label="Pinned chats">
+            <div className="section-title">Pinned</div>
+            {pins.map(chatRow)}
+          </div>
+        )}
         <div className="section-title sb-projects-head">
           Projects
           {/* The one way a folder becomes a project - the same flow the
@@ -446,7 +478,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
             No projects yet. <button className="sb-empty-add" onClick={onAddProject}>Add a project</button> to group its chats here.
           </p>
         )}
-        {groups.map(({ project, items }) => {
+        {groups.map(({ project, items, pinned: pinnedHere }) => {
           const isCollapsed = isFolded(project.id)
           const top = isCollapsed ? rollup(items.map(kindOf)) : null
           return (
@@ -502,7 +534,9 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
               {/* A project just added has no chats: say so quietly, and
                   leave its + (and the drop target) in place. */}
               {!isCollapsed && items.length === 0 && (
-                <p className="sb-empty sb-project-empty">No chats yet</p>
+                <p className="sb-empty sb-project-empty">
+                  {pinnedHere > 0 ? 'Its chats are pinned' : 'No chats yet'}
+                </p>
               )}
             </section>
           )

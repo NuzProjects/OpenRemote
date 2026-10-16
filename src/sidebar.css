@@ -406,6 +406,13 @@ button.side-tile:active {
   margin-top: 14px;
 }
 
+/* The Pinned group sits between Plugins and Projects, with the same air
+   the other groups have between them. */
+.sb-plugins + .sb-pinned,
+.sb-pinned + .sb-projects-head {
+  margin-top: 14px;
+}
+
 .project {
   position: relative;
 }
