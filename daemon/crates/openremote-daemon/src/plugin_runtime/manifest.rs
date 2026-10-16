@@ -180,8 +180,22 @@ pub fn read_section(
     runtime: PluginRuntime,
     builtin_ids: &[String],
 ) -> Result<Section, PluginError> {
-    let entry = read_entry(raw.get("entry"), dir, runtime)?;
     let contributes = read_contributes(raw.get("contributes"), dir, name, runtime, builtin_ids)?;
+    // What runs a plugin's contributions: a process plugin's program
+    // drives its harnesses, answers its tools and its views' requests; a
+    // wasm plugin's module answers its tools. A plugin that contributes
+    // none of those runs nothing, and may name no entry.
+    let runs = match runtime {
+        PluginRuntime::Process => {
+            !(contributes.harnesses.is_empty()
+                && contributes.tools.is_empty()
+                && contributes.views.is_empty()
+                && contributes.composer_inputs.is_empty())
+        }
+        PluginRuntime::Wasm => !contributes.tools.is_empty(),
+        _ => false,
+    };
+    let entry = read_entry(raw.get("entry"), dir, runtime, runs)?;
     let mut implied = Vec::new();
     if !contributes.tools.is_empty() {
         implied.push(PluginPower::AgentTools);
@@ -200,14 +214,15 @@ fn read_entry(
     raw: Option<&Value>,
     dir: &Path,
     runtime: PluginRuntime,
+    runs: bool,
 ) -> Result<Option<Entry>, PluginError> {
     let Some(raw) = raw.filter(|v| !v.is_null()) else {
         return match runtime {
-            PluginRuntime::Process => Err(invalid(
-                "openremote.json names no entry: a process plugin names the program it runs",
+            PluginRuntime::Process if runs => Err(invalid(
+                "openremote.json names no entry: a process plugin names the program that runs what it contributes",
             )),
-            PluginRuntime::Wasm => Err(invalid(
-                "openremote.json names no entry: a wasm plugin names its .wasm module",
+            PluginRuntime::Wasm if runs => Err(invalid(
+                "openremote.json names no entry: a wasm plugin names the .wasm module that runs its tools",
             )),
             _ => Ok(None),
         };
@@ -705,7 +720,11 @@ mod tests {
     fn mistakes_are_named() {
         let dir = folder(&["tool.wasm"]);
         let cases = [
-            (json!({}), PluginRuntime::Wasm, "names no entry"),
+            (
+                json!({"contributes": {"tools": [{"name": "t", "description": "d"}]}}),
+                PluginRuntime::Wasm,
+                "names no entry",
+            ),
             (
                 json!({"entry": "../x.wasm"}),
                 PluginRuntime::Wasm,
