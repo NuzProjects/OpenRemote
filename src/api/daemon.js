@@ -344,6 +344,18 @@ export class DaemonApi {
     return this.call('POST', `/sessions/${id}/title`, { request_id: newRequestId(), title })
   }
 
+  // Move a chat into one of its machine's projects, or out of every
+  // project with `projectId` null. A running harness restarts in the new
+  // folder - the boot budget, like resume.
+  moveChat(id, projectId) {
+    return this.call(
+      'POST',
+      `/sessions/${id}/workspace`,
+      { request_id: newRequestId(), project_id: projectId ?? null },
+      { timeoutMs: BOOT_TIMEOUT_MS },
+    )
+  }
+
   // What a composer's / and @ menus offer: a chat's own, or a harness's in
   // a folder before the chat exists. The first ask in a folder starts the
   // harness briefly to list them - the longer budget.

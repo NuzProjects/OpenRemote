@@ -54,12 +54,14 @@ const SECTIONS = [
   // plugin gets its own entry under it.
   { id: 'plugins', label: 'Plugins' },
   { id: 'archived', label: 'Archived chats' },
+  { id: 'confirmations', label: 'Confirmations' },
   { id: 'this-install', label: 'This install' },
 ]
 
 // A phone runs no harnesses and has no daemon of its own to manage or
-// start with the system: its settings are how it looks and its account.
-const PHONE_SECTIONS = new Set(['appearance', 'cloud', 'this-install'])
+// start with the system: its settings are how it looks, its account, and
+// what it asks before acting.
+const PHONE_SECTIONS = new Set(['appearance', 'cloud', 'confirmations', 'this-install'])
 
 export default function SettingsView({ onReplay, onOpenChat }) {
   const privacy = usePrivacyMode()
@@ -895,6 +897,28 @@ export default function SettingsView({ onReplay, onOpenChat }) {
           ))
         )}
         <div className="pn-detail">Archived chats are hidden on this computer only. They keep running and syncing as usual. Delete removes a synced chat from every device; a private chat can't be deleted.</div>
+      </div>
+
+      {/* What OpenRemote asks before it acts, on this device. A dialog's
+          "Don't show this again" turns its question off; here it comes
+          back. */}
+      <h2 className="pn-section" id="stg-confirmations">Confirmations</h2>
+      <div className="pn-list pn-list--tight">
+        <div className="pn-row">
+          <div>
+            <div className="pn-name">Ask before moving a chat</div>
+            <div className="pn-detail">
+              A chat moved to another project works in that project&apos;s folder from its next message.
+            </div>
+          </div>
+          <button
+            type="button"
+            className={prefs.ask_move_chat ? 'pn-btn on' : 'pn-btn'}
+            onClick={() => setPref({ ask_move_chat: !prefs.ask_move_chat })}
+          >
+            {prefs.ask_move_chat ? 'On' : 'Off'}
+          </button>
+        </div>
       </div>
 
       <h2 className="pn-section" id="stg-this-install">This install</h2>

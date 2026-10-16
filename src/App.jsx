@@ -28,6 +28,7 @@ import CommandPalette from './CommandPalette.jsx'
 import ShortcutSheet from './ShortcutSheet.jsx'
 import ViewPopup from './ViewPopup.jsx'
 import { POPUP_VIEWS, onPopup } from './popups.js'
+import { useMoveChat } from './useMoveChat.jsx'
 import { KeyboardProvider, useKeyboard, useShortcut } from './keyboard.jsx'
 import { PluginProvider, usePlugins } from './plugins-host.jsx'
 import PluginView from './PluginView.jsx'
@@ -398,6 +399,7 @@ function Shell() {
   // and act on the chat it shows. Text, links and fields keep the
   // browser's own menu (copy, paste, spelling).
   const [paneMenu, setPaneMenu] = useState(null)
+  const move = useMoveChat()
   const onMainContextMenu = (e) => {
     if (isMobile) return
     const t = e.target
@@ -406,6 +408,10 @@ function Shell() {
     const leafId = t.closest?.('[data-leaf-id]')?.dataset.leafId ?? layout.focus
     e.preventDefault()
     setLayout((l) => focusLeaf(l, leafId))
+    // The pane's chat may run on another machine: its projects are asked
+    // for as the menu opens.
+    const shown = leafById(layout, leafId)?.view ?? view
+    if (chats[shown]) move.prepare(chats[shown])
     setPaneMenu({ x: e.clientX, y: e.clientY, leafId })
   }
 
@@ -432,6 +438,7 @@ function Shell() {
     if (isChatView(v) && title) {
       items.push(
         { divider: true },
+        move.menuItem(chats[v]),
         { label: 'Archive chat', icon: <Archive size={14} />, hint: kb.label('archive'), onSelect: () => archiveFrom(leaf, v) },
         {
           label: 'Copy chat title',
@@ -729,6 +736,7 @@ function Shell() {
               onClose={() => setPaneMenu(null)}
             />
           )}
+          {move.modal}
           {palette && (
             <CommandPalette
               recentChatIds={recentChatIds}

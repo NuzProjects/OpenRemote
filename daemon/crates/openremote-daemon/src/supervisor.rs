@@ -32,6 +32,7 @@ use crate::registry::{Backend, HarnessRegistry, SessionDriver};
 
 mod composer;
 pub use composer::{AgentEntry, CommandEntry, CommandsView, McpServerName};
+mod relocate;
 
 /// Store conflicts surface as their own shape, not a generic store error.
 fn store_error(e: openremote_core::store::StoreError) -> SupervisorError {
@@ -1260,6 +1261,7 @@ impl Supervisor {
             queue: Vec::new(),
             queue_paused: false,
             mentioned_chats: Vec::new(),
+            carry_transcript: None,
         };
         let id = session.id;
         self.emit_all(&id, vec![EventPayload::SessionCreated { session }])?;
@@ -1520,7 +1522,27 @@ impl Supervisor {
         entry: &SessionEntry,
         prompt: &openremote_harness::Prompt,
     ) -> Result<(), SupervisorError> {
-        if let Err(e) = entry.driver.lock().await.send_prompt(prompt).await {
+        let mut driver = entry.driver.lock().await;
+        // The first message after a move the harness's conversation
+        // couldn't follow carries the chat so far (relocate.rs); the
+        // transcript keeps the message as the user wrote it, and any
+        // pictures ride along unchanged.
+        let carried = self.carried_prompt(id, &prompt.text, driver.per_prompt_process());
+        let sent = match &carried {
+            Some(text) => {
+                let with_context = openremote_harness::Prompt {
+                    text: text.clone(),
+                    images: prompt.images.clone(),
+                };
+                driver.send_prompt(&with_context).await
+            }
+            None => driver.send_prompt(prompt).await,
+        };
+        drop(driver);
+        if carried.is_some() && sent.is_ok() {
+            self.settle_carry(id);
+        }
+        if let Err(e) = sent {
             // The turn's existence is already durable: a write that
             // failed must not leave it open forever. The boundary rides
             // through open_turn_boundary (a no-op when the turn is
@@ -1891,11 +1913,17 @@ impl Supervisor {
                 "session {id} is already running"
             )));
         }
-        let harness_ref = session.harness_session_ref.clone().ok_or_else(|| {
-            SupervisorError::Conflict(
-                "the harness never reported a conversation to resume".to_string(),
-            )
-        })?;
+        // A chat that moved where its harness's conversation couldn't
+        // follow starts a fresh one there; its next message carries the
+        // chat so far (relocate.rs).
+        let harness_ref = match session.carry_transcript {
+            Some(_) => None,
+            None => Some(session.harness_session_ref.clone().ok_or_else(|| {
+                SupervisorError::Conflict(
+                    "the harness never reported a conversation to resume".to_string(),
+                )
+            })?),
+        };
         let Some(backend) = self.backend(&session.harness) else {
             return Err(SupervisorError::Harness(format!(
                 "harness '{}' is not available",
@@ -1908,7 +1936,7 @@ impl Supervisor {
             model: session.model.clone(),
             effort: session.effort.clone(),
             permission_mode: session.permission_mode.clone(),
-            resume: Some(harness_ref),
+            resume: harness_ref,
             include_deltas: true,
             fast: session.fast,
             mcp_servers: self.mcp_servers_for(id),
@@ -2794,6 +2822,7 @@ mod tests {
             queue: Vec::new(),
             queue_paused: false,
             mentioned_chats: Vec::new(),
+            carry_transcript: None,
         };
         let id = session.id;
         supervisor

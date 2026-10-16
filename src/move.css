@@ -1,0 +1,124 @@
+/* ---- moving a chat between projects ---- */
+
+/* The question carries the chat's title, which can run long: it wraps,
+   and the close button keeps its place at the top. */
+.mv-modal .dv-modal-head {
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.mv-title {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.mv-path {
+  font-family: 'Geist Mono', ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+/* "Don't show this again": the app's own checkbox - a small square that
+   fills amber with a dark check when ticked. The real input stays, out of
+   sight, for the keyboard and screen readers. */
+.mv-skip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-2);
+  font-size: 12.5px;
+  cursor: default;
+  user-select: none;
+}
+
+.mv-skip input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.mv-box {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+  color: var(--bg-app);
+}
+
+.mv-skip:hover .mv-box {
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.mv-skip input:checked + .mv-box {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.mv-skip input:focus-visible + .mv-box {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The chat header's menu button: the facts row's own button shape, its
+   glyph alone. */
+.cv-fact-more {
+  padding: 2px 5px;
+}
+
+/* ---- the sidebar's drag: a chat row onto a project, or onto Chats ---- */
+
+/* The row being dragged stays in its place, faded; a small label with its
+   name follows the pointer. */
+.chat-item.sb-dragged {
+  opacity: 0.45;
+}
+
+.sb-drag-label {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 240px;
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: var(--radius);
+  background: #171b21;
+  color: var(--text-1);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.sb-drag-label span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Where the chat would land: the project (or Chats) under the pointer, in
+   the accent - only where a drop would really move it. */
+.sb-drop-target {
+  border-radius: var(--radius);
+  outline: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: -1px;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+/* While a chat is dragged the pointer says so everywhere, and nothing
+   selects as it passes. */
+html.sb-dragging,
+html.sb-dragging * {
+  cursor: grabbing !important;
+  user-select: none;
+}

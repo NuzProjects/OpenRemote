@@ -140,6 +140,8 @@ const PEER_ROUTES: &[(&str, &str, Tier)] = &[
     ("POST", "/sessions/{id}/stop", Tier::Chat),
     ("POST", "/sessions/{id}/resume", Tier::Chat),
     ("POST", "/sessions/{id}/title", Tier::Chat),
+    // Moving a chat between the projects of the machine that runs it.
+    ("POST", "/sessions/{id}/workspace", Tier::Chat),
     ("POST", "/decisions/{id}/answer", Tier::Chat),
     // A synced chat's pictures, for the devices that show it.
     ("GET", "/sessions/{id}/blobs/{sha}", Tier::Read),
@@ -207,6 +209,7 @@ fn api_routes() -> Router<Arc<App>> {
         .route("/files", get(get_files))
         .route("/sessions/{id}/mentions/{chat}", get(get_mentioned_chat))
         .route("/sessions/{id}/title", post(post_title))
+        .route("/sessions/{id}/workspace", post(post_workspace))
         .route("/sync/summary", get(sync_summary))
         .route("/sync/sessions/{id}/events", get(sync_range))
         .route("/harnesses/{id}/models", get(harness_models))
@@ -1351,6 +1354,37 @@ async fn post_title(
     let sup = Arc::clone(&app.supervisor);
     receipted(&app, body.request_id, &id, |sid| async move {
         let session = sup.rename(&sid, &body.title)?;
+        Ok(serde_json::to_value(&session).unwrap_or(Value::Null))
+    })
+    .await
+}
+
+#[derive(Deserialize)]
+struct WorkspaceBody {
+    request_id: String,
+    /// One of the projects of the machine that runs the chat; null (or
+    /// absent) moves the chat out of every project, into the home folder.
+    #[serde(default)]
+    project_id: Option<String>,
+}
+
+/// Move a chat to another project: from its next message its agent works
+/// in that project's folder, on every device's copy of the chat alike.
+async fn post_workspace(
+    State(app): State<Arc<App>>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<WorkspaceBody>,
+) -> Response {
+    let project = match body.project_id.as_deref().filter(|p| !p.is_empty()) {
+        None => None,
+        Some(raw) => match openremote_core::ProjectId::parse(raw) {
+            Some(project) => Some(project),
+            None => return error(StatusCode::BAD_REQUEST, "bad project id"),
+        },
+    };
+    let sup = Arc::clone(&app.supervisor);
+    receipted(&app, body.request_id, &id, |sid| async move {
+        let session = sup.move_chat(&sid, project.as_ref()).await?;
         Ok(serde_json::to_value(&session).unwrap_or(Value::Null))
     })
     .await

@@ -10,6 +10,8 @@ import {
   Brain,
   Trash,
   CloudArrowUp,
+  Copy,
+  DotsThree,
   PencilSimple,
   X,
   Globe,
@@ -30,7 +32,9 @@ import { isCommandRun } from './command-card.js'
 import { renderMarkdown } from './markdown.js'
 import { capLines, capRows, MAX_RENDER_LINES, MAX_RENDER_ROWS, shouldRenderLive } from './render-budget.js'
 import ContextRing from './ContextRing.jsx'
+import ContextMenu from './ContextMenu.jsx'
 import PickerMenu from './PickerMenu.jsx'
+import { useMoveChat } from './useMoveChat.jsx'
 import { hasTauri, isMobile } from './platform.js'
 import { usePrivacyMode } from './privacy.js'
 import { useHint, useModelSwitches, usePaletteSource, useShortcut } from './keyboard.jsx'
@@ -324,6 +328,9 @@ export default function ChatView({ chat, onBack, focused = true }) {
   } = useConsole()
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [confirmSync, setConfirmSync] = useState(false)
+  // The header's menu: moving the chat to another project, and its title.
+  const move = useMoveChat()
+  const [headMenu, setHeadMenu] = useState(null)
   // A synced chat may run on another device: what can be done from here.
   const access = chatAccess(chat, devices, thisDevice, cloud)
   const reachable = access === 'here' || access === 'remote'
@@ -869,8 +876,40 @@ export default function ChatView({ chat, onBack, focused = true }) {
               </button>
             )
           )}
+          <button
+            className="cv-fact-btn cv-fact-more"
+            title="More for this chat"
+            aria-label="More for this chat"
+            aria-haspopup="menu"
+            aria-expanded={Boolean(headMenu)}
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect()
+              // A chat on another machine moves among that machine's
+              // projects: they are asked for as the menu opens.
+              move.prepare(chat)
+              setHeadMenu({ x: r.left, y: r.bottom + 4 })
+            }}
+          >
+            <DotsThree size={13} weight="bold" />
+          </button>
         </p>
         {chat.lastError && chat.status === 'failed' && <p className="cv-facts cv-error pv">{chat.lastError}</p>}
+        {headMenu && (
+          <ContextMenu
+            x={headMenu.x}
+            y={headMenu.y}
+            items={[
+              move.menuItem(chat),
+              {
+                label: 'Copy chat title',
+                icon: <Copy size={14} />,
+                onSelect: () => navigator.clipboard?.writeText(chat.title ?? '').catch(() => {}),
+              },
+            ]}
+            onClose={() => setHeadMenu(null)}
+          />
+        )}
+        {move.modal}
       </header>
       <div className="cv-scroll" ref={scrollRef}>
         <div className="cv-thread">
