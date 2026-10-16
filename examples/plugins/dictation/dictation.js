@@ -186,6 +186,8 @@ async function finish(state) {
     }
   } catch (err) {
     openremote.ui.toast(err.message)
+    // A key or an address that is wrong is fixed in Settings: open it.
+    if (err.inSettings) openremote.ui.openSettings().catch(() => {})
   } finally {
     transcribing = false
     show('idle', null, null, state.composer)
@@ -200,13 +202,21 @@ async function reason(response) {
     const body = await response.text()
     try {
       const data = JSON.parse(body)
-      return String(data?.error?.message ?? data?.error ?? data?.message ?? data?.detail ?? '').slice(0, 200)
+      const words = [data?.error?.message, data?.error, data?.message, data?.detail].find((w) => typeof w === 'string')
+      return (words ?? '').slice(0, 200)
     } catch {
       return body.trim().slice(0, 200)
     }
   } catch {
     return ''
   }
+}
+
+// A failure the user fixes in Dictation's settings.
+function settingsProblem(words) {
+  const err = new Error(words)
+  err.inSettings = true
+  return err
 }
 
 async function transcribe(audio, { values, secrets }) {
@@ -234,10 +244,14 @@ async function transcribe(audio, { values, secrets }) {
     throw new Error(`Couldn't reach the transcription service: ${err.message}`)
   }
   if (response.status === 401 || response.status === 403) {
-    throw new Error('The transcription service turned the API key down. Check it in Settings.')
+    throw settingsProblem(
+      secrets.api_key === 'set'
+        ? 'The transcription service turned the API key down. Check it in Settings.'
+        : 'The transcription service needs an API key. Set it in Settings.',
+    )
   }
   if (response.status === 404) {
-    throw new Error(`The transcription service has no ${base}/audio/transcriptions. Check its address in Settings: it usually ends in /v1.`)
+    throw settingsProblem(`The transcription service has no ${base}/audio/transcriptions. Check its address in Settings: it usually ends in /v1.`)
   }
   if (response.status === 413) {
     throw new Error('The recording was too long for the transcription service. Try a shorter one.')
