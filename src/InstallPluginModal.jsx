@@ -3,7 +3,9 @@
 // for, whether it runs outside a sandbox - and only then approve. Nothing
 // is installed until the Install button; closing before that leaves
 // nothing behind. A plugin a marketplace makes with a command shows the
-// command first: nothing runs until the user has seen it.
+// command first: nothing runs until the user has seen it. A plugin written
+// for another app's layout also says what the install rewrites for Claude
+// Code and what it leaves out, so the review matches what will run.
 
 import { useEffect, useRef, useState } from 'react'
 import { X } from '@phosphor-icons/react'
@@ -166,6 +168,29 @@ export default function InstallPluginModal({ onClose, entry = null }) {
                   <span>Nothing beyond itself</span>
                 )}
               </div>
+              {manifest.adapted?.length > 0 && (
+                <div className="pg-review-row">
+                  <span className="pg-review-label">Adapted</span>
+                  <span>
+                    <span className="pg-review-lead">Written for another app&apos;s plugin layout.</span>
+                    <ul className="pg-powers">
+                      {manifest.adapted.map((note) => (
+                        <li key={note}>{note}.</li>
+                      ))}
+                    </ul>
+                  </span>
+                </div>
+              )}
+              {manifest.left_out?.length > 0 && (
+                <div className="pg-review-row">
+                  <span className="pg-review-label">Left out</span>
+                  <ul className="pg-powers">
+                    {manifest.left_out.map((note) => (
+                      <li key={note}>{note}.</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               {staged.command && (
                 <div className="pg-review-row">
                   <span className="pg-review-label">Made by</span>
