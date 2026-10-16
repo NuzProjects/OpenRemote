@@ -9,6 +9,11 @@
 //! each with a [`FromHost::Reply`] and tells the daemon about its tabs as
 //! they change.
 //!
+//! A tab can also be shown live on another of the user's devices: the
+//! daemon starts its pictures with [`Call::Screencast`], each arrives as a
+//! [`FromHost::Frame`], [`Call::FrameAck`] asks for the next one, and
+//! [`Call::Input`] carries the viewer's taps, swipes and typing.
+//!
 //! Also here, so every engine reads pages the same way: [`AGENT_SCRIPT`],
 //! the page-side helper that turns a page into the text agents read (with a
 //! ref for each element they can act on), and [`keys`], Chrome's key names
@@ -57,6 +62,16 @@ pub enum FromHost {
     Closed { tab: String },
     /// A download started, moved on or finished.
     Download { download: DownloadInfo },
+    /// One picture of a tab being cast ([`Call::Screencast`]), for a live
+    /// view on another of the user's devices: a JPEG in base64, and the
+    /// page's size in its own CSS pixels, where a viewer's input lands. The
+    /// browser sends the next picture only after a [`Call::FrameAck`].
+    Frame {
+        tab: String,
+        data: String,
+        width: f64,
+        height: f64,
+    },
 }
 
 /// What a browser can do beyond the basics, so tools that need more say
@@ -269,6 +284,64 @@ pub enum Call {
         #[serde(default)]
         controller: Option<Controller>,
     },
+    /// Start (or stop) sending the tab's picture as it changes, for a live
+    /// view on another device. Each picture arrives as a
+    /// [`FromHost::Frame`], and the next one only after a
+    /// [`Call::FrameAck`], so a slow viewer slows the pictures down instead
+    /// of piling them up. Calling it again while on changes the settings.
+    Screencast {
+        tab: String,
+        on: bool,
+        /// JPEG quality, 1 to 100.
+        #[serde(default)]
+        quality: Option<u8>,
+        /// The picture's widest side, in pixels.
+        #[serde(default)]
+        max_width: Option<u32>,
+    },
+    /// The live views of a tab are ready for its next picture.
+    FrameAck {
+        tab: String,
+    },
+    /// Input from the device holding a live view's control, at a point of
+    /// the page in its CSS pixels (the frames' sizes).
+    Input {
+        tab: String,
+        #[serde(flatten)]
+        input: Input,
+    },
+}
+
+/// What a live view's controller does to the page, as real input.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Input {
+    /// A click (a tap); `count` 2 is a double click.
+    Click {
+        x: f64,
+        y: f64,
+        /// `left` (the default), `right` or `middle`.
+        #[serde(default)]
+        button: Option<String>,
+        #[serde(default = "one")]
+        count: u32,
+    },
+    /// The left button pressed: a drag starts.
+    Down { x: f64, y: f64 },
+    /// The pointer moved (dragging, while the button is down).
+    Move { x: f64, y: f64 },
+    /// The left button released: the drag ends.
+    Up { x: f64, y: f64 },
+    /// The wheel (a swipe on a phone): scroll by `dx`, `dy` at a point.
+    Wheel { x: f64, y: f64, dx: f64, dy: f64 },
+    /// Text typed where the focus is (a phone's keyboard).
+    Text { text: String },
+    /// A key or a chord (`Enter`, `Backspace`, `Control+A`).
+    Key { key: String },
+}
+
+fn one() -> u32 {
+    1
 }
 
 impl Call {
@@ -297,8 +370,28 @@ impl Call {
             | Call::Viewport { tab, .. }
             | Call::Dialog { tab, .. }
             | Call::Upload { tab, .. }
-            | Call::Mark { tab, .. } => Some(tab),
+            | Call::Mark { tab, .. }
+            | Call::Screencast { tab, .. }
+            | Call::FrameAck { tab }
+            | Call::Input { tab, .. } => Some(tab),
         }
+    }
+
+    /// Whether the call only looks at a page (reading it, hovering,
+    /// scrolling): such calls never ask the user and still work while the
+    /// user has taken the tab over. Everything else acts.
+    pub fn reads(&self) -> bool {
+        matches!(
+            self,
+            Call::Tabs
+                | Call::Snapshot { .. }
+                | Call::Screenshot { .. }
+                | Call::Console { .. }
+                | Call::Network { .. }
+                | Call::Wait { .. }
+                | Call::Hover { .. }
+                | Call::Scroll { .. }
+        )
     }
 }
 
@@ -370,5 +463,42 @@ mod tests {
             Some("2")
         );
         assert_eq!(Call::Tabs.tab(), None);
+    }
+
+    #[test]
+    fn a_live_views_input_rides_flat_beside_its_tab() {
+        let call = ToHost {
+            id: 3,
+            call: Call::Input {
+                tab: "tab-2".into(),
+                input: Input::Click {
+                    x: 10.0,
+                    y: 20.5,
+                    button: None,
+                    count: 1,
+                },
+            },
+        };
+        let text = line(&call);
+        assert!(text.contains(r#""op":"input""#), "{text}");
+        assert!(text.contains(r#""kind":"click""#), "{text}");
+        assert_eq!(parse::<ToHost>(&text), Some(call));
+        let typed: ToHost =
+            parse(r#"BROWSER {"id":4,"call":{"op":"input","tab":"tab-2","kind":"wheel","x":1,"y":2,"dx":0,"dy":-120}}"#)
+                .unwrap();
+        assert_eq!(
+            typed.call,
+            Call::Input {
+                tab: "tab-2".into(),
+                input: Input::Wheel {
+                    x: 1.0,
+                    y: 2.0,
+                    dx: 0.0,
+                    dy: -120.0
+                }
+            }
+        );
+        assert!(Call::Snapshot { tab: "1".into() }.reads());
+        assert!(!Call::FrameAck { tab: "1".into() }.reads());
     }
 }
