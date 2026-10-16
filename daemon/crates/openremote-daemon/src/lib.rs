@@ -1,6 +1,7 @@
 //! The daemon library: registry, supervisor, HTTP API, SSE. The binary in
 //! `main.rs` is a thin shell over `app::serve`.
 
+pub mod adapt;
 pub mod app;
 pub mod browser;
 pub mod cloud_http;
