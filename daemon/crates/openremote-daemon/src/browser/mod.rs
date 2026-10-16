@@ -374,6 +374,14 @@ impl BrowserService {
         lock(&self.downloads).clone()
     }
 
+    /// What the connected browser can do (nothing, while none is).
+    pub fn caps(&self) -> Caps {
+        lock(&self.link)
+            .as_ref()
+            .map(|l| l.caps.clone())
+            .unwrap_or_default()
+    }
+
     pub fn status(&self) -> Value {
         let link = lock(&self.link);
         json!({

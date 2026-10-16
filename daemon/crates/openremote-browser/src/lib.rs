@@ -91,6 +91,10 @@ pub struct Caps {
     /// Files can be put into a page's file picker.
     #[serde(default)]
     pub upload: bool,
+    /// Tabs can be shown live on another device: pictures of the page
+    /// ([`Call::Screencast`]) and a viewer's input ([`Call::Input`]).
+    #[serde(default)]
+    pub live: bool,
 }
 
 /// One tab, as the daemon and agents see it.

@@ -119,6 +119,9 @@ struct Cast {
     /// Taking control paused an agent using the tab: letting go hands it
     /// back (a pause the user made on this device stays theirs).
     paused: bool,
+    /// The page has a field focused that takes typing, as last reported to
+    /// the viewer holding control.
+    editable: bool,
 }
 
 impl Cast {
@@ -134,6 +137,7 @@ impl Cast {
             frame_at: None,
             control: None,
             paused: false,
+            editable: false,
         }
     }
 }
@@ -156,10 +160,26 @@ struct Watching {
     ended: Option<String>,
     control: bool,
     controller: Option<String>,
+    /// The page has a field focused that takes typing (the phone's keyboard
+    /// comes up for it).
+    editable: bool,
     polled: Instant,
     kept: Instant,
+    /// Counts what changed besides pictures (control, typing focus), so the
+    /// console's waiting request answers at once when one did.
+    rev: u64,
     /// Bumped on every change, for the console's waiting request.
     changes: watch::Sender<u64>,
+}
+
+impl Watching {
+    /// Something changed: whoever waits on this view looks again.
+    fn bump(&mut self, state: bool) {
+        if state {
+            self.rev += 1;
+        }
+        self.changes.send_modify(|n| *n += 1);
+    }
 }
 
 struct Received {
@@ -218,12 +238,24 @@ fn decode(payload: &[u8]) -> Option<(Value, &[u8])> {
 #[derive(Deserialize)]
 pub struct StartBody {
     tab: String,
+    /// The viewer's own name for the view, so it is ready for the first
+    /// picture before the answer arrives.
+    #[serde(default)]
+    id: Option<String>,
     #[serde(default)]
     fps: Option<u32>,
     #[serde(default)]
     quality: Option<u8>,
     #[serde(default)]
     max_width: Option<u32>,
+}
+
+/// A view id a viewer made: plain letters, digits and dashes.
+fn plain_id(id: &str) -> bool {
+    (8..=64).contains(&id.len())
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 /// Another device starts showing one of this device's tabs.
@@ -242,13 +274,34 @@ pub async fn start_view(
     if !browser.connected() {
         return super::peer::no_browser();
     }
+    if !browser.caps().live {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "this device can't show its tabs live yet",
+                "code": "no_live_view",
+            })),
+        )
+            .into_response();
+    }
     if !browser.shared_with_peers(&body.tab) {
         return bad(StatusCode::NOT_FOUND, "there's no such tab here");
     }
     let fps = body.fps.unwrap_or(12).clamp(1, 15);
     let quality = body.quality.unwrap_or(65).clamp(40, 70);
     let max_width = body.max_width.unwrap_or(1280).clamp(320, 1280);
-    let id = uuid::Uuid::new_v4().simple().to_string();
+    let id = match body.id.as_deref() {
+        Some(id) if plain_id(id) => id.to_string(),
+        Some(_) => return bad(StatusCode::BAD_REQUEST, "that isn't a view id"),
+        None => uuid::Uuid::new_v4().simple().to_string(),
+    };
+    if lock(&browser.live.source)
+        .views
+        .get(&id)
+        .is_some_and(|v| v.viewer != peer.device_id)
+    {
+        return bad(StatusCode::CONFLICT, "that view id is taken");
+    }
     let restart = {
         let mut source = lock(&browser.live.source);
         source.views.insert(
@@ -353,6 +406,8 @@ pub async fn control_view(
         let tab = view.tab.clone();
         let mut hand_back = false;
         if let Some(cast) = source.casts.get_mut(&tab) {
+            // Whoever holds control next hears about the focus afresh.
+            cast.editable = false;
             if body.take {
                 cast.control = Some(id.clone());
             } else if cast.control.as_deref() == Some(id.as_str()) {
@@ -778,8 +833,41 @@ async fn feed(app: Arc<App>, tab: String) {
             tab: tab.clone(),
             input: next,
         };
-        let _ = app.browser.call(call, Duration::from_secs(5)).await;
+        // The browser says, after a tap or a key, whether the page now has
+        // a field focused that takes typing: the viewer's keyboard follows.
+        if let Ok(answer) = app.browser.call(call, Duration::from_secs(5)).await {
+            if let Some(editable) = answer.get("editable").and_then(Value::as_bool) {
+                report_focus(&app.browser, &tab, editable);
+            }
+        }
     }
+}
+
+/// Tells the viewer holding a tab's control whether the page has a field
+/// focused that takes typing, when that changed.
+fn report_focus(browser: &BrowserService, tab: &str, editable: bool) {
+    let note = {
+        let mut source = lock(&browser.live.source);
+        let Source { views, casts } = &mut *source;
+        let Some(cast) = casts.get_mut(tab) else {
+            return;
+        };
+        if cast.editable == editable {
+            return;
+        }
+        cast.editable = editable;
+        let Some(id) = cast.control.clone() else {
+            return;
+        };
+        let Some(view) = views.get(&id) else {
+            return;
+        };
+        (
+            view.viewer,
+            json!({"type": "browser.view.focus", "view": id, "editable": editable}),
+        )
+    };
+    send_notes(browser, vec![note]);
 }
 
 // ---- the viewer: other devices' tabs shown here ----
@@ -814,57 +902,9 @@ async fn watch_tab(State(app): State<Arc<App>>, Json(body): Json<WatchBody>) -> 
     }
     let (fps, quality, max_width) = preset(body.network.as_deref());
     let max_width = body.width.map_or(max_width, |w| w.clamp(320, max_width));
-    let request = Request {
-        method: "POST".into(),
-        path: "/browser/views".into(),
-        content_type: Some("application/json".into()),
-        body: json!({"tab": body.tab, "fps": fps, "quality": quality, "max_width": max_width})
-            .to_string()
-            .into_bytes(),
-    };
-    let response = match mesh
-        .request(device.id, request, Duration::from_secs(15))
-        .await
-    {
-        Ok(response) => response,
-        Err(e @ MeshError::Offline(_)) => {
-            return bad(StatusCode::SERVICE_UNAVAILABLE, &e.to_string());
-        }
-        Err(e) => return bad(StatusCode::BAD_GATEWAY, &e.to_string()),
-    };
-    let answer: Value = serde_json::from_slice(&response.body).unwrap_or(Value::Null);
-    match response.status {
-        200 => {}
-        409 => {
-            return (
-                StatusCode::CONFLICT,
-                Json(json!({
-                    "error": format!("{} has no browser open right now", device.name),
-                    "code": "no_browser",
-                })),
-            )
-                .into_response();
-        }
-        404 => return bad(StatusCode::NOT_FOUND, "that tab was closed"),
-        403 => {
-            return bad(
-                StatusCode::CONFLICT,
-                &format!("{} needs a newer OpenRemote to share its tabs", device.name),
-            );
-        }
-        _ => {
-            return bad(
-                StatusCode::BAD_GATEWAY,
-                answer["error"]
-                    .as_str()
-                    .unwrap_or("the other device answered oddly"),
-            );
-        }
-    }
-    let Some(id) = answer["id"].as_str().map(str::to_string) else {
-        return bad(StatusCode::BAD_GATEWAY, "the other device answered oddly");
-    };
-    let controller = answer["controller"].as_str().map(str::to_string);
+    // The view is known here before the source answers: its first picture
+    // can arrive ahead of the answer.
+    let id = uuid::Uuid::new_v4().simple().to_string();
     lock(&app.browser.live.watching).insert(
         id.clone(),
         Watching {
@@ -875,12 +915,85 @@ async fn watch_tab(State(app): State<Arc<App>>, Json(body): Json<WatchBody>) -> 
             delivered: 0,
             ended: None,
             control: false,
-            controller: controller.clone(),
+            controller: None,
+            editable: false,
             polled: Instant::now(),
             kept: Instant::now(),
+            rev: 0,
             changes: watch::channel(0).0,
         },
     );
+    let request = Request {
+        method: "POST".into(),
+        path: "/browser/views".into(),
+        content_type: Some("application/json".into()),
+        body: json!({
+            "id": id,
+            "tab": body.tab,
+            "fps": fps,
+            "quality": quality,
+            "max_width": max_width,
+        })
+        .to_string()
+        .into_bytes(),
+    };
+    let refused = |response: Response| {
+        lock(&app.browser.live.watching).remove(&id);
+        response
+    };
+    let response = match mesh
+        .request(device.id, request, Duration::from_secs(15))
+        .await
+    {
+        Ok(response) => response,
+        Err(e @ MeshError::Offline(_)) => {
+            return refused(bad(StatusCode::SERVICE_UNAVAILABLE, &e.to_string()));
+        }
+        Err(e) => return refused(bad(StatusCode::BAD_GATEWAY, &e.to_string())),
+    };
+    let answer: Value = serde_json::from_slice(&response.body).unwrap_or(Value::Null);
+    match response.status {
+        200 => {}
+        409 => {
+            // No browser there, or one that can't show its tabs live yet.
+            let (code, error) = match answer["code"].as_str() {
+                Some("no_live_view") => (
+                    "no_live_view",
+                    format!("{} can't show its tabs live yet", device.name),
+                ),
+                _ => (
+                    "no_browser",
+                    format!("{} has no browser open right now", device.name),
+                ),
+            };
+            return refused(
+                (
+                    StatusCode::CONFLICT,
+                    Json(json!({"error": error, "code": code})),
+                )
+                    .into_response(),
+            );
+        }
+        404 => return refused(bad(StatusCode::NOT_FOUND, "that tab was closed")),
+        403 => {
+            return refused(bad(
+                StatusCode::CONFLICT,
+                &format!("{} needs a newer OpenRemote to share its tabs", device.name),
+            ));
+        }
+        _ => {
+            return refused(bad(
+                StatusCode::BAD_GATEWAY,
+                answer["error"]
+                    .as_str()
+                    .unwrap_or("the other device answered oddly"),
+            ));
+        }
+    }
+    let controller = answer["controller"].as_str().map(str::to_string);
+    if let Some(view) = lock(&app.browser.live.watching).get_mut(&id) {
+        view.controller = controller.clone();
+    }
     Json(json!({
         "id": id,
         "device": {"id": device.id, "name": device.name},
@@ -893,13 +1006,33 @@ async fn watch_tab(State(app): State<Arc<App>>, Json(body): Json<WatchBody>) -> 
 
 #[derive(Deserialize)]
 struct FrameQuery {
+    /// The number of the last picture the console has.
     #[serde(default)]
     after: u64,
+    /// The last state (control, typing focus) it has been told.
+    #[serde(default)]
+    rev: u64,
 }
 
-/// The console's next picture of a tab it shows: the latest one newer than
-/// `after`, waiting a few seconds for one. 204 when none came (ask again),
-/// 410 once the view has ended (the answer says why).
+/// What the console is told about a view each time: the page's address
+/// and title as the last picture saw them, and who holds control.
+fn view_state(view: &Watching) -> Value {
+    let header = view.latest.as_ref().map(|l| &l.header);
+    json!({
+        "rev": view.rev,
+        "control": view.control,
+        "controller": view.controller,
+        "editable": view.editable,
+        "url": header.map(|h| h["url"].clone()),
+        "title": header.map(|h| h["title"].clone()),
+        "loading": header.map(|h| h["loading"].clone()),
+    })
+}
+
+/// The console's next news of a tab it shows: the latest picture newer than
+/// `after`, or a change of state since `rev`, waiting a few seconds for
+/// either. 204 when nothing came (ask again), 410 once the view has ended
+/// (the answer says why).
 async fn next_frame(
     State(app): State<Arc<App>>,
     AxumPath(id): AxumPath<String>,
@@ -915,7 +1048,7 @@ async fn next_frame(
         view.changes.subscribe()
     };
     loop {
-        let found = {
+        let news = {
             let mut watching = lock(&app.browser.live.watching);
             let Some(view) = watching.get_mut(&id) else {
                 return bad(StatusCode::GONE, "this live view has ended");
@@ -925,36 +1058,34 @@ async fn next_frame(
                 watching.remove(&id);
                 return bad(StatusCode::GONE, &why);
             }
-            match &view.latest {
-                Some(latest) if latest.seq > query.after => {
-                    view.delivered = latest.seq;
-                    view.kept = Instant::now();
-                    Some((
-                        view.device,
-                        latest.seq,
-                        BASE64.encode(&latest.jpeg),
-                        latest.header.clone(),
-                        view.control,
-                        view.controller.clone(),
-                    ))
+            let fresh = view.latest.as_ref().is_some_and(|l| l.seq > query.after);
+            if fresh || view.rev > query.rev {
+                let mut state = view_state(view);
+                let mut taken = None;
+                if let Some(latest) = view.latest.as_ref().filter(|_| fresh) {
+                    state["seq"] = json!(latest.seq);
+                    state["data"] = json!(BASE64.encode(&latest.jpeg));
+                    state["width"] = latest.header["width"].clone();
+                    state["height"] = latest.header["height"].clone();
+                    taken = Some(latest.seq);
+                } else {
+                    state["seq"] = json!(query.after);
                 }
-                _ => None,
+                if let Some(seq) = taken {
+                    view.delivered = seq;
+                    view.kept = Instant::now();
+                }
+                Some((view.device, taken, state))
+            } else {
+                None
             }
         };
-        if let Some((device, seq, data, header, control, controller)) = found {
-            tell_source(&app, device, &id, seq).await;
-            return Json(json!({
-                "seq": seq,
-                "data": data,
-                "width": header["width"],
-                "height": header["height"],
-                "url": header["url"],
-                "title": header["title"],
-                "loading": header["loading"],
-                "control": control,
-                "controller": controller,
-            }))
-            .into_response();
+        if let Some((device, taken, state)) = news {
+            // Taking a picture is the room the source waits for.
+            if let Some(seq) = taken {
+                tell_source(&app, device, &id, seq);
+            }
+            return Json(state).into_response();
         }
         if tokio::time::timeout_at(deadline, changes.changed())
             .await
@@ -974,18 +1105,21 @@ async fn next_frame(
         })
     };
     if let Some((device, seq)) = keep {
-        tell_source(&app, device, &id, seq).await;
+        tell_source(&app, device, &id, seq);
     }
     StatusCode::NO_CONTENT.into_response()
 }
 
 /// Acknowledges the pictures up to `seq` to the source (and says this
-/// viewer is still there).
-async fn tell_source(app: &App, device: DeviceId, id: &str, seq: u64) {
-    if let Some(mesh) = app.cloud.mesh() {
-        let note = json!({"type": "browser.view.ack", "view": id, "seq": seq});
+/// viewer is still there), without waiting.
+fn tell_source(app: &App, device: DeviceId, id: &str, seq: u64) {
+    let Some(mesh) = app.cloud.mesh() else {
+        return;
+    };
+    let note = json!({"type": "browser.view.ack", "view": id, "seq": seq});
+    tokio::spawn(async move {
         let _ = mesh.note(device, &note).await;
-    }
+    });
 }
 
 /// The console's tap, swipe or typing on a tab it shows, once it holds
@@ -1050,7 +1184,10 @@ async fn take_control(
             if let Some(view) = lock(&app.browser.live.watching).get_mut(&id) {
                 view.control = control;
                 view.controller = controller.clone();
-                view.changes.send_modify(|n| *n += 1);
+                if !control {
+                    view.editable = false;
+                }
+                view.bump(true);
             }
             Json(json!({"control": control, "controller": controller})).into_response()
         }
@@ -1184,7 +1321,7 @@ pub fn on_note(app: &Arc<App>, peer: PeerContext, note: Value) {
                         .unwrap_or("the live view ended")
                         .to_string(),
                 );
-                view.changes.send_modify(|n| *n += 1);
+                view.bump(true);
             }
         }
         Some("browser.view.control") => {
@@ -1194,7 +1331,23 @@ pub fn on_note(app: &Arc<App>, peer: PeerContext, note: Value) {
             {
                 view.control = note["control"].as_bool().unwrap_or(false);
                 view.controller = note["controller"].as_str().map(str::to_string);
-                view.changes.send_modify(|n| *n += 1);
+                if !view.control {
+                    view.editable = false;
+                }
+                view.bump(true);
+            }
+        }
+        // Whether the page has a field focused that takes typing.
+        Some("browser.view.focus") => {
+            if let Some(view) = lock(&app.browser.live.watching)
+                .get_mut(id)
+                .filter(|v| v.device == peer.device_id)
+            {
+                let editable = note["editable"].as_bool().unwrap_or(false);
+                if view.editable != editable {
+                    view.editable = editable;
+                    view.bump(true);
+                }
             }
         }
         _ => {}
@@ -1221,14 +1374,20 @@ pub fn on_bin(app: &Arc<App>, peer: PeerContext, payload: Vec<u8>) {
     if view.latest.as_ref().is_some_and(|l| l.seq >= seq) {
         return;
     }
-    view.control = me.is_some() && header["control"].as_str() == me.as_deref();
-    view.controller = header["controller"].as_str().map(str::to_string);
+    let control = me.is_some() && header["control"].as_str() == me.as_deref();
+    let controller = header["controller"].as_str().map(str::to_string);
+    let moved = view.control != control || view.controller != controller;
+    view.control = control;
+    view.controller = controller;
+    if !control {
+        view.editable = false;
+    }
     view.latest = Some(Received {
         seq,
         jpeg: jpeg.to_vec(),
         header,
     });
-    view.changes.send_modify(|n| *n += 1);
+    view.bump(moved);
 }
 
 /// Every few seconds: views whose other side went quiet end, and pictures

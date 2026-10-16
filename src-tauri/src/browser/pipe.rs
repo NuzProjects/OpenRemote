@@ -39,6 +39,7 @@ pub fn hello(app: &AppHandle) {
         console: cfg!(windows),
         network: cfg!(windows),
         upload: cfg!(windows),
+        live: cfg!(windows),
     };
     let engine = if cfg!(windows) {
         "webview2"
@@ -83,6 +84,21 @@ pub fn tab_changed(app: &AppHandle, tab: &Tab) {
 
 pub fn closed(app: &AppHandle, id: &str) {
     send(app, &FromHost::Closed { tab: id.into() });
+}
+
+/// One picture of a tab being shown live on another device: a JPEG in
+/// base64, and the page's size in CSS pixels.
+#[cfg(windows)]
+pub fn frame(app: &AppHandle, tab: &str, data: &str, width: f64, height: f64) {
+    send(
+        app,
+        &FromHost::Frame {
+            tab: tab.into(),
+            data: data.into(),
+            width,
+            height,
+        },
+    );
 }
 
 pub fn download(app: &AppHandle, download: &super::Download) {

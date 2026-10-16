@@ -250,6 +250,8 @@ pub async fn call(
 
 /// One other device's open tabs.
 pub struct Elsewhere {
+    /// Its browser can show tabs live (pictures and input).
+    pub live: bool,
     pub device: Device,
     pub tabs: Vec<TabInfo>,
 }
@@ -279,7 +281,8 @@ pub async fn tabs_elsewhere(app: &App) -> Vec<Elsewhere> {
                 }
                 let body: Value = serde_json::from_slice(&response.body).ok()?;
                 let tabs = serde_json::from_value(body.get("tabs")?.clone()).ok()?;
-                Some(Elsewhere { device, tabs })
+                let live = body["status"]["caps"]["live"].as_bool().unwrap_or(false);
+                Some(Elsewhere { device, tabs, live })
             }
         });
     futures_util::future::join_all(asks)
@@ -303,6 +306,7 @@ pub async fn remote_tabs(State(app): State<Arc<App>>) -> Response {
                     "key": e.device.key,
                     "platform": e.device.platform,
                 },
+                "live": e.live,
                 "tabs": e.tabs,
             })
         })

@@ -154,9 +154,9 @@ pub use page::{forget, pick, screencast};
 mod page {
     use std::collections::{HashMap, VecDeque};
     use std::sync::Mutex;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
-    use openremote_browser::{keys, Call, AGENT_SCRIPT};
+    use openremote_browser::{keys, Call, Input, AGENT_SCRIPT};
     use serde_json::{json, Value};
     use tauri::{AppHandle, Emitter, Manager, Webview};
 
@@ -169,6 +169,13 @@ mod page {
     const PICKED: &str = "__openremotePick";
     /// Console and network lines kept per tab until an agent reads them.
     const KEPT: usize = 300;
+    /// What the console's recording asks of the engine's pictures.
+    const RECORD_CAST: (u8, u32) = (60, 1280);
+    /// A live view's picture the daemon never asked past is let go of
+    /// after this long, so a lost message can't stall the engine for good.
+    const HELD_FOR: Duration = Duration::from_secs(5);
+    /// How long a page's size in CSS pixels is trusted (a zoom changes it).
+    const CSS_SIZE_FOR: Duration = Duration::from_secs(2);
 
     /// What the shell keeps about a page agents use.
     #[derive(Default)]
@@ -184,6 +191,23 @@ mod page {
         dialog: Option<(String, String)>,
         /// A file picker the page opened while we were listening for one.
         chooser: Option<i64>,
+        /// The console is recording the tab.
+        recording: bool,
+        /// A live view on another device wants pictures: (JPEG quality,
+        /// widest side).
+        live: Option<(u8, u32)>,
+        /// What the engine is casting at now, if anything: it casts once
+        /// for whoever wants pictures, at the most any of them asks for.
+        casting: Option<(u8, u32)>,
+        /// The picture a live view hasn't asked past yet: the engine's
+        /// session number, to acknowledge when the daemon says so.
+        held: Option<i64>,
+        /// The page's size in CSS pixels, where a viewer's input lands, and
+        /// when it was read.
+        css: Option<(f64, f64, Instant)>,
+        /// The shell drew the tab off screen for a live view, and puts it
+        /// away again when the last view ends.
+        cast_parked: bool,
     }
 
     static PAGES: Mutex<Option<HashMap<String, Page>>> = Mutex::new(None);
@@ -357,22 +381,46 @@ mod page {
         })?;
         let (a, t) = (app.clone(), tab.clone());
         win::on_event(webview, "Page.screencastFrame", move |e| {
-            let _ = a.emit_to(
-                super::super::console(),
-                "browser:frame",
-                json!({
-                    "tab": t,
-                    "data": e["data"],
-                    "width": e["metadata"]["deviceWidth"],
-                    "height": e["metadata"]["deviceHeight"],
-                }),
-            );
-            // Acknowledged a beat later: about ten frames a second is
-            // plenty for a recording and keeps the page's own work first.
-            if let Some(session) = e["sessionId"].as_i64() {
+            let session = e["sessionId"].as_i64();
+            let (recording, live) = with_page(&t, |p| (p.recording, p.live.is_some()));
+            if recording {
+                let _ = a.emit_to(
+                    super::super::console(),
+                    "browser:frame",
+                    json!({
+                        "tab": t,
+                        "data": e["data"],
+                        "width": e["metadata"]["deviceWidth"],
+                        "height": e["metadata"]["deviceHeight"],
+                    }),
+                );
+            }
+            if live {
+                // A live view's picture goes to the daemon, which sends it
+                // on; the engine waits for its say-so before the next one.
+                let (width, height) = css_size(&a, &t, &e["metadata"]);
+                if let Some(data) = e["data"].as_str() {
+                    super::super::pipe::frame(&a, &t, data, width, height);
+                }
+                if let Some(session) = session {
+                    with_page(&t, |p| p.held = Some(session));
+                    let (a, t) = (a.clone(), t.clone());
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(HELD_FOR).await;
+                        // Still waiting after all this time: let it go.
+                        if with_page(&t, |p| p.held == Some(session)) {
+                            let _ = release_frame(&a, &t).await;
+                        }
+                    });
+                }
+            } else if let Some(session) = session {
+                // Acknowledged a beat later (when only a recording wants
+                // them): about ten frames a second is plenty and keeps the
+                // page's own work first.
                 let (a, t) = (a.clone(), t.clone());
                 tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(Duration::from_millis(90)).await;
+                    let late = if recording { 90 } else { 0 };
+                    tokio::time::sleep(Duration::from_millis(late)).await;
                     if let Ok(webview) = super::super::tab(&a, &t) {
                         let _ = win::cdp(
                             &webview,
@@ -532,13 +580,14 @@ mod page {
 
     /// The tab made ready for an agent: awake, and drawn (off screen when
     /// the console isn't showing it) so pictures and layout are real.
-    fn wake(app: &AppHandle, webview: &Webview) {
+    /// Answers whether it just drew the tab off screen.
+    fn wake(app: &AppHandle, webview: &Webview) -> bool {
         let tab = webview.label().to_string();
         let (suspended, park) = {
             let browser = app.state::<Browser>();
             let mut tabs = browser.tabs.lock().expect("browser lock");
             let Some(t) = tabs.get_mut(&tab) else {
-                return;
+                return false;
             };
             let suspended = std::mem::replace(&mut t.suspended, false);
             let park = !t.shown && !t.parked;
@@ -558,15 +607,325 @@ mod page {
             });
             let _ = webview.show();
         }
+        park
+    }
+
+    /// A tab the shell drew off screen only for a live view goes back out of
+    /// sight when the view ends (unless the console shows it by then).
+    fn put_away(app: &AppHandle, webview: &Webview) {
+        let tab = webview.label().to_string();
+        let hide = {
+            let browser = app.state::<Browser>();
+            let mut tabs = browser.tabs.lock().expect("browser lock");
+            tabs.get_mut(&tab).is_some_and(|t| {
+                if t.shown || !t.parked {
+                    return false;
+                }
+                t.parked = false;
+                t.hidden_since = Some(Instant::now());
+                true
+            })
+        };
+        if hide {
+            let _ = webview.hide();
+        }
+    }
+
+    /// The page's size in CSS pixels, with the screen's scale: where a
+    /// viewer's input lands is measured in these.
+    async fn read_css(webview: &Webview) -> Result<(f64, f64, f64), String> {
+        let answer = win::cdp(
+            webview,
+            "Runtime.evaluate",
+            json!({
+                "expression": "[innerWidth, innerHeight, devicePixelRatio]",
+                "returnByValue": true,
+            }),
+        )
+        .await?;
+        let v = &answer["result"]["value"];
+        match (v[0].as_f64(), v[1].as_f64(), v[2].as_f64()) {
+            (Some(w), Some(h), Some(dpr)) if w > 0.0 && h > 0.0 => Ok((w, h, dpr.max(0.5))),
+            _ => Err("the page has no size yet".into()),
+        }
+    }
+
+    /// The size a live picture is sent with: the page's, in CSS pixels, as
+    /// last read (read again when it is stale: a zoom changes it); until
+    /// the first read lands, the engine's own numbers.
+    fn css_size(app: &AppHandle, tab: &str, metadata: &Value) -> (f64, f64) {
+        let known = with_page(tab, |p| p.css);
+        if known.is_none_or(|(_, _, at)| at.elapsed() > CSS_SIZE_FOR) {
+            // Stamped now, so one read runs at a time.
+            with_page(tab, |p| {
+                let (w, h) = p.css.map_or((0.0, 0.0), |(w, h, _)| (w, h));
+                p.css = Some((w, h, Instant::now()));
+            });
+            let (app, tab) = (app.clone(), tab.to_string());
+            tauri::async_runtime::spawn(async move {
+                let Ok(webview) = super::super::tab(&app, &tab) else {
+                    return;
+                };
+                if let Ok((w, h, _)) = read_css(&webview).await {
+                    with_page(&tab, |p| p.css = Some((w, h, Instant::now())));
+                }
+            });
+        }
+        match known {
+            Some((w, h, _)) if w > 0.0 && h > 0.0 => (w, h),
+            _ => (
+                metadata["deviceWidth"].as_f64().unwrap_or(0.0),
+                metadata["deviceHeight"].as_f64().unwrap_or(0.0),
+            ),
+        }
+    }
+
+    /// Lets the engine paint a live view's next picture: the daemon says
+    /// some viewer has room for it.
+    async fn release_frame(app: &AppHandle, tab: &str) -> Result<(), String> {
+        let Some(session) = with_page(tab, |p| p.held.take()) else {
+            return Ok(());
+        };
+        let webview = super::super::tab(app, tab)?;
+        win::cdp(
+            &webview,
+            "Page.screencastFrameAck",
+            json!({ "sessionId": session }),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Applies what wants a tab's pictures - the console recording it, a
+    /// live view on another device. The engine casts once for all of them,
+    /// at the most any asks for, and stops when none does.
+    async fn cast(webview: &Webview, change: impl FnOnce(&mut Page)) -> Result<(), String> {
+        let tab = webview.label().to_string();
+        let (before, want) = with_page(&tab, |p| {
+            let before = p.casting;
+            change(p);
+            let want = match (p.live, p.recording) {
+                (Some((q, w)), true) => Some((q.max(RECORD_CAST.0), w.max(RECORD_CAST.1))),
+                (Some(live), false) => Some(live),
+                (None, true) => Some(RECORD_CAST),
+                (None, false) => None,
+            };
+            p.casting = want;
+            if want.is_none() {
+                p.held = None;
+            }
+            (before, want)
+        });
+        if before == want {
+            return Ok(());
+        }
+        if before.is_some() {
+            let _ = win::cdp(webview, "Page.stopScreencast", json!({})).await;
+        }
+        if let Some((quality, width)) = want {
+            win::cdp(
+                webview,
+                "Page.startScreencast",
+                json!({
+                    "format": "jpeg", "quality": quality,
+                    "maxWidth": width, "maxHeight": width,
+                }),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// A first picture for a new live view at once: a page that doesn't
+    /// change sends none of its own, and the viewer would wait on nothing.
+    async fn first_frame(app: &AppHandle, webview: &Webview, quality: u8, max_width: u32) {
+        let tab = webview.label().to_string();
+        let Ok((w, h, dpr)) = read_css(webview).await else {
+            return;
+        };
+        with_page(&tab, |p| p.css = Some((w, h, Instant::now())));
+        // Whole screen pixels, but no wider than the view asked for.
+        let scale = (f64::from(max_width) / (w * dpr)).min(1.0);
+        let shot = tokio::time::timeout(
+            Duration::from_secs(5),
+            win::cdp(
+                webview,
+                "Page.captureScreenshot",
+                json!({
+                    "format": "jpeg", "quality": quality,
+                    "clip": { "x": 0, "y": 0, "width": w, "height": h, "scale": scale },
+                }),
+            ),
+        )
+        .await;
+        if let Ok(Ok(shot)) = shot {
+            if let Some(data) = shot["data"].as_str() {
+                super::super::pipe::frame(app, &tab, data, w, h);
+            }
+        }
+    }
+
+    /// Start, change or stop the pictures of a tab for live views on other
+    /// devices.
+    async fn live_cast(
+        app: &AppHandle,
+        webview: &Webview,
+        on: bool,
+        quality: Option<u8>,
+        max_width: Option<u32>,
+    ) -> Result<(), String> {
+        instrument(app, webview).await?;
+        let tab = webview.label().to_string();
+        if on {
+            // Drawn (off screen if need be) so the engine paints it at all.
+            let parked = wake(app, webview);
+            if parked {
+                with_page(&tab, |p| p.cast_parked = true);
+            }
+            let quality = quality.unwrap_or(65).clamp(30, 90);
+            let width = max_width.unwrap_or(1280).clamp(320, 1920);
+            cast(webview, |p| p.live = Some((quality, width))).await?;
+            first_frame(app, webview, quality, width).await;
+        } else {
+            cast(webview, |p| p.live = None).await?;
+            if with_page(&tab, |p| std::mem::take(&mut p.cast_parked)) {
+                put_away(app, webview);
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether the page has a field focused that takes typing.
+    async fn editable_focus(webview: &Webview) -> bool {
+        const ASK: &str = "(() => { let a = document.activeElement; \
+            while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement; \
+            if (!a) return false; if (a.isContentEditable) return true; \
+            const t = a.tagName; \
+            if (t === 'TEXTAREA') return !a.readOnly && !a.disabled; \
+            if (t === 'INPUT') return !a.readOnly && !a.disabled && \
+              !['button','submit','reset','checkbox','radio','file','image','range','color','hidden'] \
+                .includes((a.type || '').toLowerCase()); \
+            return false; })()";
+        let asked = tokio::time::timeout(
+            Duration::from_secs(1),
+            win::cdp(
+                webview,
+                "Runtime.evaluate",
+                json!({ "expression": ASK, "returnByValue": true }),
+            ),
+        )
+        .await;
+        matches!(asked, Ok(Ok(a)) if a["result"]["value"] == true)
+    }
+
+    /// A point a viewer sent, if it is one.
+    fn point(x: f64, y: f64) -> Result<(f64, f64), String> {
+        if x.is_finite() && y.is_finite() {
+            Ok((x.clamp(-1.0, 100_000.0), y.clamp(-1.0, 100_000.0)))
+        } else {
+            Err("that isn't a point on the page".into())
+        }
+    }
+
+    /// What the viewer holding a live view's control does to the page, as
+    /// real input. After a tap or a key the answer says whether the page
+    /// now has a field focused that takes typing.
+    async fn viewer_input(webview: &Webview, input: Input) -> Result<Value, String> {
+        let w = webview;
+        let mut look = false;
+        match input {
+            Input::Click {
+                x,
+                y,
+                button,
+                count,
+            } => {
+                let at = point(x, y)?;
+                let button = match button.as_deref() {
+                    Some("right") => "right",
+                    Some("middle") => "middle",
+                    _ => "left",
+                };
+                mouse(w, "mouseMoved", at, "none", 0).await?;
+                for clicks in 1..=count.clamp(1, 3) {
+                    mouse(w, "mousePressed", at, button, clicks).await?;
+                    mouse(w, "mouseReleased", at, button, clicks).await?;
+                }
+                look = true;
+            }
+            Input::Down { x, y } => {
+                let at = point(x, y)?;
+                mouse(w, "mouseMoved", at, "none", 0).await?;
+                mouse(w, "mousePressed", at, "left", 1).await?;
+            }
+            Input::Move { x, y } => {
+                let (x, y) = point(x, y)?;
+                win::cdp(
+                    w,
+                    "Input.dispatchMouseEvent",
+                    json!({ "type": "mouseMoved", "x": x, "y": y, "button": "left", "buttons": 1 }),
+                )
+                .await?;
+            }
+            Input::Up { x, y } => {
+                mouse(w, "mouseReleased", point(x, y)?, "left", 1).await?;
+                look = true;
+            }
+            Input::Wheel { x, y, dx, dy } => {
+                let (x, y) = point(x, y)?;
+                let (dx, dy) = (
+                    if dx.is_finite() { dx } else { 0.0 },
+                    if dy.is_finite() { dy } else { 0.0 },
+                );
+                win::cdp(
+                    w,
+                    "Input.dispatchMouseEvent",
+                    json!({ "type": "mouseWheel", "x": x, "y": y, "deltaX": dx, "deltaY": dy }),
+                )
+                .await?;
+            }
+            Input::Text { text } => {
+                if !text.is_empty() {
+                    win::cdp(w, "Input.insertText", json!({ "text": text })).await?;
+                }
+            }
+            Input::Key { key } => {
+                press(w, &key).await?;
+                look = true;
+            }
+        }
+        if look {
+            return Ok(json!({ "editable": editable_focus(w).await }));
+        }
+        Ok(json!({}))
     }
 
     pub async fn in_page(app: &AppHandle, call: Call) -> Result<Value, String> {
         let tab = call.tab().ok_or("that call names no tab")?.to_string();
         let webview = super::super::tab(app, &tab)?;
+        // A live view's own calls first: they must not wait on the page
+        // helper, and the cast decides itself whether to draw the tab.
+        match &call {
+            Call::FrameAck { .. } => {
+                release_frame(app, &tab).await?;
+                return Ok(json!({}));
+            }
+            Call::Screencast {
+                on,
+                quality,
+                max_width,
+                ..
+            } => {
+                live_cast(app, &webview, *on, *quality, *max_width).await?;
+                return Ok(json!({}));
+            }
+            _ => {}
+        }
         wake(app, &webview);
         instrument(app, &webview).await?;
         let w = &webview;
         match call {
+            Call::Input { input, .. } => viewer_input(w, input).await,
             Call::Snapshot { .. } => {
                 let text = helper(w, "snapshot()").await?;
                 Ok(page_answer(app, &tab, json!({ "text": text })))
@@ -988,21 +1347,10 @@ mod page {
         );
     }
 
-    /// Start or stop a tab's stream of frames (recording).
+    /// Start or stop a tab's stream of frames (recording). A live view of
+    /// the same tab shares the engine's one cast.
     pub async fn screencast(app: &AppHandle, webview: &Webview, on: bool) -> Result<(), String> {
         instrument(app, webview).await?;
-        if on {
-            win::cdp(
-                webview,
-                "Page.startScreencast",
-                json!({ "format": "jpeg", "quality": 60, "maxWidth": 1280, "maxHeight": 1280 }),
-            )
-            .await
-            .map(|_| ())
-        } else {
-            win::cdp(webview, "Page.stopScreencast", json!({}))
-                .await
-                .map(|_| ())
-        }
+        cast(webview, |p| p.recording = on).await
     }
 }
