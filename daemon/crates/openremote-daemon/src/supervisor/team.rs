@@ -657,7 +657,15 @@ impl Supervisor {
             &name_of(&lead),
             &self.harness_name(&lead.harness),
             lead.workspace.as_deref(),
-            rides_mcp && settings.tools,
+            // What this worker really has: the team tools ride only the
+            // harnesses that take the chat's MCP server, and what it may
+            // do with them depends on how deep it is and on the user's
+            // setting for messages between workers.
+            BriefTools {
+                report: rides_mcp && settings.tools,
+                spawn: rides_mcp && settings.tools && depth + 1 < settings.max_depth,
+                sideways: rides_mcp && settings.tools && settings.sideways,
+            },
             request.brief.trim(),
         );
         let origin = Origin {
@@ -1580,24 +1588,40 @@ fn ago(ms: i64) -> String {
     }
 }
 
+/// What a worker is told it can do with the team tools - only what is so.
+struct BriefTools {
+    /// It can send its lead a note while it works.
+    report: bool,
+    /// It can start workers of its own.
+    spawn: bool,
+    /// It can message the other workers under its lead.
+    sideways: bool,
+}
+
 /// A worker's first message: the plain facts of its situation, then the
 /// brief. Nothing here is a role to play - each line is true.
 fn worker_brief(
     lead: &str,
     lead_harness: &str,
     workspace: Option<&Path>,
-    has_team_tools: bool,
+    tools: BriefTools,
     brief: &str,
 ) -> String {
     let mut text = format!(
-        "You are a worker in an OpenRemote team. The chat \"{lead}\" ({lead_harness}) started you with the task below. \
-         When your turn ends, your final message is your report: the lead reads that message and nothing else you wrote, so put the result in it. \
-         You work for the lead, so do not ask the user questions; if you are blocked, say so in your final message."
+        "You are a worker in an OpenRemote team. The chat \"{lead}\" ({lead_harness}) started you with the task below.          When your turn ends, your final message is sent to the lead as your report, so put the result in it.          You work for the lead, so do not ask the user questions; if you are blocked, say so in your final message."
     );
-    if has_team_tools {
+    if tools.report {
         text.push_str(
             " You can send the lead a note without ending your turn with the agents_report tool.",
         );
+    }
+    if tools.spawn {
+        text.push_str(
+            " You can start workers of your own with agents_spawn, within the limits the user set.",
+        );
+    }
+    if tools.sideways {
+        text.push_str(" You can message the other workers under your lead with agents_message.");
     }
     if let Some(folder) = workspace {
         text.push_str(&format!(
@@ -1605,7 +1629,12 @@ fn worker_brief(
             folder.display()
         ));
     }
-    text.push_str("\n\nTask:\n");
+    text.push_str(
+        "
+
+Task:
+",
+    );
     text.push_str(brief);
     text
 }
