@@ -471,12 +471,14 @@ export function ConsoleProvider({ children }) {
   // Back to the name the chat was given from its first message. The daemon
   // refuses an empty name, so the name is made the way the daemon made it:
   // from the words of the first message (the folded transcript when this
-  // console has it, else the start of the event stream).
+  // console has it, else the start of the event stream). A chat already
+  // named that way is left alone: a rename would only move it up the list.
   const restoreChatTitle = useCallback(
-    async (chatId) => {
+    async (chatId, current = null) => {
       const words = firstPromptText(chatsRef.current[chatId]?.timeline) ?? (await readFirstPrompt(chatId))
       const name = words ? titleFrom(words).trim() : ''
       if (!name) throw new Error('This chat has no first message to name it from')
+      if (name === current) return null
       return renameChat(chatId, name)
     },
     [renameChat, readFirstPrompt],

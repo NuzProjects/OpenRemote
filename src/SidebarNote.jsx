@@ -9,7 +9,8 @@ const NOTE_MS = 6000
  * work. It sits at the foot of the list for a few seconds; a newer note
  * replaces an older one and starts the clock again.
  *
- * say(text, { label, run }?) shows it; dismiss() takes it away.
+ * say(text, { label, run }?, { veiled }?) shows it; dismiss() takes it away.
+ * A note that may carry a name (a device, a chat) is veiled in privacy mode.
  */
 export function useNote() {
   const [note, setNote] = useState(null)
@@ -21,9 +22,9 @@ export function useNote() {
   }, [])
 
   const say = useCallback(
-    (text, action = null) => {
+    (text, action = null, { veiled = false } = {}) => {
       clearTimeout(timer.current)
-      setNote({ text, action })
+      setNote({ text, action, veiled })
       timer.current = setTimeout(() => setNote(null), NOTE_MS)
     },
     [],
@@ -35,10 +36,10 @@ export function useNote() {
 
 export default function SidebarNote({ note, onDismiss }) {
   if (!note) return null
-  const { text, action } = note
+  const { text, action, veiled } = note
   return (
     <div className="sb-note" role="status">
-      <span className="sb-note-text">{text}</span>
+      <span className={veiled ? 'sb-note-text pv' : 'sb-note-text'}>{text}</span>
       {action && (
         <button
           type="button"

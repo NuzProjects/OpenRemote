@@ -20,6 +20,7 @@ import {
   House,
   Lightning,
   MagnifyingGlass,
+  PencilSimple,
   Plus,
   PuzzlePiece,
   TrashSimple,
@@ -43,6 +44,7 @@ import { useMoveChat } from './useMoveChat.jsx'
 import { usePersistedList, useUnseen } from './useSidebarMarks.js'
 import { KEYS, toggled } from './sidebar-marks.js'
 import { DOT_WORDS, dotKind, rollup } from './sidebar-groups.js'
+import SidebarChat from './SidebarChat.jsx'
 import SidebarNote, { useNote } from './SidebarNote.jsx'
 import { useChatDrag } from './useChatDrag.js'
 import { wouldMove } from './move-chat.js'
@@ -50,7 +52,7 @@ import './sidebar.css'
 import './move.css'
 
 export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit, onAddProject, onNewChatIn, onReveal }) {
-  const { connection, sessions, chats, devices, thisDevice, projects, removeProject, archived, setChatArchived, deleteChat } = useConsole()
+  const { connection, sessions, chats, devices, thisDevice, projects, removeProject, archived, setChatArchived, deleteChat, renameChat, restoreChatTitle } = useConsole()
   const privacy = usePrivacyMode()
   // The views enabled plugins add: the Plugins group's tiles.
   const pluginViews = usePlugins()?.views ?? []
@@ -61,6 +63,8 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   const collapsed = useMemo(() => new Set(folded), [folded])
   const [menu, setMenu] = useState(null)
   const [deleting, setDeleting] = useState(null)
+  // The chat whose name is being edited in its row.
+  const [renaming, setRenaming] = useState(null)
 
   // A chat never opened here has no record, but the poll still carries its
   // status: without it a chat running in the background (started on another
@@ -76,6 +80,8 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
       return {
         id: session.id,
         title: chats[session.id]?.title ?? session.title ?? 'A new task',
+        // A chat with no name yet shows a stand-in; renaming starts blank.
+        named: Boolean(chats[session.id]?.title ?? session.title),
         status: statusOf(session),
         harness: session.harness,
         workspace: session.workspace ?? null,
@@ -189,6 +195,27 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [archived])
 
+  // A chat that leaves the list mid-edit (deleted on another device, say)
+  // must not come back later with its field open.
+  useEffect(() => {
+    if (renaming && !rows.some((r) => r.id === renaming)) setRenaming(null)
+  }, [rows, renaming])
+
+  // Save a chat's new name from its row. An empty name puts back the one
+  // the chat was given from its first message; a name that did not change
+  // asks the daemon for nothing. The daemon's answer reaches every device.
+  const saveName = async (row, text) => {
+    setRenaming(null)
+    const name = text.trim()
+    if (name === (row.named ? row.title : '')) return
+    try {
+      if (name) await renameChat(row.id, name)
+      else await restoreChatTitle(row.id, row.named ? row.title : null)
+    } catch (err) {
+      say(`Couldn't rename the chat: ${err.message ?? err}`, null, { veiled: true })
+    }
+  }
+
   // Right-click on a chat: the same actions as the hover buttons, plus the
   // split directions.
   const menuItems = (row) => {
@@ -207,10 +234,17 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
           ]
         : []),
       { divider: true },
+      { label: 'Rename', icon: <PencilSimple size={14} />, onSelect: () => setRenaming(row.id) },
       unseen.has(row.id)
         ? { label: 'Mark as read', icon: <EnvelopeSimpleOpen size={14} />, onSelect: () => mark(row.id, false) }
         : { label: 'Mark as unread', icon: <EnvelopeSimple size={14} />, onSelect: () => mark(row.id, true) },
       move.menuItem(row),
+      {
+        label: 'Copy title',
+        icon: <Copy size={14} />,
+        onSelect: () => navigator.clipboard?.writeText(row.title).catch(() => {}),
+      },
+      { divider: true },
       { label: 'Archive', icon: <Archive size={14} />, onSelect: () => archive(row.id) },
       // The daemon deletes synced chats only (it removes them from every
       // device); a private chat has no delete.
@@ -224,11 +258,6 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
             },
           ]
         : []),
-      {
-        label: 'Copy title',
-        icon: <Copy size={14} />,
-        onSelect: () => navigator.clipboard?.writeText(row.title).catch(() => {}),
-      },
     ]
   }
 
@@ -259,61 +288,31 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
 
   const kindOf = (row) => dotKind({ status: row.status, offline: row.offline, unseen: unseen.has(row.id) })
 
-  const chatRow = (row) => {
-    const kind = kindOf(row)
-    return (
-    <div
+  const chatRow = (row) => (
+    <SidebarChat
       key={row.id}
-      className={`chat-item${drag?.item.id === row.id ? ' sb-dragged' : ''}`}
-      onContextMenu={(e) => {
-        e.preventDefault()
+      row={row}
+      kind={kindOf(row)}
+      mode={mode}
+      active={row.id === active}
+      dragged={drag?.item.id === row.id}
+      privacy={privacy}
+      renaming={renaming === row.id}
+      onOpen={onSelect}
+      onArchive={archive}
+      onMenu={(e, chat) => {
         // A chat on another machine moves among that machine's projects.
-        move.prepare(row)
-        setMenu({ x: e.clientX, y: e.clientY, row })
+        move.prepare(chat)
+        setMenu({ x: e.clientX, y: e.clientY, row: chat })
       }}
-    >
-      <button
-        className={`chat-row${row.id === active ? ' active' : ''}`}
-        data-status={row.status}
-        data-unseen={kind === 'unseen' ? '' : undefined}
-        onClick={() => onSelect(row.id)}
-        onPointerDown={
-          // Only a chat that runs here can be dropped on this computer's
-          // projects; one on another machine moves from its menu.
-          !isMobile && !row.device ? start(row) : undefined
-        }
-      >
-        {/* the harness's mark leads - every harness, one
-            sidebar, the at-a-glance signal of which agent owns
-            each chat - sized to read from afar, then the title, with
-            the status dot at the right edge so every status scans in
-            one column */}
-        {row.harness && <HarnessMark harness={row.harness} size={15} />}
-        <span className="chat-title pv">{row.title}</span>
-        {mode === 'cloud' && row.device && (
-          <span className="chat-device pv">{row.device}</span>
-        )}
-        {mode === 'local' && row.synced && (
-          <Cloud size={11} className="chat-synced" aria-label="Synced to your devices" />
-        )}
-        <span
-          className={`dot dot--${kind}`}
-          title={kind === 'offline' ? (privacy ? 'Offline' : `${row.device} is offline`) : DOT_WORDS[kind]}
-        />
-      </button>
-      {/* Archive hides the chat from this list; Settings keeps it. */}
-      <button
-        type="button"
-        className="chat-archive"
-        title="Archive this chat"
-        aria-label={`Archive ${row.title}`}
-        onClick={() => archive(row.id)}
-      >
-        <Archive size={12} />
-      </button>
-    </div>
-    )
-  }
+      // Only a chat that runs here can be dropped on this computer's
+      // projects; one on another machine moves from its menu.
+      onPointerDown={!isMobile && !row.device ? start(row) : undefined}
+      onRenameStart={setRenaming}
+      onRenameSave={saveName}
+      onRenameCancel={() => setRenaming(null)}
+    />
+  )
 
   return (
     <aside className={`sidebar${open ? '' : ' collapsed'}`}>

@@ -917,3 +917,31 @@ html[data-reduce-motion] .chat-archive {
 .sb-note-action:hover {
   background: var(--bg-hover);
 }
+
+/* A chat's name being edited in its row: the row lights in the accent (the
+   same outline a drop target wears - amber marks interaction), the field
+   takes the title's place and metrics so nothing shifts. */
+.chat-row.renaming {
+  background: var(--bg-active);
+  outline: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: -1px;
+  cursor: text;
+}
+
+.chat-rename {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: none;
+  color: var(--text-1);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.chat-rename::placeholder {
+  color: var(--text-3);
+}
