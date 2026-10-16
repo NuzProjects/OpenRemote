@@ -62,6 +62,9 @@ export function chatFromSession(session) {
     title: session.title ?? null,
     // The device that runs a synced chat; none for a private one.
     executor: session.executor ?? null,
+    // The chat whose agent started this one, when one did: this chat is a
+    // worker in that chat's team ({ chat, depth, role, brief }).
+    parent: session.parent ?? null,
     // Messages waiting for the running turn to end (the daemon's queue),
     // and whether an interrupt, a stop or a failure is holding them.
     queue: session.queue ?? [],
@@ -197,6 +200,9 @@ export function foldEvent(chat, event) {
         // The pictures the user sent with it, as the blob store names
         // them; the bytes are fetched when the bubble shows.
         images: message.images ?? [],
+        // Set when another agent sent it (a lead's brief, a worker's
+        // report): { kind: 'agent', chat, title, report }.
+        origin: message.origin ?? null,
       })
       if (message.role === 'user' && !chat.title) chat.title = titleFrom(message.text)
       break
