@@ -97,6 +97,11 @@ async function start(composer) {
     openremote.ui.toast(microphoneWords(err))
     return
   }
+  if (typeof MediaRecorder === 'undefined') {
+    release(stream)
+    openremote.ui.toast("This system can't record audio here.")
+    return
+  }
   const type = TYPES.find((t) => MediaRecorder.isTypeSupported?.(t)) ?? ''
   let recorder
   try {
