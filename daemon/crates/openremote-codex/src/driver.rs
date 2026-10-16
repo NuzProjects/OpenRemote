@@ -15,7 +15,9 @@ use std::time::Duration;
 
 use openremote_core::{DecisionKind, DecisionOption, TurnOutcome};
 use openremote_harness::events::{ApprovalRequest, DecisionSpec};
-use openremote_harness::{DriverError, DriverEvent, Resolution, SessionSettings, SpawnOptions};
+use openremote_harness::{
+    DriverError, DriverEvent, Prompt, Resolution, SessionSettings, SpawnOptions,
+};
 use serde_json::{Value, json};
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
@@ -274,8 +276,15 @@ impl Driver {
 
     /// Send one user message as a turn. If a turn is already running, the
     /// message steers it (Codex's own mechanism, `expectedTurnId`).
-    pub async fn send_prompt(&mut self, text: &str) -> Result<(), DriverError> {
-        let input = self.user_input(text).await;
+    pub async fn send_prompt(&mut self, prompt: &Prompt) -> Result<(), DriverError> {
+        let mut input = self.user_input(&prompt.text).await;
+        if let Value::Array(items) = &mut input {
+            // A message of pictures alone needs no empty text item.
+            if prompt.text.is_empty() && !prompt.images.is_empty() {
+                items.retain(|item| item.get("type").and_then(Value::as_str) != Some("text"));
+            }
+            items.extend(prompt.images.iter().map(image_item));
+        }
         let active = self.shared.active_turn.lock().unwrap().clone();
         if let Some(turn) = active {
             self.call(
@@ -440,6 +449,19 @@ impl Driver {
         self.stdin.write_all(line.as_bytes()).await?;
         self.stdin.flush().await?;
         Ok(())
+    }
+}
+
+/// A picture as Codex's own input item: a `localImage` it reads from disk
+/// where the daemon kept one as a file, else an `image` carrying the bytes
+/// as a data URL - the two picture forms its turn input takes.
+fn image_item(image: &openremote_harness::Image) -> Value {
+    match &image.path {
+        Some(path) => json!({"type": "localImage", "path": path.to_string_lossy()}),
+        None => json!({
+            "type": "image",
+            "url": format!("data:{};base64,{}", image.mime, image.data),
+        }),
     }
 }
 
@@ -962,6 +984,7 @@ fn notification(method: &str, params: &Value, shared: &Shared) -> Option<DriverE
                             .unwrap_or_default()
                             .to_string(),
                         is_error: exit != 0,
+                        images: Vec::new(),
                     })
                 }
                 _ => None,

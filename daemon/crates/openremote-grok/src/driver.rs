@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use openremote_core::TurnOutcome;
 use openremote_harness::anthropic_wire as wire;
-use openremote_harness::{DriverError, DriverEvent, Resolution, SpawnOptions};
+use openremote_harness::{DriverError, DriverEvent, Prompt, Resolution, SpawnOptions};
 use serde_json::Value;
 use tokio::io::BufReader;
 use tokio::process::{Child, Command};
@@ -78,7 +78,9 @@ impl Driver {
 
     /// Run one prompt as its own grok process; the reader maps the
     /// Anthropic-wire frames onto driver events.
-    pub async fn send_prompt(&mut self, text: &str) -> Result<(), DriverError> {
+    pub async fn send_prompt(&mut self, prompt: &Prompt) -> Result<(), DriverError> {
+        // Grok's print mode takes the message as words on its command line.
+        let text = prompt.text_only("Grok Build")?;
         let (program, prefix): (PathBuf, Vec<std::ffi::OsString>) = match &self.resolution {
             Resolution::Executable(path) => (path.clone(), Vec::new()),
             Resolution::NodeScript { node, script } => {
@@ -250,13 +252,14 @@ async fn read_prompt(
                 }
             }
             wire::Frame::UserToolResults { content } => {
-                for (_id, text, is_error) in wire::tool_result_blocks(&content) {
+                for block in wire::tool_result_blocks(&content) {
                     let _ = tx
                         .send(DriverEvent::ToolResult {
                             tool_use_id: String::new(),
                             name: "commandExecution".into(),
-                            text,
-                            is_error,
+                            text: block.text,
+                            is_error: block.is_error,
+                            images: block.images,
                         })
                         .await;
                 }

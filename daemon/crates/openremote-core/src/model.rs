@@ -25,6 +25,11 @@ pub struct Harness {
     /// `fastMode` headless ≥ 2.1.205, codex service tier `fast` ≥ 0.110.0).
     #[serde(default)]
     pub fast_supported: bool,
+    /// The harness reads pictures sent with a message (claude's image
+    /// blocks, codex's local images). The console offers attaching only
+    /// where it does.
+    #[serde(default)]
+    pub image_input: bool,
     /// Whether this CLI is signed in, in its own words. `None` means this
     /// harness has no status command we can ask - the row stays Ready or
     /// Missing, never a guessed sign-in.
@@ -146,6 +151,10 @@ pub struct QueuedMessage {
     pub id: String,
     pub text: String,
     pub at: i64,
+    /// Its pictures, already in the blob store: the queue holds where they
+    /// are, never their bytes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ImageRef>,
 }
 
 /// One computer that can run agent chats. The daemon's own machine is
@@ -543,6 +552,22 @@ pub struct ChatMessage {
     pub turn: u64,
     pub role: MessageRole,
     pub text: String,
+    /// The pictures the user sent with it (pasted, dropped, a page's
+    /// screenshot), kept in the blob store of the device that runs the
+    /// chat.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ImageRef>,
+}
+
+/// A picture as an event names it: the sha256 its bytes are kept under in
+/// the blob store, and its type. The bytes never ride the event log - a
+/// screenshot outweighs a whole transcript, and every device copies the
+/// log - so a device that wants to show one asks the device that runs the
+/// chat.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub struct ImageRef {
+    pub blob: String,
+    pub mime: String,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]

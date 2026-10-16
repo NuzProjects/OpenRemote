@@ -715,6 +715,7 @@ mod tests {
                 turn: 1,
                 role: openremote_core::MessageRole::User,
                 text: "private words".into(),
+                images: Vec::new(),
             },
         };
         {

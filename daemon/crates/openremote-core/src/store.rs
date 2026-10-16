@@ -141,6 +141,9 @@ struct State {
 pub struct Store {
     dir: PathBuf,
     state: State,
+    /// The chats' pictures, beside the store (`<data_dir>/blobs`): shared
+    /// out so a picture is read and written without the store's lock.
+    blobs: std::sync::Arc<crate::blobs::Blobs>,
 }
 
 impl Store {
@@ -177,7 +180,8 @@ impl Store {
             },
             Err(_) => State::default(),
         };
-        let mut store = Self { dir, state };
+        let blobs = std::sync::Arc::new(crate::blobs::Blobs::new(&dir));
+        let mut store = Self { dir, state, blobs };
         let rekeyed = store.rekey_installed_plugins();
         let healed = store.heal_logs()?;
         let discovered = store.discover_logs()?;
@@ -197,6 +201,11 @@ impl Store {
     /// The folder the store lives in - the daemon's data dir.
     pub fn dir(&self) -> &std::path::Path {
         &self.dir
+    }
+
+    /// The chats' pictures. A chat's go when the chat does.
+    pub fn blobs(&self) -> std::sync::Arc<crate::blobs::Blobs> {
+        std::sync::Arc::clone(&self.blobs)
     }
 
     /// The first plugin builds keyed installs by bare name, before plugins
@@ -556,7 +565,8 @@ impl Store {
                 String::from_utf8_lossy(&head).lines().find_map(
                     |line| match serde_json::from_str::<Event>(line).ok()?.payload {
                         EventPayload::MessageAdded { message }
-                            if message.role == MessageRole::User =>
+                            if message.role == MessageRole::User
+                                && !message.text.trim().is_empty() =>
                         {
                             Some(crate::title_from(&message.text))
                         }
@@ -1442,6 +1452,11 @@ impl Store {
     }
 
     fn forget_session(&mut self, session_id: &SessionId) -> Result<(), StoreError> {
+        // Its pictures go with it. A picture that can't be removed now is
+        // only disk space, never a reason to keep a deleted chat.
+        if let Err(e) = self.blobs.release(*session_id) {
+            eprintln!("warning: chat {session_id}'s pictures weren't all removed: {e}");
+        }
         self.state.sessions.remove(session_id);
         self.state.next_seq.remove(session_id);
         self.state
@@ -1572,7 +1587,12 @@ impl Store {
             EventPayload::MessageAdded { message } => {
                 if let Some(session) = self.state.sessions.get_mut(&event.session_id) {
                     session.updated_at = now;
-                    if session.title.is_none() && message.role == MessageRole::User {
+                    // A message of pictures alone names nothing; the
+                    // next one with words does.
+                    if session.title.is_none()
+                        && message.role == MessageRole::User
+                        && !message.text.trim().is_empty()
+                    {
                         session.title = Some(crate::title_from(&message.text));
                     }
                 }
@@ -1821,6 +1841,7 @@ mod tests {
                         turn: 1,
                         role: crate::model::MessageRole::Assistant,
                         text: "hi".into(),
+                        images: Vec::new(),
                     },
                 },
             )
@@ -1903,6 +1924,7 @@ mod tests {
                 turn,
                 role: MessageRole::User,
                 text: text.into(),
+                images: Vec::new(),
             },
         }
     }

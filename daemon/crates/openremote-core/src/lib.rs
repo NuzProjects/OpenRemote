@@ -17,6 +17,7 @@
 //!   `accepted` and a terminal state is surfaced as `unknown`; uncertain work
 //!   is never resent.
 
+pub mod blobs;
 pub mod events;
 pub mod fsx;
 pub mod ids;
@@ -27,7 +28,7 @@ pub use events::{Event, EventPayload};
 pub use ids::{DecisionId, DeviceId, MachineId, ProjectId, RuleId, SessionId};
 pub use model::{
     ApprovedCommand, AutomationRule, ChatMessage, Decision, DecisionKind, DecisionOption,
-    DecisionState, Harness, InstallSpec, InstalledPlugin, LOCAL_MARKETPLACE, Machine,
+    DecisionState, Harness, ImageRef, InstallSpec, InstalledPlugin, LOCAL_MARKETPLACE, Machine,
     MachineStatus, MachineView, MarketplaceRecord, MarketplaceSource, McpServerEntry, MessageRole,
     PluginPower, PluginRuntime, PluginScope, PluginSource, Project, QueuedMessage, Receipt,
     ReceiptStatus, Session, SessionStatus, Trigger, TriggerKind, TurnOutcome,
