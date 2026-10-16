@@ -1105,7 +1105,7 @@ export default function ChatView({ chat, onBack, focused = true }) {
             </div>
             <div className="nc-send-group">
               {/* The buttons plugins add to the composer (dictation's
-                  microphone, say), still while the chat can't take text. */}
+                  microphone, say), dimmed while the chat can't take text. */}
               <PluginComposerButtons
                 inputRef={inputRef}
                 setText={setText}
