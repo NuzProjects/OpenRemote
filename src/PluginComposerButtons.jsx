@@ -41,7 +41,7 @@ export default function PluginComposerButtons({ inputRef, setText, composer, dis
 
   if (!host || host.inputs.length === 0) return null
   return host.inputs.map(({ pluginId, pluginName, input }) => {
-    const state = host.inputState(pluginId, input.id, handle)
+    const state = host.inputState(pluginId, input.id, handle, composer)
     return (
       <button
         key={`${pluginId}/${input.id}`}

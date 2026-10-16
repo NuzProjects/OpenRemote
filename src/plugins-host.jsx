@@ -322,13 +322,17 @@ export function PluginProvider({ children }) {
 
     'composer.setState': async ({ plugin, ui }, { input, state, label, title, composer }) => {
       if (!ui.inputs.some((i) => i.id === input)) throw new Error(`There is no composer button named ${input}.`)
+      const granted = grantsRef.current.get(plugin.id)
+      const scoped = Boolean(composer && granted?.has(composer))
       const next = {
         state: INPUT_STATES.has(state) ? state : 'idle',
         label: typeof label === 'string' && label.trim() ? label.trim().slice(0, 40) : null,
         title: typeof title === 'string' && title.trim() ? title.trim().slice(0, 120) : null,
         // One composer's button only, when the plugin names one it was
-        // handed by a click; every composer's otherwise.
-        composer: composer && grantsRef.current.get(plugin.id)?.has(composer) ? composer : null,
+        // handed by a click (and that chat's composer, should it open
+        // again); every composer's otherwise.
+        composer: scoped ? composer : null,
+        composerKey: scoped ? granted.get(composer) ?? null : null,
       }
       setInputStates((current) => ({ ...current, [`${plugin.id}/${input}`]: next }))
       return [null]
@@ -406,15 +410,21 @@ export function PluginProvider({ children }) {
 
   // The composer a plugin writes in: the one it names (a handle a click
   // gave it), else the one whose button the user clicked last. A plugin
-  // never writes in a composer the user didn't point it at.
+  // never writes in a composer the user didn't point it at - though when
+  // the user left that chat and came back, its composer is a new one, and
+  // the words still belong there.
   function composerFor(pluginId, handle) {
+    const granted = grantsRef.current.get(pluginId)
     const chosen = handle ?? lastClickRef.current.get(pluginId) ?? null
-    if (!chosen || !grantsRef.current.get(pluginId)?.has(chosen)) {
+    if (!chosen || !granted?.has(chosen)) {
       throw new Error('A plugin writes in a composer only after the user clicks its button there.')
     }
     const target = composersRef.current.get(chosen)
-    if (!target) throw new Error('That composer has closed.')
-    return target
+    if (target) return target
+    const key = granted.get(chosen)
+    const again = key == null ? null : [...composersRef.current.values()].find((c) => c.attachKey === key)
+    if (again) return again
+    throw new Error('That composer has closed.')
   }
 
   const boot = (frame) => {
@@ -529,8 +539,10 @@ export function PluginProvider({ children }) {
   }, [])
 
   const clickInput = useCallback((pluginId, inputId, handle) => {
-    const granted = grantsRef.current.get(pluginId) ?? new Set()
-    granted.add(handle)
+    // The composer's handle, and which composer it is (a chat's id, or
+    // the home screen's).
+    const granted = grantsRef.current.get(pluginId) ?? new Map()
+    granted.set(handle, composersRef.current.get(handle)?.attachKey ?? null)
     grantsRef.current.set(pluginId, granted)
     lastClickRef.current.set(pluginId, handle)
     clicksRef.current.push({ pluginId, detail: { input: inputId, composer: handle } })
@@ -540,11 +552,18 @@ export function PluginProvider({ children }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // A button's state in one composer: the plugin's, when it set it for
+  // every composer, for this one, or for this chat's composer before it
+  // opened again; at rest otherwise.
   const inputState = useCallback(
-    (pluginId, inputId, handle) => {
+    (pluginId, inputId, handle, composerKey) => {
       const state = inputStates[`${pluginId}/${inputId}`]
-      if (!state || (state.composer && state.composer !== handle)) return { state: 'idle', label: null, title: null }
-      return state
+      const mine =
+        state &&
+        (!state.composer ||
+          state.composer === handle ||
+          (state.composerKey != null && state.composerKey === composerKey))
+      return mine ? state : { state: 'idle', label: null, title: null }
     },
     [inputStates],
   )
