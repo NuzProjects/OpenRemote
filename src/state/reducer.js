@@ -194,6 +194,9 @@ export function foldEvent(chat, event) {
         id: message.id,
         role: message.role === 'user' ? 'user' : 'agent',
         text: message.text,
+        // The pictures the user sent with it, as the blob store names
+        // them; the bytes are fetched when the bubble shows.
+        images: message.images ?? [],
       })
       if (message.role === 'user' && !chat.title) chat.title = titleFrom(message.text)
       break
@@ -224,6 +227,7 @@ export function foldEvent(chat, event) {
         input: payload.input,
         state: 'ok',
         result: null,
+        images: [],
       })
       break
     }
@@ -301,6 +305,9 @@ export function foldEvent(chat, event) {
         if (item.kind === 'tool' && item.turn === payload.turn && item.name === payload.name && item.result == null) {
           item.result = typeof payload.output === 'string' ? payload.output : JSON.stringify(payload.output)
           item.state = payload.is_error ? 'failed' : 'ok'
+          // What the tool answered with besides words (an agent's
+          // screenshot of a page), named in the blob store.
+          item.images = payload.images ?? []
           break
         }
       }

@@ -23,6 +23,11 @@ const CALL_TIMEOUT_MS = 10000
 // says "not answering" long before this fires.
 const BOOT_TIMEOUT_MS = 120000
 
+// A message carrying pictures (tens of megabytes at most, as base64), or
+// a picture coming back from another device over Cloud: more than a
+// plain call's budget, still bounded.
+const UPLOAD_TIMEOUT_MS = 60000
+
 // The resume cursor of an SSE stream: the highest event seq the client
 // already holds. Only a non-negative integer counts (a digit string too,
 // since a cursor can survive a round trip through storage or a URL) -
@@ -298,13 +303,40 @@ export class DaemonApi {
   }
 
   // `mentionedChats`: the chats this message points at with @ - from now
-  // on the chat's agent may read them, and only them.
-  prompt(id, text, mentionedChats = []) {
-    return this.call('POST', `/sessions/${id}/prompts`, {
-      request_id: newRequestId(),
-      text,
-      ...(mentionedChats.length ? { mentioned_chats: mentionedChats } : {}),
+  // on the chat's agent may read them, and only them. `attachments`: the
+  // pictures riding the message, `{ kind: 'image', mime, data }` with the
+  // bytes in base64; a message of pictures can take a moment to upload.
+  prompt(id, text, mentionedChats = [], attachments = []) {
+    return this.call(
+      'POST',
+      `/sessions/${id}/prompts`,
+      {
+        request_id: newRequestId(),
+        text,
+        ...(mentionedChats.length ? { mentioned_chats: mentionedChats } : {}),
+        ...(attachments.length ? { attachments } : {}),
+      },
+      attachments.length ? { timeoutMs: UPLOAD_TIMEOUT_MS } : undefined,
+    )
+  }
+
+  // A picture from the daemon's blob store, as a Blob of its own type.
+  // The token rides the header, which an <img> can't send - the caller
+  // turns it into an object URL. `session` asks through the chat's own
+  // route, the one another device answers for a synced chat it runs.
+  async blob(sha, { session = null, mime = null } = {}) {
+    const path = session ? `/sessions/${session}/blobs/${sha}` : `/blobs/${sha}`
+    const response = await fetch(`${this.url}${this.prefix}${path}`, {
+      headers: { Authorization: `Bearer ${this.token}` },
+      signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
     })
+    if (!response.ok) {
+      const error = new Error(`HTTP ${response.status}`)
+      error.status = response.status
+      throw error
+    }
+    const bytes = await response.blob()
+    return mime && bytes.type !== mime ? new Blob([bytes], { type: mime }) : bytes
   }
 
   // Rename a chat (the composer's /rename).
@@ -359,12 +391,18 @@ export class DaemonApi {
 
   // The chat's queue - the daemon keeps it, so every device sees the same
   // one. A queued message runs as its own turn when the running one ends.
-  queue(id, text, mentionedChats = []) {
-    return this.call('POST', `/sessions/${id}/queue`, {
-      request_id: newRequestId(),
-      text,
-      ...(mentionedChats.length ? { mentioned_chats: mentionedChats } : {}),
-    })
+  queue(id, text, mentionedChats = [], attachments = []) {
+    return this.call(
+      'POST',
+      `/sessions/${id}/queue`,
+      {
+        request_id: newRequestId(),
+        text,
+        ...(mentionedChats.length ? { mentioned_chats: mentionedChats } : {}),
+        ...(attachments.length ? { attachments } : {}),
+      },
+      attachments.length ? { timeoutMs: UPLOAD_TIMEOUT_MS } : undefined,
+    )
   }
 
   queueRemove(id, item) {
@@ -386,11 +424,16 @@ export class DaemonApi {
   }
 
   // A message straight into the running turn, never through the queue.
-  steer(id, text, mentionedChats = []) {
+  steer(id, text, mentionedChats = [], attachments = []) {
     return this.call(
       'POST',
       `/sessions/${id}/steer`,
-      { request_id: newRequestId(), text, ...(mentionedChats.length ? { mentioned_chats: mentionedChats } : {}) },
+      {
+        request_id: newRequestId(),
+        text,
+        ...(mentionedChats.length ? { mentioned_chats: mentionedChats } : {}),
+        ...(attachments.length ? { attachments } : {}),
+      },
       { timeoutMs: BOOT_TIMEOUT_MS },
     )
   }
