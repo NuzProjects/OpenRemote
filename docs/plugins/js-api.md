@@ -97,10 +97,14 @@ Every page of your plugin runs in a frame sandboxed to scripts alone:
 The console builds your page from your folder:
 
 - A `.js` entry runs as the page's one script, in an empty page.
+- A page that can't be built says why: in its view, or - for the hidden
+  page behind composer buttons - in a note in the app.
 - An `.html` entry has its markup and inline styles kept; its linked
   stylesheets (`<link rel="stylesheet">`) read in; its pictures and media
   (`src`, `poster`) read in as `data:` URLs; then its scripts run in
-  order, inline or from your folder. Remote files are left out.
+  order, inline or from your folder. Remote files are left out, and so
+  are the files a stylesheet's own `url()` names: put those in as
+  `data:` URLs.
 - Scripts run after the markup is in place; `DOMContentLoaded` and
   `load` are sent once they have run.
 - Inline event handlers (`onclick="..."`), `eval` and `javascript:`
@@ -210,8 +214,8 @@ For people working on OpenRemote itself:
   of its own, scripts only from the bridge and `blob:` - and the bridge,
   `public/plugin-bridge.js`, served by the console.
 - The bridge and the console talk by `postMessage`: `{ openremote: 1,
-  kind }` with kinds `ready`, `boot`, `booted`, `call`, `reply`, `event`,
-  `log` and `key`; each call carries a number its reply answers. The
+  kind }` with kinds `ready`, `boot`, `booted`, `failed`, `call`, `reply`,
+  `event`, `log` and `key`; each call carries a number its reply answers. The
   console (`src/plugins-host.jsx`) answers only a frame it made: the
   message's source is that frame's window, and its origin is the
   sandbox's opaque `"null"`. Every call is checked against the powers the

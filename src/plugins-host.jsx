@@ -458,7 +458,11 @@ export function PluginProvider({ children }) {
     if (!message || message.openremote !== 1) return
     const record = live.current.records.get(frame.pluginId)
     if (message.kind === 'ready') {
-      if (!frame.booted) boot(frame)
+      // A page that says hello is a fresh one (the first, or the plugin
+      // reloaded its frame): it boots, and events wait for it again. A
+      // second hello from the same page meets a bridge that boots once.
+      frame.booted = false
+      boot(frame)
       return
     }
     if (message.kind === 'booted') {
@@ -469,6 +473,13 @@ export function PluginProvider({ children }) {
     }
     if (message.kind === 'log') {
       console.warn(`[plugin ${record?.name ?? frame.pluginId}] ${String(message.text ?? '')}`)
+      return
+    }
+    if (message.kind === 'failed') {
+      // A view shows its own problem; a hidden page's would go unseen.
+      const words = String(message.text ?? '').slice(0, 200)
+      console.warn(`[plugin ${record?.name ?? frame.pluginId}] ${words}`)
+      if (frame.place.kind === 'background') live.current.toast(record?.name ?? frame.pluginId, `It could not start: ${words}`)
       return
     }
     if (message.kind === 'key') {

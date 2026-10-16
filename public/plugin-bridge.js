@@ -99,7 +99,10 @@
     else document.documentElement.removeAttribute('data-reduce-motion')
   }
 
+  // A page that could not be built: said in the frame (a view shows it)
+  // and to the console (which tells the user when no view would).
   function showProblem(words) {
+    send({ kind: 'failed', text: String(words) })
     const note = document.createElement('p')
     note.textContent = words
     note.style.cssText = 'margin: 32px; color: var(--text-3); font-size: 13px;'
