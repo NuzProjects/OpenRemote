@@ -118,7 +118,7 @@ export default function BrowserNewTab({ privateTab, engine, api, icons, chats, a
   const [tiles, setTiles] = useState([])
   const [menu, setMenu] = useState(null)
   const [dialog, setDialog] = useState(null)
-  const servers = useSyncExternalStore(subscribeDevServers, recentDevServers)
+  const servers = useSyncExternalStore(subscribeDevServers, recentDevServers, recentDevServers)
   const privacy = usePrivacyMode()
 
   const load = async () => {
