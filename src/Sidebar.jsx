@@ -38,6 +38,8 @@ import { useHint, useShortcut } from './keyboard.jsx'
 import { usePlugins } from './plugins-host.jsx'
 import { PluginIcon } from './plugin-icons.jsx'
 import { useMoveChat } from './useMoveChat.jsx'
+import { usePersistedList } from './useSidebarMarks.js'
+import { KEYS, toggled } from './sidebar-marks.js'
 import { useChatDrag } from './useChatDrag.js'
 import { wouldMove } from './move-chat.js'
 import './sidebar.css'
@@ -49,7 +51,10 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   // The views enabled plugins add: the Plugins group's tiles.
   const pluginViews = usePlugins()?.views ?? []
   const [query, setQuery] = useState('')
-  const [collapsed, setCollapsed] = useState({})
+  // Which projects are folded: kept on this device, so the tree opens the
+  // way it was left.
+  const [folded, setFolded] = usePersistedList(KEYS.collapsed)
+  const collapsed = useMemo(() => new Set(folded), [folded])
   const [menu, setMenu] = useState(null)
   const [deleting, setDeleting] = useState(null)
 
@@ -94,9 +99,10 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   const searching = query.trim() !== ''
   const groups = searching ? grouped.projects.filter((g) => g.items.length > 0) : grouped.projects
 
-  const toggleProject = (id) => {
-    setCollapsed((c) => ({ ...c, [id]: !c[id] }))
-  }
+  const toggleProject = (id) => setFolded((list) => toggled(list, id, !list.includes(id)))
+  // A search opens the projects that hold a match: a folded one would hide
+  // the very chats being looked for.
+  const isFolded = (id) => !searching && collapsed.has(id)
 
   // Moving chats between projects: from a chat's menu, or by dragging a
   // chat that runs on this computer onto one of its projects (or onto
@@ -118,7 +124,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   // project's chats are skipped, like the eye skips them.
   const searchRef = useRef(null)
   const order = [
-    ...grouped.projects.flatMap(({ project, items }) => (collapsed[project.id] ? [] : items)),
+    ...grouped.projects.flatMap(({ project, items }) => (isFolded(project.id) ? [] : items)),
     ...grouped.flat,
   ].map((row) => row.id)
   const step = (pick) => () => {
@@ -395,7 +401,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
           </p>
         )}
         {groups.map(({ project, items }) => {
-          const isCollapsed = !!collapsed[project.id]
+          const isCollapsed = isFolded(project.id)
           return (
             <section
               key={project.id}
