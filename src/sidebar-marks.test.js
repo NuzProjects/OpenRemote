@@ -9,7 +9,7 @@ globalThis.localStorage = {
   clear: () => store.clear(),
 }
 
-const { KEYS, loadList, saveList, toggled, pruned } = await import('./sidebar-marks.js')
+const { KEYS, loadList, saveList, toggled, pruned, endedTurn } = await import('./sidebar-marks.js')
 
 test('a list of ids round-trips, and a damaged value reads as none', () => {
   store.clear()
@@ -38,4 +38,19 @@ test('pruned drops ids that no longer exist and keeps the order', () => {
   assert.deepEqual(pruned(base, new Set(['a', 'b', 'c'])), ['c', 'a'])
   const whole = ['a', 'b']
   assert.equal(pruned(whole, new Set(['a', 'b', 'c'])), whole)
+})
+
+test('a turn that ended or failed is news; a first look, a stop or a boot is not', () => {
+  assert.equal(endedTurn('running', 'idle'), true)
+  assert.equal(endedTurn('waiting', 'idle'), true)
+  assert.equal(endedTurn('running', 'failed'), true)
+  // Still going, or going again.
+  assert.equal(endedTurn('running', 'waiting'), false)
+  assert.equal(endedTurn('idle', 'running'), false)
+  // Stopped by hand (or the daemon restarting) is not a finished turn.
+  assert.equal(endedTurn('running', 'stopped'), false)
+  // Never seen mid-turn: a first look, or a chat settling after its boot.
+  assert.equal(endedTurn(undefined, 'idle'), false)
+  assert.equal(endedTurn('starting', 'idle'), false)
+  assert.equal(endedTurn('idle', 'idle'), false)
 })

@@ -13,6 +13,8 @@ import {
   Copy,
   Desktop,
   DeviceMobile,
+  EnvelopeSimple,
+  EnvelopeSimpleOpen,
   GearSix,
   Globe,
   House,
@@ -38,8 +40,9 @@ import { useHint, useShortcut } from './keyboard.jsx'
 import { usePlugins } from './plugins-host.jsx'
 import { PluginIcon } from './plugin-icons.jsx'
 import { useMoveChat } from './useMoveChat.jsx'
-import { usePersistedList } from './useSidebarMarks.js'
+import { usePersistedList, useUnseen } from './useSidebarMarks.js'
 import { KEYS, toggled } from './sidebar-marks.js'
+import { DOT_WORDS, dotKind } from './sidebar-groups.js'
 import { useChatDrag } from './useChatDrag.js'
 import { wouldMove } from './move-chat.js'
 import './sidebar.css'
@@ -58,6 +61,11 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   const [menu, setMenu] = useState(null)
   const [deleting, setDeleting] = useState(null)
 
+  // A chat never opened here has no record, but the poll still carries its
+  // status: without it a chat running in the background (started on another
+  // device, or by an automation) showed no dot.
+  const statusOf = (session) => chats[session.id]?.status ?? chatStatus(session.status)
+
   // Local: everything that runs on this computer. Cloud: every synced chat,
   // named by the device it runs on when that isn't this one.
   const rows = useMemo(() => {
@@ -67,10 +75,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
       return {
         id: session.id,
         title: chats[session.id]?.title ?? session.title ?? 'A new task',
-        // A chat never opened here has no record, but the poll still
-        // carries its status: without it a chat running in the background
-        // (started on another device, or by an automation) showed no dot.
-        status: chats[session.id]?.status ?? chatStatus(session.status),
+        status: statusOf(session),
         harness: session.harness,
         workspace: session.workspace ?? null,
         updatedAt: session.updated_at ?? 0,
@@ -82,6 +87,21 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
       }
     })
   }, [sessions, archived, chats, mode, devices, thisDevice])
+
+  // "Done, not seen": a turn that ended or failed in a chat that was not on
+  // screen keeps a mark until the chat is opened. It watches every chat -
+  // whatever the mode, search or archive hides - so the mark is there when
+  // the chat comes back into view.
+  const statuses = useMemo(
+    () => new Map((sessions ?? []).map((s) => [s.id, statusOf(s)])),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sessions, chats],
+  )
+  const alive = useMemo(
+    () => (connection.state === 'connected' && sessions.length > 0 ? new Set(sessions.map((s) => s.id)) : null),
+    [connection.state, sessions],
+  )
+  const { unseen, mark } = useUnseen({ statuses, archived, active, alive })
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -170,6 +190,9 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
           ]
         : []),
       { divider: true },
+      unseen.has(row.id)
+        ? { label: 'Mark as read', icon: <EnvelopeSimpleOpen size={14} />, onSelect: () => mark(row.id, false) }
+        : { label: 'Mark as unread', icon: <EnvelopeSimple size={14} />, onSelect: () => mark(row.id, true) },
       move.menuItem(row),
       { label: 'Archive', icon: <Archive size={14} />, onSelect: () => archive(row.id) },
       // The daemon deletes synced chats only (it removes them from every
@@ -217,7 +240,9 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   const phones = (devices ?? []).filter(isPhone)
   const phoneOnline = phones.some((d) => d.online)
 
-  const chatRow = (row) => (
+  const chatRow = (row) => {
+    const kind = dotKind({ status: row.status, offline: row.offline, unseen: unseen.has(row.id) })
+    return (
     <div
       key={row.id}
       className={`chat-item${drag?.item.id === row.id ? ' sb-dragged' : ''}`}
@@ -231,6 +256,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
       <button
         className={`chat-row${row.id === active ? ' active' : ''}`}
         data-status={row.status}
+        data-unseen={kind === 'unseen' ? '' : undefined}
         onClick={() => onSelect(row.id)}
         onPointerDown={
           // Only a chat that runs here can be dropped on this computer's
@@ -252,8 +278,8 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
           <Cloud size={11} className="chat-synced" aria-label="Synced to your devices" />
         )}
         <span
-          className={`dot dot--${row.offline ? 'offline' : row.status}`}
-          title={row.offline ? (privacy ? 'Offline' : `${row.device} is offline`) : undefined}
+          className={`dot dot--${kind}`}
+          title={kind === 'offline' ? (privacy ? 'Offline' : `${row.device} is offline`) : DOT_WORDS[kind]}
         />
       </button>
       {/* Archive hides the chat from this list; Settings keeps it. */}
@@ -267,7 +293,8 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
         <Archive size={12} />
       </button>
     </div>
-  )
+    )
+  }
 
   return (
     <aside className={`sidebar${open ? '' : ' collapsed'}`}>

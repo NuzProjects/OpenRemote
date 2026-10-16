@@ -701,6 +701,18 @@ button:focus-visible {
   background: #f87171;
 }
 
+/* Done, not seen: the turn ended or failed while another chat was on
+   screen. A solid bright dot - the text colour, so no new colour joins the
+   amber, red and green - and the title brightens with it. It goes when the
+   chat is opened. */
+.dot--unseen {
+  background: var(--text-1);
+}
+
+.chat-row[data-unseen] .chat-title {
+  color: var(--text-1);
+}
+
 .sb-empty {
   margin: 10px 14px;
   color: var(--text-3);

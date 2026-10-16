@@ -50,3 +50,17 @@ export function pruned(list, alive) {
   const kept = list.filter((id) => alive.has(id))
   return kept.length === list.length ? list : kept
 }
+
+// A chat that is working, or waiting on the user, is mid-turn.
+const MID_TURN = new Set(['running', 'waiting'])
+
+/**
+ * Whether a chat's turn ended or failed between two looks at it: it was
+ * mid-turn, and now it is idle (done) or failed. A chat stopped by hand,
+ * or one that was never mid-turn (a first look, a boot settling), is not
+ * news - counting those would mark every chat each time the daemon
+ * restarts.
+ */
+export function endedTurn(before, after) {
+  return MID_TURN.has(before) && (after === 'idle' || after === 'failed')
+}
