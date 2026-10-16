@@ -37,6 +37,11 @@ pub trait CloudHost: Send + Sync + 'static {
     fn dispatch(&self, peer: PeerContext, request: Request) -> BoxFuture<'static, Response>;
     /// A one-way message from a peer.
     fn note(&self, peer: PeerContext, note: Value);
+    /// A one-way binary message from a peer, whole (a live view's picture).
+    /// Hosts that take none ignore it.
+    fn note_bin(&self, peer: PeerContext, payload: Vec<u8>) {
+        let _ = (peer, payload);
+    }
     /// A link to `peer` just came up.
     fn linked(&self, peer: DeviceId);
     /// `peer` is online (it just came online, or was when this device
@@ -97,6 +102,15 @@ struct Inbound {
     deadline: Instant,
 }
 
+/// A binary note still arriving, chunk by chunk. A peer's chunks come in
+/// order and one note at a time, so one per peer is all there can be.
+struct Partial {
+    id: u32,
+    next: u16,
+    count: u16,
+    data: Vec<u8>,
+}
+
 #[derive(Default)]
 struct State {
     peers: HashMap<DeviceId, Peer>,
@@ -105,6 +119,9 @@ struct State {
     calls: HashMap<(DeviceId, u32), Call>,
     inbound: HashMap<(DeviceId, u32), Inbound>,
     next_stream: u32,
+    /// Binary notes: the next outgoing id, and the ones arriving.
+    next_bin: u32,
+    partial: HashMap<DeviceId, Partial>,
     auto_update: bool,
     online: std::collections::HashSet<DeviceId>,
 }
@@ -458,6 +475,26 @@ impl Mesh {
         }
     }
 
+    /// A one-way binary message to a peer, of up to `rpc::MAX_NOTE_BIN`
+    /// bytes, in chunks that each fit one Noise message. Its chunks are
+    /// queued back to back, so another message never lands between them;
+    /// the whole note is dropped if the link fails on the way.
+    pub async fn note_bin(&self, peer: DeviceId, payload: &[u8]) -> Result<(), MeshError> {
+        if payload.len() > rpc::MAX_NOTE_BIN {
+            return Err(MeshError::TooLarge);
+        }
+        self.ensure_link(peer).await?;
+        let mut st = self.state();
+        st.next_bin = st.next_bin.wrapping_add(1);
+        let id = st.next_bin;
+        for frame in rpc::bin_frames(id, payload) {
+            if !self.send_sealed(&mut st, peer, &frame) {
+                return Err(MeshError::Reset(String::new()));
+            }
+        }
+        Ok(())
+    }
+
     /// Ids of the devices online right now, this one excluded.
     pub fn online(&self) -> Vec<DeviceId> {
         self.state()
@@ -667,9 +704,62 @@ impl Mesh {
                     self.host.note(context, note);
                 }
             }
+            rpc::NOTE_BIN => {
+                let Some((index, count, data)) = rpc::bin_chunk(body) else {
+                    return;
+                };
+                let whole = match collect_chunk(&mut st.partial, from, stream, index, count, data) {
+                    Some(whole) => whole,
+                    None => return,
+                };
+                let context = self.context(&st, from);
+                drop(st);
+                self.host.note_bin(context, whole);
+            }
             _ => {}
         }
     }
+}
+
+/// Takes one chunk of a peer's binary note; the whole note once its last
+/// chunk is in. A chunk out of turn (a note whose start was lost with an
+/// old link) drops what was gathered, as does a note grown too large.
+fn collect_chunk(
+    partial: &mut HashMap<DeviceId, Partial>,
+    from: DeviceId,
+    id: u32,
+    index: u16,
+    count: u16,
+    data: &[u8],
+) -> Option<Vec<u8>> {
+    if index == 0 {
+        partial.insert(
+            from,
+            Partial {
+                id,
+                next: 0,
+                count,
+                // Room for the whole note, but never past the cap: the
+                // count is the peer's word.
+                data: Vec::with_capacity((data.len() * usize::from(count)).min(rpc::MAX_NOTE_BIN)),
+            },
+        );
+    }
+    let entry = partial.get_mut(&from)?;
+    if entry.id != id || entry.next != index || entry.count != count {
+        partial.remove(&from);
+        return None;
+    }
+    if entry.data.len() + data.len() > rpc::MAX_NOTE_BIN {
+        partial.remove(&from);
+        return None;
+    }
+    entry.data.extend_from_slice(data);
+    entry.next += 1;
+    if entry.next < entry.count {
+        return None;
+    }
+    partial.remove(&from).map(|p| p.data)
 }
 
 /// Reclaims inbound streams whose END never came: a peer frozen mid
@@ -700,6 +790,7 @@ fn fail_peer(st: &mut State, peer: DeviceId, _why: &str) {
         }
     }
     st.inbound.retain(|(p, _), _| *p != peer);
+    st.partial.remove(&peer);
 }
 
 /// How a relay session ended.

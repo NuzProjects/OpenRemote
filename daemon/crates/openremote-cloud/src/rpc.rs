@@ -5,7 +5,11 @@
 //! - OPEN carries the request's JSON header, DATA its body in chunks, END
 //!   closes it;
 //! - HEAD carries the response's JSON header, RDATA its body, REND closes it;
-//! - RESET aborts a stream; NOTE (stream 0) is a one-way JSON message.
+//! - RESET aborts a stream; NOTE (stream 0) is a one-way JSON message;
+//! - NOTE_BIN is a one-way binary message (a live view's picture) in
+//!   chunks: the stream id names the message, and each chunk's body starts
+//!   with its index and the chunk count (u16 big-endian each). A message's
+//!   chunks go out back to back, so they arrive in order and unmixed.
 
 use serde::{Deserialize, Serialize};
 
@@ -17,11 +21,15 @@ pub const RDATA: u8 = 0x14;
 pub const REND: u8 = 0x15;
 pub const RESET: u8 = 0x16;
 pub const NOTE: u8 = 0x20;
+pub const NOTE_BIN: u8 = 0x21;
 
 /// Body bytes per frame, well inside one Noise message.
 pub const CHUNK: usize = 48 * 1024;
 pub const MAX_REQUEST: usize = 4 << 20;
 pub const MAX_RESPONSE: usize = 16 << 20;
+/// The largest binary note: far above a live view's picture, small enough
+/// that a peer can't make this device hold much for it.
+pub const MAX_NOTE_BIN: usize = 4 << 20;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Request {
@@ -85,6 +93,38 @@ pub fn frames(head_kind: u8, stream: u32, header: &[u8], body: &[u8]) -> Vec<Vec
     out
 }
 
+/// The frames of one binary note: its chunks, each led by its index and
+/// the count. An empty note is one empty chunk.
+pub fn bin_frames(id: u32, payload: &[u8]) -> Vec<Vec<u8>> {
+    let chunks: Vec<&[u8]> = if payload.is_empty() {
+        vec![&[]]
+    } else {
+        payload.chunks(CHUNK).collect()
+    };
+    let count = chunks.len() as u16;
+    chunks
+        .iter()
+        .enumerate()
+        .map(|(index, chunk)| {
+            let mut body = Vec::with_capacity(4 + chunk.len());
+            body.extend_from_slice(&(index as u16).to_be_bytes());
+            body.extend_from_slice(&count.to_be_bytes());
+            body.extend_from_slice(chunk);
+            frame(NOTE_BIN, id, &body)
+        })
+        .collect()
+}
+
+/// A binary note chunk's index, the chunk count, and its bytes.
+pub fn bin_chunk(body: &[u8]) -> Option<(u16, u16, &[u8])> {
+    if body.len() < 4 {
+        return None;
+    }
+    let index = u16::from_be_bytes([body[0], body[1]]);
+    let count = u16::from_be_bytes([body[2], body[3]]);
+    (index < count).then_some((index, count, &body[4..]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,5 +139,18 @@ mod tests {
         assert_eq!(parse(&out[4]).unwrap().0, END);
         assert!(out.iter().all(|f| f.len() <= crate::link::MAX_PLAINTEXT));
         assert!(parse(&[1, 2]).is_none());
+    }
+
+    #[test]
+    fn a_binary_note_splits_into_numbered_chunks() {
+        let payload = vec![3u8; CHUNK + 1];
+        let out = bin_frames(5, &payload);
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().all(|f| f.len() <= crate::link::MAX_PLAINTEXT));
+        let (kind, id, body) = parse(&out[1]).unwrap();
+        assert_eq!((kind, id), (NOTE_BIN, 5));
+        assert_eq!(bin_chunk(body), Some((1, 2, &[3u8][..])));
+        assert_eq!(bin_frames(6, &[]).len(), 1);
+        assert_eq!(bin_chunk(&[0, 2, 0, 1]), None, "an index past the count");
     }
 }
