@@ -24,6 +24,8 @@ use tauri::{
     WebviewUrl,
 };
 
+#[cfg(windows)]
+mod adblock;
 mod agent;
 pub mod pipe;
 #[cfg(all(windows, debug_assertions))]
@@ -225,7 +227,10 @@ pub fn close_tab(app: &AppHandle, id: &str) -> Result<(), String> {
         .expect("browser lock")
         .remove(id);
     #[cfg(windows)]
-    agent::forget(id);
+    {
+        agent::forget(id);
+        adblock::forget(id);
+    }
     pipe::closed(app, id);
     webview.close().map_err(|e| e.to_string())
 }
@@ -371,6 +376,7 @@ pub fn open_tab(
     {
         win::attach(&app, &webview);
         win::watch_requests(&app, &webview);
+        adblock::attach(&app, &webview);
     }
     update(&app, &id, |_| {});
     Ok(id)

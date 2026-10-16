@@ -33,7 +33,13 @@ tokio = { version = "1", features = ["sync", "time"] }
 # browser keys, history): the same versions wry already links, so nothing
 # new ships.
 webview2-com = "0.39"
-windows = { version = "0.62", features = ["Win32_System_Com", "Win32_UI_Input_KeyboardAndMouse"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_UI_Input_KeyboardAndMouse"] }
+# Ad and tracker blocking, which stays off unless the user turns it on:
+# Brave's filter engine (MPL-2.0) with the public suffix list it needs to
+# tell a site's own requests from others'. The lists that ship with the
+# app are brotli-compressed; the decoder is the one Tauri already links.
+adblock = { version = "0.13", default-features = false, features = ["embedded-domain-resolver", "full-regex-handling"] }
+brotli-decompressor = { version = "6", default-features = false, features = ["std"] }
 # A page's icon reaches the console as a data URL.
 base64 = "0.22"
 
