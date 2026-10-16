@@ -51,3 +51,26 @@ export function pinnedRows(rows, pinned) {
   const byId = new Map(rows.map((row) => [row.id, row]))
   return pinned.map((id) => byId.get(id)).filter(Boolean)
 }
+
+/** How many chats a project shows before "Show more", and how many the flat Chats list does. */
+export const PROJECT_PAGE = 5
+export const CHATS_PAGE = 15
+
+/**
+ * The part of a list the sidebar shows. The rows come newest first: the
+ * first `page` of them show, a further `page` for each time the user asked
+ * for more (`pages`), and whichever rows `keep` names stay in view wherever
+ * they sit (a chat that needs you; the one that is open). `rest` is what is
+ * left out, and `next` how many rows the next "Show more" brings in -
+ * counted exactly, since a kept row far down is already on screen.
+ */
+export function pageOf(items, { page, pages = 0, keep = () => false }) {
+  const showing = (limit) => items.filter((item, i) => i < limit || keep(item))
+  const shown = showing(page * (pages + 1))
+  const inShown = new Set(shown)
+  return {
+    shown,
+    rest: items.filter((item) => !inShown.has(item)),
+    next: showing(page * (pages + 2)).length - shown.length,
+  }
+}

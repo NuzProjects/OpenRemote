@@ -45,13 +45,16 @@ import { PluginIcon } from './plugin-icons.jsx'
 import { useMoveChat } from './useMoveChat.jsx'
 import { usePersistedList, usePinned, useUnseen } from './useSidebarMarks.js'
 import { KEYS, toggled } from './sidebar-marks.js'
-import { DOT_WORDS, dotKind, pinnedRows, rollup } from './sidebar-groups.js'
+import { CHATS_PAGE, DOT_WORDS, PROJECT_PAGE, dotKind, pageOf, pinnedRows, rollup } from './sidebar-groups.js'
 import SidebarChat from './SidebarChat.jsx'
 import SidebarNote, { useNote } from './SidebarNote.jsx'
 import { useChatDrag } from './useChatDrag.js'
 import { wouldMove } from './move-chat.js'
 import './sidebar.css'
 import './move.css'
+
+// The "Show more" count of the flat Chats list (a project's is its id).
+const FLAT_KEY = '@chats'
 
 export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit, onAddProject, onNewChatIn, onReveal }) {
   const { connection, sessions, chats, devices, thisDevice, projects, removeProject, archived, setChatArchived, deleteChat, renameChat, restoreChatTitle } = useConsole()
@@ -146,10 +149,39 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   const searching = query.trim() !== ''
   const groups = searching ? grouped.projects.filter((g) => g.items.length > 0) : grouped.projects
 
-  const toggleProject = (id) => setFolded((list) => toggled(list, id, !list.includes(id)))
+  // How many extra pages of chats each list has been asked for ("Show N
+  // more"). They belong to this look at the list: folding a project puts it
+  // back to its first page.
+  const [more, setMore] = useState({})
+  const showMore = (key) => setMore((m) => ({ ...m, [key]: (m[key] ?? 0) + 1 }))
+  const toggleProject = (id) => {
+    setFolded((list) => toggled(list, id, !list.includes(id)))
+    setMore((m) => {
+      if (!(id in m)) return m
+      const { [id]: _folded, ...rest } = m
+      return rest
+    })
+  }
   // A search opens the projects that hold a match: a folded one would hide
   // the very chats being looked for.
   const isFolded = (id) => !searching && collapsed.has(id)
+
+  // Each project shows its five most recent chats, the flat Chats list
+  // fifteen; "Show N more" opens the next page. A chat that needs you, and
+  // the one that is open, stay in view wherever they sit - a long list
+  // never hides the one that is waiting, or the user's place in it. A
+  // search shows every match.
+  const keepShown = (row) => row.id === active || (row.status === 'waiting' && !row.offline)
+  const pageFor = (key, items, page) =>
+    searching
+      ? { shown: items, rest: [], next: 0 }
+      : pageOf(items, { page, pages: more[key] ?? 0, keep: keepShown })
+  const projectViews = groups.map((g) => ({
+    ...g,
+    folded: isFolded(g.project.id),
+    page: pageFor(g.project.id, g.items, PROJECT_PAGE),
+  }))
+  const flatPage = pageFor(FLAT_KEY, grouped.flat, CHATS_PAGE)
 
   // Moving chats between projects: from a chat's menu, or by dragging a
   // chat that runs on this computer onto one of its projects (or onto
@@ -167,13 +199,14 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   })
 
   // The keyboard's walk through the list goes in the order it reads:
-  // each open project's chats, then the flat Chats list. A collapsed
-  // project's chats are skipped, like the eye skips them.
+  // pinned chats, each open project's chats, then the flat Chats list. A
+  // folded project's chats are skipped, like the eye skips them - and so
+  // are the ones "Show more" has not opened.
   const searchRef = useRef(null)
   const order = [
     ...pins,
-    ...grouped.projects.flatMap(({ project, items }) => (isFolded(project.id) ? [] : items)),
-    ...grouped.flat,
+    ...projectViews.flatMap((v) => (v.folded ? [] : v.page.shown)),
+    ...flatPage.shown,
   ].map((row) => row.id)
   const step = (pick) => () => {
     if (!order.length) return false
@@ -311,6 +344,20 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   const phoneOnline = phones.some((d) => d.online)
 
   const kindOf = (row) => dotKind({ status: row.status, offline: row.offline, unseen: unseen.has(row.id) })
+
+  // The quiet line under a list that has more to show. A dot on it says what
+  // the chats it leaves out are up to, so a long list never hides a failure.
+  const moreLine = (key, page) => {
+    const top = rollup(page.rest.map(kindOf))
+    return (
+      <button type="button" className="sb-more" onClick={() => showMore(key)}>
+        <span>Show {page.next} more</span>
+        {top && (
+          <span className={`dot dot--${top}`} role="img" aria-label={DOT_WORDS[top]} title={DOT_WORDS[top]} />
+        )}
+      </button>
+    )
+  }
 
   const chatRow = (row) => (
     <SidebarChat
@@ -478,8 +525,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
             No projects yet. <button className="sb-empty-add" onClick={onAddProject}>Add a project</button> to group its chats here.
           </p>
         )}
-        {groups.map(({ project, items, pinned: pinnedHere }) => {
-          const isCollapsed = isFolded(project.id)
+        {projectViews.map(({ project, items, pinned: pinnedHere, folded: isCollapsed, page }) => {
           const top = isCollapsed ? rollup(items.map(kindOf)) : null
           return (
             <section
@@ -530,7 +576,8 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
               >
                 <TrashSimple size={11} />
               </button>
-              {!isCollapsed && items.map(chatRow)}
+              {!isCollapsed && page.shown.map(chatRow)}
+              {!isCollapsed && page.rest.length > 0 && moreLine(project.id, page)}
               {/* A project just added has no chats: say so quietly, and
                   leave its + (and the drop target) in place. */}
               {!isCollapsed && items.length === 0 && (
@@ -549,7 +596,8 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
           {grouped.projects.length > 0 && grouped.flat.length === 0 && (
             <p className="sb-empty">No chats outside projects.</p>
           )}
-          {grouped.flat.map(chatRow)}
+          {flatPage.shown.map(chatRow)}
+          {flatPage.rest.length > 0 && moreLine(FLAT_KEY, flatPage)}
         </div>
 
         {rows.length === 0 && (
