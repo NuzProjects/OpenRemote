@@ -40,6 +40,8 @@ windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com"
 # app are brotli-compressed; the decoder is the one Tauri already links.
 adblock = { version = "0.13", default-features = false, features = ["embedded-domain-resolver", "full-regex-handling"] }
 brotli-decompressor = { version = "6", default-features = false, features = ["std"] }
+# The same URL type Tauri uses, for reading the addresses requests go to.
+url = "2"
 # A page's icon reaches the console as a data URL.
 base64 = "0.22"
 
