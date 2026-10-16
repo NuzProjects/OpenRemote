@@ -401,46 +401,6 @@
   visibility: visible;
 }
 
-.bw-ntp {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding-top: 20vh;
-  background: var(--bg-app);
-}
-
-.bw-ntp-search {
-  position: relative;
-  width: min(600px, 100% - 32px);
-}
-
-.bw-ntp-icon {
-  position: absolute;
-  top: 50%;
-  left: 18px;
-  color: var(--text-3);
-  transform: translateY(-50%);
-}
-
-.bw-ntp-search input {
-  width: 100%;
-  height: 48px;
-  padding: 0 20px 0 48px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  outline: 0;
-  background: #171b21;
-  color: var(--text-1);
-  font: inherit;
-  font-size: 15px;
-}
-
-.bw-ntp-search input:focus {
-  border-color: rgba(255, 255, 255, 0.16);
-}
-
 .bw-unavailable {
   display: flex;
   flex-direction: column;
@@ -452,23 +412,514 @@
   font-size: 13px;
 }
 
-/* Reduced motion, both ways: the system's setting and the app's own. */
+
+/* ---- full screen: a page that asked for it fills the window, over the
+   app's own title bar and sidebar (the shell makes the window full
+   screen) ---- */
+
+.bw.full {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+}
+
+/* ---- tabs: private ones and the agents' ---- */
+
+.bw-tab.private .bw-tab-icon {
+  color: var(--text-2);
+}
+
+/* The chat whose agent holds the tab: its title on a small badge, with
+   the app's breathe while the agent acts. */
+.bw-agent {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 96px;
+  height: 18px;
+  padding: 0 7px 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.bw-agent.live {
+  border-color: rgba(76, 180, 135, 0.35);
+  color: var(--text-2);
+}
+
+.bw-agent-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bw-agent-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dot-idle);
+}
+
+.bw-agent.live .bw-agent-dot,
+.bw-agent-dot.live {
+  background: var(--green);
+  animation: bw-breathe 2.4s ease-in-out infinite;
+}
+
+/* ---- the address bar's extras ---- */
+
+.bw-address {
+  position: relative;
+}
+
+.bw-private {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text-2);
+  font-size: 11.5px;
+}
+
+.bw-star {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.bw-star:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.bw-star.on {
+  color: var(--accent);
+}
+
+/* The suggestions under the address bar. They float over the page, which
+   shows as its picture while they are open (browser-occlusion.js). */
+.bw-suggest {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: -1px;
+  left: -1px;
+  z-index: 5;
+  padding: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 12px;
+  background: #171b21;
+}
+
+.bw-suggest-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  color: var(--text-2);
+  font-size: 13px;
+  cursor: default;
+}
+
+.bw-suggest-row.cursor {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-1);
+}
+
+.bw-suggest-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 16px;
+  color: var(--text-3);
+}
+
+.bw-suggest-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bw-suggest-url {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bw-suggest-star {
+  flex: none;
+  margin-left: auto;
+  color: var(--accent);
+}
+
+/* ---- the toolbar's note and the recording's pill ---- */
+
+.bw-notice {
+  flex: none;
+  max-width: 260px;
+  overflow: hidden;
+  padding: 0 10px;
+  color: var(--green);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bw-notice.error {
+  color: var(--red, #f87171);
+}
+
+.bw-rec {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  margin: 0 4px;
+  padding: 0 11px 0 10px;
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  border-radius: 999px;
+  background: none;
+  color: var(--text-1);
+  font: inherit;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+
+.bw-rec:hover {
+  background: rgba(248, 113, 113, 0.1);
+}
+
+.bw-rec-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--red, #f87171);
+  animation: bw-breathe 2.4s ease-in-out infinite;
+}
+
+/* ---- bookmarks bar ---- */
+
+.bw-marks {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  height: 32px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--line);
+  background: #171b21;
+}
+
+.bw-marks-list {
+  position: relative;
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.bw-mark {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  max-width: 180px;
+  height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.bw-mark:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.bw-mark-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bw-marks-empty {
+  padding: 0 6px;
+  color: var(--text-3);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.bw-marks .bw-marks-more {
+  width: 26px;
+  height: 26px;
+}
+
+.bw-mark-folder {
+  margin-left: 2px;
+}
+
+/* ---- info bars: in the page's flow, above it ---- */
+
+.bw-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 5px 10px 5px 14px;
+  border-bottom: 1px solid var(--line);
+  background: #171b21;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.bw-info-icon {
+  flex: none;
+  color: var(--text-3);
+}
+
+.bw-info-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.bw-info-text strong {
+  color: var(--text-1);
+  font-weight: 600;
+}
+
+.bw-check {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.bw-check input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+/* The one primary button of a bar or dialog: amber, the app's accent. */
+.pn-btn.bw-primary {
+  border-color: rgba(220, 162, 75, 0.35);
+  background: rgba(220, 162, 75, 0.07);
+  color: var(--accent);
+}
+
+.pn-btn.bw-primary:hover:not(:disabled) {
+  background: rgba(220, 162, 75, 0.14);
+  color: var(--accent);
+}
+
+/* ---- the bookmark editor, under the star ---- */
+
+.bw-pop {
+  position: fixed;
+  z-index: 40;
+  padding: 14px 16px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 12px;
+  background: #171b21;
+}
+
+.bw-pop-title {
+  margin-bottom: 12px;
+  color: var(--text-1);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.bw-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.bw-field input {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  outline: 0;
+  background: var(--bg-app);
+  color: var(--text-1);
+  font: inherit;
+  font-size: 13px;
+}
+
+.bw-field input:focus {
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+/* Two choices side by side (the bookmark's folder). */
+.bw-seg {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.bw-seg button {
+  flex: 1;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.bw-seg button:hover {
+  color: var(--text-1);
+}
+
+.bw-seg button.on {
+  background: var(--bg-active);
+  color: var(--text-1);
+}
+
+/* ---- a page still opening, or one that didn't ---- */
+
+.bw-waiting {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+.bw-waiting-title {
+  max-width: 60%;
+  overflow: hidden;
+  color: var(--text-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- the region picker, over the page's picture ---- */
+
+.bw-region {
+  position: absolute;
+  z-index: 2;
+  overflow: hidden;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.bw-region-shade {
+  position: absolute;
+  inset: 0;
+  background: rgba(4, 6, 9, 0.55);
+}
+
+/* The chosen part stays clear; everything around it is shaded by its
+   outline, which reaches past the picker's edges (clipped there). */
+.bw-region-rect {
+  position: absolute;
+  border: 1px solid var(--accent);
+  outline: 200vmax solid rgba(4, 6, 9, 0.55);
+}
+
+.bw-region-hint {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  padding: 6px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 999px;
+  background: #171b21;
+  color: var(--text-1);
+  font-size: 12.5px;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+/* ---- the three-dot menu is long: it scrolls rather than leave the
+   window ---- */
+
+.ctx-menu.bw-menu {
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+}
+
+/* Reduced motion, both ways: the system's setting and the app's own. The
+   breathing marks stand still. */
 @media (prefers-reduced-motion: reduce) {
-  .bw-spinner {
+  .bw-spinner,
+  .bw-agent.live .bw-agent-dot,
+  .bw-agent-dot.live,
+  .bw-rec-dot {
     animation: none;
   }
 
   .bw-tab,
-  .bw-btn {
+  .bw-btn,
+  .bw-star,
+  .bw-rec,
+  .bw-mark {
     transition: none;
   }
 }
 
-html[data-reduce-motion] .bw-spinner {
+html[data-reduce-motion] .bw-spinner,
+html[data-reduce-motion] .bw-agent.live .bw-agent-dot,
+html[data-reduce-motion] .bw-agent-dot.live,
+html[data-reduce-motion] .bw-rec-dot {
   animation: none;
 }
 
 html[data-reduce-motion] .bw-tab,
-html[data-reduce-motion] .bw-btn {
+html[data-reduce-motion] .bw-btn,
+html[data-reduce-motion] .bw-star,
+html[data-reduce-motion] .bw-rec,
+html[data-reduce-motion] .bw-mark {
   transition: none;
 }

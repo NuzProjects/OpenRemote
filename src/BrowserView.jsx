@@ -1,65 +1,64 @@
 // The built-in browser: Chrome's arrangement (tab strip, toolbar, address
-// bar, menus) drawn by the console, with each page a native webview the
-// shell lays over the placeholder below the toolbar (src-tauri/src/browser).
-// The tabs live in browser-store.js, so leaving the view hides the pages
-// instead of closing them.
+// bar, bookmarks bar, menus) drawn by the console, with each page a native
+// webview the shell lays over the placeholder below the bars
+// (src-tauri/src/browser). The tabs live in browser-store.js, so leaving
+// the view hides the pages instead of closing them. The browser's own
+// pages - the new tab page, history, downloads, bookmarks - are drawn here
+// in the page's place, with no webview at all.
 
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
-import {
-  ArrowClockwise,
-  ArrowCounterClockwise,
-  ArrowLeft,
-  ArrowRight,
-  ArrowSquareOut,
-  ArrowsClockwise,
-  CaretDown,
-  CaretUp,
-  Code,
-  DeviceMobile,
-  DotsThreeVertical,
-  DownloadSimple,
-  Globe,
-  Lock,
-  MagnifyingGlass,
-  MagnifyingGlassMinus,
-  MagnifyingGlassPlus,
-  Plus,
-  Printer,
-  Trash,
-  Warning,
-  X,
-} from '@phosphor-icons/react'
+import { Globe } from '@phosphor-icons/react'
 import { hasTauri, isMobile } from './platform.js'
-import { omnibox, security, shownAddress } from './browser-omnibox.js'
-import { closeTab, cycle, newTab, tabTitle } from './browser-tabs.js'
-import { adopt, call, getState, onKey, patchTab, setState, subscribe } from './browser-store.js'
+import { useConsole } from './state/console.jsx'
+import { isMac, useKeyboard, useShortcut } from './keyboard.jsx'
+import { BROWSER_ACTIONS, actionForCombo } from './shortcuts.js'
+import { PAGES, internalPage, omnibox, pageUrl } from './browser-omnibox.js'
+import { cycle, insertAfter, isDormant, newTab, tabTitle } from './browser-tabs.js'
+import {
+  adopt,
+  answerPrompt,
+  call,
+  clearDownloads,
+  getState,
+  notify,
+  onKey,
+  patchTab,
+  recordTab,
+  removeTab,
+  setApi,
+  setState,
+  stopRecording,
+  subscribe,
+} from './browser-store.js'
 import { FLOATING, covered } from './browser-occlusion.js'
-import { DEVICES, fitDevice, fileName, nextZoom, zoomLabel } from './browser-chrome.js'
+import { DEVICES, fileUrl, fitDevice, nextZoom } from './browser-chrome.js'
+import {
+  browserSetting,
+  getBrowserData,
+  removeBookmark,
+  saveBookmark,
+  setBrowserSetting,
+  setSitePermission,
+  useBrowserData,
+} from './browser-data.js'
+import { bookmarkFor, inFolder, positionAt } from './browser-bookmarks.js'
+import { keyEventInit } from './browser-keys.js'
+import { screenshotAttachment } from './browser-attach.js'
+import { addAttachment, focusedComposer } from './attachments.js'
+import { recording, subscribeRecording } from './browser-record.js'
 import ContextMenu from './ContextMenu.jsx'
+import BrowserTabStrip, { TabIcon } from './BrowserTabStrip.jsx'
+import BrowserToolbar from './BrowserToolbar.jsx'
+import BrowserBookmarksBar from './BrowserBookmarksBar.jsx'
+import BrowserBookmarkEditor from './BrowserBookmarkEditor.jsx'
+import { AgentBar, PermissionBar, PickBar } from './BrowserInfobar.jsx'
+import { BrowserDeviceBar, BrowserFindBar } from './BrowserFindBar.jsx'
+import BrowserNewTab from './BrowserNewTab.jsx'
+import BrowserPages from './BrowserPages.jsx'
+import BrowserRegion from './BrowserRegion.jsx'
+import { menuItems } from './BrowserMenus.jsx'
+import './panels.css'
 import './browser.css'
-
-// The app's own global keys pressed while a page had focus: handed to the
-// app's shortcut layer as if typed in the console.
-const APP_KEYS = { 'Mod+K': 'KeyK', 'Mod+/': 'Slash', 'Mod+N': 'KeyN', 'Mod+B': 'KeyB', 'Mod+,': 'Comma' }
-
-function replayAppKey(chord) {
-  const code = APP_KEYS[chord]
-  if (!code) return false
-  window.dispatchEvent(
-    new KeyboardEvent('keydown', { code, key: code.replace(/^Key/, '').toLowerCase(), ctrlKey: true, bubbles: true }),
-  )
-  return true
-}
-
-function chordOf(e) {
-  const parts = []
-  if (e.ctrlKey) parts.push('Mod')
-  if (e.altKey) parts.push('Alt')
-  if (e.shiftKey) parts.push('Shift')
-  const named = { ArrowLeft: 'Left', ArrowRight: 'Right', '+': '=', _: '-' }
-  const key = named[e.key] ?? (e.key.length === 1 ? e.key.toUpperCase() : e.key)
-  return [...parts, key].join('+')
-}
 
 // A box on whole device pixels: its edges rounded, not its size, so two
 // boxes that touch still touch.
@@ -85,36 +84,127 @@ function frames(n) {
   })
 }
 
-// A menu anchored under a toolbar button.
-function anchorOf(el) {
-  const r = el.getBoundingClientRect()
-  return { x: r.left, y: r.bottom + 4 }
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = reject
+    img.src = src
+  })
 }
 
-// ---- the view ----
+// A part of a picture of the page: `r` in the on-screen box `box`.
+async function crop(picture, r, box) {
+  try {
+    const img = await loadImage(picture)
+    const sx = img.naturalWidth / box.width
+    const sy = img.naturalHeight / box.height
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(r.width * sx))
+    canvas.height = Math.max(1, Math.round(r.height * sy))
+    canvas
+      .getContext('2d')
+      .drawImage(img, r.x * sx, r.y * sy, r.width * sx, r.height * sy, 0, 0, canvas.width, canvas.height)
+    return canvas.toDataURL('image/jpeg', 0.9)
+  } catch {
+    return null
+  }
+}
 
+// The phone gets its own browser layout; this is the desktop's.
 export default function BrowserView() {
-  const { tabs, active, downloads, finds, closed } = useSyncExternalStore(subscribe, getState)
+  if (!hasTauri || isMobile) {
+    return (
+      <div className="bw-unavailable">
+        <Globe size={28} />
+        <p>{isMobile ? 'The browser comes to the phone in its own build.' : 'The browser runs in the desktop app.'}</p>
+      </div>
+    )
+  }
+  return <BrowserDesktop />
+}
+
+function Waiting({ tab, onRetry }) {
+  return (
+    <div className="bw-waiting">
+      <TabIcon tab={{ ...tab, loading: false }} size={22} />
+      <span className="bw-waiting-title">{tabTitle(tab)}</span>
+      {tab.failed && (
+        <>
+          <span>This page couldn't open.</span>
+          <button type="button" className="pn-btn" onClick={onRetry}>
+            Try again
+          </button>
+        </>
+      )}
+    </div>
+  )
+}
+
+function BrowserDesktop() {
+  const { tabs, active, downloads, finds, closed, prompts, picking, fullscreen, notice, icons } = useSyncExternalStore(
+    subscribe,
+    getState,
+  )
+  const data = useBrowserData()
+  const rec = useSyncExternalStore(subscribeRecording, recording)
+  const { api, chats } = useConsole()
+  const kb = useKeyboard()
+  const kbRef = useRef(kb)
+  kbRef.current = kb
   const current = tabs.find((t) => t.key === active) ?? tabs[0]
+  const rootRef = useRef(null)
   const pageRef = useRef(null)
-  const addressRef = useRef(null)
   const findRef = useRef(null)
-  const [address, setAddress] = useState('')
-  const [editing, setEditing] = useState(false)
+  const omni = useRef(null)
   // The page's picture while a console menu covers it: one element that
   // stays in the page, so a picture is decoded in it before it shows.
   const pictureRef = useRef(null)
   const [menu, setMenu] = useState(null)
+  const [editor, setEditor] = useState(null)
+  const [region, setRegion] = useState(null)
+  // The browser's keys act while it has focus (see the tracker below).
+  const [focused, setFocused] = useState(true)
   const shownNative = useRef(null)
+
+  const engine = browserSetting(data.settings, 'search')
+  const barSetting = browserSetting(data.settings, 'bookmarks_bar')
+  const page = internalPage(current?.url)
+  const ntp = !current?.url || page === 'newtab'
+  const live = Boolean(current?.native)
   const device = current?.device ?? null
   const find = current?.find ?? null
   const findState = (current?.native && finds[current.native]) || null
   const busy = downloads.some((d) => d.state === 'started')
+  const prompt = (current?.native && prompts.find((p) => p.tab === current.native)) || null
+  const bookmarked = Boolean(bookmarkFor(data.bookmarks, current?.url))
+  // Chrome's rule: the bar shows on every page when it's on, and on a new
+  // tab page whenever there are bookmarks to show.
+  const barShown = barSetting || (ntp && !current?.private && data.bookmarks.length > 0)
+  const full = Boolean(fullscreen) && fullscreen === current?.native
 
-  // The address bar follows the tab unless the user is typing in it.
+  // The daemon client, for the store's restoring and saving.
   useEffect(() => {
-    if (!editing) setAddress(shownAddress(current?.url))
-  }, [current?.url, current?.key, editing])
+    setApi(api)
+  }, [api])
+
+  // Focus: from the last click or focus inside the browser (its chrome or,
+  // through its keys, its page) until one lands elsewhere in the app. The
+  // app's menus and dialogs over it don't count as elsewhere.
+  useEffect(() => {
+    const track = (e) => {
+      const t = e.target
+      if (!(t instanceof Element)) return
+      if (rootRef.current?.contains(t)) setFocused(true)
+      else if (!t.closest(`${FLOATING}, [role="dialog"]`)) setFocused(false)
+    }
+    window.addEventListener('pointerdown', track, true)
+    window.addEventListener('focusin', track, true)
+    return () => {
+      window.removeEventListener('pointerdown', track, true)
+      window.removeEventListener('focusin', track, true)
+    }
+  }, [])
 
   // Where the page sits: the whole placeholder, or a device's size
   // centred in it.
@@ -160,7 +250,6 @@ export default function BrowserView() {
 
   // Show the active tab's page over the placeholder, hide the one before.
   useLayoutEffect(() => {
-    if (!hasTauri) return
     const next = current?.native ?? null
     const before = shownNative.current
     shownNative.current = next
@@ -172,6 +261,7 @@ export default function BrowserView() {
         await call('browser_show', { tab: next, focus: false })
       }
     })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current?.native])
 
   // Leaving the view hides the page; the tab stays.
@@ -184,9 +274,9 @@ export default function BrowserView() {
   )
 
   // The page follows the placeholder: window resizes, split drags, the
-  // sidebar opening, the find and device bars.
+  // sidebar opening, the bars and strips above it, full screen.
   useEffect(() => {
-    if (!hasTauri || !pageRef.current) return undefined
+    if (!pageRef.current) return undefined
     let frame = 0
     const sync = () => {
       cancelAnimationFrame(frame)
@@ -200,6 +290,7 @@ export default function BrowserView() {
       ro.disconnect()
       window.removeEventListener('resize', sync)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // A device size changes where the page sits and how it lays out. A tab
@@ -228,6 +319,7 @@ export default function BrowserView() {
       }
       if (flipped) await call('browser_reload', { tab: native })
     })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current?.native, device?.width, device?.height, device?.mobile])
 
   // A console menu or dialog over the page: the page's picture is decoded
@@ -237,19 +329,18 @@ export default function BrowserView() {
   // straight after another (the More menu into Downloads) keeps the
   // picture up in between.
   useEffect(() => {
-    if (!hasTauri) return undefined
     let swapped = null
     let leaving = 0
     let frame = 0
     const showPicture = async (url) => {
       const el = pictureRef.current
-      const page = pageRef.current?.getBoundingClientRect()
+      const pageBox = pageRef.current?.getBoundingClientRect()
       const at = rect()
-      if (!el || !page || !at) return false
+      if (!el || !pageBox || !at) return false
       // Exactly the page's own box, on the same whole device pixels: edges
       // that blend into a faint line at a fractional position cannot occur.
-      el.style.left = `${at.x - page.left}px`
-      el.style.top = `${at.y - page.top}px`
+      el.style.left = `${at.x - pageBox.left}px`
+      el.style.top = `${at.y - pageBox.top}px`
       el.style.width = `${at.width}px`
       el.style.height = `${at.height}px`
       if (el.getAttribute('src') !== url) el.src = url
@@ -259,10 +350,10 @@ export default function BrowserView() {
       return true
     }
     const settle = async () => {
-      const page = pageRef.current?.getBoundingClientRect()
+      const pageBox = pageRef.current?.getBoundingClientRect()
       const rects = [...document.querySelectorAll(FLOATING)].map((el) => el.getBoundingClientRect())
       const tab = shownNative.current
-      const cover = Boolean(tab) && covered(page, rects)
+      const cover = Boolean(tab) && covered(pageBox, rects)
       if (cover) {
         clearTimeout(leaving)
         leaving = 0
@@ -303,57 +394,137 @@ export default function BrowserView() {
         syncBounds()
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // ---- actions ----
+  // ---- opening pages ----
 
   const activeTab = () => getState().tabs.find((t) => t.key === getState().active)
 
-  const go = async (line) => {
-    const url = omnibox(line)
-    if (!url) return
-    setEditing(false)
-    addressRef.current?.blur()
-    const tab = activeTab()
-    if (!tab) return
-    if (tab.native) {
-      await call('browser_navigate', { tab: tab.native, url })
-      return
-    }
+  // A tab's webview, opened at `url`: shown when the tab is on screen,
+  // loading unseen behind it otherwise.
+  const openNative = async (key, url, { show = true } = {}) => {
     const bounds = rect()
-    if (!bounds) return
-    patchTab(tab.key, { url, loading: true })
-    const native = await call('browser_open', { url, bounds, show: true })
-    if (!native) return
-    shownNative.current = native
-    adopt(tab.key, native)
+    const tab = getState().tabs.find((t) => t.key === key)
+    if (!bounds || !tab) return null
+    patchTab(key, { url, loading: true, opening: true, failed: false })
+    const visible = show && getState().active === key
+    const native = await call('browser_open', { url, bounds, show: visible, private: Boolean(tab.private) })
+    // Closed while it opened: the page goes too.
+    if (!getState().tabs.some((t) => t.key === key)) {
+      if (native) call('browser_close', { tab: native })
+      return null
+    }
+    if (!native) {
+      patchTab(key, { opening: false, loading: false, failed: true })
+      return null
+    }
+    if (visible) {
+      if (getState().active === key) shownNative.current = native
+      else call('browser_hide', { tab: native })
+    }
+    adopt(key, native)
+    patchTab(key, { opening: false })
+    return native
   }
 
-  const openTab = () => {
-    const tab = newTab()
+  // A tab waiting as an entry (restored, put away, reopened) opens its page
+  // when it is first shown.
+  useEffect(() => {
+    if (!current || current.native || current.opening || current.failed || !isDormant(current)) return
+    openNative(current.key, current.url)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current?.key, current?.native, current?.url, current?.failed])
+
+  // ---- actions ----
+
+  const openTab = (fields = {}) => {
+    const tab = newTab(fields)
     setState((s) => ({ tabs: [...s.tabs, tab], active: tab.key }))
-    setEditing(true)
-    setAddress('')
-    requestAnimationFrame(() => addressRef.current?.focus())
+    omni.current?.clear()
   }
+
+  const openTabAfter = (key) => {
+    const tab = newTab()
+    setState((s) => ({ tabs: insertAfter(s.tabs, tab, key), active: tab.key }))
+    omni.current?.clear()
+  }
+
+  // Settings > Browser: the app's Settings view, at its Browser section.
+  const openSettings = () => {
+    if (!kbRef.current?.run('view-settings')) return
+    let tries = 0
+    const seek = () => {
+      const el = document.getElementById('stg-browser')
+      if (el) el.scrollIntoView({ block: 'start' })
+      else if (++tries < 30) requestAnimationFrame(seek)
+    }
+    requestAnimationFrame(seek)
+  }
+
+  // One of the browser's own pages: shown where it is already open, in the
+  // tab itself when that tab holds no page (or `here` asks for it), else
+  // in a new tab beside it.
+  const openPage = (name, { here = false } = {}) => {
+    if (name === 'settings') return openSettings()
+    const s = getState()
+    const cur = s.tabs.find((t) => t.key === s.active)
+    if (name === 'newtab') {
+      if (cur && !cur.native) return patchTab(cur.key, { url: '', title: '', failed: false })
+      return openTab()
+    }
+    const url = pageUrl(name)
+    const open = s.tabs.find((t) => t.url === url && !t.private)
+    if (open && !here) return setState(() => ({ active: open.key }))
+    if (cur && !cur.native && !cur.private && (here || !cur.url)) {
+      return patchTab(cur.key, { url, title: PAGES[name], failed: false })
+    }
+    const tab = newTab({ url, title: PAGES[name] })
+    setState((st) => ({ tabs: insertAfter(st.tabs, tab, st.active), active: tab.key }))
+  }
+
+  const go = async (line) => {
+    const text = String(line ?? '').trim()
+    const named = internalPage(text)
+    if (named) return openPage(named, { here: true })
+    const url = omnibox(text, engine)
+    const tab = activeTab()
+    if (!url || !tab) return
+    if (tab.native) return call('browser_navigate', { tab: tab.native, url })
+    return openNative(tab.key, url)
+  }
+
+  // An address from a bookmark, history or a tile: here, or in a new tab
+  // (in the background, as a middle click does in Chrome; `show` brings it
+  // forward).
+  const openUrl = (url, { newTab: inNew = false, show = false } = {}) => {
+    if (!inNew) return go(url)
+    const tab = newTab({ url })
+    setState((s) => ({ tabs: insertAfter(s.tabs, tab, s.active), ...(show ? { active: tab.key } : {}) }))
+    if (!show && !internalPage(url)) openNative(tab.key, url, { show: false })
+  }
+
+  const select = (key) => setState(() => ({ active: key }))
 
   const close = (key) => {
-    const tab = getState().tabs.find((t) => t.key === key)
-    if (tab?.native) call('browser_close', { tab: tab.native })
-    if (tab?.native === shownNative.current) shownNative.current = null
-    setState((s) => {
-      const next = closeTab(s.tabs, key, s.active)
-      const url = next.closed?.url
-      return { tabs: next.tabs, active: next.active, closed: url ? [url, ...s.closed].slice(0, 25) : s.closed }
-    })
+    const native = removeTab(key)
+    if (native && native === shownNative.current) shownNative.current = null
+  }
+
+  const closeOthers = (key) => {
+    for (const t of getState().tabs) if (t.key !== key) close(t.key)
   }
 
   const reopen = () => {
-    const [url, ...rest] = getState().closed
-    if (!url) return
-    const tab = newTab()
+    const [last, ...rest] = getState().closed
+    if (!last) return
+    const tab = newTab({ url: last.url, title: last.title })
     setState((s) => ({ closed: rest, tabs: [...s.tabs, tab], active: tab.key }))
-    requestAnimationFrame(() => go(url))
+  }
+
+  const duplicate = (t) => {
+    const tab = newTab({ url: t.url, title: t.title, private: t.private })
+    setState((s) => ({ tabs: insertAfter(s.tabs, tab, t.key), active: tab.key }))
   }
 
   const onNative = (command, extra = {}) => {
@@ -370,17 +541,15 @@ export default function BrowserView() {
     call('browser_zoom', { tab: tab.native, factor })
   }
 
-  const focusAddress = () => {
-    setEditing(true)
-    requestAnimationFrame(() => {
-      addressRef.current?.focus()
-      addressRef.current?.select()
-    })
-  }
+  const focusAddress = () => omni.current?.focus()
 
   const openFind = () => {
     const tab = activeTab()
-    if (!tab?.native) return
+    // On one of the browser's own pages, its search box is the find.
+    if (!tab?.native) {
+      rootRef.current?.querySelector('.bwp-search input')?.focus()
+      return
+    }
     patchTab(tab.key, { find: { term: tab.find?.term ?? '' } })
     requestAnimationFrame(() => {
       findRef.current?.focus()
@@ -413,373 +582,376 @@ export default function BrowserView() {
     if (tab?.device) patchTab(tab.key, { device: { ...tab.device, ...change } })
   }
 
-  // The browser's keys: from a page (the shell takes them before the page
-  // does) or typed in the browser's own chrome.
-  const keys = useRef({})
-  keys.current = {
-    'Mod+T': openTab,
-    'Mod+W': () => close(getState().active),
-    'Mod+L': focusAddress,
-    'Mod+R': () => onNative('browser_reload'),
-    F5: () => onNative('browser_reload'),
-    'Mod+F': openFind,
-    'Mod+J': (e) => setMenu({ kind: 'downloads', ...anchorFor('downloads', e) }),
-    F12: () => onNative('browser_devtools'),
-    'Mod+=': () => zoom(1),
-    'Mod+-': () => zoom(-1),
-    'Mod+0': () => zoom(0),
-    'Mod+Tab': () => setState((s) => ({ active: cycle(s.tabs, s.active, 1) })),
-    'Mod+Shift+Tab': () => setState((s) => ({ active: cycle(s.tabs, s.active, -1) })),
-    'Mod+Shift+T': reopen,
-    'Alt+Left': () => onNative('browser_back'),
-    'Alt+Right': () => onNative('browser_forward'),
-  }
-  const anchorFor = (name) => {
-    const el = document.querySelector(`[data-bw-anchor="${name}"]`)
-    return el ? anchorOf(el) : { x: 0, y: 0 }
-  }
-  useEffect(() => {
-    const fromPage = (chord) => {
-      if (replayAppKey(chord)) return
-      keys.current[chord]?.()
-    }
-    const unhook = onKey(fromPage)
-    const fromChrome = (e) => {
-      const fn = keys.current[chordOf(e)]
-      if (!fn) return
-      e.preventDefault()
-      e.stopPropagation()
-      fn()
-    }
-    window.addEventListener('keydown', fromChrome, true)
-    return () => {
-      unhook()
-      window.removeEventListener('keydown', fromChrome, true)
-    }
-  }, [])
+  // ---- bookmarks ----
 
-  if (!hasTauri || isMobile) {
-    return (
-      <div className="bw-unavailable">
-        <Globe size={28} />
-        <p>{isMobile ? 'The browser comes to the phone in its own build.' : 'The browser runs in the desktop app.'}</p>
-      </div>
-    )
+  const anchorOf = (el) => {
+    const r = el?.getBoundingClientRect()
+    return r ? { right: r.right, y: r.bottom + 6 } : { right: window.innerWidth - 8, y: 96 }
   }
 
-  const lock = security(current?.url)
-  const live = Boolean(current?.native)
-  const zoomed = (current?.zoom ?? 1) !== 1
+  // The star (or Ctrl+D): bookmarks the page on the bar, then opens the
+  // editor; on a bookmarked page, just the editor.
+  const star = async (el) => {
+    const tab = activeTab()
+    if (editor || !tab?.url || internalPage(tab.url) === 'newtab') return
+    const anchor = anchorOf(el ?? document.querySelector('[data-bw-anchor="star"]'))
+    let mark = bookmarkFor(getBrowserData().bookmarks, tab.url)
+    let fresh = false
+    if (!mark) {
+      mark = await saveBookmark(api, { url: tab.url, title: tabTitle(tab), folder: 'bar' })
+      fresh = true
+    }
+    if (mark) setEditor({ mark, fresh, anchor })
+  }
 
-  const menuItems = () => {
-    if (!menu) return []
-    if (menu.kind === 'main') {
-      return [
-        { label: 'New tab', icon: <Plus size={14} />, hint: 'Ctrl+T', onSelect: openTab },
-        { label: 'Reopen closed tab', icon: <ArrowCounterClockwise size={14} />, hint: 'Ctrl+Shift+T', disabled: !closed.length, onSelect: reopen },
-        { divider: true },
-        { label: 'Zoom in', icon: <MagnifyingGlassPlus size={14} />, hint: 'Ctrl+=', disabled: !live, onSelect: () => zoom(1) },
-        { label: 'Zoom out', icon: <MagnifyingGlassMinus size={14} />, hint: 'Ctrl+-', disabled: !live, onSelect: () => zoom(-1) },
-        { label: `Actual size (${zoomLabel(current?.zoom ?? 1)})`, icon: <ArrowsClockwise size={14} />, hint: 'Ctrl+0', disabled: !live || !zoomed, onSelect: () => zoom(0) },
-        { divider: true },
-        { label: 'Find in page', icon: <MagnifyingGlass size={14} />, hint: 'Ctrl+F', disabled: !live, onSelect: openFind },
-        { label: device ? 'Leave device view' : 'Device view', icon: <DeviceMobile size={14} />, disabled: !live, onSelect: toggleDevice },
-        { label: 'Print', icon: <Printer size={14} />, disabled: !live, onSelect: () => onNative('browser_print') },
-        { divider: true },
-        { label: 'Downloads', icon: <DownloadSimple size={14} />, hint: 'Ctrl+J', onSelect: () => setTimeout(() => setMenu({ kind: 'downloads', ...anchorFor('downloads') }), 0) },
-        { label: 'Open in your default browser', icon: <ArrowSquareOut size={14} />, disabled: !live || !/^https?:/.test(current?.url ?? ''), onSelect: () => call('browser_open_external', { url: current.url }) },
-        ...(import.meta.env.DEV
-          ? [{ label: 'Developer tools', icon: <Code size={14} />, hint: 'F12', disabled: !live, onSelect: () => onNative('browser_devtools') }]
-          : []),
-      ]
+  const editMark = (mark, at) => {
+    setEditor({ mark, fresh: false, anchor: { right: (at?.x ?? 0) + 300, y: (at?.y ?? 0) + 4 } })
+  }
+
+  const finishEdit = ({ title, folder }) => {
+    const { mark } = editor
+    setEditor(null)
+    const was = mark.folder === 'other' ? 'other' : 'bar'
+    if (title === mark.title && folder === was) return
+    // A bookmark moved to the other folder goes last there.
+    const there = inFolder(getBrowserData().bookmarks, folder).filter((m) => m.id !== mark.id)
+    const position = folder === was ? mark.position : positionAt(there, there.length)
+    saveBookmark(api, { ...mark, title, folder, position })
+  }
+
+  const toggleBar = () => setBrowserSetting(api, 'bookmarks_bar', !browserSetting(getBrowserData().settings, 'bookmarks_bar'))
+
+  // ---- the chat: picked elements, screenshots, recordings ----
+
+  const attach = (item) => {
+    const composer = focusedComposer()
+    addAttachment(item, composer)
+    notify({ kind: 'attached', composer })
+  }
+
+  const pick = () => {
+    const tab = activeTab()
+    if (!tab?.native) return
+    const on = getState().picking !== tab.native
+    setState(() => ({ picking: on ? tab.native : null }))
+    call('browser_pick', { tab: tab.native, on })
+    // The page takes the keyboard, so Esc reaches the picker there.
+    if (on) call('browser_show', { tab: tab.native, focus: true })
+  }
+
+  const shot = async () => {
+    const tab = activeTab()
+    if (!tab?.native) return
+    const dataUrl = await call('browser_capture', { tab: tab.native })
+    if (!dataUrl) {
+      notify({ kind: 'error', text: "The page's picture couldn't be taken." })
+      return
     }
-    if (menu.kind === 'site') {
-      let origin = ''
-      try {
-        origin = new URL(current.url).host
-      } catch {
-        origin = current?.url ?? ''
-      }
-      const said = {
-        secure: 'Connection is secure',
-        local: 'A page on this computer',
-        insecure: 'Not secure: this site sends what you type unencrypted',
-        none: 'A local page',
-      }[lock]
-      return [
-        { header: origin },
-        { label: said, icon: lock === 'insecure' ? <Warning size={14} /> : <Lock size={14} />, disabled: true },
-        { divider: true },
-        ...(zoomed ? [{ label: `Zoom ${zoomLabel(current.zoom)}: reset`, icon: <ArrowsClockwise size={14} />, onSelect: () => zoom(0) }] : []),
-        { label: 'Clear cookies and site data', icon: <Trash size={14} />, danger: true, onSelect: () => onNative('browser_clear_site') },
-      ]
+    attach(screenshotAttachment(dataUrl, tab.url))
+  }
+
+  const startRegion = async () => {
+    const tab = activeTab()
+    if (!tab?.native) return
+    // A fresh picture to drag over (the swap shows it in the page's place).
+    await picture$(tab.native, 0)
+    const pageBox = pageRef.current?.getBoundingClientRect()
+    const at = rect()
+    if (!pageBox || !at) return
+    setRegion({
+      tab: tab.native,
+      url: tab.url,
+      scale: (tab.zoom ?? 1) * (tab.device ? fitDevice(tab.device, { width: pageBox.width - 32, height: pageBox.height - 32 }).scale : 1),
+      box: { left: at.x - pageBox.left, top: at.y - pageBox.top, width: at.width, height: at.height },
+    })
+  }
+
+  const finishRegion = async (r) => {
+    const reg = region
+    setRegion(null)
+    if (!reg) return
+    // The page's own CSS pixels, from the top-left of what shows.
+    const clip = { x: r.x / reg.scale, y: r.y / reg.scale, width: r.width / reg.scale, height: r.height / reg.scale }
+    let dataUrl = await call('browser_capture', { tab: reg.tab, clip })
+    // A shell that sent the whole page (or nothing): the part is cut from
+    // the page's picture here instead.
+    if (dataUrl) {
+      const img = await loadImage(dataUrl).catch(() => null)
+      const dpr = window.devicePixelRatio || 1
+      const whole =
+        img &&
+        (img.naturalWidth > clip.width * dpr * 1.5 + 8 ||
+          Math.abs(img.naturalWidth / img.naturalHeight - r.width / r.height) > 0.05)
+      if (whole) dataUrl = await crop(dataUrl, r, reg.box)
+    } else if (shotRef.current.tab === reg.tab && shotRef.current.url) {
+      dataUrl = await crop(shotRef.current.url, r, reg.box)
     }
-    if (menu.kind === 'downloads') {
-      if (!downloads.length) return [{ header: 'Downloads' }, { label: 'Nothing downloaded yet', disabled: true }]
-      return [
-        { header: 'Downloads' },
-        ...downloads.slice(0, 12).map((d) => ({
-          label: fileName(d.path ?? d.url),
-          icon: d.state === 'failed' ? <Warning size={14} /> : <DownloadSimple size={14} />,
-          hint: d.state === 'started' ? 'Downloading' : d.state === 'failed' ? 'Failed' : 'Show in folder',
-          disabled: d.state !== 'done' || !d.path,
-          onSelect: () => call('browser_reveal', { path: d.path }),
-        })),
-      ]
+    if (!dataUrl) {
+      notify({ kind: 'error', text: "That part of the page couldn't be taken." })
+      return
     }
-    if (menu.kind === 'tabs') {
-      return [
-        { header: `${tabs.length} open ${tabs.length === 1 ? 'tab' : 'tabs'}` },
-        ...tabs.map((t) => ({
-          label: tabTitle(t),
-          icon: t.favicon ? <img className="bw-menu-icon" src={t.favicon} alt="" /> : <Globe size={14} />,
-          hint: t.key === active ? 'Showing' : '',
-          onSelect: () => setState(() => ({ active: t.key })),
-        })),
-      ]
+    attach(screenshotAttachment(dataUrl, reg.url))
+  }
+
+  const record = () => {
+    const tab = activeTab()
+    if (tab?.native) recordTab(tab.native)
+  }
+
+  // ---- the agent's hold, sites, downloads ----
+
+  const control = async (action) => {
+    const tab = activeTab()
+    if (!tab?.native || !api?.ready) return
+    try {
+      const got = await api.call('POST', `/browser/tabs/${encodeURIComponent(tab.native)}/control`, { action })
+      patchTab(tab.key, { controller: got?.controller ?? null })
+    } catch (err) {
+      notify({ kind: 'error', text: err?.message ?? "That didn't work." })
     }
-    return []
+  }
+
+  const share = (on) => {
+    const tab = activeTab()
+    if (!tab?.native) return
+    patchTab(tab.key, { shared: on })
+    call('browser_share', { tab: tab.native, on })
+  }
+
+  // A failed download starts again: through the tab it came from while
+  // that tab is open (a download leaves its page where it is).
+  const retry = (d) => {
+    const from = getState().tabs.find((t) => t.native && t.native === d.tab) ?? getState().tabs.find((t) => t.native)
+    if (from) call('browser_navigate', { tab: from.native, url: d.url })
+    else openUrl(d.url, { newTab: true })
+  }
+
+  const act = {
+    go,
+    openTab,
+    openTabAfter,
+    openPrivate: () => openTab({ private: true }),
+    openPage,
+    openSettings,
+    openUrl,
+    openFile: (path) => openUrl(fileUrl(path), { newTab: true, show: true }),
+    openExternal: (url) => call('browser_open_external', { url }),
+    select,
+    close,
+    closeOthers,
+    reopen,
+    duplicate,
+    reloadTab: (t) => t.native && call('browser_reload', { tab: t.native }),
+    back: () => onNative('browser_back'),
+    forward: () => onNative('browser_forward'),
+    reload: () => onNative('browser_reload'),
+    stop: () => onNative('browser_stop'),
+    print: () => onNative('browser_print'),
+    devtools: () => onNative('browser_devtools'),
+    clearSite: () => onNative('browser_clear_site'),
+    zoom,
+    openFind,
+    toggleDevice,
+    star,
+    editMark,
+    removeMark: (m) => removeBookmark(api, m.id),
+    toggleBar,
+    pick,
+    shot,
+    region: startRegion,
+    record,
+    stopRecord: () => stopRecording(),
+    share,
+    resetPermission: (p) => setSitePermission(api, p.origin, p.kind, null),
+    reveal: (path) => call('browser_reveal', { path }),
+    retry,
+    clearDownloads,
+    menu: (kind, el, extra = {}) => {
+      const target = typeof el === 'string' ? document.querySelector(`[data-bw-anchor="${el}"]`) : el
+      const r = target?.getBoundingClientRect()
+      setMenu({ kind, x: r ? r.left : 0, y: r ? r.bottom + 4 : 0, ...extra })
+    },
+    tabMenu: (tab, x, y) => setMenu({ kind: 'tab', tab, x, y }),
+    markMenu: (mark, x, y) => setMenu({ kind: 'mark', mark, x, y }),
+  }
+
+  // ---- keys ----
+
+  const handlers = useRef({})
+  handlers.current = {
+    'browser-new-tab': () => openTab(),
+    'browser-private-tab': act.openPrivate,
+    'browser-close-tab': () => close(getState().active),
+    'browser-reopen-tab': reopen,
+    'browser-next-tab': () => setState((s) => ({ active: cycle(s.tabs, s.active, 1) })),
+    'browser-prev-tab': () => setState((s) => ({ active: cycle(s.tabs, s.active, -1) })),
+    'browser-address': focusAddress,
+    'browser-back': act.back,
+    'browser-forward': act.forward,
+    'browser-reload': act.reload,
+    'browser-reload-key': act.reload,
+    'browser-find': openFind,
+    'browser-bookmark': () => star(null),
+    'browser-bookmarks-bar': toggleBar,
+    'browser-history': () => openPage('history'),
+    'browser-downloads': () => openPage('downloads'),
+    'browser-zoom-in': () => zoom(1),
+    'browser-zoom-out': () => zoom(-1),
+    'browser-zoom-reset': () => zoom(0),
+  }
+  // Typed in the browser's own chrome, through the app's keyboard layer
+  // (rebindable in Settings > Keyboard). The list is a constant, so these
+  // hooks run in the same order every render.
+  const keysOn = focused && !region
+  for (const a of BROWSER_ACTIONS) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    useShortcut(a.id, () => handlers.current[a.id]?.(), keysOn)
+  }
+
+  // Pressed while a page had focus (the shell takes them before the page
+  // does): the browser's own act here, anything else is the app's and is
+  // played back to the app as the keypress it was.
+  useEffect(
+    () =>
+      onKey((chord) => {
+        setFocused(true)
+        if (chord === 'F12' && import.meta.env.DEV) {
+          onNative('browser_devtools')
+          return
+        }
+        const id = actionForCombo(kbRef.current?.scopes?.browser ?? {}, chord)
+        if (id && handlers.current[id]) {
+          handlers.current[id]()
+          return
+        }
+        const init = keyEventInit(chord, isMac)
+        if (init) window.dispatchEvent(new KeyboardEvent('keydown', init))
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  )
+
+  const hint = (title, id) => {
+    const keys = kb?.label(id)
+    return keys ? `${title} (${keys})` : title
+  }
+
+  // ---- what shows ----
+
+  const composerName = (key) => (key === 'new' ? 'New chat' : chats?.[key]?.title ?? 'the chat')
+  const shownNotice = notice && {
+    kind: notice.kind,
+    text:
+      notice.kind === 'attached' ? (
+        <>
+          Added to <span className="pv">{composerName(notice.composer)}</span>
+        </>
+      ) : (
+        notice.text
+      ),
+  }
+
+  const ctx = {
+    act,
+    key: (id) => kb?.label(id) ?? '',
+    tab: current,
+    tabs,
+    active,
+    closed,
+    downloads,
+    marks: data.bookmarks,
+    icons,
+    permissions: data.permissions,
+    live,
+    picking: Boolean(picking) && picking === current?.native,
+    rec,
+    barSetting,
   }
 
   return (
-    <div className="bw">
-      <div className="bw-tabs" role="tablist" aria-label="Tabs" onPointerEnter={precapture}>
-        <div className="bw-tabs-scroll">
-          {tabs.map((t) => (
-            <div
-              key={t.key}
-              role="tab"
-              aria-selected={t.key === active}
-              className={`bw-tab${t.key === active ? ' on' : ''}`}
-              onMouseDown={(e) => {
-                if (e.button === 1) {
-                  e.preventDefault()
-                  close(t.key)
-                } else if (e.button === 0) setState(() => ({ active: t.key }))
-              }}
-              title={tabTitle(t)}
-            >
-              {t.loading ? (
-                <span className="bw-spinner" aria-label="Loading" />
-              ) : t.favicon ? (
-                <img className="bw-favicon" src={t.favicon} alt="" />
-              ) : (
-                <Globe size={14} className="bw-tab-icon" />
-              )}
-              <span className="bw-tab-title">{tabTitle(t)}</span>
-              <button
-                type="button"
-                className="bw-tab-close"
-                title="Close tab (Ctrl+W)"
-                onMouseDown={(e) => e.stopPropagation()}
-                onClick={() => close(t.key)}
-              >
-                <X size={11} weight="bold" />
-              </button>
-            </div>
-          ))}
-          <button type="button" className="bw-newtab" title="New tab (Ctrl+T)" onClick={openTab}>
-            <Plus size={14} />
-          </button>
-        </div>
-        <button
-          type="button"
-          className="bw-btn bw-tabsearch"
-          title="Your tabs"
-          onClick={(e) => setMenu({ kind: 'tabs', ...anchorOf(e.currentTarget) })}
-        >
-          <CaretDown size={14} />
-        </button>
-      </div>
-
-      <div className="bw-bar" onPointerEnter={precapture}>
-        <button type="button" className="bw-btn" title="Back (Alt+Left)" disabled={!current?.canBack} onClick={() => onNative('browser_back')}>
-          <ArrowLeft size={16} />
-        </button>
-        <button type="button" className="bw-btn" title="Forward (Alt+Right)" disabled={!current?.canForward} onClick={() => onNative('browser_forward')}>
-          <ArrowRight size={16} />
-        </button>
-        {current?.loading && live ? (
-          <button type="button" className="bw-btn" title="Stop loading" onClick={() => onNative('browser_stop')}>
-            <X size={16} />
-          </button>
-        ) : (
-          <button type="button" className="bw-btn" title="Reload (Ctrl+R)" disabled={!live} onClick={() => onNative('browser_reload')}>
-            <ArrowClockwise size={16} />
-          </button>
-        )}
-        <form
-          className="bw-address"
-          onSubmit={(e) => {
-            e.preventDefault()
-            go(address)
-          }}
-        >
-          <button
-            type="button"
-            className={`bw-site ${lock}`}
-            title="Site information"
-            disabled={!live}
-            onClick={(e) => setMenu({ kind: 'site', ...anchorOf(e.currentTarget) })}
-          >
-            {lock === 'insecure' ? <Warning size={14} /> : lock === 'none' ? <Globe size={14} /> : <Lock size={14} />}
-            {lock === 'insecure' && <span className="bw-site-word">Not secure</span>}
-          </button>
-          <input
-            ref={addressRef}
-            value={address}
-            placeholder="Search Google or type a URL"
-            spellCheck={false}
-            onChange={(e) => {
-              setEditing(true)
-              setAddress(e.target.value)
-            }}
-            onFocus={(e) => {
-              setEditing(true)
-              e.target.select()
-            }}
-            onBlur={() => setEditing(false)}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') {
-                setEditing(false)
-                setAddress(shownAddress(current?.url))
-                e.currentTarget.blur()
-              }
-            }}
-          />
-          {zoomed && (
-            <button type="button" className="bw-zoom" title="Reset zoom (Ctrl+0)" onClick={() => zoom(0)}>
-              {zoomLabel(current.zoom)}
-            </button>
-          )}
-        </form>
-        <button
-          type="button"
-          className={`bw-btn${device ? ' on' : ''}`}
-          title="Device view"
-          disabled={!live}
-          onClick={toggleDevice}
-        >
-          <DeviceMobile size={17} />
-        </button>
-        <button
-          type="button"
-          className={`bw-btn${busy ? ' busy' : ''}`}
-          data-bw-anchor="downloads"
-          title="Downloads (Ctrl+J)"
-          onClick={(e) => setMenu({ kind: 'downloads', ...anchorOf(e.currentTarget) })}
-        >
-          <DownloadSimple size={17} />
-        </button>
-        <button
-          type="button"
-          className="bw-btn"
-          title="More"
-          onClick={(e) => setMenu({ kind: 'main', ...anchorOf(e.currentTarget) })}
-        >
-          <DotsThreeVertical size={18} weight="bold" />
-        </button>
-      </div>
-
-      {find && live && (
-        <div className="bw-strip">
-          <MagnifyingGlass size={14} className="bw-strip-icon" />
-          <input
-            ref={findRef}
-            className="bw-find-input"
-            value={find.term}
-            placeholder="Find in page"
-            spellCheck={false}
-            onChange={(e) => runFind(e.target.value, 0)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault()
-                runFind(find.term, e.shiftKey ? -1 : 1)
-              } else if (e.key === 'Escape') {
-                e.preventDefault()
-                closeFind()
-              }
-            }}
-          />
-          <span className="bw-find-count">
-            {find.term ? (findState?.count ? `${findState.active} of ${findState.count}` : 'No matches') : ''}
-          </span>
-          <button type="button" className="bw-btn" title="Previous (Shift+Enter)" onClick={() => runFind(find.term, -1)}>
-            <CaretUp size={14} />
-          </button>
-          <button type="button" className="bw-btn" title="Next (Enter)" onClick={() => runFind(find.term, 1)}>
-            <CaretDown size={14} />
-          </button>
-          <button type="button" className="bw-btn" title="Close (Esc)" onClick={closeFind}>
-            <X size={14} />
-          </button>
-        </div>
+    <div className={`bw${full ? ' full' : ''}`} ref={rootRef}>
+      {!full && <BrowserTabStrip tabs={tabs} active={active} act={act} hint={hint} precapture={precapture} />}
+      {!full && (
+        <BrowserToolbar
+          tab={current}
+          live={live}
+          act={act}
+          hint={hint}
+          engine={engine}
+          bookmarked={bookmarked}
+          picking={ctx.picking}
+          rec={rec}
+          notice={shownNotice}
+          busy={busy}
+          device={device}
+          omni={omni}
+          api={api}
+          icons={icons}
+          precapture={precapture}
+        />
       )}
-
-      {device && live && (
-        <div className="bw-strip">
-          <DeviceMobile size={14} className="bw-strip-icon" />
-          {DEVICES.map((d) => (
-            <button
-              key={d.name}
-              type="button"
-              className={`bw-chip${device.name === d.name ? ' on' : ''}`}
-              onClick={() => setDevice({ ...d })}
-            >
-              {d.name}
-            </button>
-          ))}
-          <span className="bw-size">
-            <input
-              type="number"
-              value={device.width}
-              min={200}
-              max={3840}
-              onChange={(e) => setDevice({ name: 'Custom', width: Number(e.target.value) || device.width })}
-            />
-            <span>x</span>
-            <input
-              type="number"
-              value={device.height}
-              min={200}
-              max={2160}
-              onChange={(e) => setDevice({ name: 'Custom', height: Number(e.target.value) || device.height })}
-            />
-          </span>
-          <button
-            type="button"
-            className="bw-btn"
-            title="Rotate"
-            onClick={() => setDevice({ width: device.height, height: device.width })}
-          >
-            <ArrowsClockwise size={14} />
-          </button>
-          <span className="bw-strip-fill" />
-          <button type="button" className="bw-btn" title="Leave device view" onClick={toggleDevice}>
-            <X size={14} />
-          </button>
-        </div>
+      {!full && barShown && <BrowserBookmarksBar marks={data.bookmarks} icons={icons} act={act} />}
+      {/* A site's request shows even in full screen: a call that went full
+          screen and then asks for the camera still needs an answer. */}
+      {prompt && (
+        <PermissionBar
+          key={`${prompt.tab}:${prompt.id}`}
+          prompt={prompt}
+          onAnswer={(allow, remember) => answerPrompt(prompt, allow, remember)}
+        />
+      )}
+      {!full && current?.controller && <AgentBar controller={current.controller} onControl={control} />}
+      {!full && ctx.picking && <PickBar onCancel={pick} />}
+      {!full && find && live && (
+        <BrowserFindBar find={find} state={findState} inputRef={findRef} onFind={runFind} onClose={closeFind} />
+      )}
+      {!full && device && live && (
+        <BrowserDeviceBar device={device} onChange={setDevice} onClose={toggleDevice} />
       )}
 
       <div className={`bw-page${device ? ' device' : ''}`} ref={pageRef}>
         <img ref={pictureRef} className="bw-picture" alt="" />
-        {!live && (
-          <div className="bw-ntp">
-            <form
-              className="bw-ntp-search"
-              onSubmit={(e) => {
-                e.preventDefault()
-                go(e.currentTarget.elements.q.value)
-              }}
-            >
-              <MagnifyingGlass size={18} className="bw-ntp-icon" />
-              <input name="q" placeholder="Search Google or type a URL" spellCheck={false} autoFocus />
-            </form>
-          </div>
-        )}
+        {!live &&
+          (page && page !== 'newtab' ? (
+            <BrowserPages page={page} api={api} icons={icons} marks={data.bookmarks} downloads={downloads} act={act} />
+          ) : ntp ? (
+            <BrowserNewTab
+              key={current?.key}
+              privateTab={Boolean(current?.private)}
+              engine={engine}
+              api={api}
+              icons={icons}
+              chats={chats}
+              act={act}
+            />
+          ) : (
+            <Waiting tab={current} onRetry={() => patchTab(current.key, { failed: false })} />
+          ))}
+        {region && <BrowserRegion box={region.box} onPick={finishRegion} onCancel={() => setRegion(null)} />}
       </div>
 
-      {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems()} onClose={() => setMenu(null)} />}
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={menuItems(menu, ctx)}
+          onClose={() => setMenu(null)}
+          className={menu.kind === 'main' ? 'bw-menu' : undefined}
+        />
+      )}
+      {editor && (
+        <BrowserBookmarkEditor
+          key={editor.mark.id}
+          mark={editor.mark}
+          fresh={editor.fresh}
+          anchor={editor.anchor}
+          onDone={finishEdit}
+          onRemove={() => {
+            removeBookmark(api, editor.mark.id)
+            setEditor(null)
+          }}
+        />
+      )}
     </div>
   )
 }

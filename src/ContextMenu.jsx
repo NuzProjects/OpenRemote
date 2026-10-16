@@ -9,9 +9,10 @@ import './contextmenu.css'
  * does its thing and the menu closes.
  *
  * items: [{ label, icon, onSelect, disabled, hint, danger }], a { header: 'Text' }
- * for a group label, or { divider: true }.
+ * for a group label, or { divider: true }. `className` adds to the menu's
+ * own (a long menu that scrolls, say).
  */
-export default function ContextMenu({ x, y, items, onClose }) {
+export default function ContextMenu({ x, y, items, onClose, className = '' }) {
   const ref = useRef(null)
   const actions = items.map((item, i) => ({ item, i })).filter(({ item }) => item.onSelect && !item.disabled)
   const [cursor, setCursor] = useState(actions[0]?.i ?? -1)
@@ -87,7 +88,7 @@ export default function ContextMenu({ x, y, items, onClose }) {
   return createPortal(
     <div
       ref={ref}
-      className="nc-menu ctx-menu"
+      className={`nc-menu ctx-menu${className ? ` ${className}` : ''}`}
       role="menu"
       tabIndex={-1}
       style={{ left: x, top: y }}
