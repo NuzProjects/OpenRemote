@@ -12,6 +12,10 @@ import {
   CloudArrowUp,
   PencilSimple,
   X,
+  Globe,
+  ImageSquare,
+  CaretDown,
+  CaretRight,
 } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
 import { chatAccess, deviceName, signedIn } from './cloud.js'
@@ -27,17 +31,128 @@ import { renderMarkdown } from './markdown.js'
 import { capLines, capRows, MAX_RENDER_LINES, MAX_RENDER_ROWS, shouldRenderLive } from './render-budget.js'
 import ContextRing from './ContextRing.jsx'
 import PickerMenu from './PickerMenu.jsx'
-import { isMobile } from './platform.js'
+import { hasTauri, isMobile } from './platform.js'
 import { usePrivacyMode } from './privacy.js'
 import { useHint, useModelSwitches, usePaletteSource, useShortcut } from './keyboard.jsx'
 import { useComposerMenus } from './useComposerMenus.jsx'
 import { mentionedChats, ownCommands, takeCommands } from './composer-menus.js'
+import { addAttachment, removeAttachment, setFocusedComposer } from './attachments.js'
+import { AttachmentChips, useAttachInput, useAttachments } from './ComposerAttachments.jsx'
+import { outgoing } from './composer-attachments.js'
+import { ChatImages, chatImageDataUrl } from './chat-images.jsx'
+import { findDevServers, noteDevServers } from './devservers.js'
+import { isBrowsing, requestBrowser } from './browser-placement.js'
+import { browserTool, foldsResult, isBrowserTool } from './browser-tools.js'
 import './chatview.css'
 import './composer.css'
 
 // The harnesses that run one process per prompt cannot take a message
 // mid-turn: Steer interrupts the turn and runs the message next there.
 const INTERRUPT_STEER = new Set(['grok', 'agy'])
+
+// The harnesses that read pictures, for a chat whose harness this
+// computer doesn't list (one running on another machine, any chat on a
+// phone); the daemon's own `image_input` decides where it is known.
+const IMAGE_HARNESSES = new Set(['claude', 'codex'])
+
+// The browser opens beside a chat in the desktop app only: a phone has its
+// own Browser view, and a plain browser tab has no browser to show.
+const BESIDE = hasTauri && !isMobile
+
+// Dev server addresses per text, kept while the text is the same: the
+// rail renders on every streamed token, and a long tool output must not
+// be searched again each time.
+const devCache = new Map()
+function devServersIn(text) {
+  if (!text) return []
+  let found = devCache.get(text)
+  if (!found) {
+    if (devCache.size > 400) devCache.clear()
+    found = findDevServers(text)
+    devCache.set(text, found)
+  }
+  return found
+}
+
+/// "Open beside chat" for each dev server a reply or a tool's output
+/// mentions - this computer's own servers, so only on a chat that runs
+/// here.
+function DevServerChips({ text, chatId }) {
+  const servers = devServersIn(text)
+  if (!servers.length) return null
+  return (
+    <div className="cv-dev-row">
+      {servers.slice(0, 3).map((server) => (
+        <button
+          key={server.url}
+          type="button"
+          className="cv-dev-chip"
+          onClick={() => requestBrowser({ chatId, url: server.url })}
+          title={`Open ${server.url} in the browser beside this chat`}
+        >
+          <Globe size={12} />
+          <span className="cv-dev-host">
+            {server.host === '0.0.0.0' ? 'localhost' : server.host}:{server.port}
+          </span>
+          Open beside chat
+        </button>
+      ))}
+    </div>
+  )
+}
+
+/// A tool's output row. A page read as text runs long, so it folds until
+/// asked for.
+function OutRow({ out, fold }) {
+  const [open, setOpen] = useState(!fold)
+  return (
+    <>
+      <div className="cv-io-row">
+        <span className="cv-io-label">Out</span>
+        {open ? (
+          <code>{out.text}</code>
+        ) : (
+          <button type="button" className="cv-fold" onClick={() => setOpen(true)} aria-expanded={false}>
+            <CaretRight size={11} />
+            Show the page text
+          </button>
+        )}
+      </div>
+      {open && fold && (
+        <button type="button" className="cv-fold cv-fold--under" onClick={() => setOpen(false)} aria-expanded>
+          <CaretDown size={11} />
+          Fold the page text
+        </button>
+      )}
+      {open && out.hidden > 0 && (
+        <div className="cv-io-more">Showing the first {MAX_RENDER_LINES} lines.</div>
+      )}
+    </>
+  )
+}
+
+/// What a browser tool did, in words: the element as the agent named it,
+/// the address, and the argument worth reading (typed text, a script).
+function BrowserFacts({ facts }) {
+  return (
+    <>
+      {(facts.description || facts.url) && (
+        <p className="cv-bt pv">
+          {facts.description && <span className="cv-bt-desc">{facts.description}</span>}
+          {facts.url && <code className="cv-bt-url">{facts.url}</code>}
+        </p>
+      )}
+      {facts.detail &&
+        (facts.mono ? (
+          <div className="cv-cmd pv">
+            <code className="cv-cmd-text">{facts.detail}</code>
+          </div>
+        ) : (
+          <p className="cv-bt-detail pv">{facts.detail}</p>
+        ))}
+    </>
+  )
+}
 
 const STATUS_LABEL = {
   starting: 'Starting',
@@ -116,6 +231,9 @@ function DecisionCard({ item, onAnswer }) {
       ? item.input.questions[0]?.question ?? null
       : null
   const command = !question && isCommandRun(item.input) ? item.input : null
+  // A browser action asks in words: what it acts on, where, and what it
+  // types or runs - never a JSON dump.
+  const browser = !question && isBrowserTool(item.toolName) ? browserTool(item.toolName, item.input) : null
   // An approval's input rides its tool card once the answer settles it -
   // the run card is the one full record, so the settled card keeps the
   // answer line alone (never the same command twice). The 0.3s fade
@@ -133,7 +251,8 @@ function DecisionCard({ item, onAnswer }) {
           <code className="cv-cmd-text">{command.command}</code>
         </div>
       )}
-      {keepBody && item.input && !question && !command && (
+      {keepBody && browser && <BrowserFacts facts={browser} />}
+      {keepBody && item.input && !question && !command && !browser && (
         <div className="cv-decision-io pv">
           <span className="cv-io-label">In</span>
           <code>{typeof item.input === 'string' ? item.input : JSON.stringify(item.input, null, 2)}</code>
@@ -200,6 +319,7 @@ export default function ChatView({ chat, onBack, focused = true }) {
     resumeQueue,
     renameChat,
     chats,
+    apiFor,
   } = useConsole()
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [confirmSync, setConfirmSync] = useState(false)
@@ -240,8 +360,22 @@ export default function ChatView({ chat, onBack, focused = true }) {
   // the daemon and runs as its own turn when this one ends.
   const turnOpen = chat.status === 'running' || chat.status === 'waiting'
   const queue = chat.queue ?? []
-  const canSend = text.trim().length > 0 && alive && !busy && reachable
+  // What rides the next message besides its words: pictures, and elements
+  // picked in the browser (attachments.js keeps them per composer).
+  const composerKey = chat.id
+  const attached = useAttachments(composerKey)
+  const canSend = (text.trim().length > 0 || attached.length > 0) && alive && !busy && reachable
   const harness = (capabilities?.harnesses ?? []).find((h) => h.id === chat.harness)
+  const takesImages = harness ? Boolean(harness.image_input) : IMAGE_HARNESSES.has(chat.harness)
+  const attach = useAttachInput(composerKey, { enabled: takesImages && alive && reachable, onError: setError })
+  // The browser's picks go to the composer the user is in: this one while
+  // it is the focused pane's, or the moment its text gains focus.
+  useEffect(() => {
+    if (focused) setFocusedComposer(composerKey)
+  }, [focused, composerKey])
+  // A dev server this chat mentions opens beside it - this computer's own
+  // servers, so only for a chat that runs here.
+  const devChips = BESIDE && !elsewhere
   const live = LIVE_SETTINGS[chat.harness] ?? { model: false, effort: false, fast: false }
   // A stopped chat can change anything the harness accepts at start. A
   // running one only where the wire accepts it now - permission never:
@@ -298,11 +432,31 @@ export default function ChatView({ chat, onBack, focused = true }) {
   }
 
   // The message as it goes: OpenRemote's commands run and leave it; what
-  // remains goes to the harness with the chats it points at.
+  // remains goes to the harness with the chats it points at, its pictures,
+  // and the picked elements' words. A message that can't carry what is
+  // attached is refused before any command runs.
   const prepare = async () => {
     const { run, text: message } = takeCommands(text.trim(), ownCommands({ inChat: true, cloud: cloudReady }))
+    const sent = attached
+    const payload = outgoing(message, sent, {
+      images: takesImages,
+      harness: harnessName(chat.harness),
+      remote: Boolean(elsewhere),
+    })
+    if (payload.error) throw new Error(payload.error)
     for (const command of run) await runCommand(command)
-    return { message, pointed: mentionedChats(message, chats) }
+    return {
+      message: payload.text,
+      pointed: mentionedChats(message, chats),
+      attachments: payload.attachments,
+      sent,
+    }
+  }
+
+  // What was sent leaves the composer; anything the browser added
+  // meanwhile stays.
+  const clearSent = (sent) => {
+    for (const item of sent) removeAttachment(composerKey, item.id)
   }
 
   useEffect(() => {
@@ -349,6 +503,34 @@ export default function ChatView({ chat, onBack, focused = true }) {
     if (el) el.scrollTop = el.scrollHeight
   }, [rail.length, chat.status])
 
+  // The dev servers this chat mentions, for the browser's new tab page:
+  // what arrives while the chat is open, and on opening, its latest turn
+  // - an old transcript's servers are long gone.
+  const noted = useRef(null)
+  useEffect(() => {
+    const opening = noted.current == null
+    if (opening) noted.current = new Set()
+    const seen = noted.current
+    let latestTurn = 0
+    if (opening) {
+      for (let i = rail.length - 1; i >= 0; i--) {
+        if (rail[i].kind === 'message' && rail[i].role === 'user') {
+          latestTurn = i
+          break
+        }
+      }
+    }
+    rail.forEach((item, i) => {
+      const said =
+        item.kind === 'message' && item.role === 'agent' ? item.text : item.kind === 'tool' ? item.result : null
+      if (!said) return
+      const key = `${item.id}|${said.length}`
+      if (seen.has(key)) return
+      seen.add(key)
+      if (!opening || i > latestTurn) noteDevServers(chat.id, said)
+    })
+  })
+
   // the composer floats over the transcript; its height varies as the
   // textarea grows. Publish it as --cv-clear so the thread's bottom padding
   // always keeps the last message above the box, never under it.
@@ -370,11 +552,12 @@ export default function ChatView({ chat, onBack, focused = true }) {
     setBusy(true)
     setError(null)
     try {
-      const { message, pointed } = await prepare()
-      if (message) {
-        if (turnOpen) await queueMessage(chat.id, message, pointed)
-        else await sendPrompt(chat.id, message, pointed)
+      const { message, pointed, attachments, sent } = await prepare()
+      if (message || attachments.length) {
+        if (turnOpen) await queueMessage(chat.id, message, pointed, attachments)
+        else await sendPrompt(chat.id, message, pointed, attachments)
       }
+      clearSent(sent)
       setText('')
     } catch (err) {
       setError(err.message ?? String(err))
@@ -504,7 +687,7 @@ export default function ChatView({ chat, onBack, focused = true }) {
   // Steer (Ctrl+Enter): into the running turn now; with nothing running
   // it is an ordinary send.
   const steerNow = async () => {
-    if (!text.trim() || !alive || !reachable || busy) return false
+    if ((!text.trim() && !attached.length) || !alive || !reachable || busy) return false
     if (!turnOpen) {
       send()
       return
@@ -512,8 +695,9 @@ export default function ChatView({ chat, onBack, focused = true }) {
     setBusy(true)
     setError(null)
     try {
-      const { message, pointed } = await prepare()
-      if (message) await steerMessage(chat.id, message, pointed)
+      const { message, pointed, attachments, sent } = await prepare()
+      if (message || attachments.length) await steerMessage(chat.id, message, pointed, attachments)
+      clearSent(sent)
       setText('')
     } catch (err) {
       setError(err.message ?? String(err))
@@ -526,6 +710,13 @@ export default function ChatView({ chat, onBack, focused = true }) {
   // anything already typed) and leaves the queue; Enter queues it again.
   const pullBack = (message) => {
     setText((typed) => (typed.trim() ? `${message.text}\n${typed}` : message.text))
+    // Its pictures come back as attachments, read from where they were
+    // kept.
+    for (const image of message.images ?? []) {
+      chatImageDataUrl(apiFor(elsewhere ? chat.executor : null), image, elsewhere ? chat.id : null)
+        .then((dataUrl) => addAttachment({ kind: 'image', name: 'Picture', mime: image.mime, dataUrl }, composerKey))
+        .catch(() => setError('A queued picture could not be brought back - attach it again.'))
+    }
     control(() => removeQueued(chat.id, message.id))
     inputRef.current?.focus()
   }
@@ -645,6 +836,18 @@ export default function ChatView({ chat, onBack, focused = true }) {
               </button>
             )
           )}
+          {/* The browser, as a pane beside this chat - the same one the
+              sidebar opens; one pane holds it at a time. */}
+          {BESIDE && (
+            <button
+              className="cv-fact-btn"
+              onClick={() => requestBrowser({ chatId: chat.id })}
+              title="Open the browser beside this chat"
+            >
+              <Globe size={11} />
+              Browser
+            </button>
+          )}
           {/* Deleting a synced chat removes it from every device - asked
               twice, in place. */}
           {chat.executor && (
@@ -696,11 +899,28 @@ export default function ChatView({ chat, onBack, focused = true }) {
               )
             }
             if (item.kind === 'message') {
-              if (item.role === 'user') return <div key={item.id} className="cv-user pv">{item.text}</div>
+              if (item.role === 'user') {
+                // The words, then the pictures sent with them.
+                return (
+                  <div key={item.id} className="cv-user">
+                    {item.text && <div className="pv">{item.text}</div>}
+                    <ChatImages images={item.images} chat={chat} label="Attached picture" />
+                  </div>
+                )
+              }
               if (item.role === 'note') return <p key={item.id} className="cv-node cv-note pv">{item.text}</p>
               // Agent messages are markdown - the harness's own output
               // shape - rendered through the escape-first mini renderer,
-              // parsed once per message (MarkdownBody's cache).
+              // parsed once per message (MarkdownBody's cache). A dev
+              // server it names gets its "Open beside chat" chip.
+              if (devChips && devServersIn(item.text).length) {
+                return (
+                  <div key={item.id} className="cv-node cv-agent-wrap">
+                    <MarkdownBody text={item.text} className="cv-agent pv" />
+                    <DevServerChips text={item.text} chatId={chat.id} />
+                  </div>
+                )
+              }
               return <MarkdownBody key={item.id} text={item.text} className="cv-node cv-agent pv" />
             }
             if (item.kind === 'tool') {
@@ -731,7 +951,10 @@ export default function ChatView({ chat, onBack, focused = true }) {
               // JSON dump of the input. The tile replaces the In row
               // alone; the Out row still shows what the command printed.
               const command = !edit && isCommandRun(item.input) ? item.input : null
-              const shownIn = item.input && !command && !edit
+              // One of OpenRemote's browser tools reads as "Browser ·
+              // click" with what it acted on, never as a JSON dump.
+              const browser = isBrowserTool(item.name) ? browserTool(item.name, item.input) : null
+              const shownIn = item.input && !command && !edit && !browser
                 ? capLines(typeof item.input === 'string' ? item.input : JSON.stringify(item.input, null, 2))
                 : null
               const shownOut = item.result ? capLines(item.result) : null
@@ -745,7 +968,9 @@ export default function ChatView({ chat, onBack, focused = true }) {
               return (
                 <div key={item.id} className={`cv-node cv-node--${item.state}`}>
                   <div className="cv-tool-line">
-                    <span className="cv-tool-name">{item.name}</span>
+                    <span className="cv-tool-name" title={browser ? item.name : undefined}>
+                      {browser ? browser.label : item.name}
+                    </span>
                     {inFlight ? (
                       <span className="cv-tool-status">
                         <span className="cv-tool-status-dot" />
@@ -789,6 +1014,7 @@ export default function ChatView({ chat, onBack, focused = true }) {
                       <code className="cv-cmd-text">{command.command}</code>
                     </div>
                   )}
+                  {browser && <BrowserFacts facts={browser} />}
                   {(shownIn || shownOut) && !edit && (
                     <div className="cv-io pv">
                       {shownIn && (
@@ -802,19 +1028,13 @@ export default function ChatView({ chat, onBack, focused = true }) {
                           )}
                         </>
                       )}
-                      {shownOut && (
-                        <>
-                          <div className="cv-io-row">
-                            <span className="cv-io-label">Out</span>
-                            <code>{shownOut.text}</code>
-                          </div>
-                          {shownOut.hidden > 0 && (
-                            <div className="cv-io-more">Showing the first {MAX_RENDER_LINES} lines.</div>
-                          )}
-                        </>
-                      )}
+                      {shownOut && <OutRow out={shownOut} fold={Boolean(browser) && foldsResult(item.name)} />}
                     </div>
                   )}
+                  {/* What the tool answered with besides words - an
+                      agent's screenshot, inline, large on a click. */}
+                  <ChatImages images={item.images} chat={chat} label="Screenshot" />
+                  {devChips && item.result && <DevServerChips text={item.result} chatId={chat.id} />}
                 </div>
               )
             }
@@ -838,7 +1058,11 @@ export default function ChatView({ chat, onBack, focused = true }) {
             return (
               <div key={item.id} className={`cv-node cv-node--${item.pending ? 'pending' : 'done'}`}>
                 <div className="cv-tool-line">
-                  <span className="cv-tool-name">{item.toolName ?? 'Decision'}</span>
+                  <span className="cv-tool-name" title={isBrowserTool(item.toolName) ? item.toolName : undefined}>
+                    {isBrowserTool(item.toolName)
+                      ? browserTool(item.toolName, item.input).label
+                      : item.toolName ?? 'Decision'}
+                  </span>
                   <span className="cv-tool-state">
                     {item.pending ? (
                       'Needs a decision'
@@ -862,7 +1086,16 @@ export default function ChatView({ chat, onBack, focused = true }) {
       </div>
 
       <div className="cv-composer" ref={composerRef}>
-        <div className="cv-box">
+        {/* On the phone the browser never opens by itself: the chat says
+            the agent is in it, and a tap opens the Browser view. */}
+        {isMobile && isBrowsing(chat) && (
+          <button type="button" className="cv-browsing" onClick={() => requestBrowser({ chatId: chat.id })}>
+            <span className="cv-browsing-dot" />
+            {harnessName(chat.harness)} is browsing
+            <Globe size={13} />
+          </button>
+        )}
+        <div className="cv-box" onDragOver={attach.onDragOver} onDrop={attach.onDrop}>
           {menus.element}
           {queue.length > 0 && (
             <div className="cv-queue">
@@ -886,6 +1119,15 @@ export default function ChatView({ chat, onBack, focused = true }) {
               {queue.map((message) => (
                 <div key={message.id} className="cv-queue-row">
                   <span className="cv-queue-text pv">{message.text}</span>
+                  {message.images?.length > 0 && (
+                    <span
+                      className="cv-queue-pics"
+                      title={`${message.images.length} picture${message.images.length > 1 ? 's' : ''} with it`}
+                    >
+                      <ImageSquare size={13} />
+                      {message.images.length}
+                    </span>
+                  )}
                   <span className="cv-queue-actions">
                     <button
                       type="button"
@@ -918,6 +1160,7 @@ export default function ChatView({ chat, onBack, focused = true }) {
               ))}
             </div>
           )}
+          <AttachmentChips composerKey={composerKey} takesImages={takesImages} harness={harnessName(chat.harness)} />
           <textarea
             ref={inputRef}
             value={text}
@@ -927,6 +1170,8 @@ export default function ChatView({ chat, onBack, focused = true }) {
             }}
             onKeyUp={menus.track}
             onClick={menus.track}
+            onFocus={() => setFocusedComposer(composerKey)}
+            onPaste={attach.onPaste}
             onKeyDown={(e) => {
               // The / and @ menus take their keys first.
               if (menus.onKeyDown(e)) return
@@ -1103,6 +1348,7 @@ export default function ChatView({ chat, onBack, focused = true }) {
               )}
             </div>
             <div className="nc-send-group">
+              {attach.button}
               {/* The ring renders wherever usage is known - the composer's
                   one live element; a claude chat carries it from its first
                   breath at zero. Codex reports its window too; claude
