@@ -73,7 +73,7 @@ export default function BrowserTabStrip({ tabs, active, act, hint, precapture })
             </button>
           </div>
         ))}
-        <button type="button" className="bw-newtab" title={hint('New tab', 'browser-new-tab')} onClick={act.openTab}>
+        <button type="button" className="bw-newtab" title={hint('New tab', 'browser-new-tab')} onClick={() => act.openTab()}>
           <Plus size={14} />
         </button>
       </div>

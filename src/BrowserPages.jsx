@@ -223,7 +223,7 @@ function DownloadsPage({ downloads, act }) {
       <div className="bwp-inner">
         <PageHead title="Downloads">
           {done && (
-            <button type="button" className="pn-btn" onClick={act.clearDownloads}>
+            <button type="button" className="pn-btn" onClick={() => act.clearDownloads()}>
               Clear all
             </button>
           )}

@@ -398,6 +398,7 @@ function BrowserDesktop({ paneFocused }) {
   }
 
   const finishEdit = ({ title, folder }) => {
+    if (!editor) return
     const { mark } = editor
     setEditor(null)
     const was = mark.folder === 'other' ? 'other' : 'bar'
