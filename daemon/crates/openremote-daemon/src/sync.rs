@@ -244,7 +244,9 @@ pub async fn apply_tombstone(app: &Arc<App>, id: SessionId, stone: Tombstone) {
         return;
     }
     if running_here {
-        let _ = app.supervisor.stop(&id).await;
+        // Only this chat: what becomes of its workers was the user's call
+        // when they deleted it.
+        let _ = app.supervisor.stop_only(&id).await;
     }
     let _ = lock_recovering(&app.store).tombstone(id, stone);
     app.sync.forget(id);

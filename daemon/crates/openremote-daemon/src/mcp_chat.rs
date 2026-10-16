@@ -1,10 +1,12 @@
 //! `openremote-daemon mcp-chat`: OpenRemote's MCP server for one chat - its
-//! read-a-chat tool (the first of OpenRemote Controls) and the built-in
-//! browser's tools. A chat's harness starts it over stdio (MCP's
+//! read-a-chat tool (the first of OpenRemote Controls), the built-in
+//! browser's tools, and the team tools (start workers, wait for their
+//! reports). A chat's harness starts it over stdio (MCP's
 //! newline-delimited JSON-RPC). It reads the API token from the data
 //! folder, never from its command line, and asks the daemon on loopback:
 //! for a chat the user pointed this chat at with @ (the daemon refuses any
-//! other), and for the browser, which the daemon reaches in the app.
+//! other), for the browser, which the daemon reaches in the app, and for
+//! the team, whose limits and reports the daemon keeps.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -74,6 +76,7 @@ pub async fn run(args: &[String]) -> ExitCode {
             "tools/list" => {
                 let mut tools = vec![tool()];
                 tools.extend(browser_tools(&config, &token).await);
+                tools.extend(agent_tools(&config, &token).await);
                 Ok(json!({"tools": tools}))
             }
             "tools/call" => Ok(call(&config, &token, &params).await),
@@ -124,11 +127,45 @@ async fn browser_tools(config: &Config, token: &str) -> Vec<Value> {
         .unwrap_or_default()
 }
 
+/// The team tools this chat is offered: none where the user turned them
+/// off, and only the ones this chat can use (a chat at the bottom of a team
+/// can only report up).
+async fn agent_tools(config: &Config, token: &str) -> Vec<Value> {
+    let url = format!(
+        "http://127.0.0.1:{}/sessions/{}/agents/tools",
+        config.port,
+        encode(&config.session)
+    );
+    let bearer = format!("Bearer {token}");
+    let http = openremote_cloud::https::Http::new();
+    let Ok(response) = http
+        .request("GET", &url, &[("authorization", bearer.as_str())], None)
+        .await
+    else {
+        return Vec::new();
+    };
+    serde_json::from_slice::<Value>(&response.body)
+        .ok()
+        .and_then(|v| v.get("tools").and_then(Value::as_array).cloned())
+        .unwrap_or_default()
+}
+
 /// A browser tool: the daemon runs it in the app's browser and answers the
 /// tool's result as MCP shapes it.
 async fn browser_call(config: &Config, token: &str, params: &Value) -> Value {
+    call_daemon(config, token, "browser", params).await
+}
+
+/// A team tool: the daemon does it and answers the tool's result.
+async fn agents_call(config: &Config, token: &str, params: &Value) -> Value {
+    call_daemon(config, token, "agents", params).await
+}
+
+/// A tool the daemon runs for this chat (`/sessions/{id}/<kind>/call`),
+/// answered as the MCP result it came back as.
+async fn call_daemon(config: &Config, token: &str, kind: &str, params: &Value) -> Value {
     let url = format!(
-        "http://127.0.0.1:{}/sessions/{}/browser/call",
+        "http://127.0.0.1:{}/sessions/{}/{kind}/call",
         config.port,
         encode(&config.session)
     );
@@ -171,6 +208,9 @@ async fn call(config: &Config, token: &str, params: &Value) -> Value {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
     if name.starts_with("browser_") {
         return browser_call(config, token, params).await;
+    }
+    if name.starts_with("agents_") {
+        return agents_call(config, token, params).await;
     }
     if name != "read_chat" {
         return failure(&format!("there is no tool named {name}"));

@@ -139,11 +139,14 @@ impl Supervisor {
     }
 
     /// The tools a chat runs without asking: OpenRemote's browser tools
-    /// that only read (reading, hovering, scrolling, switching tabs), named
-    /// as its MCP server's tools.
+    /// that only read (reading, hovering, scrolling, switching tabs) and
+    /// the team tools that only read (looking at the team, waiting for it,
+    /// reporting up), named as its MCP server's tools.
     pub(super) fn allowed_tools(&self) -> Vec<String> {
         if self.controls.get().is_some() {
-            crate::browser::tools::reading_tool_names("openremote")
+            let mut names = crate::browser::tools::reading_tool_names("openremote");
+            names.extend(crate::team::reading_tool_names("openremote"));
+            names
         } else {
             Vec::new()
         }
