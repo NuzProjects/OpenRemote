@@ -6,7 +6,7 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowUp,
-  CaretDown,
+  ArrowsInLineVertical,
   ChartBar,
   ChatCircle,
   Cloud,
@@ -15,6 +15,7 @@ import {
   DeviceMobile,
   EnvelopeSimple,
   EnvelopeSimpleOpen,
+  FolderOpen,
   GearSix,
   Globe,
   House,
@@ -30,11 +31,11 @@ import {
   X,
 } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
-import { sections } from './projects.js'
+import { projectName, sections } from './projects.js'
 import { chatStatus } from './state/reducer.js'
 import { activeSessions } from './archive.js'
 import { deviceName, isPhone, sessionsForMode } from './cloud.js'
-import { isMobile } from './platform.js'
+import { hasTauri, isMobile } from './platform.js'
 import { HarnessMark } from './brand-marks.jsx'
 import ContextMenu from './ContextMenu.jsx'
 import DeleteChatModal from './DeleteChatModal.jsx'
@@ -47,6 +48,7 @@ import { usePersistedList, usePinned, useUnseen } from './useSidebarMarks.js'
 import { KEYS, toggled } from './sidebar-marks.js'
 import { CHATS_PAGE, DOT_WORDS, PROJECT_PAGE, dotKind, pageOf, pinnedRows, rollup } from './sidebar-groups.js'
 import SidebarChat from './SidebarChat.jsx'
+import SidebarProject from './SidebarProject.jsx'
 import SidebarNote, { useNote } from './SidebarNote.jsx'
 import { useChatDrag } from './useChatDrag.js'
 import { wouldMove } from './move-chat.js'
@@ -178,6 +180,9 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
       : pageOf(items, { page, pages: more[key] ?? 0, keep: keepShown })
   const projectViews = groups.map((g) => ({
     ...g,
+    key: g.project.id,
+    device: null,
+    deviceName: null,
     folded: isFolded(g.project.id),
     page: pageFor(g.project.id, g.items, PROJECT_PAGE),
   }))
@@ -315,6 +320,62 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
             },
           ]
         : []),
+    ]
+  }
+
+  // A project's menu - right-click, the ... on its row, or a long press.
+  // Removing is here, not beside the +: it sat one slip away from a new
+  // chat. Its promise is the same - the chats stay, the folder is untouched.
+  const reveal = async (folder) => {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      await invoke('reveal_in_folder', { path: folder })
+    } catch (err) {
+      say(`Couldn't open the folder: ${err?.message ?? err}`, null, { veiled: true })
+    }
+  }
+  const collapseOthers = (key) => {
+    const others = projectViews.filter((v) => v.key !== key).map((v) => v.key)
+    setFolded((list) => others.reduce((l, k) => toggled(l, k, true), list))
+    setMore((m) => (key in m ? { [key]: m[key] } : {}))
+  }
+  const removeHere = async (v) => {
+    try {
+      await removeProject(v.project.id)
+      setFolded((list) => toggled(list, v.key, false))
+    } catch (err) {
+      say(`Couldn't remove the project: ${err?.message ?? err}`, null, { veiled: true })
+    }
+  }
+  const projectMenuItems = (v) => {
+    const folder = v.project.folders[0]
+    return [
+      { label: 'New chat here', icon: <Plus size={14} />, onSelect: () => onNewChatIn?.(v.project.id, v.device) },
+      // The file manager is the desktop app's, and the folder this
+      // computer's: a project of another machine has no folder here.
+      ...(hasTauri && !isMobile && !v.device
+        ? [{ label: 'Open folder', icon: <FolderOpen size={14} />, onSelect: () => reveal(folder) }]
+        : []),
+      {
+        label: 'Copy path',
+        icon: <Copy size={14} />,
+        onSelect: () => navigator.clipboard?.writeText(folder).catch(() => {}),
+      },
+      { divider: true },
+      {
+        label: 'Collapse all others',
+        icon: <ArrowsInLineVertical size={14} />,
+        disabled: !projectViews.some((o) => o.key !== v.key && !o.folded),
+        onSelect: () => collapseOthers(v.key),
+      },
+      { divider: true },
+      {
+        label: 'Remove project',
+        icon: <TrashSimple size={14} />,
+        hint: 'Chats stay',
+        danger: true,
+        onSelect: () => removeHere(v),
+      },
     ]
   }
 
@@ -525,67 +586,33 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
             No projects yet. <button className="sb-empty-add" onClick={onAddProject}>Add a project</button> to group its chats here.
           </p>
         )}
-        {projectViews.map(({ project, items, pinned: pinnedHere, folded: isCollapsed, page }) => {
-          const top = isCollapsed ? rollup(items.map(kindOf)) : null
+        {projectViews.map((v) => {
+          const { project, items, folded, page } = v
           return (
-            <section
-              key={project.id}
-              className={`project${drag?.over === project.id ? ' sb-drop-target' : ''}`}
-              data-drop={project.id}
+            <SidebarProject
+              key={v.key}
+              name={projectName(project)}
+              device={v.deviceName}
+              count={items.length}
+              top={folded ? rollup(items.map(kindOf)) : null}
+              folded={folded}
+              dropKey={v.device ? undefined : project.id}
+              dropping={drag?.over === project.id}
+              privacy={privacy}
+              onToggle={() => toggleProject(v.key)}
+              onNewChat={() => onNewChatIn?.(project.id, v.device)}
+              onMenu={({ x, y }) => setMenu({ x, y, group: v })}
             >
-              <button
-                className="project-head"
-                onClick={() => toggleProject(project.id)}
-                aria-expanded={!isCollapsed}
-              >
-                <span className={`project-caret${isCollapsed ? ' closed' : ''}`}>
-                  <CaretDown size={12} />
-                </span>
-                <span className="project-name pv">{project.folders[0].split(/[\\/]/).filter(Boolean).pop()}</span>
-                {/* Folded, the project still tells the truth: the most
-                    urgent state among its chats, in the chats' own dot
-                    language. */}
-                {top && (
-                  <span
-                    className={`dot dot--${top}`}
-                    role="img"
-                    aria-label={DOT_WORDS[top]}
-                    title={DOT_WORDS[top]}
-                  />
-                )}
-                {items.length > 0 && <span className="project-count">{items.length}</span>}
-              </button>
-              {/* A new chat already in this project, straight from its
-                  row: no trip through the home screen's project picker. */}
-              <button
-                type="button"
-                className="sb-project-new"
-                title={`New chat in ${project.folders[0].split(/[\\/]/).filter(Boolean).pop()}`}
-                aria-label={`New chat in ${project.folders[0].split(/[\\/]/).filter(Boolean).pop()}`}
-                onClick={() => onNewChatIn?.(project.id)}
-              >
-                <Plus size={12} weight="bold" />
-              </button>
-              {/* Unregistering keeps the chats - they fall to the flat
-                  list below; the folder on disk is never touched. */}
-              <button
-                type="button"
-                className="sb-project-remove"
-                title="Remove the project - its chats stay"
-                onClick={() => removeProject(project.id)}
-              >
-                <TrashSimple size={11} />
-              </button>
-              {!isCollapsed && page.shown.map(chatRow)}
-              {!isCollapsed && page.rest.length > 0 && moreLine(project.id, page)}
+              {!folded && page.shown.map(chatRow)}
+              {!folded && page.rest.length > 0 && moreLine(v.key, page)}
               {/* A project just added has no chats: say so quietly, and
                   leave its + (and the drop target) in place. */}
-              {!isCollapsed && items.length === 0 && (
+              {!folded && items.length === 0 && (
                 <p className="sb-empty sb-project-empty">
-                  {pinnedHere > 0 ? 'Its chats are pinned' : 'No chats yet'}
+                  {v.pinned > 0 ? 'Its chats are pinned' : 'No chats yet'}
                 </p>
               )}
-            </section>
+            </SidebarProject>
           )
         })}
 
@@ -691,7 +718,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
         <ContextMenu
           x={menu.x}
           y={menu.y}
-          items={menu.view ? viewMenuItems(menu.view) : menuItems(menu.row)}
+          items={menu.view ? viewMenuItems(menu.view) : menu.group ? projectMenuItems(menu.group) : menuItems(menu.row)}
           onClose={() => setMenu(null)}
         />
       )}

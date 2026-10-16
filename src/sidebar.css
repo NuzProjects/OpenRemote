@@ -350,9 +350,9 @@ button.side-tile:active {
   color: var(--text-3);
 }
 
-/* the Projects head: the title, the one way a folder becomes a project
-   (the +), and - per project - the unregister button. The section titles
-   stack with a little air: Projects, then the flat Chats list. */
+/* the Projects head: the title and the one way a folder becomes a project
+   (the +). The section titles stack with a little air: Projects, then the
+   flat Chats list. */
 .sb-projects-head {
   display: flex;
   align-items: center;
@@ -417,7 +417,7 @@ button.side-tile:active {
   position: relative;
 }
 
-/* A project's own new chat and unregister live on its head row, revealed
+/* A project's own new chat and menu live on its head row, revealed
    on hover and keyboard focus (and always there on touch screens, which
    have no hover). The row makes room so the name never runs under them. */
 .project:hover .project-head,
@@ -449,7 +449,7 @@ button.side-tile:active {
 
 .project:hover .sb-project-new,
 .project:focus-within .sb-project-new,
-.project:focus-within .sb-project-remove {
+.project:focus-within .sb-project-more {
   opacity: 1;
 }
 
@@ -459,7 +459,8 @@ button.side-tile:active {
 }
 
 @media (hover: none) {
-  .sb-project-new {
+  .sb-project-new,
+  .sb-project-more {
     opacity: 1;
   }
 
@@ -468,8 +469,8 @@ button.side-tile:active {
   }
 }
 
-/* Unregister: a quiet action that never touches the disk. */
-.sb-project-remove {
+/* The project's menu: a quiet ... that opens what a right click opens. */
+.sb-project-more {
   position: absolute;
   top: 6px;
   right: 6px;
@@ -486,13 +487,25 @@ button.side-tile:active {
   transition: opacity 0.12s ease;
 }
 
-.project:hover .sb-project-remove {
+.project:hover .sb-project-more {
   opacity: 1;
 }
 
-.sb-project-remove:hover {
+.sb-project-more:hover {
   background: var(--bg-active);
   color: var(--text-1);
+}
+
+/* A project of another machine wears that machine's name beside its own. */
+.project-device {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-3);
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .chat-row {
@@ -660,7 +673,7 @@ html[data-reduce-motion] .sidebar.collapsed,
 html[data-reduce-motion] .machines-reveal,
 html[data-reduce-motion] .machines-reveal > *,
 html[data-reduce-motion] .sb-project-new,
-html[data-reduce-motion] .sb-project-remove {
+html[data-reduce-motion] .sb-project-more {
   transition: none;
 }
 
@@ -681,7 +694,7 @@ button:focus-visible {
   .machines-reveal,
   .machines-reveal > *,
   .sb-project-new,
-  .sb-project-remove {
+  .sb-project-more {
     transition: none;
   }
 }
