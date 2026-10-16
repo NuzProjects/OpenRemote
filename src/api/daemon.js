@@ -23,6 +23,11 @@ const CALL_TIMEOUT_MS = 10000
 // says "not answering" long before this fires.
 const BOOT_TIMEOUT_MS = 120000
 
+// A message carrying pictures (tens of megabytes at most, as base64), or
+// a picture coming back from another device over Cloud: more than a
+// plain call's budget, still bounded.
+const UPLOAD_TIMEOUT_MS = 60000
+
 // The resume cursor of an SSE stream: the highest event seq the client
 // already holds. Only a non-negative integer counts (a digit string too,
 // since a cursor can survive a round trip through storage or a URL) -
@@ -298,18 +303,57 @@ export class DaemonApi {
   }
 
   // `mentionedChats`: the chats this message points at with @ - from now
-  // on the chat's agent may read them, and only them.
-  prompt(id, text, mentionedChats = []) {
-    return this.call('POST', `/sessions/${id}/prompts`, {
-      request_id: newRequestId(),
-      text,
-      ...(mentionedChats.length ? { mentioned_chats: mentionedChats } : {}),
+  // on the chat's agent may read them, and only them. `attachments`: the
+  // pictures riding the message, `{ kind: 'image', mime, data }` with the
+  // bytes in base64; a message of pictures can take a moment to upload.
+  prompt(id, text, mentionedChats = [], attachments = []) {
+    return this.call(
+      'POST',
+      `/sessions/${id}/prompts`,
+      {
+        request_id: newRequestId(),
+        text,
+        ...(mentionedChats.length ? { mentioned_chats: mentionedChats } : {}),
+        ...(attachments.length ? { attachments } : {}),
+      },
+      attachments.length ? { timeoutMs: UPLOAD_TIMEOUT_MS } : undefined,
+    )
+  }
+
+  // A picture from the daemon's blob store, as a Blob of its own type.
+  // The token rides the header, which an <img> can't send - the caller
+  // turns it into an object URL. `session` asks through the chat's own
+  // route, the one another device answers for a synced chat it runs.
+  async blob(sha, { session = null, mime = null } = {}) {
+    const path = session ? `/sessions/${session}/blobs/${sha}` : `/blobs/${sha}`
+    const response = await fetch(`${this.url}${this.prefix}${path}`, {
+      headers: { Authorization: `Bearer ${this.token}` },
+      signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
     })
+    if (!response.ok) {
+      const error = new Error(`HTTP ${response.status}`)
+      error.status = response.status
+      throw error
+    }
+    const bytes = await response.blob()
+    return mime && bytes.type !== mime ? new Blob([bytes], { type: mime }) : bytes
   }
 
   // Rename a chat (the composer's /rename).
   rename(id, title) {
     return this.call('POST', `/sessions/${id}/title`, { request_id: newRequestId(), title })
+  }
+
+  // Move a chat into one of its machine's projects, or out of every
+  // project with `projectId` null. A running harness restarts in the new
+  // folder - the boot budget, like resume.
+  moveChat(id, projectId) {
+    return this.call(
+      'POST',
+      `/sessions/${id}/workspace`,
+      { request_id: newRequestId(), project_id: projectId ?? null },
+      { timeoutMs: BOOT_TIMEOUT_MS },
+    )
   }
 
   // What a composer's / and @ menus offer: a chat's own, or a harness's in
@@ -359,12 +403,18 @@ export class DaemonApi {
 
   // The chat's queue - the daemon keeps it, so every device sees the same
   // one. A queued message runs as its own turn when the running one ends.
-  queue(id, text, mentionedChats = []) {
-    return this.call('POST', `/sessions/${id}/queue`, {
-      request_id: newRequestId(),
-      text,
-      ...(mentionedChats.length ? { mentioned_chats: mentionedChats } : {}),
-    })
+  queue(id, text, mentionedChats = [], attachments = []) {
+    return this.call(
+      'POST',
+      `/sessions/${id}/queue`,
+      {
+        request_id: newRequestId(),
+        text,
+        ...(mentionedChats.length ? { mentioned_chats: mentionedChats } : {}),
+        ...(attachments.length ? { attachments } : {}),
+      },
+      attachments.length ? { timeoutMs: UPLOAD_TIMEOUT_MS } : undefined,
+    )
   }
 
   queueRemove(id, item) {
@@ -386,11 +436,16 @@ export class DaemonApi {
   }
 
   // A message straight into the running turn, never through the queue.
-  steer(id, text, mentionedChats = []) {
+  steer(id, text, mentionedChats = [], attachments = []) {
     return this.call(
       'POST',
       `/sessions/${id}/steer`,
-      { request_id: newRequestId(), text, ...(mentionedChats.length ? { mentioned_chats: mentionedChats } : {}) },
+      {
+        request_id: newRequestId(),
+        text,
+        ...(mentionedChats.length ? { mentioned_chats: mentionedChats } : {}),
+        ...(attachments.length ? { attachments } : {}),
+      },
       { timeoutMs: BOOT_TIMEOUT_MS },
     )
   }
@@ -449,8 +504,14 @@ export class DaemonApi {
     return this.call('POST', '/plugins/stage', { request_id: newRequestId(), source }, { timeoutMs: 180_000 })
   }
 
-  installStagedPlugin(stageId) {
-    return this.call('POST', `/plugins/stage/${stageId}/install`, { request_id: newRequestId() })
+  // Who it is for: { scope: 'global' | 'machine' | 'project_local' |
+  // 'project', project } - the daemon's default is this machine.
+  installStagedPlugin(stageId, { scope, project } = {}) {
+    return this.call('POST', `/plugins/stage/${stageId}/install`, {
+      request_id: newRequestId(),
+      ...(scope ? { scope } : {}),
+      ...(project ? { project } : {}),
+    })
   }
 
   cancelStagedPlugin(stageId) {
@@ -465,6 +526,59 @@ export class DaemonApi {
 
   removePlugin(id) {
     return this.call('POST', `/plugins/${encodeURIComponent(id)}/remove`, { request_id: newRequestId() })
+  }
+
+  // ---- JavaScript plugins (the frames the console hosts) ----
+
+  // One of a plugin's own files, as bytes: its manifest, its page, its
+  // scripts and pictures. The token rides as everywhere else - the frame
+  // never sees it; the console reads the file and hands it over.
+  async pluginFile(id, path) {
+    const segments = String(path).split('/').map(encodeURIComponent).join('/')
+    const response = await fetch(`${this.url}${this.prefix}/plugins/${encodeURIComponent(id)}/files/${segments}`, {
+      headers: { Authorization: `Bearer ${this.token}` },
+      signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+    })
+    if (!response.ok) {
+      let words = null
+      try {
+        words = (await response.json())?.error ?? null
+      } catch {
+        /* not JSON: the status says it */
+      }
+      const error = new Error(words ?? `${path} could not be read (HTTP ${response.status})`)
+      error.status = response.status
+      throw error
+    }
+    return { type: response.headers.get('content-type') ?? '', bytes: await response.arrayBuffer() }
+  }
+
+  // The settings a plugin declares: every value, and for each secret only
+  // whether it is set - a secret never comes back to the console.
+  pluginSettings(id) {
+    return this.call('GET', `/plugins/${encodeURIComponent(id)}/settings`)
+  }
+
+  // A secret is replaced only when `values` names it.
+  savePluginSettings(id, values) {
+    return this.call('POST', `/plugins/${encodeURIComponent(id)}/settings`, { request_id: newRequestId(), values })
+  }
+
+  // A plugin's request, made by the daemon (only for a plugin given the
+  // network). A transcription can take a while: the daemon allows up to
+  // five minutes, and this waits a little longer than that.
+  pluginFetch(id, request) {
+    return this.call(
+      'POST',
+      `/plugins/${encodeURIComponent(id)}/fetch`,
+      { request_id: newRequestId(), ...request },
+      { timeoutMs: 330_000 },
+    )
+  }
+
+  // A chat read for a plugin given reading chats.
+  pluginChat(id, chatId) {
+    return this.call('GET', `/plugins/${encodeURIComponent(id)}/chats/${encodeURIComponent(chatId)}`)
   }
 
   // ---- marketplaces (Plugins > Discover, Marketplaces) ----

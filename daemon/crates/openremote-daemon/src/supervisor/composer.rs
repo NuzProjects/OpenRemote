@@ -51,6 +51,9 @@ pub struct CommandEntry {
     pub aliases: Vec<String>,
     /// `harness` (its own) or `plugin` (an installed plugin's).
     pub source: &'static str,
+    /// `command` or `skill`: a harness lists the user's whole skill library
+    /// beside its commands, and the / menu keeps the two apart.
+    pub kind: &'static str,
     /// The plugin's id, for a plugin's command.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plugin: Option<String>,
@@ -171,23 +174,21 @@ impl Supervisor {
                 "'{harness}' is not installed on this machine"
             )));
         };
-        let cwd = workspace.unwrap_or_else(Self::home_dir);
-        let (plugins, data_dir) = self.with_store(|s| {
-            let plugins: Vec<openremote_core::InstalledPlugin> = s
-                .installed_plugins()
-                .into_iter()
-                .filter(|p| p.enabled)
-                .cloned()
-                .collect();
-            (plugins, s.dir().to_path_buf())
+        // The plugins a chat here gets: this machine's and, in a project,
+        // that project's.
+        let active = self.with_store(|s| {
+            let data_dir = s.dir().to_path_buf();
+            crate::plugin_runtime::scope::active(s, &data_dir, workspace.as_deref())
         });
-        // Each enabled plugin: its id, its folder, the name its commands carry.
-        let folders: Vec<(String, PathBuf, String)> = plugins
-            .iter()
-            .map(|p| {
-                let dir = crate::plugins::plugin_dir(&data_dir, &p.marketplace, &p.name);
-                let prefix = manifest_name(&dir).unwrap_or_else(|| p.name.clone());
-                (p.id(), dir, prefix)
+        let cwd = workspace.unwrap_or_else(Self::home_dir);
+        let plugins: Vec<openremote_core::InstalledPlugin> =
+            active.iter().map(|a| a.plugin.clone()).collect();
+        // Each plugin: its id, its folder, the name its commands carry.
+        let folders: Vec<(String, PathBuf, String)> = active
+            .into_iter()
+            .map(|a| {
+                let prefix = manifest_name(&a.dir).unwrap_or_else(|| a.plugin.name.clone());
+                (a.plugin.id(), a.dir, prefix)
             })
             .collect();
         let runs_plugins = backend.runs_plugins();
@@ -248,6 +249,7 @@ impl Supervisor {
             &folders,
             settings_servers,
             error,
+            &local_skills(&cwd),
         ))
     }
 
@@ -347,12 +349,40 @@ impl Supervisor {
                     "this chat was not pointed at {wanted}; the user points a chat at another with @"
                 ))
             })?;
-        let chat = self.session(&target)?;
+        self.condensed_chat(&target)
+    }
+
+    /// A chat condensed to its messages, as an agent or a plugin with the
+    /// power to read chats is handed it.
+    pub fn condensed_chat(&self, id: &SessionId) -> Result<String, SupervisorError> {
+        let chat = self.session(id)?;
         let events = self
-            .with_store(|s| s.events_after(&target, None))
+            .with_store(|s| s.events_after(id, None))
             .map_err(store_error)?;
         Ok(condensed(&chat, &events))
     }
+}
+
+/// The skills a harness lists as commands, by folder name: the user's own
+/// (`~/.claude/skills`) and the project's (`.claude/skills`). Plugins'
+/// skills are known from their own folders.
+fn local_skills(cwd: &std::path::Path) -> BTreeSet<String> {
+    let mut found = BTreeSet::new();
+    let roots = [
+        Supervisor::home_dir().join(".claude").join("skills"),
+        cwd.join(".claude").join("skills"),
+    ];
+    for root in roots {
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if entry.path().join("SKILL.md").is_file() {
+                found.insert(entry.file_name().to_string_lossy().into_owned());
+            }
+        }
+    }
+    found
 }
 
 /// The / and @ lists: the harness's own entries (a plugin's when its name
@@ -366,7 +396,34 @@ fn build_view(
     folders: &[(String, PathBuf, String)],
     settings_servers: Vec<String>,
     error: Option<String>,
+    skills: &BTreeSet<String>,
 ) -> CommandsView {
+    // Every plugin's own parts, read once: which of its names are skills.
+    let parts: Vec<(String, crate::plugins::PluginParts)> = folders
+        .iter()
+        .map(|(id, dir, prefix)| (id.clone(), crate::plugins::plugin_parts(dir, prefix)))
+        .collect();
+    let plugin_skills: BTreeSet<&str> = parts
+        .iter()
+        .flat_map(|(_, p)| p.skills.iter().map(String::as_str))
+        .collect();
+    let plugin_commands: BTreeSet<&str> = parts
+        .iter()
+        .flat_map(|(_, p)| p.commands.iter().map(|c| c.name.as_str()))
+        .filter(|n| !plugin_skills.contains(n))
+        .collect();
+    // A plugin-scoped name the harness lists from a plugin of its own is a
+    // skill unless an installed plugin says it's a command file.
+    let kind = |name: &str| {
+        if skills.contains(name)
+            || plugin_skills.contains(name)
+            || (name.contains(':') && !plugin_commands.contains(name))
+        {
+            "skill"
+        } else {
+            "command"
+        }
+    };
     let owner = |name: &str| {
         folders
             .iter()
@@ -385,6 +442,7 @@ fn build_view(
             } else {
                 "harness"
             },
+            kind: kind(&c.name),
             plugin,
             available: true,
             why: None,
@@ -421,12 +479,16 @@ fn build_view(
             plugin: None,
         })
         .collect();
-    for (id, dir, prefix) in folders {
-        let parts = crate::plugins::plugin_parts(dir, prefix);
+    for (id, parts) in parts {
         for c in parts.commands {
             if seen_commands.insert(c.name.clone()) {
                 commands.push(CommandEntry {
                     source: "plugin",
+                    kind: if parts.skills.contains(&c.name) {
+                        "skill"
+                    } else {
+                        "command"
+                    },
                     plugin: Some(id.clone()),
                     available: runs_plugins,
                     why: unavailable.clone(),
@@ -472,6 +534,23 @@ fn build_view(
 /// Past the limit the oldest part is cut - the end of a chat is the part
 /// an agent pointed at it most likely needs.
 fn condensed(chat: &Session, events: &[Event]) -> String {
+    format!(
+        "Chat \"{}\" ({}{}), id {}\n{}",
+        chat.title.as_deref().unwrap_or("untitled"),
+        chat.harness,
+        chat.model
+            .as_deref()
+            .map(|m| format!(", {m}"))
+            .unwrap_or_default(),
+        chat.id,
+        transcript(events, READ_LIMIT)
+    )
+}
+
+/// A chat's messages in order, each tool call a one-line note. Past
+/// `limit` bytes the oldest part is cut - the end of a chat is the part a
+/// reader most likely needs. Empty when the chat has no messages.
+pub(super) fn transcript(events: &[Event], limit: usize) -> String {
     let mut body = String::new();
     for event in events {
         match &event.payload {
@@ -488,24 +567,14 @@ fn condensed(chat: &Session, events: &[Event]) -> String {
             _ => {}
         }
     }
-    if body.len() > READ_LIMIT {
-        let mut cut = body.len() - READ_LIMIT;
+    if body.len() > limit {
+        let mut cut = body.len() - limit;
         while !body.is_char_boundary(cut) {
             cut += 1;
         }
         body = format!("[earlier messages cut]\n{}", &body[cut..]);
     }
-    format!(
-        "Chat \"{}\" ({}{}), id {}\n{}",
-        chat.title.as_deref().unwrap_or("untitled"),
-        chat.harness,
-        chat.model
-            .as_deref()
-            .map(|m| format!(", {m}"))
-            .unwrap_or_default(),
-        chat.id,
-        body
-    )
+    body
 }
 
 #[cfg(test)]
@@ -574,6 +643,7 @@ mod tests {
             &folders,
             vec!["docs@m".into()],
             None,
+            &BTreeSet::new(),
         );
         let by = |n: &str| view.commands.iter().find(|c| c.name == n).unwrap();
         assert_eq!(by("compact").source, "harness");
@@ -612,6 +682,7 @@ mod tests {
             &folders,
             vec![],
             None,
+            &BTreeSet::new(),
         );
         let jot = dimmed
             .commands

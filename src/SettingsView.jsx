@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'react'
 import AboutModal from './AboutModal.jsx'
+import UpdatesRow from './UpdatesRow.jsx'
 import McpServersSection from './McpServersSection.jsx'
+import PluginSettings from './PluginSettings.jsx'
+import { usePlugins } from './plugins-host.jsx'
+import { settingsAnchor } from './plugin-runtime.js'
+import BrowserSettings from './BrowserSettings.jsx'
 import DeleteChatModal from './DeleteChatModal.jsx'
 import SignInModal from './SignInModal.jsx'
 import PickerMenu from './PickerMenu.jsx'
@@ -29,7 +34,7 @@ import './panels.css'
 import './settings.css'
 import './keyboard.css'
 import { useKeyboard, isMac } from './keyboard.jsx'
-import { ACTIONS, GROUPS, comboFromEvent, comboLabel, isOverridden } from './shortcuts.js'
+import { CATALOG, GROUPS, comboFromEvent, comboLabel, isOverridden } from './shortcuts.js'
 
 // The harnesses whose own login command the daemon can relay - the
 // Sign-in action renders only there (no dead UI elsewhere).
@@ -42,17 +47,23 @@ const SECTIONS = [
   { id: 'appearance', label: 'Appearance' },
   { id: 'startup', label: 'Startup' },
   { id: 'keyboard', label: 'Keyboard' },
+  { id: 'browser', label: 'Browser' },
   { id: 'cloud', label: 'Cloud' },
   { id: 'daemon', label: 'Daemon' },
   { id: 'harnesses', label: 'Harnesses' },
   { id: 'mcp-servers', label: 'MCP servers' },
+  // Shown only when an installed plugin declares settings; each such
+  // plugin gets its own entry under it.
+  { id: 'plugins', label: 'Plugins' },
   { id: 'archived', label: 'Archived chats' },
+  { id: 'confirmations', label: 'Confirmations' },
   { id: 'this-install', label: 'This install' },
 ]
 
 // A phone runs no harnesses and has no daemon of its own to manage or
-// start with the system: its settings are how it looks and its account.
-const PHONE_SECTIONS = new Set(['appearance', 'cloud', 'this-install'])
+// start with the system: its settings are how it looks, its account, and
+// what it asks before acting.
+const PHONE_SECTIONS = new Set(['appearance', 'cloud', 'confirmations', 'this-install'])
 
 export default function SettingsView({ onReplay, onOpenChat }) {
   const privacy = usePrivacyMode()
@@ -73,6 +84,8 @@ export default function SettingsView({ onReplay, onOpenChat }) {
     deleteChat,
   } = useConsole()
   const [deleting, setDeleting] = useState(null)
+  // The installed plugins that declare settings (Settings > Plugins).
+  const pluginSettings = usePlugins()?.settingsPlugins ?? []
   const archivedRows = archivedSessions(sessions, archived)
   const [confirmSignOut, setConfirmSignOut] = useState(false)
   const inCloud = signedIn(cloud)
@@ -116,7 +129,7 @@ export default function SettingsView({ onReplay, onOpenChat }) {
       const displaced = kb.rebind(capturing, combo)
       setMoved(
         displaced.length
-          ? { id: capturing, from: displaced.map((id) => ACTIONS.find((a) => a.id === id)?.label ?? id).join(', ') }
+          ? { id: capturing, from: displaced.map((id) => CATALOG.find((a) => a.id === id)?.label ?? id).join(', ') }
           : null,
       )
       setCapturing(null)
@@ -293,25 +306,36 @@ export default function SettingsView({ onReplay, onOpenChat }) {
   return (
     <div className="settings">
       <nav className="stg-nav" aria-label="Settings sections">
-        {(isMobile ? SECTIONS.filter((s) => PHONE_SECTIONS.has(s.id)) : SECTIONS).map((s) => (
-          <a
-            key={s.id}
-            href={`#stg-${s.id}`}
-            className="stg-nav-btn"
-            onClick={
-              // On a phone a hash link would be a history entry, and the
-              // back button would land on it.
-              isMobile
-                ? (e) => {
-                    e.preventDefault()
-                    document.getElementById(`stg-${s.id}`)?.scrollIntoView({ behavior: 'smooth' })
-                  }
-                : undefined
-            }
-          >
-            {s.label}
-          </a>
-        ))}
+        {(isMobile ? SECTIONS.filter((s) => PHONE_SECTIONS.has(s.id)) : SECTIONS)
+          // The browser lives in the desktop app: no section without it.
+          .filter((s) => s.id !== 'browser' || hasTauri)
+          .filter((s) => s.id !== 'plugins' || pluginSettings.length > 0)
+          .flatMap((s) => [
+            { key: s.id, anchor: `stg-${s.id}`, label: s.label, sub: false },
+            // Settings > Plugins > <name>: each plugin's own entry.
+            ...(s.id === 'plugins'
+              ? pluginSettings.map((r) => ({ key: r.plugin.id, anchor: settingsAnchor(r.plugin.id), label: r.name, sub: true }))
+              : []),
+          ])
+          .map((link) => (
+            <a
+              key={link.key}
+              href={`#${link.anchor}`}
+              className={link.sub ? 'stg-nav-btn stg-nav-sub' : 'stg-nav-btn'}
+              onClick={
+                // On a phone a hash link would be a history entry, and the
+                // back button would land on it.
+                isMobile
+                  ? (e) => {
+                      e.preventDefault()
+                      document.getElementById(link.anchor)?.scrollIntoView({ behavior: 'smooth' })
+                    }
+                  : undefined
+              }
+            >
+              {link.label}
+            </a>
+          ))}
       </nav>
       <div className="panel stg-panel">
 
@@ -623,10 +647,15 @@ export default function SettingsView({ onReplay, onOpenChat }) {
         Click an action, then press its new keys. A key another action holds moves here.
         Backspace clears a key, Esc cancels.
       </p>
-      {GROUPS.map((group) => (
+      {GROUPS.filter((group) => group.id !== 'browser' || hasTauri).map((group) => (
         <div key={group.id} className="pn-list pn-list--tight kb-set">
           <div className="kb-group-label">{group.label}</div>
-          {ACTIONS.filter((a) => a.group === group.id).map((a) => (
+          {group.id === 'browser' && (
+            <div className="pn-detail kb-group-note">
+              These act while the browser has focus. Everywhere else the same keys keep their meaning above.
+            </div>
+          )}
+          {CATALOG.filter((a) => a.group === group.id).map((a) => (
             <div className="pn-row" key={a.id}>
               <div>
                 <div className="pn-name">{a.label}</div>
@@ -685,6 +714,13 @@ export default function SettingsView({ onReplay, onOpenChat }) {
         </div>
       )}
       </>
+      )}
+
+      {!isMobile && hasTauri && (
+        <>
+          <h2 className="pn-section" id="stg-browser">Browser</h2>
+          <BrowserSettings />
+        </>
       )}
 
       <h2 className="pn-section" id="stg-cloud">Cloud</h2>
@@ -831,6 +867,17 @@ export default function SettingsView({ onReplay, onOpenChat }) {
         </>
       )}
 
+      {!isMobile && pluginSettings.length > 0 && (
+        <>
+          <h2 className="pn-section" id="stg-plugins">Plugins</h2>
+          <p className="pn-lead">
+            Each plugin&apos;s own settings. A secret, like an API key, stays with this computer&apos;s
+            OpenRemote: it is never shown again, and goes only into the plugin&apos;s own requests.
+          </p>
+          <PluginSettings />
+        </>
+      )}
+
       <h2 className="pn-section" id="stg-archived">Archived chats</h2>
       <div className="pn-list pn-list--tight">
         {archivedRows.length === 0 ? (
@@ -868,6 +915,28 @@ export default function SettingsView({ onReplay, onOpenChat }) {
         <div className="pn-detail">Archived chats are hidden on this computer only. They keep running and syncing as usual. Delete removes a synced chat from every device; a private chat can't be deleted.</div>
       </div>
 
+      {/* What OpenRemote asks before it acts, on this device. A dialog's
+          "Don't show this again" turns its question off; here it comes
+          back. */}
+      <h2 className="pn-section" id="stg-confirmations">Confirmations</h2>
+      <div className="pn-list pn-list--tight">
+        <div className="pn-row">
+          <div>
+            <div className="pn-name">Ask before moving a chat</div>
+            <div className="pn-detail">
+              A chat moved to another project works in that project&apos;s folder from its next message.
+            </div>
+          </div>
+          <button
+            type="button"
+            className={prefs.ask_move_chat ? 'pn-btn on' : 'pn-btn'}
+            onClick={() => setPref({ ask_move_chat: !prefs.ask_move_chat })}
+          >
+            {prefs.ask_move_chat ? 'On' : 'Off'}
+          </button>
+        </div>
+      </div>
+
       <h2 className="pn-section" id="stg-this-install">This install</h2>
       <div className="pn-list pn-list--tight">
         <div className="pn-row">
@@ -877,6 +946,7 @@ export default function SettingsView({ onReplay, onOpenChat }) {
           </div>
           <button type="button" className="pn-btn" onClick={() => setAbout(true)}>About</button>
         </div>
+        {!isMobile && <UpdatesRow />}
         {!isMobile && (
           <div className="pn-row">
             <div>

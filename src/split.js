@@ -97,12 +97,50 @@ function prune(node, leafId) {
 }
 
 export function setLeafView(layout, leafId, view) {
-  const root = mapNode(layout.root, (node) =>
+  // The browser moves to this pane rather than show in two.
+  const base =
+    view === BROWSER
+      ? leaves(layout.root)
+          .filter((l) => l.view === BROWSER && l.id !== leafId)
+          .reduce((l, leaf) => closeLeaf(l, leaf.id), layout)
+      : layout
+  const root = mapNode(base.root, (node) =>
     node.type === 'leaf' && node.id === leafId && node.view !== null && node.view !== view
       ? { ...node, view }
       : node,
   )
-  return root === layout.root ? layout : { ...layout, root }
+  return root === base.root ? base : { ...base, root }
+}
+
+// The built-in browser is one set of pages, so one pane holds it at a
+// time: opening it where a pane already has it shows that pane instead.
+
+export const BROWSER = 'browser'
+
+/** The pane showing the browser, or null - the primary's view comes from navigation. */
+export function browserPane(layout, primaryView) {
+  return leaves(layout.root).find((l) => (l.view ?? primaryView) === BROWSER) ?? null
+}
+
+/**
+ * Open the browser in a new pane beside `leafId` - or focus the pane that
+ * already holds it. At MAX_PANES nothing changes (the caller decides).
+ */
+export function openBrowserBeside(layout, leafId, primaryView, dir = 'row') {
+  const holder = browserPane(layout, primaryView)
+  if (holder) return focusLeaf(layout, holder.id)
+  return splitLeaf(layout, leafId, dir, BROWSER)
+}
+
+/**
+ * Keep the browser to one pane: when the primary shows it (the user went
+ * there), a split pane that held it closes; of several split panes, the
+ * first keeps it.
+ */
+export function singleBrowser(layout, primaryView) {
+  const holders = leaves(layout.root).filter((l) => l.view === BROWSER)
+  const extra = primaryView === BROWSER ? holders : holders.slice(1)
+  return extra.reduce((l, leaf) => closeLeaf(l, leaf.id), layout)
 }
 
 export function focusLeaf(layout, leafId) {

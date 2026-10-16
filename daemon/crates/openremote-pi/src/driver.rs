@@ -19,7 +19,9 @@ use std::time::Duration;
 
 use openremote_core::{DecisionKind, DecisionOption, TurnOutcome};
 use openremote_harness::events::{ApprovalRequest, DecisionSpec};
-use openremote_harness::{DriverError, DriverEvent, Resolution, SessionSettings, SpawnOptions};
+use openremote_harness::{
+    DriverError, DriverEvent, Prompt, Resolution, SessionSettings, SpawnOptions,
+};
 use serde_json::{Value, json};
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
@@ -253,7 +255,8 @@ impl Driver {
     }
 
     /// Fire one prompt; pi's turn boundary arrives as `message_end`.
-    pub async fn send_prompt(&mut self, text: &str) -> Result<(), DriverError> {
+    pub async fn send_prompt(&mut self, prompt: &Prompt) -> Result<(), DriverError> {
+        let text = prompt.text_only("Pi Agent")?;
         self.write(json!({"type": "prompt", "message": text})).await
     }
 
@@ -600,6 +603,7 @@ async fn read_stdout(
                     .unwrap_or_default()
                     .to_string(),
                 is_error: false,
+                images: Vec::new(),
             }),
             "extension_ui_request" => {
                 let id = frame

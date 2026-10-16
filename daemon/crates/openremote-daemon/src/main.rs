@@ -106,6 +106,7 @@ async fn serve(agent: bool) -> ExitCode {
             shutdown_signal().await;
             eprintln!("openremote-daemon: stopping");
             app.supervisor.shutdown_all().await;
+            app.plugin_runtime.shutdown().await;
             std::process::exit(0);
         });
     } else {
@@ -135,6 +136,7 @@ async fn serve(agent: bool) -> ExitCode {
             eprintln!("openremote-daemon: stdin closed, exiting");
             app.browser.disconnect();
             app.supervisor.shutdown_all().await;
+            app.plugin_runtime.shutdown().await;
             std::process::exit(0);
         });
     }

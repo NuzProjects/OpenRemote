@@ -37,6 +37,23 @@ windows = { version = "0.62", features = ["Win32_System_Com", "Win32_UI_Input_Ke
 # A page's icon reaches the console as a data URL.
 base64 = "0.22"
 
+# Updates: signed releases checked and installed from the app (the
+# release workflow signs them once the signing key exists). The system's
+# own TLS on Windows and macOS keeps the download client small; macOS
+# updates arrive as a .app.tar.gz, so it also unpacks archives.
+[target.'cfg(windows)'.dependencies.tauri-plugin-updater]
+version = "2"
+default-features = false
+features = ["native-tls"]
+
+[target.'cfg(target_os = "macos")'.dependencies.tauri-plugin-updater]
+version = "2"
+default-features = false
+features = ["native-tls", "zip"]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tauri-plugin-updater = "2"
+
 [target.'cfg(any(windows, target_os = "linux"))'.dependencies]
 # A second launch shows the running window instead of starting a second
 # daemon on the same data.
@@ -48,10 +65,13 @@ tauri-plugin-single-instance = "2"
 # its own URI scheme.
 openremote-daemon = { path = "../daemon/crates/openremote-daemon" }
 openremote-cloud = { path = "../daemon/crates/openremote-cloud" }
+# The built-in browser's messages with the daemon, and the page-side helper
+# agents read pages through.
+openremote-browser = { path = "../daemon/crates/openremote-browser" }
 tauri-plugin-deep-link = "2"
 tauri-plugin-opener = "2"
 android_system_properties = "0.1"
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = ["time", "sync"] }
 
 [lib]
 name = "openremote_ui_desktop_lib"

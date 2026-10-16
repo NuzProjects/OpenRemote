@@ -13,8 +13,12 @@ mod browser;
 mod desktop;
 #[cfg(target_os = "android")]
 mod mobile;
+#[cfg(target_os = "android")]
+mod mobile_browser;
 #[cfg(desktop)]
 mod tray;
+#[cfg(desktop)]
+mod updates;
 
 /// What the shell knows about the running daemon. The console asks for
 /// this once on boot.

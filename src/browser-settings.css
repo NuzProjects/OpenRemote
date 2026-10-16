@@ -1,0 +1,99 @@
+/* Settings > Browser and the "Clear browsing data" dialog it shares with
+   the history page. */
+
+.bws-sites {
+  display: flex;
+  flex-direction: column;
+  margin-top: 10px;
+}
+
+.bws-site {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 40px;
+  border-top: 1px solid var(--line);
+}
+
+.bws-site-host {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-1);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bws-site-kind {
+  flex: none;
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+
+.bw-dialog {
+  width: 420px;
+}
+
+/* The time range, as chips. */
+.bw-clear-ranges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 14px 0 6px;
+}
+
+.bw-clear-ranges button {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.bw-clear-ranges button:hover {
+  color: var(--text-1);
+}
+
+.bw-clear-ranges button.on {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: var(--bg-active);
+  color: var(--text-1);
+}
+
+.bw-clear-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 12px;
+  cursor: pointer;
+}
+
+.bw-clear-row input {
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+
+.bw-clear-name {
+  display: block;
+  color: var(--text-1);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.bw-clear-detail {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.bw-dialog-error {
+  margin: 10px 0 0;
+  color: var(--red, #f87171);
+  font-size: 12.5px;
+}

@@ -392,6 +392,26 @@
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
+/* who a plugin is for: the scope picker in the review, and the project
+   a project scope names, under it */
+.pg-scope .pn-pick button {
+  padding: 6px 8px;
+}
+
+.pg-scope-projects {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+/* a repo's plugin waiting for this computer's review */
+.pg-found {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 @media (max-width: 900px) {
   .pg-discover {
     grid-template-columns: minmax(0, 1fr);
