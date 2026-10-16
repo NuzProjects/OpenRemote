@@ -30,6 +30,15 @@ export function titleFrom(text) {
   return first.length > 44 ? `${first.slice(0, 44).trimEnd()}…` : first
 }
 
+/// The words a chat's generated name comes from: the first user message
+/// that has any (a message of pictures alone names nothing), or null.
+export function firstPromptText(timeline) {
+  for (const item of timeline ?? []) {
+    if (item.kind === 'message' && item.role === 'user' && item.text?.trim()) return item.text
+  }
+  return null
+}
+
 /// A fresh chat view over one daemon session (plus any known events).
 export function chatFromSession(session) {
   const chat = {
@@ -93,7 +102,9 @@ export function mergeSessionIntoChat(existing, session) {
   const fresh = chatFromSession(session)
   return {
     ...fresh,
-    title: existing.title ?? fresh.title,
+    // The daemon owns a chat's name (a rename changes it on every device);
+    // the folded one only stands in until the poll carries a name.
+    title: fresh.title ?? existing.title,
     timeline: existing.timeline,
     foldedSeq: existing.foldedSeq,
     pendingDecisionId: existing.pendingDecisionId,
@@ -179,6 +190,8 @@ export function foldEvent(chat, event) {
       chat.workspace = session.workspace ?? null
       chat.project = workspaceName(session.workspace)
       chat.fast = session.fast ?? chat.fast
+      // A rename: the name every device shows.
+      if (session.title) chat.title = session.title
       // An empty list is left off the wire: absent is none (a move into a
       // fresh conversation drops the grants the old one had).
       chat.approvedTools = session.approved_tools ?? []

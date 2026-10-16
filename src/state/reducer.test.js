@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { chatFromSession, chatStatus, foldEvent, mergeSessionIntoChat, railItems, titleFrom, vanishedChatIds, workspaceName } from './reducer.js'
+import { chatFromSession, chatStatus, firstPromptText, foldEvent, mergeSessionIntoChat, railItems, titleFrom, vanishedChatIds, workspaceName } from './reducer.js'
 
 const session = (over = {}) => ({
   id: 's1',
@@ -455,4 +455,29 @@ test('the queue folds from the session and from queue.changed, and an empty one 
   foldEvent(chat, { seq: 3, type: 'queue.changed', queue: [{ id: 'q2', text: 'third', at: 2 }], paused: false })
   foldEvent(chat, { seq: 4, type: 'session.updated', session: { id: 's1', harness: 'claude', status: 'working' } })
   assert.deepEqual(chat.queue.map((m) => m.text), ['third'])
+})
+
+test('a rename reaches the chat from the stream and from the poll', () => {
+  let chat = chatFromSession(session())
+  chat = foldEvent(chat, event(1, { type: 'message.added', message: { id: 'm1', turn: 0, role: 'user', text: 'fix the failing test' } }))
+  assert.equal(chat.title, 'fix the failing test')
+  // The rename lands as a session.updated carrying the new name...
+  chat = foldEvent(chat, event(2, { type: 'session.updated', session: session({ title: 'Flaky test' }) }))
+  assert.equal(chat.title, 'Flaky test')
+  // ...a later update that carries no name leaves it be...
+  chat = foldEvent(chat, event(3, { type: 'session.updated', session: session() }))
+  assert.equal(chat.title, 'Flaky test')
+  // ...and so does a poll, which wins over the folded name when it has one.
+  assert.equal(mergeSessionIntoChat(chat, session()).title, 'Flaky test')
+  assert.equal(mergeSessionIntoChat(chat, session({ title: 'From another device' })).title, 'From another device')
+})
+
+test('a chat is named from its first message with words', () => {
+  let chat = chatFromSession(session())
+  assert.equal(firstPromptText(chat.timeline), null)
+  chat = foldEvent(chat, event(1, { type: 'message.added', message: { id: 'm1', turn: 0, role: 'user', text: '   ' } }))
+  chat = foldEvent(chat, event(2, { type: 'message.added', message: { id: 'm2', turn: 0, role: 'assistant', text: 'Hello' } }))
+  assert.equal(firstPromptText(chat.timeline), null, 'a picture alone, or the agent, names nothing')
+  chat = foldEvent(chat, event(3, { type: 'message.added', message: { id: 'm3', turn: 1, role: 'user', text: 'fix the failing test\nthen the flaky one' } }))
+  assert.equal(titleFrom(firstPromptText(chat.timeline)), 'fix the failing test')
 })
