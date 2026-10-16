@@ -760,17 +760,21 @@ impl Supervisor {
         if !got.is_empty() {
             return Ok(self.wait_answer(caller, got, None));
         }
-        let working = |tree: &Tree| {
-            tree.descendants(caller)
-                .iter()
-                .any(|s| matches!(s.status, SessionStatus::Working | SessionStatus::Starting))
+        // A worker has a turn open while it works or waits on the user.
+        let active = |tree: &Tree| {
+            tree.descendants(caller).iter().any(|s| {
+                matches!(
+                    s.status,
+                    SessionStatus::Working | SessionStatus::Starting | SessionStatus::Waiting
+                )
+            })
         };
-        if !working(&tree) {
+        if !active(&tree) {
             return Ok(self.wait_answer(
                 caller,
                 Vec::new(),
                 Some(
-                    "None of your workers is working right now, so there is nothing to wait for."
+                    "None of your workers has a turn running, so there is nothing to wait for."
                         .into(),
                 ),
             ));
@@ -801,6 +805,18 @@ impl Supervisor {
                 && self.current_turn(caller) == turn;
             if !in_turn {
                 return Ok("Your turn ended while you were waiting; any report that arrives reaches you as a message.".into());
+            }
+            // Everyone under the lead ended without a report for this wait (the
+            // user stopped them): a report may still be a moment behind the
+            // status that made it.
+            if !active(&Tree::new(self.sessions())) {
+                tokio::time::sleep(Duration::from_millis(400)).await;
+                let got = self.take_mailbox(caller);
+                return Ok(self.wait_answer(
+                    caller,
+                    got,
+                    Some("None of your workers has a turn running any more.".into()),
+                ));
             }
             let now = Instant::now();
             if now >= deadline {
