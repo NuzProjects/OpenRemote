@@ -243,12 +243,16 @@ export default function BrowserPhone() {
     const before = shownNative.current
     shownNative.current = wanted
     if (barRef.current) barRef.current.style.transform = ''
+    // Each command runs on its own in the shell, so a quick second switch
+    // could overtake this one: each step goes only while it is still the
+    // page wanted.
+    const latest = () => shownNative.current === wanted
     ;(async () => {
       if (before && before !== wanted) await call('browser_hide', { tab: before })
       const bounds = rect()
-      if (wanted && bounds) {
+      if (wanted && bounds && latest()) {
         await call('browser_set_bounds', { tab: wanted, bounds })
-        await call('browser_show', { tab: wanted, focus: false })
+        if (latest()) await call('browser_show', { tab: wanted, focus: false })
       }
     })()
   }, [wanted])
