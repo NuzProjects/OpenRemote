@@ -671,6 +671,12 @@ fn build_argv(opts: &SpawnOptions) -> Vec<std::ffi::OsString> {
                 .into(),
         );
     }
+    if !opts.allowed_tools.is_empty() {
+        // Claude's own allow-list: these never reach the permission
+        // prompt (it ignores an MCP tool's read-only hint).
+        argv.push("--allowedTools".into());
+        argv.push(opts.allowed_tools.join(",").into());
+    }
     for dir in &opts.plugin_dirs {
         // One flag per plugin rather than the folder that holds them all:
         // a plugin the user turned off sits in that folder too.
@@ -910,6 +916,7 @@ mod tests {
             fast: false,
             mcp_servers: Vec::new(),
             plugin_dirs: Vec::new(),
+            allowed_tools: Vec::new(),
         };
         let argv = build_argv(&opts);
         let joined = argv

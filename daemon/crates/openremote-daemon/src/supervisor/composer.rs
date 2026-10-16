@@ -135,6 +135,17 @@ impl Supervisor {
         servers
     }
 
+    /// The tools a chat runs without asking: OpenRemote's browser tools
+    /// that only read (reading, hovering, scrolling, switching tabs), named
+    /// as its MCP server's tools.
+    pub(super) fn allowed_tools(&self) -> Vec<String> {
+        if self.controls.get().is_some() {
+            crate::browser::tools::reading_tool_names("openremote")
+        } else {
+            Vec::new()
+        }
+    }
+
     /// What `/` and `@` offer for a chat on `harness` in `workspace`.
     pub async fn commands(
         &self,
