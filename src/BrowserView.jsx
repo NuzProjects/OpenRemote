@@ -680,7 +680,7 @@ function BrowserDesktop({ paneFocused }) {
           precapture={precapture}
         />
       )}
-      {!full && barShown && <BrowserBookmarksBar marks={data.bookmarks} icons={icons} act={act} />}
+      {!full && barShown && <BrowserBookmarksBar marks={data.bookmarks} icons={icons} act={act} precapture={precapture} />}
       {/* A site's request shows even in full screen: a call that went full
           screen and then asks for the camera still needs an answer. */}
       {prompt && (

@@ -14,7 +14,7 @@ export function MarkIcon({ url, icons, size = 14 }) {
   return icon ? <img className="bw-favicon" src={icon} alt="" /> : <Globe size={size} className="bw-tab-icon" />
 }
 
-export default function BrowserBookmarksBar({ marks, icons, act }) {
+export default function BrowserBookmarksBar({ marks, icons, act, precapture }) {
   const bar = inFolder(marks, 'bar')
   const other = inFolder(marks, 'other')
   const listRef = useRef(null)
@@ -39,7 +39,8 @@ export default function BrowserBookmarksBar({ marks, icons, act }) {
   }, [marks])
 
   return (
-    <div className="bw-marks" aria-label="Bookmarks bar">
+    // Its menus cover the page: a picture is taken as the pointer arrives.
+    <div className="bw-marks" aria-label="Bookmarks bar" onPointerEnter={precapture}>
       <div className="bw-marks-list" ref={listRef}>
         {bar.map((m, i) => (
           <button
