@@ -4,7 +4,7 @@
 import { useEffect } from 'react'
 import { X } from '@phosphor-icons/react'
 import { useKeyboard, isMac } from './keyboard.jsx'
-import { ACTIONS, GROUPS, comboLabel } from './shortcuts.js'
+import { CATALOG, GROUPS, comboLabel } from './shortcuts.js'
 import './keyboard.css'
 
 export default function ShortcutSheet({ onClose }) {
@@ -20,7 +20,7 @@ export default function ShortcutSheet({ onClose }) {
 
   const groups = GROUPS.map((g) => ({
     ...g,
-    rows: ACTIONS.filter((a) => a.group === g.id && kb.bindings[a.id]),
+    rows: CATALOG.filter((a) => a.group === g.id && kb.bindings[a.id]),
   })).filter((g) => g.rows.length)
 
   return (

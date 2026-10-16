@@ -29,7 +29,7 @@ import './panels.css'
 import './settings.css'
 import './keyboard.css'
 import { useKeyboard, isMac } from './keyboard.jsx'
-import { ACTIONS, GROUPS, comboFromEvent, comboLabel, isOverridden } from './shortcuts.js'
+import { CATALOG, GROUPS, comboFromEvent, comboLabel, isOverridden } from './shortcuts.js'
 
 // The harnesses whose own login command the daemon can relay - the
 // Sign-in action renders only there (no dead UI elsewhere).
@@ -116,7 +116,7 @@ export default function SettingsView({ onReplay, onOpenChat }) {
       const displaced = kb.rebind(capturing, combo)
       setMoved(
         displaced.length
-          ? { id: capturing, from: displaced.map((id) => ACTIONS.find((a) => a.id === id)?.label ?? id).join(', ') }
+          ? { id: capturing, from: displaced.map((id) => CATALOG.find((a) => a.id === id)?.label ?? id).join(', ') }
           : null,
       )
       setCapturing(null)
@@ -626,7 +626,12 @@ export default function SettingsView({ onReplay, onOpenChat }) {
       {GROUPS.map((group) => (
         <div key={group.id} className="pn-list pn-list--tight kb-set">
           <div className="kb-group-label">{group.label}</div>
-          {ACTIONS.filter((a) => a.group === group.id).map((a) => (
+          {group.id === 'browser' && (
+            <div className="pn-detail kb-group-note">
+              These act while the browser has focus. Everywhere else the same keys keep their meaning above.
+            </div>
+          )}
+          {CATALOG.filter((a) => a.group === group.id).map((a) => (
             <div className="pn-row" key={a.id}>
               <div>
                 <div className="pn-name">{a.label}</div>
