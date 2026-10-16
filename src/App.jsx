@@ -157,8 +157,10 @@ function Shell() {
   const [addProjectOpen, setAddProjectOpen] = useState(false)
 
   // Each mode has its own views; one restored from history that belongs to
-  // the other mode opens New chat instead.
-  const OTHER_MODE = { local: ['machines'], cloud: ['plugins', 'automations'] }
+  // the other mode opens New chat instead. Plugins and automations act on
+  // this computer, so the desktop keeps them in Cloud too; a phone runs no
+  // chats, so it has neither.
+  const OTHER_MODE = { local: ['machines'], cloud: isMobile ? ['plugins', 'automations'] : [] }
   const stored = history[hIndex]
   const view = OTHER_MODE[mode].includes(stored) ? 'new' : stored
   const chat = STATIC_VIEWS.includes(view) ? null : chats[view] ?? null
@@ -477,6 +479,11 @@ function Shell() {
     <Suspense fallback={null}>
       <BrowserView />
     </Suspense>
+  ) : view === 'plugins' ? (
+    // Plugins and automations are this computer's: no Cloud sign-in needed.
+    <PluginsView />
+  ) : view === 'automations' ? (
+    <AutomationsView onOpenChat={openSession} />
   ) : mode === 'cloud' && needsSignIn(cloud) ? (
     <CloudMode onBackToLocal={isMobile ? null : () => switchMode('local')} />
   ) : (
@@ -493,8 +500,6 @@ function Shell() {
         />
       )}
       {view === 'machines' && <MachinesView onOpenChat={openSession} openDevice={openDevice} />}
-      {view === 'plugins' && <PluginsView />}
-      {view === 'automations' && <AutomationsView onOpenChat={openSession} />}
       {!STATIC_VIEWS.includes(view) &&
         (chat ? (
           <ChatView key={chat.id} chat={chat} focused={primaryFocused} />

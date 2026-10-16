@@ -170,7 +170,7 @@ button {
   color: var(--text-2);
 }
 
-/* The Machines tile, which belongs to cloud mode only: reveals and
+/* The Machines tile, which belongs to cloud mode only, reveals and
    collapses with the mode switch. grid-template-rows animates the
    height in both directions (max-height never shrinks); the inner row
    clips, the button fades a touch as it goes. */
