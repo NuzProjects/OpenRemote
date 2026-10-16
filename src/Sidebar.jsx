@@ -256,10 +256,11 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
             </button>
           )}
         </label>
-        {/* Plugins and automations act on this computer, so they belong
-            to Local; Machines belongs to Cloud. The tiles reveal and
-            collapse with the mode switch (the grid-rows transition). */}
-        <div className={`machines-reveal${mode === 'cloud' ? ' closed' : ''}`}>
+        {/* Plugins and automations act on this computer, so the desktop
+            shows them in Local and Cloud alike (a phone runs no chats and
+            has neither); Machines belongs to Cloud and reveals and
+            collapses with the mode switch (the grid-rows transition). */}
+        <div className={`machines-reveal${isMobile ? ' closed' : ''}`}>
           <div className="machines-clip">
             <button
               className={`side-tile${active === 'plugins' ? ' on' : ''}`}
