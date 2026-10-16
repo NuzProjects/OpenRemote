@@ -1256,4 +1256,119 @@ mod tests {
         assert!(!by("odd").installable);
         assert_eq!(by("odd").id, "odd@claude-plugins-official");
     }
+
+    #[test]
+    fn a_catalog_at_the_top_of_a_folder_reads_with_its_plugin_root_above_every_source() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("marketplace.json"),
+            json!({"name": "layout-tools", "pluginRoot": "plugins", "plugins": [
+                {"name": "a", "source": "./a"},
+                {"name": "b", "source": "b"},
+                {"name": "c", "source": {"source": "github", "repo": "x/y", "path": "sub"}},
+            ]})
+            .to_string(),
+        )
+        .unwrap();
+        let catalog = read_catalog(dir.path()).unwrap();
+        assert_eq!(catalog.name, "layout-tools");
+        let source = |i: usize| entry_source(&catalog.entries[i], None).unwrap();
+        assert_eq!(source(0), EntrySource::Relative("plugins/a".into()));
+        assert_eq!(source(1), EntrySource::Relative("plugins/b".into()));
+        assert!(matches!(source(2), EntrySource::GitSubdir { ref path, .. } if path == "sub"));
+
+        // Claude Code's own place wins where a folder has both.
+        std::fs::create_dir_all(dir.path().join(".claude-plugin")).unwrap();
+        std::fs::write(
+            dir.path().join(".claude-plugin").join("marketplace.json"),
+            json!({"name": "claude-side", "plugins": []}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(read_catalog(dir.path()).unwrap().name, "claude-side");
+        // A marketplace.json given on its own names the folder it sits in.
+        let top = dir.path().join("marketplace.json");
+        assert!(matches!(
+            parse_source(&top.to_string_lossy()).unwrap(),
+            MarketplaceSource::Directory { ref path } if Path::new(path) == dir.path()
+        ));
+    }
+
+    #[test]
+    fn a_pinned_download_reads_and_an_unsafe_one_says_why() {
+        let read = |v: Value| entry_source(&json!({"name": "x", "source": v}), None);
+        let sha = "ab".repeat(32);
+        assert_eq!(
+            read(json!({"source": "url", "type": "zip", "url": "https://x/p.zip", "sha256": sha, "path": "p"}))
+                .unwrap(),
+            EntrySource::Archive {
+                url: "https://x/p.zip".into(),
+                sha256: Some(sha.clone()),
+                path: Some("p".into())
+            }
+        );
+        // This machine's own address may serve a mirror over plain http.
+        assert!(
+            read(json!({"source": "url", "type": "zip", "url": "http://127.0.0.1:9/p.zip", "sha256": sha}))
+                .is_ok()
+        );
+        for (source, says) in [
+            (
+                json!({"source": "url", "type": "zip", "url": "https://x/p.zip"}),
+                "sha256",
+            ),
+            (
+                json!({"source": "url", "type": "zip", "url": "https://x/p.zip", "sha256": "ab"}),
+                "64 hex",
+            ),
+            (
+                json!({"source": "url", "type": "zip", "url": "http://example.com/p.zip", "sha256": sha}),
+                "https",
+            ),
+            (
+                json!({"source": "url", "type": "zip", "url": "https://x/p.zip", "sha256": sha, "path": "../p"}),
+                "leaves",
+            ),
+            (
+                json!({"source": "url", "type": "tar", "url": "https://x/p.tar", "sha256": sha}),
+                "'tar'",
+            ),
+        ] {
+            let why = read(source).unwrap_err();
+            assert!(why.contains(says), "{why}");
+        }
+        // A git source without a type stays a git repository.
+        assert!(matches!(
+            read(json!({"source": "url", "url": "https://x/p.git"})).unwrap(),
+            EntrySource::Url { .. }
+        ));
+    }
+
+    #[test]
+    fn the_publishers_own_catalog_name_is_honored_only_from_its_own_places() {
+        let elsewhere = MarketplaceSource::Github {
+            repo: "someone/plugins".into(),
+            reference: None,
+        };
+        assert!(check_name(PUBLISHER_CATALOG, &elsewhere).is_err());
+        let own_repo = MarketplaceSource::Github {
+            repo: format!("{PUBLISHER_GITHUB}plugins"),
+            reference: None,
+        };
+        assert!(check_name(PUBLISHER_CATALOG, &own_repo).is_ok());
+        let own_host = MarketplaceSource::Url {
+            url: format!(
+                "https://cdn.{}/official/marketplace.json",
+                PUBLISHER_HOSTS[0]
+            ),
+        };
+        assert!(check_name(PUBLISHER_CATALOG, &own_host).is_ok());
+        // A look-alike host is not the publisher's.
+        let lookalike = MarketplaceSource::Url {
+            url: format!(
+                "https://{}.example.com/marketplace.json",
+                PUBLISHER_HOSTS[0]
+            ),
+        };
+        assert!(check_name(PUBLISHER_CATALOG, &lookalike).is_err());
+    }
 }

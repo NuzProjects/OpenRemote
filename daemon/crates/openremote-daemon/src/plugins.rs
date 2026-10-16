@@ -1976,4 +1976,90 @@ mod tests {
             json!({"name": "greeter", "version": "1.0.0"})
         );
     }
+
+    #[test]
+    fn an_archive_unpacks_only_the_folder_it_is_told_to() {
+        let mut zip_bytes = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(Cursor::new(&mut zip_bytes));
+            let options = zip::write::SimpleFileOptions::default();
+            for (path, body) in [
+                ("plugin/a.txt", "a"),
+                ("plugin/deep/b.txt", "b"),
+                ("other/c.txt", "c"),
+            ] {
+                zip.start_file(path, options).unwrap();
+                std::io::Write::write_all(&mut zip, body.as_bytes()).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        let mut tgz_bytes = Vec::new();
+        {
+            let gz = flate2::write::GzEncoder::new(&mut tgz_bytes, flate2::Compression::default());
+            let mut tar = tar::Builder::new(gz);
+            for (path, body) in [
+                ("plugin/a.txt", "a"),
+                ("plugin/deep/b.txt", "b"),
+                ("other/c.txt", "c"),
+            ] {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(body.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                tar.append_data(&mut header, path, body.as_bytes()).unwrap();
+            }
+            tar.into_inner().unwrap().finish().unwrap();
+        }
+        for bytes in [&zip_bytes, &tgz_bytes] {
+            let to = tempfile::tempdir().unwrap();
+            unpack_within(bytes, to.path(), Some("plugin")).unwrap();
+            assert!(to.path().join("a.txt").is_file());
+            assert!(to.path().join("deep").join("b.txt").is_file());
+            assert!(!to.path().join("c.txt").exists());
+            assert!(!to.path().join("other").exists());
+            // A folder the archive doesn't have, or one that climbs out of
+            // it, is refused.
+            let refused = tempfile::tempdir().unwrap();
+            let missing = unpack_within(bytes, refused.path(), Some("nope"));
+            assert!(missing.unwrap_err().to_string().contains("no folder"));
+            assert!(unpack_within(bytes, refused.path(), Some("../plugin")).is_err());
+        }
+    }
+
+    #[test]
+    fn a_plugin_in_the_sibling_layout_is_read_by_its_own_manifest() {
+        let dir = folder(&[
+            (
+                ".zcode-plugin/plugin.json",
+                r#"{"name": "layout-plugin", "version": "0.3.0", "skills": "payload/skills",
+                    "description": "plain", "description_i18n": {"en": "In English"}}"#,
+            ),
+            ("payload/skills/x/SKILL.md", "# x"),
+            (
+                ".mcp.json",
+                r#"{"mcpServers": {"data": {"type": "http", "url": "${ZCODE_BASE_URL}/mcp",
+                                            "auth": {"type": "zcode_official"}}}}"#,
+            ),
+        ]);
+        let m = read_manifest(dir.path(), &builtins()).unwrap();
+        assert_eq!(m.name, "layout-plugin");
+        assert_eq!(m.version.as_deref(), Some("0.3.0"));
+        assert_eq!(m.description.as_deref(), Some("In English"));
+        // Its skills sit in a folder of its own choosing; its only server
+        // needs the publisher's account, so it brings no program.
+        assert_eq!(m.claude_parts, vec!["skills"]);
+        assert_eq!(m.powers, Vec::<PluginPower>::new());
+        assert!(m.left_out.iter().any(|n| n.contains("account")));
+        assert!(m.nothing_left().is_none());
+        // Claude Code's manifest, where there is one, wins over it.
+        std::fs::create_dir_all(dir.path().join(".claude-plugin")).unwrap();
+        std::fs::write(
+            dir.path().join(".claude-plugin").join("plugin.json"),
+            r#"{"name": "claude-name"}"#,
+        )
+        .unwrap();
+        let both = read_manifest(dir.path(), &builtins()).unwrap();
+        assert_eq!(both.name, "claude-name");
+        assert_eq!(both.version.as_deref(), Some("0.3.0"));
+    }
 }
