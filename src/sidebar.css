@@ -170,7 +170,7 @@ button {
   color: var(--text-2);
 }
 
-/* The Machines tile, which belongs to cloud mode only: reveals and
+/* The Machines tile, which belongs to cloud mode only, reveals and
    collapses with the mode switch. grid-template-rows animates the
    height in both directions (max-height never shrinks); the inner row
    clips, the button fades a touch as it goes. */
@@ -401,8 +401,58 @@ button.side-tile:active {
   position: relative;
 }
 
-/* Unregister lives on the head row, revealed on hover - a quiet action
-   that never touches the disk. */
+/* A project's own new chat and unregister live on its head row, revealed
+   on hover and keyboard focus (and always there on touch screens, which
+   have no hover). The row makes room so the name never runs under them. */
+.project:hover .project-head,
+.project:focus-within .project-head {
+  padding-right: 58px;
+}
+
+.project:hover .project-count,
+.project:focus-within .project-count {
+  visibility: hidden;
+}
+
+.sb-project-new {
+  position: absolute;
+  top: 6px;
+  right: 30px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-2);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 0.12s ease;
+}
+
+.project:hover .sb-project-new,
+.project:focus-within .sb-project-new,
+.project:focus-within .sb-project-remove {
+  opacity: 1;
+}
+
+.sb-project-new:hover {
+  background: var(--bg-active);
+  color: var(--text-1);
+}
+
+@media (hover: none) {
+  .sb-project-new {
+    opacity: 1;
+  }
+
+  .project-head {
+    padding-right: 58px;
+  }
+}
+
+/* Unregister: a quiet action that never touches the disk. */
 .sb-project-remove {
   position: absolute;
   top: 6px;
@@ -592,7 +642,9 @@ html[data-reduce-motion] .dot--running {
 html[data-reduce-motion] .sidebar,
 html[data-reduce-motion] .sidebar.collapsed,
 html[data-reduce-motion] .machines-reveal,
-html[data-reduce-motion] .machines-reveal > * {
+html[data-reduce-motion] .machines-reveal > *,
+html[data-reduce-motion] .sb-project-new,
+html[data-reduce-motion] .sb-project-remove {
   transition: none;
 }
 
@@ -611,7 +663,9 @@ button:focus-visible {
   }
 
   .machines-reveal,
-  .machines-reveal > * {
+  .machines-reveal > *,
+  .sb-project-new,
+  .sb-project-remove {
     transition: none;
   }
 }

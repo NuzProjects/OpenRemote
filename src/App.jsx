@@ -14,10 +14,14 @@ import MobileView from './MobileView.jsx'
 import MetricsView from './MetricsView.jsx'
 // Loaded on first use: the browser costs nothing until it is opened.
 const BrowserView = lazy(() => import('./BrowserView.jsx'))
+// The phone's browser is its own layout (Chrome Android's), a chunk of its
+// own so the desktop never loads it and the phone never loads the desktop's.
+const BrowserPhone = lazy(() => import('./BrowserPhone.jsx'))
 import { ConsoleProvider, useConsole } from './state/console.jsx'
 import { needsSignIn } from './cloud.js'
 import CloudNotices from './CloudNotices.jsx'
-import { isMobile } from './platform.js'
+import { hasTauri, isMobile } from './platform.js'
+import { onBrowserRequest, openedKey, shouldAutoOpen } from './browser-placement.js'
 import { hashWriteReady } from './settings.js'
 import { Archive, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Copy, X } from '@phosphor-icons/react'
 import { pushBack, useBack } from './use-back.js'
@@ -25,18 +29,28 @@ import SplitArea from './SplitArea.jsx'
 import ContextMenu from './ContextMenu.jsx'
 import CommandPalette from './CommandPalette.jsx'
 import ShortcutSheet from './ShortcutSheet.jsx'
+import ViewPopup from './ViewPopup.jsx'
+import { POPUP_VIEWS, onPopup } from './popups.js'
+import { useMoveChat } from './useMoveChat.jsx'
 import { KeyboardProvider, useKeyboard, useShortcut } from './keyboard.jsx'
+import { PluginProvider, usePlugins } from './plugins-host.jsx'
+import PluginView from './PluginView.jsx'
+import { isPluginView, settingsAnchor } from './plugin-runtime.js'
 import {
+  BROWSER,
   MAX_PANES,
+  browserPane,
   closeLeaf,
   focusLeaf,
   leafById,
   leaves,
   newLayout,
+  openBrowserBeside,
   paneCount,
   restoreLayout,
   secondaryChatIds,
   setLeafView,
+  singleBrowser,
   splitLeaf,
 } from './split.js'
 
@@ -66,7 +80,10 @@ function loadViewState(sessions) {
   } catch {
     saved = null
   }
-  const known = new Set([...STATIC_VIEWS, ...sessions.map((s) => s.id)])
+  const ids = new Set([...STATIC_VIEWS, ...sessions.map((s) => s.id)])
+  // A plugin's view is known by its shape: the plugin list may not have
+  // answered yet, and its pane says so if the view is gone.
+  const known = { has: (v) => ids.has(v) || isPluginView(v) }
   const hashView = location.hash.replace(/^#/, '')
   const fromHash = known.has(hashView) ? hashView : null
   let history
@@ -93,7 +110,7 @@ function loadLayout() {
   }
 }
 
-const isChatView = (v) => !STATIC_VIEWS.includes(v)
+const isChatView = (v) => !STATIC_VIEWS.includes(v) && !isPluginView(v)
 
 function Shell() {
   const { sessions, chats, connection, ensureChat, cloud, watchChats, setChatArchived } = useConsole()
@@ -157,10 +174,14 @@ function Shell() {
   const [addProjectOpen, setAddProjectOpen] = useState(false)
 
   // Each mode has its own views; one restored from history that belongs to
-  // the other mode opens New chat instead.
-  const OTHER_MODE = { local: ['machines'], cloud: ['plugins', 'automations'] }
+  // the other mode opens New chat instead. Plugins and automations act on
+  // this computer, so the desktop keeps them in Cloud too; a phone runs no
+  // chats, so it has neither.
+  const OTHER_MODE = { local: ['machines'], cloud: isMobile ? ['plugins', 'automations'] : [] }
   const stored = history[hIndex]
-  const view = OTHER_MODE[mode].includes(stored) ? 'new' : stored
+  // Settings, Metrics and Mobile open over the app (popups.js), never in
+  // a pane; one left in the history from before opens New chat.
+  const view = OTHER_MODE[mode].includes(stored) || POPUP_VIEWS.includes(stored) ? 'new' : stored
   const chat = STATIC_VIEWS.includes(view) ? null : chats[view] ?? null
 
   // Every chat on screen streams live - the primary's and each pane's -
@@ -282,11 +303,19 @@ function Shell() {
   }
 
   // The sidebar's click goes where the user is looking: the focused pane
-  // when that is a split pane and the target is a chat or New chat; every
-  // other view (plugins, settings, ...) belongs to the primary pane.
+  // when that is a split pane and the target is a chat, a plugin's view or
+  // New chat; every other view (plugins, settings, ...) belongs to the
+  // primary pane.
   const focused = leafById(layout, layout.focus)
   const openInFocus = (id) => {
-    if (focused?.view !== null && (id === 'new' || isChatView(id))) {
+    // One pane holds the browser: where a split pane has it, that pane
+    // takes focus instead of the main pane opening a second.
+    const holder = id === BROWSER ? browserPane(layout, view) : null
+    if (holder) {
+      setLayout((l) => focusLeaf(l, holder.id))
+      return
+    }
+    if (focused?.view !== null && (id === 'new' || isChatView(id) || isPluginView(id))) {
       const session = (sessions ?? []).find((s) => s.id === id)
       if (session) ensureChat(session)
       setLayout((l) => setLeafView(l, focused.id, id))
@@ -295,6 +324,70 @@ function Shell() {
     setLayout((l) => focusLeaf(l, leaves(l.root).find((p) => p.view === null).id))
     openSession(id)
   }
+
+  // The browser keeps to one pane: going to it in the main pane (Back
+  // and Forward included) closes a split pane that held it.
+  useEffect(() => {
+    setLayout((l) => singleBrowser(l, view))
+  }, [view])
+
+  // A chat asks for the browser - its Browser button, an "Open beside
+  // chat" chip, the phone's pill, or its agent opening a tab (`focus`
+  // false): beside that chat on the desktop (the pane that holds the
+  // browser, if one does), the Browser view on the phone. With four panes
+  // already open a click shows it in the main pane (Back returns); the
+  // agent's own tab never takes the chat's place.
+  const browserRequest = useRef(null)
+  browserRequest.current = ({ chatId, url = null, tab = null, focus = true }) => {
+    if (url || tab) {
+      import('./browser-store.js').then((store) => (url ? store.openUrl(url) : store.focusTab(tab)))
+    }
+    if (isMobile) {
+      navigate(BROWSER)
+      return
+    }
+    const chatLeaf = leaves(layout.root).find((l) => (l.view ?? view) === chatId) ?? focused
+    let next = openBrowserBeside(layout, chatLeaf.id, view)
+    if (next === layout && !browserPane(layout, view)) {
+      if (!focus) return
+      focusPrimary()
+      navigate(BROWSER)
+      return
+    }
+    // The agent opening a tab never takes the keyboard from the chat.
+    if (!focus) next = focusLeaf(next, chatLeaf.id)
+    setLayout(next)
+  }
+  useEffect(() => onBrowserRequest((request) => browserRequest.current?.(request)), [])
+
+  // The agent of the chat in the main pane opening a tab opens the browser
+  // beside it, showing that tab; another chat's agent never steals the
+  // view (its tab carries its badge in the browser instead).
+  const primaryChat = useRef(null)
+  primaryChat.current = isChatView(view) ? view : null
+  useEffect(() => {
+    if (!hasTauri || isMobile) return undefined
+    const opened = new Set()
+    let stop = null
+    let gone = false
+    import('@tauri-apps/api/event')
+      .then(({ listen }) =>
+        listen('browser:tab', ({ payload }) => {
+          if (!shouldAutoOpen(payload, primaryChat.current, opened)) return
+          opened.add(openedKey(payload))
+          browserRequest.current?.({ chatId: payload.controller.chat, tab: payload.id, focus: false })
+        }),
+      )
+      .then((unlisten) => {
+        if (gone) unlisten()
+        else stop = unlisten
+      })
+      .catch(() => {})
+    return () => {
+      gone = true
+      stop?.()
+    }
+  }, [])
 
   // Open a chat in a new pane beside the focused one.
   const openBeside = (id, dir = 'row', before = false) => {
@@ -309,6 +402,7 @@ function Shell() {
   // and act on the chat it shows. Text, links and fields keep the
   // browser's own menu (copy, paste, spelling).
   const [paneMenu, setPaneMenu] = useState(null)
+  const move = useMoveChat()
   const onMainContextMenu = (e) => {
     if (isMobile) return
     const t = e.target
@@ -317,6 +411,10 @@ function Shell() {
     const leafId = t.closest?.('[data-leaf-id]')?.dataset.leafId ?? layout.focus
     e.preventDefault()
     setLayout((l) => focusLeaf(l, leafId))
+    // The pane's chat may run on another machine: its projects are asked
+    // for as the menu opens.
+    const shown = leafById(layout, leafId)?.view ?? view
+    if (chats[shown]) move.prepare(chats[shown])
     setPaneMenu({ x: e.clientX, y: e.clientY, leafId })
   }
 
@@ -343,6 +441,7 @@ function Shell() {
     if (isChatView(v) && title) {
       items.push(
         { divider: true },
+        move.menuItem(chats[v]),
         { label: 'Archive chat', icon: <Archive size={14} />, hint: kb.label('archive'), onSelect: () => archiveFrom(leaf, v) },
         {
           label: 'Copy chat title',
@@ -413,16 +512,52 @@ function Shell() {
   const kb = useKeyboard()
   const desk = onboarded && !isMobile
   const [palette, setPalette] = useState(false)
+  // The view open over the app, if any: settings, metrics or mobile.
+  const [popup, setPopup] = useState(null)
+  useEffect(() => onPopup((name) => setPopup(name)), [])
   const [sheet, setSheet] = useState(false)
   const [presetProject, setPresetProject] = useState(null)
   const [openDevice, setOpenDevice] = useState(null)
   const goView = (id) => {
-    const needs = { plugins: 'local', automations: 'local', machines: 'cloud' }[id]
+    if (POPUP_VIEWS.includes(id)) {
+      setPopup(id)
+      return
+    }
+    // Machines is Cloud's; plugins and automations live in both modes.
+    const needs = { machines: 'cloud' }[id]
     if (needs && mode !== needs) keepMode(needs)
     openInFocus(id)
   }
+  // A new chat already in a project (the sidebar's + on a project, the
+  // palette's project rows): the home screen with that project chosen and
+  // its message box focused.
+  const newChatIn = (id) => {
+    setPresetProject({ id, nonce: Date.now() })
+    focusPrimary()
+    navigate('new')
+    if (typeof window !== 'undefined' && !window.matchMedia('(min-width: 640px)').matches)
+      setSidebarOpen(false)
+  }
   const focusPrimary = () =>
     setLayout((l) => focusLeaf(l, leaves(l.root).find((p) => p.view === null).id))
+  // A plugin opens its own view (ui.openView) where the sidebar would, and
+  // its part of Settings (ui.openSettings, the Installed tab's Settings).
+  // Set on every render: the handlers read this render's layout.
+  const setPluginNavigation = usePlugins()?.setNavigation
+  useEffect(() => {
+    setPluginNavigation?.({
+      openView: (key) => openInFocus(key),
+      openSettings: (pluginId) => {
+        goView('settings')
+        // Once Settings is on screen, the plugin's own part scrolls in.
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() =>
+            document.getElementById(settingsAnchor(pluginId))?.scrollIntoView({ block: 'start' }),
+          ),
+        )
+      },
+    })
+  })
   useShortcut('new-chat', () => openInFocus('new'), desk)
   useShortcut('palette', () => setPalette(true), desk)
   useShortcut('cheat-sheet', () => setSheet(true), desk)
@@ -475,8 +610,16 @@ function Shell() {
   ) : view === 'browser' ? (
     // The browser is this device's, in Local and Cloud alike.
     <Suspense fallback={null}>
-      <BrowserView />
+      {isMobile ? <BrowserPhone /> : <BrowserView focused={primaryFocused} />}
     </Suspense>
+  ) : view === 'plugins' ? (
+    // Plugins and automations are this computer's: no Cloud sign-in needed.
+    <PluginsView />
+  ) : view === 'automations' ? (
+    <AutomationsView onOpenChat={openSession} />
+  ) : isPluginView(view) ? (
+    // A plugin's view runs in this console, in Local and Cloud alike.
+    <PluginView viewKey={view} />
   ) : mode === 'cloud' && needsSignIn(cloud) ? (
     <CloudMode onBackToLocal={isMobile ? null : () => switchMode('local')} />
   ) : (
@@ -493,8 +636,6 @@ function Shell() {
         />
       )}
       {view === 'machines' && <MachinesView onOpenChat={openSession} openDevice={openDevice} />}
-      {view === 'plugins' && <PluginsView />}
-      {view === 'automations' && <AutomationsView onOpenChat={openSession} />}
       {!STATIC_VIEWS.includes(view) &&
         (chat ? (
           <ChatView key={chat.id} chat={chat} focused={primaryFocused} />
@@ -505,10 +646,12 @@ function Shell() {
     )
   )
 
+  const pluginViews = usePlugins()?.views
   const paneLabel = (leaf) => {
     const v = leaf.view ?? view
     if (v === 'new') return 'New chat'
     if (STATIC_VIEWS.includes(v)) return v[0].toUpperCase() + v.slice(1)
+    if (isPluginView(v)) return pluginViews?.find((p) => p.key === v)?.title ?? 'Plugin'
     return chats[v]?.title ?? 'Chat'
   }
 
@@ -516,6 +659,16 @@ function Shell() {
   // composers serve Local and Cloud, so one window mixes both.
   const renderPane = (leaf) => {
     if (leaf.view === null) return primaryContent
+    if (leaf.view === BROWSER) {
+      // The browser beside a chat: the same view the sidebar opens, lazy
+      // the same way.
+      return (
+        <Suspense fallback={null}>
+          <BrowserView focused={leaf.id === layout.focus} />
+        </Suspense>
+      )
+    }
+    if (isPluginView(leaf.view)) return <PluginView viewKey={leaf.view} />
     if (leaf.view === 'new') {
       return (
         <NewChat
@@ -556,12 +709,13 @@ function Shell() {
           {sidebarOpen && <div className="sb-backdrop" onClick={() => setSidebarOpen(false)} />}
           <Sidebar
             open={sidebarOpen}
-            active={(focused?.view ?? view) === 'new' ? null : (focused?.view ?? view)}
+            active={popup ?? ((focused?.view ?? view) === 'new' ? null : (focused?.view ?? view))}
             mode={mode}
             onMode={switchMode}
-            onSelect={openInFocus}
+            onSelect={(id) => (POPUP_VIEWS.includes(id) ? setPopup(id) : openInFocus(id))}
             onSplit={openBeside}
             onAddProject={addProject}
+            onNewChatIn={newChatIn}
             onReveal={() => setSidebarOpen(true)}
           />
           <main className="main" onContextMenu={onMainContextMenu}>
@@ -585,16 +739,13 @@ function Shell() {
               onClose={() => setPaneMenu(null)}
             />
           )}
+          {move.modal}
           {palette && (
             <CommandPalette
               recentChatIds={recentChatIds}
               onClose={() => setPalette(false)}
               onOpenChat={openInFocus}
-              onOpenProject={(id) => {
-                setPresetProject({ id, nonce: Date.now() })
-                focusPrimary()
-                navigate('new')
-              }}
+              onOpenProject={newChatIn}
               onOpenMachine={(id) => {
                 setOpenDevice({ id, nonce: Date.now() })
                 goView('machines')
@@ -602,6 +753,34 @@ function Shell() {
             />
           )}
           {sheet && <ShortcutSheet onClose={() => setSheet(false)} />}
+          {popup && (
+            <ViewPopup
+              label={{ settings: 'Settings', metrics: 'Metrics', mobile: 'Mobile' }[popup]}
+              onClose={() => setPopup(null)}
+            >
+              {popup === 'settings' ? (
+                <SettingsView
+                  onReplay={() => {
+                    setPopup(null)
+                    replayOnboarding()
+                  }}
+                  onOpenChat={(id) => {
+                    setPopup(null)
+                    openSession(id)
+                  }}
+                />
+              ) : popup === 'metrics' ? (
+                <MetricsView />
+              ) : (
+                <MobileView
+                  onOpenChat={(id) => {
+                    setPopup(null)
+                    openSession(id)
+                  }}
+                />
+              )}
+            </ViewPopup>
+          )}
         </div>
       )}
     </>
@@ -614,9 +793,11 @@ export default function App() {
   return (
     <ConsoleProvider>
       <KeyboardProvider>
-        <div className="app">
-          <Shell />
-        </div>
+        <PluginProvider>
+          <div className="app">
+            <Shell />
+          </div>
+        </PluginProvider>
       </KeyboardProvider>
     </ConsoleProvider>
   )

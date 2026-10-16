@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use openremote_core::TurnOutcome;
-use openremote_harness::{DriverError, DriverEvent, Resolution, SpawnOptions};
+use openremote_harness::{DriverError, DriverEvent, Prompt, Resolution, SpawnOptions};
 use serde_json::Value;
 use tokio::io::BufReader;
 use tokio::process::{Child, Command};
@@ -69,7 +69,10 @@ impl Driver {
     }
 
     /// Run one prompt as its own agy process.
-    pub async fn send_prompt(&mut self, text: &str) -> Result<(), DriverError> {
+    pub async fn send_prompt(&mut self, prompt: &Prompt) -> Result<(), DriverError> {
+        // Antigravity's print mode takes the message as words on its
+        // command line.
+        let text = prompt.text_only("Antigravity")?;
         let program = match &self.resolution {
             Resolution::Executable(path) => path.clone(),
             Resolution::NodeScript { .. } => {

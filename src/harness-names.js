@@ -11,6 +11,16 @@ const NAMES = {
   agy: 'Antigravity',
 }
 
+// A harness an installed plugin drives names itself: the daemon's
+// capabilities carry each one's name, learned here as they load.
+const LEARNED = new Map()
+
+export function learnHarnessNames(harnesses) {
+  for (const h of harnesses ?? []) {
+    if (h?.plugin && h.id && h.name) LEARNED.set(h.id, h.name)
+  }
+}
+
 export function harnessName(id) {
-  return NAMES[id] ?? id
+  return NAMES[id] ?? LEARNED.get(id) ?? id
 }

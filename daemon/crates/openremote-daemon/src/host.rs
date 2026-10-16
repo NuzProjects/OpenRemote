@@ -62,6 +62,14 @@ impl CloudHost for DaemonHost {
 
     fn note(&self, peer: PeerContext, note: Value) {
         if let Some(app) = self.app.upgrade() {
+            // The account's Global plugins have notes of their own.
+            if note["type"]
+                .as_str()
+                .is_some_and(|t| t.starts_with("plugins."))
+            {
+                crate::plugin_runtime::global::on_note(&app, peer, note);
+                return;
+            }
             crate::sync::on_note(&app, peer, note);
         }
     }
@@ -74,7 +82,11 @@ impl CloudHost for DaemonHost {
 
     fn online(&self, peer: DeviceId) {
         if let Some(app) = self.app.upgrade() {
-            tokio::spawn(async move { crate::sync::sync_with(&app, peer).await });
+            tokio::spawn(async move {
+                crate::sync::sync_with(&app, peer).await;
+                // Global plugins catch up the same way chats do.
+                crate::plugin_runtime::global::sync_with(&app, peer).await;
+            });
         }
     }
 

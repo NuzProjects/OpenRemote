@@ -8,15 +8,16 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  SCOPES,
   actionForCombo,
   comboFromEvent,
   comboLabel,
-  effectiveBindings,
   firesWhileTyping,
   loadOverrides,
   rebind,
   resetOne,
   saveOverrides,
+  scopedBindings,
   unbind,
 } from './shortcuts.js'
 import { isMobile } from './platform.js'
@@ -35,9 +36,12 @@ const KeyboardContext = createContext(null)
 
 export function KeyboardProvider({ children }) {
   const [overrides, setOverrides] = useState(loadOverrides)
-  const bindings = useMemo(() => effectiveBindings(overrides, isMac), [overrides])
-  const bindingsRef = useRef(bindings)
-  bindingsRef.current = bindings
+  // Each scope's keys (the app's, and the browser's while it has focus),
+  // and all of them in one table for labels and lists.
+  const scopes = useMemo(() => scopedBindings(overrides, isMac), [overrides])
+  const bindings = useMemo(() => ({ ...scopes.app, ...scopes.browser }), [scopes])
+  const scopesRef = useRef(scopes)
+  scopesRef.current = scopes
   const handlers = useRef(new Map())
   const sources = useRef(new Map())
   // The Keyboard settings' "press the new keys" moment: every shortcut
@@ -82,14 +86,19 @@ export function KeyboardProvider({ children }) {
       if (capturing.current || e.defaultPrevented) return
       const combo = comboFromEvent(e, isMac)
       if (!combo) return
-      const id = actionForCombo(bindingsRef.current, combo)
-      if (!id) return
+      // One key can mean one action per scope; the first scope with
+      // someone to act on it here wins (the browser's only while it has
+      // focus, see SCOPES).
+      const ids = Object.keys(SCOPES)
+        .map((scope) => actionForCombo(scopesRef.current[scope], combo))
+        .filter(Boolean)
+      if (!ids.length) return
       if (document.querySelector(OVERLAY)) return
       if (typingIn(document.activeElement) && !firesWhileTyping(combo)) return
       // A Ctrl/Cmd key the app owns never falls through to the webview's
       // own accelerators (Ctrl+P would print) even when nothing can act on
       // it here; Esc and Alt keys do fall through, keeping their meaning.
-      if (run(id) || /(^|\+)(Mod|Ctrl)\+/.test(combo)) e.preventDefault()
+      if (ids.some((id) => run(id)) || /(^|\+)(Mod|Ctrl)\+/.test(combo)) e.preventDefault()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -103,6 +112,7 @@ export function KeyboardProvider({ children }) {
   const value = useMemo(
     () => ({
       bindings,
+      scopes,
       overrides,
       label: (id) => comboLabel(bindings[id], isMac),
       run,
@@ -122,7 +132,7 @@ export function KeyboardProvider({ children }) {
       reset: (id) => commit(resetOne(overrides, id, isMac)),
       resetAll: () => commit({}),
     }),
-    [bindings, overrides, run, available, source, register, commit],
+    [bindings, scopes, overrides, run, available, source, register, commit],
   )
 
   return <KeyboardContext.Provider value={value}>{children}</KeyboardContext.Provider>

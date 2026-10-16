@@ -33,6 +33,36 @@ const RESPAWN_WAIT_MAX: Duration = Duration::from_secs(30);
 #[derive(Default)]
 struct Sidecar(Mutex<Option<tauri_plugin_shell::process::CommandChild>>);
 
+/// Lines for the daemon's stdin (the built-in browser's news and answers),
+/// written in order by one thread so a busy pipe never holds up the window.
+static TO_DAEMON: std::sync::OnceLock<std::sync::mpsc::Sender<String>> = std::sync::OnceLock::new();
+
+/// Send one line to the running daemon; dropped when none runs (the next
+/// daemon hears everything again in its hello).
+pub fn write_to_daemon(app: &tauri::AppHandle, line: &str) {
+    let tx = TO_DAEMON.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        let app = app.clone();
+        std::thread::spawn(move || {
+            for line in rx {
+                let sidecar = app.state::<Sidecar>();
+                let mut slot = sidecar.0.lock().expect("daemon state lock");
+                if let Some(child) = slot.as_mut() {
+                    let _ = child.write(
+                        format!(
+                            "{line}
+"
+                        )
+                        .as_bytes(),
+                    );
+                }
+            }
+        });
+        tx
+    });
+    let _ = tx.send(line.to_string());
+}
+
 /// Restart the daemon sidecar: kill the old child, drop what the shell
 /// knew about it, spawn fresh. The console heals on its own - on
 /// connection error it re-polls daemon_info every 2.5s and follows a
@@ -63,6 +93,7 @@ pub fn run() {
             None,
         ))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
         .manage(DaemonState::default())
         .manage(Sidecar::default())
@@ -93,7 +124,15 @@ pub fn run() {
             browser::browser_viewport,
             browser::browser_clear_site,
             browser::browser_open_external,
-            browser::browser_reveal
+            browser::browser_reveal,
+            crate::updates::update_check,
+            crate::updates::update_install,
+            browser::browser_permission,
+            browser::browser_pick,
+            browser::browser_screencast,
+            browser::browser_save_file,
+            browser::browser_clear_data,
+            browser::browser_share
         ])
         .setup(|app| {
             // A dev build gives the console's webview a debugging port
@@ -109,6 +148,7 @@ pub fn run() {
             tray::load(app.handle());
             tray::apply(app.handle());
             spawn_daemon(app.handle().clone());
+            browser::start_sweeper(app.handle().clone());
             Ok(())
         })
         // With the tray on, closing the window hides it: the daemon keeps
@@ -176,6 +216,10 @@ fn spawn_daemon(app: tauri::AppHandle) {
             while let Some(event) = rx.recv().await {
                 if let CommandEvent::Stdout(line) = event {
                     let line = String::from_utf8_lossy(&line).trim().to_string();
+                    // The daemon's calls to the built-in browser share the pipe.
+                    if browser::pipe::receive(&app, &line) {
+                        continue;
+                    }
                     if let Some(addr) = line.strip_prefix("READY ") {
                         info.url = Some(format!("http://{addr}"));
                     } else if let Some(dir) = line.strip_prefix("DATA_DIR ") {
@@ -184,6 +228,8 @@ fn spawn_daemon(app: tauri::AppHandle) {
                     if info.url.is_some() && info.data_dir.is_some() && !published {
                         publish(&app, &mut info);
                         published = true;
+                        // A new daemon learns about the browser and its tabs.
+                        browser::pipe::hello(&app);
                     }
                 }
             }

@@ -20,6 +20,10 @@ import { clashes } from './plugins.js'
 import { useComposerMenus } from './useComposerMenus.jsx'
 import { mentionedChats, ownCommands, takeCommands } from './composer-menus.js'
 import { isMobile } from './platform.js'
+import { moveAttachments, removeAttachment, setFocusedComposer } from './attachments.js'
+import { AttachmentChips, useAttachInput, useAttachments } from './ComposerAttachments.jsx'
+import { outgoing } from './composer-attachments.js'
+import PluginComposerButtons from './PluginComposerButtons.jsx'
 import './newchat.css'
 import './composer.css'
 
@@ -94,6 +98,8 @@ export default function NewChat({
     if (!presetProject) return
     setTarget(null)
     setProjectId(presetProject.id)
+    // Straight to typing: the project is chosen, the message is next.
+    requestAnimationFrame(() => inputRef.current?.focus())
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [presetProject?.nonce])
 
@@ -206,8 +212,13 @@ export default function NewChat({
   // workspace - the chat runs in the home folder on its machine.
   const workspace = chosenProject?.folders[0] ?? null
 
+  // What rides the first message besides its words: pictures, and
+  // elements picked in the browser - kept under 'new' until the chat
+  // exists (attachments.js).
+  const attached = useAttachments('new')
+  const takesImages = Boolean(currentHarness?.image_input)
   const canSend =
-    text.trim().length > 0 && !busy && currentHarness && connection.state === 'connected'
+    (text.trim().length > 0 || attached.length > 0) && !busy && currentHarness && connection.state === 'connected'
     && !needsSignIn && !targetOffline
   // The harness's own pre-send facts, each in its own words: what its
   // config says a fresh chat runs (grok's config.toml, agy's settings,
@@ -260,6 +271,12 @@ export default function NewChat({
   // its key fall through.
   const boxRef = useRef(null)
   const inputRef = useRef(null)
+  const attach = useAttachInput('new', { enabled: takesImages, onError: setError })
+  // The browser's picks go to the composer the user is in: this one while
+  // it is the focused pane's, or the moment its text gains focus.
+  useEffect(() => {
+    if (focused) setFocusedComposer('new')
+  }, [focused])
   // The / and @ menus for the chat this screen will start: its harness,
   // its folder, the machine it will run on.
   const cloudReady = signedIn(cloud)
@@ -383,7 +400,16 @@ export default function NewChat({
       const { run, text: message } = takeCommands(text.trim(), ownCommands({ inChat: false, cloud: cloudReady }))
       const picked = Object.fromEntries(run.map((c) => [c.name, c.arg]))
       const fastPicked = 'fast' in picked ? (picked.fast ? picked.fast.toLowerCase() === 'on' : !fast) : fast
-      if (!message) {
+      // The first message's pictures and picked elements, refused here
+      // when the harness can't take them - before a chat is made.
+      const sent = attached
+      const payload = outgoing(message, sent, {
+        images: takesImages,
+        harness: currentHarness.name,
+        remote: Boolean(target) && target !== thisDevice,
+      })
+      if (payload.error) throw new Error(payload.error)
+      if (!payload.text && !payload.attachments.length) {
         // Only commands: they set this screen's pickers.
         if (picked.model) setModel(picked.model)
         if (picked.effort) setEffort(picked.effort)
@@ -393,7 +419,7 @@ export default function NewChat({
         return
       }
       const id = await createChat(
-        message,
+        payload.text,
         workspace,
         currentHarness.id,
         picked.model ?? startModel ?? undefined,
@@ -404,8 +430,13 @@ export default function NewChat({
           deviceId: target,
           synced: cloudMode || 'sync' in picked || 'cloud' in picked,
           mentionedChats: mentionedChats(message, chats),
+          attachments: payload.attachments,
         },
       )
+      // What was sent leaves; anything added meanwhile follows the
+      // message into its chat's composer.
+      for (const item of sent) removeAttachment('new', item.id)
+      moveAttachments('new', id)
       if (picked.rename) await renameChat(id, picked.rename)
       setText('')
       onOpen(id)
@@ -478,8 +509,9 @@ export default function NewChat({
           )}
         </div>
       )}
-      <div className="nc-box" ref={boxRef}>
+      <div className="nc-box" ref={boxRef} onDragOver={attach.onDragOver} onDrop={attach.onDrop}>
         {menus.element}
+        <AttachmentChips composerKey="new" takesImages={takesImages} harness={currentHarness?.name} />
         <textarea
           value={text}
           onChange={(e) => {
@@ -488,6 +520,8 @@ export default function NewChat({
           }}
           onKeyUp={menus.track}
           onClick={menus.track}
+          onFocus={() => setFocusedComposer('new')}
+          onPaste={attach.onPaste}
           onKeyDown={(e) => {
             // The / and @ menus take their keys first.
             if (menus.onKeyDown(e)) return
@@ -638,6 +672,25 @@ export default function NewChat({
                 }
               />
             )}
+            {currentHarness?.fast_supported && (
+              <button
+                className={`nc-meta nc-fast${fast ? ' on' : ''}`}
+                onClick={() => setFast((v) => !v)}
+                aria-pressed={fast}
+                title={hintFast("The harness's own fast mode - its speed tier, never a model switch")}
+              >
+                <Lightning size={13} weight={fast ? 'fill' : 'light'} />
+                Fast
+              </button>
+            )}
+          </div>
+          <div className="nc-send-group">
+            {attach.button}
+            {/* The buttons plugins add to the composer (dictation's
+                microphone, say), beside the send button. */}
+            <PluginComposerButtons inputRef={inputRef} setText={setText} composer="new" disabled={busy} />
+            {/* What the agent may do without asking sits by the send button:
+                the last thing to check before a message goes. */}
             {permissionWords.length > 0 && (
               <button
                 type="button"
@@ -674,19 +727,6 @@ export default function NewChat({
                 }
               />
             )}
-            {currentHarness?.fast_supported && (
-              <button
-                className={`nc-meta nc-fast${fast ? ' on' : ''}`}
-                onClick={() => setFast((v) => !v)}
-                aria-pressed={fast}
-                title={hintFast("The harness's own fast mode - its speed tier, never a model switch")}
-              >
-                <Lightning size={13} weight={fast ? 'fill' : 'light'} />
-                Fast
-              </button>
-            )}
-          </div>
-          <div className="nc-send-group">
             <button className="nc-send" onClick={start} disabled={!canSend} title="Start task">
               <ArrowUp size={15} weight="bold" />
             </button>

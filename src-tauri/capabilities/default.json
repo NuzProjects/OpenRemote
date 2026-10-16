@@ -45,6 +45,14 @@
     "allow-browser-viewport",
     "allow-browser-clear-site",
     "allow-browser-open-external",
-    "allow-browser-reveal"
+    "allow-browser-reveal",
+    "allow-update-check",
+    "allow-update-install",
+    "allow-browser-permission",
+    "allow-browser-pick",
+    "allow-browser-screencast",
+    "allow-browser-save-file",
+    "allow-browser-clear-data",
+    "allow-browser-share"
   ]
 }

@@ -72,6 +72,11 @@ pub struct Manifest {
     /// It runs programs as the user, outside any sandbox - said before the
     /// user approves (a JS or WASM plugin is sandboxed; a program is not).
     pub not_sandboxed: bool,
+    /// What it runs, in a line: its program and arguments, or its file.
+    pub entry: Option<String>,
+    /// What it adds to OpenRemote: harnesses, agent tools, composer
+    /// inputs, views, settings.
+    pub contributes: openremote_core::PluginContributions,
     /// For a plugin written in another layout: what the install rewrites
     /// so Claude Code runs it, and what it leaves out and why.
     pub adapted: Vec<String>,
@@ -303,6 +308,14 @@ pub fn read_manifest(dir: &Path, builtin_ids: &[String]) -> Result<Manifest, Plu
     if runtime == PluginRuntime::Process || has_hooks || has_mcp || has_lsp {
         powers.push(PluginPower::RunPrograms);
     }
+    // What it runs and adds (openremote.json's entry and contributes).
+    let section = match read_json::<Value>(&dir.join("openremote.json"))? {
+        Some(raw) => {
+            crate::plugin_runtime::manifest::read_section(&raw, dir, &name, runtime, builtin_ids)?
+        }
+        None => Default::default(),
+    };
+    powers.extend(section.implied.iter().copied());
     powers.sort();
     powers.dedup();
     let not_sandboxed = powers.contains(&PluginPower::RunPrograms)
@@ -323,6 +336,8 @@ pub fn read_manifest(dir: &Path, builtin_ids: &[String]) -> Result<Manifest, Plu
         powers,
         claude_parts,
         not_sandboxed,
+        entry: section.entry.as_ref().map(|e| e.describe()),
+        contributes: section.contributes,
         adapted: plan
             .as_ref()
             .map(|p| p.notes.adapted.clone())
@@ -351,6 +366,8 @@ pub fn plugin_dir(data_dir: &Path, marketplace: &str, name: &str) -> PathBuf {
 #[derive(Default, Debug, PartialEq, Eq)]
 pub struct PluginParts {
     pub commands: Vec<openremote_harness::CommandDescriptor>,
+    /// Which of `commands` are skills (skills/<name>/SKILL.md).
+    pub skills: Vec<String>,
     pub agents: Vec<openremote_harness::AgentDescriptor>,
     pub mcp_servers: Vec<String>,
 }
@@ -378,6 +395,7 @@ pub fn plugin_parts(dir: &Path, prefix: &str) -> PluginParts {
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default()
             });
+            parts.skills.push(format!("{prefix}:{name}"));
             parts.commands.push(openremote_harness::CommandDescriptor {
                 name: format!("{prefix}:{name}"),
                 description: meta.get("description").cloned(),
@@ -526,6 +544,12 @@ pub enum SourceRequest {
         #[serde(default)]
         approve_command: Option<String>,
     },
+    /// A plugin a registered project's repo carries
+    /// (`.openremote/plugins/<name>`), read for this machine's approval.
+    Project {
+        project: String,
+        name: String,
+    },
 }
 
 impl SourceRequest {
@@ -556,7 +580,7 @@ impl SourceRequest {
                     location: location.clone(),
                 },
             ),
-            SourceRequest::Marketplace { .. } => return None,
+            SourceRequest::Marketplace { .. } | SourceRequest::Project { .. } => return None,
         };
         Some(StageRequest {
             fetch,
@@ -627,6 +651,11 @@ pub struct Staged {
 impl Staged {
     pub fn id(&self) -> String {
         format!("{}@{}", self.name, self.marketplace)
+    }
+
+    /// The fetched plugin folder, before it is placed.
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 }
 
@@ -702,6 +731,7 @@ impl PluginHost {
             if let Some(why) = manifest.nothing_left() {
                 return Err(PluginError::Invalid(why));
             }
+            crate::plugin_runtime::check_staged(&root, &manifest)?;
             write_bare_claude_manifest(&root, &manifest)?;
             Ok((root, manifest, resolved))
         }
@@ -759,6 +789,12 @@ impl PluginHost {
         let result = swap_in(&self.root, &staged.root, &target);
         let _ = std::fs::remove_dir_all(&staged.dir);
         result
+    }
+
+    /// A staged install's leftovers, once its folder was placed elsewhere
+    /// (a project's own folder).
+    pub fn discard(&self, staged: Staged) {
+        let _ = std::fs::remove_dir_all(&staged.dir);
     }
 
     pub fn uninstall(&self, marketplace: &str, name: &str) -> Result<(), PluginError> {
@@ -886,7 +922,7 @@ async fn fetch(fetch: &Fetch, to: &Path) -> Result<Option<String>, PluginError> 
             }
             let to = to.to_path_buf();
             let inner = path.clone();
-            tokio::task::spawn_blocking(move || unpack(&bytes, &to, inner.as_deref()))
+            tokio::task::spawn_blocking(move || unpack_within(&bytes, &to, inner.as_deref()))
                 .await
                 .map_err(|e| PluginError::Source(e.to_string()))??;
             Ok(Some(digest))
@@ -1202,7 +1238,7 @@ async fn npm_fetch(
         integrity.check(&bytes, &tarball)?;
     }
     let to = to.to_path_buf();
-    tokio::task::spawn_blocking(move || unpack(&bytes, &to, None))
+    tokio::task::spawn_blocking(move || unpack(&bytes, &to))
         .await
         .map_err(|e| PluginError::Source(e.to_string()))??;
     Ok(resolved)
@@ -1584,10 +1620,15 @@ fn write_bare_claude_manifest(root: &Path, manifest: &Manifest) -> Result<(), Pl
     Ok(())
 }
 
-/// Unpack a .zip or .tar.gz into `to` - only the folder `inner` names
-/// inside it, when it names one - refusing any entry that would land
-/// outside it and any archive that unpacks past the size limit.
-fn unpack(bytes: &[u8], to: &Path, inner: Option<&str>) -> Result<(), PluginError> {
+/// Unpack a whole .zip or .tar.gz into `to`, refusing any entry that
+/// would land outside it and any archive that unpacks past the size limit.
+pub(crate) fn unpack(bytes: &[u8], to: &Path) -> Result<(), PluginError> {
+    unpack_within(bytes, to, None)
+}
+
+/// `unpack`, or - when `inner` names a folder - only that folder of the
+/// archive, which becomes the top of `to`; the rest stays behind.
+fn unpack_within(bytes: &[u8], to: &Path, inner: Option<&str>) -> Result<(), PluginError> {
     if let Some(inner) = inner {
         if !relative_inside(inner) {
             return Err(PluginError::Invalid(format!(
@@ -1834,7 +1875,7 @@ mod tests {
             zip.finish().unwrap();
         }
         let to = tempfile::tempdir().unwrap();
-        let err = unpack(&bytes, to.path(), None).unwrap_err().to_string();
+        let err = unpack(&bytes, to.path()).unwrap_err().to_string();
         assert!(err.contains("outside"), "{err}");
     }
 

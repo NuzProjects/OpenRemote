@@ -1,7 +1,12 @@
 // The browser's tab list as the console keeps it: order, which tab is
-// active, closing and reopening. A tab is { key, native, url, title,
-// loading }: `native` is the shell's webview for it, null while the tab
-// shows the new tab page. Pure: tested without a DOM.
+// active, closing and reopening, what is saved for the next start and
+// which pages to put away when too many are open. A tab is { key, native,
+// url, title, loading, ... }: `native` is the shell's webview for it, null
+// while the tab shows one of the browser's own pages or waits as an entry
+// (restored, or put away) for its page to open. Pure: tested without a
+// DOM.
+
+import { internalPage } from './browser-omnibox.js'
 
 let counter = 0
 
@@ -45,4 +50,41 @@ export function tabTitle(tab) {
   if (tab.title) return tab.title
   if (tab.url && tab.url !== 'about:blank') return tab.url.replace(/^https?:\/\//, '')
   return 'New tab'
+}
+
+// A tab waiting for its page: it has a web address but no webview yet.
+export function isDormant(tab) {
+  return Boolean(tab?.url) && !tab.native && !internalPage(tab.url)
+}
+
+// The tabs saved for the next start: every tab with an address, never a
+// private one, and which of them was showing.
+export function sessionOf(tabs, active) {
+  const kept = tabs.filter((t) => !t.private && t.url && t.url !== 'about:blank')
+  const at = kept.findIndex((t) => t.key === active)
+  return { tabs: kept.map((t) => ({ url: t.url, title: t.title ?? '' })), active: Math.max(0, at) }
+}
+
+// A saved session as tabs again: entries with their address and title,
+// which open their pages when first shown. Anything malformed is dropped.
+export function restoredTabs(session) {
+  const saved = Array.isArray(session?.tabs) ? session.tabs : []
+  const tabs = saved
+    .filter((t) => t && typeof t.url === 'string' && t.url && !/^javascript:/i.test(t.url))
+    .map((t) => newTab({ url: t.url, title: typeof t.title === 'string' ? t.title : '' }))
+  const at = Number.isInteger(session?.active) ? session.active : 0
+  return { tabs, active: Math.min(Math.max(0, at), Math.max(0, tabs.length - 1)) }
+}
+
+// When more than `limit` pages are open, the ones to put away: the least
+// recently shown first, never the tab on screen, one an agent holds, or a
+// private one (putting it away would end its private session).
+export function toDiscard(tabs, active, limit = 10) {
+  const live = tabs.filter((t) => t.native)
+  const extra = live.length - limit
+  if (extra <= 0) return []
+  return live
+    .filter((t) => t.key !== active && !t.controller && !t.private)
+    .sort((a, b) => (a.seen ?? 0) - (b.seen ?? 0))
+    .slice(0, extra)
 }

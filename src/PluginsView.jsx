@@ -1,8 +1,10 @@
 // Plugins, in three tabs. Discover: every plugin the marketplaces offer.
 // Installed: the six harnesses OpenRemote drives, built in, and the
-// plugins the user installed - each with its runtime and the powers it
-// was given. Marketplaces: where Discover's plugins come from. MCP servers
-// set up by hand live in Settings, under MCP servers.
+// plugins the user installed - each with its runtime, who it is for, and
+// the powers it was given - plus the plugins a project's repo carries
+// that wait for this computer's review. Marketplaces: where Discover's
+// plugins come from. MCP servers set up by hand live in Settings, under
+// MCP servers.
 
 import { useState } from 'react'
 import { useConsole } from './state/console.jsx'
@@ -10,7 +12,9 @@ import { HarnessMark } from './brand-marks.jsx'
 import InstallPluginModal from './InstallPluginModal.jsx'
 import PluginDiscover from './PluginDiscover.jsx'
 import PluginMarketplaces from './PluginMarketplaces.jsx'
-import { POWER_SHORT, RUNTIME_LABEL, clashes, notSandboxed, sourceLabel } from './plugins.js'
+import { POWER_SHORT, RUNTIME_LABEL, clashes, notSandboxed, scopeLabel, sourceLabel } from './plugins.js'
+import { usePlugins } from './plugins-host.jsx'
+import { projectName } from './projects.js'
 import './devices.css'
 import './panels.css'
 import './plugins.css'
@@ -23,8 +27,8 @@ const TABS = [
 
 export default function PluginsView() {
   const [tab, setTab] = useState('discover')
-  // What the Install dialog is open for: a Discover entry, or a direct
-  // install (folder, git repo, archive).
+  // What the Install dialog is open for: a Discover entry, a repo's
+  // plugin to review, or a direct install (folder, git repo, archive).
   const [installing, setInstalling] = useState(null)
 
   return (
@@ -57,16 +61,26 @@ export default function PluginsView() {
       </div>
 
       {tab === 'discover' && <PluginDiscover onInstall={(entry) => setInstalling({ entry })} />}
-      {tab === 'installed' && <InstalledPlugins onUpdate={(entry) => setInstalling({ entry })} />}
+      {tab === 'installed' && (
+        <InstalledPlugins
+          onUpdate={(entry) => setInstalling({ entry })}
+          onReview={(source) => setInstalling({ source })}
+        />
+      )}
       {tab === 'marketplaces' && <PluginMarketplaces />}
 
-      {installing && <InstallPluginModal entry={installing.entry} onClose={() => setInstalling(null)} />}
+      {installing && (
+        <InstallPluginModal entry={installing.entry} source={installing.source} onClose={() => setInstalling(null)} />
+      )}
     </div>
   )
 }
 
-function InstalledPlugins({ onUpdate }) {
-  const { plugins, catalog, marketplaces, setPluginEnabled, removePlugin } = useConsole()
+function InstalledPlugins({ onUpdate, onReview }) {
+  const { plugins, catalog, marketplaces, projects, setPluginEnabled, removePlugin } = useConsole()
+  // What the console read of each plugin's openremote.json: whether it
+  // has settings to open.
+  const host = usePlugins()
   const [confirmRemove, setConfirmRemove] = useState(null)
   const [error, setError] = useState(null)
   const builtin = plugins?.builtin ?? []
@@ -74,6 +88,12 @@ function InstalledPlugins({ onUpdate }) {
   const entries = new Map((catalog?.entries ?? []).map((e) => [e.id, e]))
   const known = new Set((marketplaces ?? []).map((m) => m.name))
   const clashing = clashes(installed)
+  const found = plugins?.found ?? []
+  const pending = plugins?.global_pending ?? []
+  const nameOf = (id) => {
+    const project = (projects ?? []).find((p) => p.id === id)
+    return project ? projectName(project) : null
+  }
 
   const run = async (action) => {
     setError(null)
@@ -118,7 +138,41 @@ function InstalledPlugins({ onUpdate }) {
         ))}
       </div>
 
+      {found.length > 0 && (
+        <>
+          <h2 className="pn-section">Waiting for your review</h2>
+          <p className="pn-lead">
+            A project&apos;s repo carries these. Nothing runs until you have seen what each asks for.
+          </p>
+          <div className="pn-list pn-list--wide">
+            {found.map((f) => (
+              <div className="pn-row pg-found" key={`${f.project}/${f.name}`}>
+                <div>
+                  <div className="pn-name">{f.name}</div>
+                  <div className="pn-detail">
+                    {f.why === 'changed' ? 'Changed in the repo since you approved it' : 'New in the repo'} ·{' '}
+                    {nameOf(f.project) ?? 'a project'}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="pn-btn"
+                  onClick={() => onReview({ kind: 'project', project: f.project, name: f.name })}
+                >
+                  Review
+                </button>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
       <h2 className="pn-section">Installed</h2>
+      {pending.map((g) => (
+        <p key={g.id} className="pn-lead">
+          {g.name} is on your other devices and not here yet{g.error ? `: ${g.error}` : ''}.
+        </p>
+      ))}
       {installed.length === 0 && (
         <p className="pn-empty">
           Nothing installed yet. Find plugins under Discover, or install one from a folder, a git repo
@@ -141,6 +195,11 @@ function InstalledPlugins({ onUpdate }) {
                   <div className="pn-detail">{p.description ?? RUNTIME_LABEL[p.runtime]}</div>
                 </div>
                 <div className="pn-actions">
+                  {host?.records.get(p.id)?.ui.settings.length > 0 && (
+                    <button type="button" className="pn-btn" onClick={() => host.openSettings(p.id)}>
+                      Settings
+                    </button>
+                  )}
                   {entry?.update && (
                     <button type="button" className="pn-btn pg-update" onClick={() => onUpdate(entry)}>
                       Update{entry.version ? ` to ${entry.version}` : ''}
@@ -162,7 +221,11 @@ function InstalledPlugins({ onUpdate }) {
                         run(() => removePlugin(p.id))
                       }}
                     >
-                      Remove it
+                      {p.scope === 'project'
+                        ? 'Remove it and its files from the repo'
+                        : p.scope === 'global'
+                          ? 'Remove it from every device'
+                          : 'Remove it'}
                     </button>
                   ) : (
                     <button type="button" className="pn-btn" onClick={() => setConfirmRemove(p.id)}>
@@ -173,16 +236,30 @@ function InstalledPlugins({ onUpdate }) {
               </div>
               <div className="pg-facts">
                 <span className="pg-chip">{RUNTIME_LABEL[p.runtime] ?? p.runtime}</span>
+                <span className="pg-chip">{scopeLabel(p, nameOf(p.project))}</span>
                 {(p.powers ?? []).map((w) => (
                   <span key={w} className="pg-chip">
                     {POWER_SHORT[w] ?? w}
                   </span>
                 ))}
                 {notSandboxed(p) && <span className="pg-chip pg-warn">Runs as you, not sandboxed</span>}
+                {/* Where a JavaScript plugin shows up in the app. */}
+                {p.runtime === 'js' && host?.records.get(p.id)?.ui.inputs.length > 0 && (
+                  <span className="pg-chip">In the composer</span>
+                )}
+                {p.runtime === 'js' && host?.records.get(p.id)?.ui.views.length > 0 && (
+                  <span className="pg-chip">In the sidebar</span>
+                )}
               </div>
               <div className="pg-source pv">{sourceLabel(p.source)}</div>
               {orphaned && (
                 <div className="pg-sub">Its marketplace was removed: it keeps working, with no more updates.</div>
+              )}
+              {p.process?.state === 'waiting' && (
+                <div className="pg-sub">
+                  It stopped by itself{p.process.error ? ` (${p.process.error})` : ''} and starts again on its
+                  next use, after a short pause.
+                </div>
               )}
             </div>
           )

@@ -1,0 +1,57 @@
+{
+  "api": 1,
+  "name": "toy-harness",
+  "version": "0.1.0",
+  "description": "A toy command-line agent driven as an OpenRemote harness, with one agent tool. An example of a process plugin.",
+  "runtime": "process",
+  "entry": {
+    "command": "node",
+    "args": ["${OPENREMOTE_PLUGIN_ROOT}/plugin.js"]
+  },
+  "powers": ["agent_tools"],
+  "contributes": {
+    "harnesses": [
+      {
+        "id": "toy",
+        "name": "Toy CLI",
+        "description": "Echoes what you say, counts it, and asks before it shouts.",
+        "models": [
+          { "model": "toy-echo", "display_name": "Toy Echo", "default": true },
+          { "model": "toy-mirror", "display_name": "Toy Mirror", "efforts": ["low", "high"] }
+        ],
+        "permission_modes": ["ask", "allow"],
+        "default_permission": "ask",
+        "one_prompt_at_a_time": true
+      }
+    ],
+    "tools": [
+      {
+        "name": "word_count",
+        "description": "Count the words, lines and characters in a piece of text.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "text": { "type": "string", "description": "The text to count." }
+          },
+          "required": ["text"]
+        },
+        "read_only": true
+      }
+    ],
+    "settings": [
+      {
+        "key": "greeting",
+        "type": "string",
+        "label": "Greeting",
+        "help": "What the toy says before every reply.",
+        "default": "Hello"
+      },
+      {
+        "key": "token",
+        "type": "secret",
+        "label": "Token",
+        "help": "A pretend API token, to show how secrets reach a plugin. The toy only says whether one is set."
+      }
+    ]
+  }
+}

@@ -9,6 +9,28 @@ import { useConsole } from './state/console.jsx'
 import ComposerMenu from './ComposerMenu.jsx'
 import { applyPick, argItems, chatList, commandItems, mentionItems, menuAt, ownCommands } from './composer-menus.js'
 
+// The / commands this device picked lately, newest first: the menu's
+// "Recent" before anything is typed.
+const RECENT_KEY = 'openremote-recent-commands'
+
+function readRecent() {
+  try {
+    const list = JSON.parse(localStorage.getItem(RECENT_KEY) ?? '[]')
+    return Array.isArray(list) ? list.filter((n) => typeof n === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+function noteRecent(name) {
+  try {
+    const list = [name, ...readRecent().filter((n) => n !== name)].slice(0, 8)
+    localStorage.setItem(RECENT_KEY, JSON.stringify(list))
+  } catch {
+    /* storage unavailable: no recents, nothing else lost */
+  }
+}
+
 export function useComposerMenus({
   text,
   setText,
@@ -83,6 +105,7 @@ export function useComposerMenus({
       items = commandItems(menu.query, {
         harnessCommands: view?.commands ?? [],
         own: ownCommands({ inChat, cloud: cloudReady }),
+        recent: readRecent(),
       })
     } else if (menu.kind === '@') {
       items = mentionItems(menu.query, {
@@ -104,6 +127,7 @@ export function useComposerMenus({
 
   const pick = (item) => {
     if (!item || item.disabled || !menu) return
+    if (item.kind === 'command') noteRecent(item.insertion.slice(1))
     const next = applyPick(text, menu, item.insertion, { space: item.space !== false })
     setText(next.text)
     setCaret(next.caret)
@@ -129,7 +153,15 @@ export function useComposerMenus({
       e.preventDefault()
       e.stopPropagation()
       const step = e.key === 'ArrowDown' ? 1 : -1
-      setActive((i) => (i + step + items.length) % items.length)
+      // Notes are read, not picked: the keys step over them.
+      setActive((i) => {
+        let next = i
+        for (let n = 0; n < items.length; n += 1) {
+          next = (next + step + items.length) % items.length
+          if (!items[next].note) break
+        }
+        return next
+      })
       return true
     }
     if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {

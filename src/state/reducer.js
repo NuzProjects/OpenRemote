@@ -55,8 +55,10 @@ export function chatFromSession(session) {
     running: ['starting', 'working', 'waiting'].includes(session.status),
     // The harness has its own conversation for this chat (claude's
     // `--resume` id, codex's thread id, ...). Without one - a chat stopped
-    // before its first message - there is nothing to resume, ever.
-    resumable: Boolean(session.harness_session_ref),
+    // before its first message - there is nothing to resume, ever. A chat
+    // moved where its conversation couldn't follow resumes as a fresh
+    // one, carrying the chat so far.
+    resumable: Boolean(session.harness_session_ref) || session.carry_transcript != null,
     // The daemon keeps each chat's title, so every device shows the same
     // name before the transcript loads.
     title: session.title ?? null,
@@ -171,9 +173,15 @@ export function foldEvent(chat, event) {
       if (session.model) chat.model = session.model
       if (session.effort) chat.effort = session.effort
       if (session.permission_mode) chat.permissionMode = session.permission_mode
-      if (session.harness_session_ref) chat.resumable = true
+      if (session.harness_session_ref || session.carry_transcript != null) chat.resumable = true
+      // A move: the whole session rides along, so an absent workspace is
+      // the chat leaving every project, never a missing fact.
+      chat.workspace = session.workspace ?? null
+      chat.project = workspaceName(session.workspace)
       chat.fast = session.fast ?? chat.fast
-      chat.approvedTools = session.approved_tools ?? chat.approvedTools
+      // An empty list is left off the wire: absent is none (a move into a
+      // fresh conversation drops the grants the old one had).
+      chat.approvedTools = session.approved_tools ?? []
       break
     }
     case 'message.added': {
@@ -194,6 +202,9 @@ export function foldEvent(chat, event) {
         id: message.id,
         role: message.role === 'user' ? 'user' : 'agent',
         text: message.text,
+        // The pictures the user sent with it, as the blob store names
+        // them; the bytes are fetched when the bubble shows.
+        images: message.images ?? [],
       })
       if (message.role === 'user' && !chat.title) chat.title = titleFrom(message.text)
       break
@@ -224,6 +235,7 @@ export function foldEvent(chat, event) {
         input: payload.input,
         state: 'ok',
         result: null,
+        images: [],
       })
       break
     }
@@ -301,6 +313,9 @@ export function foldEvent(chat, event) {
         if (item.kind === 'tool' && item.turn === payload.turn && item.name === payload.name && item.result == null) {
           item.result = typeof payload.output === 'string' ? payload.output : JSON.stringify(payload.output)
           item.state = payload.is_error ? 'failed' : 'ok'
+          // What the tool answered with besides words (an agent's
+          // screenshot of a page), named in the blob store.
+          item.images = payload.images ?? []
           break
         }
       }

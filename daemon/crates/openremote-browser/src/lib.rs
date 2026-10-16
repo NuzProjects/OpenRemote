@@ -93,6 +93,10 @@ pub struct TabInfo {
     /// Who is using the tab now, when not just the user.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub controller: Option<Controller>,
+    /// A private tab the user handed to agents: it never reaches history.
+    /// (Private tabs not handed over never reach the daemon at all.)
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub private: bool,
 }
 
 /// Who holds a tab.
@@ -306,7 +310,9 @@ pub fn line<T: Serialize>(message: &T) -> String {
 
 /// A pipe line's message, if the line is a browser line and parses.
 pub fn parse<T: for<'de> Deserialize<'de>>(line: &str) -> Option<T> {
-    let json = line.trim_end_matches(['\r', '\n']).strip_prefix(LINE_PREFIX)?;
+    let json = line
+        .trim_end_matches(['\r', '\n'])
+        .strip_prefix(LINE_PREFIX)?;
     serde_json::from_str(json).ok()
 }
 

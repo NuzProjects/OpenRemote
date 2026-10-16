@@ -613,10 +613,140 @@
       width: Math.max(doc.scrollWidth, window.innerWidth),
       height: Math.max(doc.scrollHeight, window.innerHeight),
       viewport: { width: window.innerWidth, height: window.innerHeight },
+      scroll: { x: window.scrollX, y: window.scrollY },
+      dpr: window.devicePixelRatio || 1,
     }
   }
 
+  // The file picker behind an element: the element itself when it is one,
+  // else the one a styled upload button stands in for (often hidden).
+  function fileInput(ref) {
+    const el = byRef(ref)
+    if (el.localName === 'input' && el.type === 'file') return el
+    const inside = el.querySelector?.('input[type=file]')
+    if (inside) return inside
+    if (el.localName === 'label' && el.control?.type === 'file') return el.control
+    for (let p = el.parentElement, n = 0; p && n < 4; p = p.parentElement, n++) {
+      const near = p.querySelector('input[type=file]')
+      if (near) return near
+    }
+    return null
+  }
+
+  // A short CSS path to an element, for the agent to name it by.
+  function selectorOf(el) {
+    const parts = []
+    for (let node = el; node && node.nodeType === Node.ELEMENT_NODE && parts.length < 5; node = node.parentElement) {
+      if (node.id && node.ownerDocument.querySelectorAll(`#${CSS.escape(node.id)}`).length === 1) {
+        parts.unshift(`#${CSS.escape(node.id)}`)
+        break
+      }
+      let part = node.localName
+      const classes = [...node.classList].filter((c) => !/\d{3,}|^css-|^_/.test(c)).slice(0, 2)
+      if (classes.length) part += classes.map((c) => `.${CSS.escape(c)}`).join('')
+      const parent = node.parentElement
+      if (parent) {
+        const same = [...parent.children].filter((c) => c.localName === node.localName)
+        if (same.length > 1) part += `:nth-of-type(${same.indexOf(node) + 1})`
+      }
+      parts.unshift(part)
+    }
+    return parts.join(' > ')
+  }
+
+  // What a picked element is, for a chat: the agent gets this as text.
+  function describeFully(el) {
+    const role = roleOf(el) || el.localName
+    const box = el.getBoundingClientRect()
+    const html = el.outerHTML || ''
+    return {
+      role,
+      name: nameOf(el, role),
+      tag: el.localName,
+      text: clean(el.innerText || el.textContent || '', 600),
+      selector: selectorOf(el),
+      html: html.length > 1500 ? `${html.slice(0, 1499)}…` : html,
+      rect: { x: box.left + window.scrollX, y: box.top + window.scrollY, width: box.width, height: box.height },
+      url: location.href,
+      title: document.title,
+    }
+  }
+
+  // The element picker: the element under the pointer is outlined, a click
+  // picks it (the page never sees that click), Esc gives up. The choice
+  // goes out through the binding the browser added to this world.
+  let picking = null
+  function pick(on) {
+    if (picking) {
+      picking.stop()
+      picking = null
+    }
+    if (!on) return true
+    const box = document.createElement('div')
+    box.style.cssText = `position:fixed;pointer-events:none;border:2px solid ${ACCENT};border-radius:4px;box-sizing:border-box;display:none`
+    const label = document.createElement('div')
+    label.style.cssText = `position:fixed;pointer-events:none;padding:2px 6px;border-radius:4px;background:${ACCENT};color:#0a0c0f;font:12px system-ui,sans-serif;display:none;max-width:320px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis`
+    if (!host || !host.isConnected) {
+      host = document.createElement('openremote-mark')
+      host.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483647'
+      host._root = host.attachShadow({ mode: 'closed' })
+      document.documentElement.appendChild(host)
+    }
+    host._root.append(box, label)
+    let current = null
+    const send = (payload) => {
+      try {
+        globalThis.__openremotePick(JSON.stringify(payload))
+      } catch {}
+    }
+    const move = (e) => {
+      const el = e.composedPath?.()[0] instanceof Element ? e.composedPath()[0] : e.target
+      if (!(el instanceof Element) || el === current) return
+      current = el
+      const r = el.getBoundingClientRect()
+      box.style.display = label.style.display = 'block'
+      Object.assign(box.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` })
+      label.textContent = describe(el)
+      Object.assign(label.style, { left: `${Math.max(0, r.left)}px`, top: `${Math.max(0, r.top - 22)}px` })
+    }
+    const swallow = (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      e.stopImmediatePropagation()
+    }
+    const choose = (e) => {
+      swallow(e)
+      const el = current || e.target
+      pick(false)
+      if (el instanceof Element) send(describeFully(el))
+    }
+    const key = (e) => {
+      if (e.key !== 'Escape') return
+      swallow(e)
+      pick(false)
+      send({ cancel: true })
+    }
+    const opts = { capture: true }
+    window.addEventListener('pointermove', move, opts)
+    for (const type of ['pointerdown', 'mousedown', 'mouseup']) window.addEventListener(type, swallow, opts)
+    window.addEventListener('click', choose, opts)
+    window.addEventListener('keydown', key, opts)
+    picking = {
+      stop() {
+        window.removeEventListener('pointermove', move, opts)
+        for (const type of ['pointerdown', 'mousedown', 'mouseup']) window.removeEventListener(type, swallow, opts)
+        window.removeEventListener('click', choose, opts)
+        window.removeEventListener('keydown', key, opts)
+        box.remove()
+        label.remove()
+      },
+    }
+    return true
+  }
+
   Object.defineProperty(globalThis, '__openremote', {
-    value: Object.freeze({ snapshot, point, focusField, setValue, selectOptions, scrollBy, click, outline, element, rect, text, page }),
+    value: Object.freeze({
+      snapshot, point, focusField, setValue, selectOptions, scrollBy, click, outline, element, rect, text, page, fileInput, pick,
+    }),
   })
 })()
