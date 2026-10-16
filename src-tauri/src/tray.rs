@@ -75,7 +75,10 @@ pub fn keeps_running(app: &AppHandle) -> bool {
 }
 
 pub fn show_main(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
+    // get_window, not get_webview_window: once the built-in browser adds a
+    // tab, the window holds more than one webview and is no longer a
+    // "webview window", so the latter would find nothing.
+    if let Some(window) = app.get_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();

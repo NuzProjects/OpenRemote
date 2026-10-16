@@ -8,6 +8,8 @@ use std::sync::Mutex;
 use tauri::State;
 
 #[cfg(desktop)]
+mod browser;
+#[cfg(desktop)]
 mod desktop;
 #[cfg(target_os = "android")]
 mod mobile;

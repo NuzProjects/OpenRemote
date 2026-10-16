@@ -4,5 +4,5 @@
   "description": "The Android app: the console and the app's own commands; the shell opens pages and hears the sign-in's return address itself",
   "windows": ["main"],
   "platforms": ["android", "iOS"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "allow-daemon-info", "allow-open-url"]
 }

@@ -8,7 +8,10 @@ edition = "2021"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# ~2.12: the built-in browser's tabs are child webviews, which Tauri ships
+# behind its `unstable` feature; that API may change in a minor release,
+# so the minor version only moves on purpose.
+tauri = { version = "~2.12", features = [] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -16,9 +19,20 @@ serde_json = "1"
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 # tray-icon: OpenRemote can keep running in the tray when its window closes.
 # (Keep panic = unwind: the Linux tray's appindicator guard catches a panic.)
-tauri = { version = "2", features = ["tray-icon"] }
+# unstable: the built-in browser's tabs are child webviews of the window.
+tauri = { version = "~2.12", features = ["tray-icon", "unstable"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-shell = "2"
+tokio = { version = "1", features = ["sync"] }
+
+[target.'cfg(windows)'.dependencies]
+# The browser drives each tab's WebView2 directly (the DevTools protocol,
+# browser keys, history): the same versions wry already links, so nothing
+# new ships.
+webview2-com = "0.39"
+windows = { version = "0.62", features = ["Win32_System_Com", "Win32_UI_Input_KeyboardAndMouse"] }
+# A page's icon reaches the console as a data URL.
+base64 = "0.22"
 
 [target.'cfg(any(windows, target_os = "linux"))'.dependencies]
 # A second launch shows the running window instead of starting a second

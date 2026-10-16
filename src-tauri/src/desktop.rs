@@ -10,7 +10,7 @@ use tauri::{Manager, State, WindowEvent};
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 
-use crate::{tray, DaemonInfo, DaemonState};
+use crate::{browser, tray, DaemonInfo, DaemonState};
 
 const DAEMON_NAME: &str = "openremote-daemon";
 
@@ -67,13 +67,45 @@ pub fn run() {
         .manage(DaemonState::default())
         .manage(Sidecar::default())
         .manage(tray::TrayState::default())
+        .manage(browser::Browser::default())
         .invoke_handler(tauri::generate_handler![
             crate::daemon_info,
             daemon_restart,
             tray::tray_prefs,
-            tray::set_tray_prefs
+            tray::set_tray_prefs,
+            browser::browser_open,
+            browser::browser_tabs,
+            browser::browser_close,
+            browser::browser_set_bounds,
+            browser::browser_show,
+            browser::browser_hide,
+            browser::browser_navigate,
+            browser::browser_back,
+            browser::browser_forward,
+            browser::browser_reload,
+            browser::browser_capture,
+            browser::browser_cdp,
+            browser::browser_stop,
+            browser::browser_zoom,
+            browser::browser_find,
+            browser::browser_print,
+            browser::browser_devtools,
+            browser::browser_viewport,
+            browser::browser_clear_site,
+            browser::browser_open_external,
+            browser::browser_reveal
         ])
         .setup(|app| {
+            // A dev build gives the console's webview a debugging port
+            // (main.rs). The window exists by now, so the variable has done
+            // its job; dropping it keeps the port off the browser's own
+            // profile, which is driven in-process and never opens one.
+            #[cfg(all(windows, debug_assertions))]
+            std::env::remove_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS");
+            #[cfg(all(windows, debug_assertions))]
+            if let Some(out) = std::env::var_os("OPENREMOTE_BROWSER_SELFTEST") {
+                browser::selftest::start(app.handle().clone(), out.into());
+            }
             tray::load(app.handle());
             tray::apply(app.handle());
             spawn_daemon(app.handle().clone());

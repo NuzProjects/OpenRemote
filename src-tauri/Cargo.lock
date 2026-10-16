@@ -2895,6 +2895,7 @@ name = "openremote-ui-desktop"
 version = "0.3.2"
 dependencies = [
  "android_system_properties",
+ "base64 0.22.1",
  "openremote-cloud",
  "openremote-daemon",
  "serde",
@@ -2908,6 +2909,8 @@ dependencies = [
  "tauri-plugin-shell",
  "tauri-plugin-single-instance",
  "tokio",
+ "webview2-com",
+ "windows",
 ]
 
 [[package]]

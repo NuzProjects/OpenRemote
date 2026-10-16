@@ -1,9 +1,15 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Main window: frameless caption controls, daemon sidecar",
-  "windows": ["main"],
-  "platforms": ["windows", "linux", "macOS"],
+  "description": "The console's webview only (never the built-in browser's tabs): frameless caption controls and the app's own commands; the shell owns the daemon sidecar itself",
+  "webviews": [
+    "main"
+  ],
+  "platforms": [
+    "windows",
+    "linux",
+    "macOS"
+  ],
   "permissions": [
     "core:default",
     "autostart:allow-enable",
@@ -15,10 +21,30 @@
     "core:window:allow-close",
     "core:window:allow-start-dragging",
     "core:window:allow-is-maximized",
-    {
-      "identifier": "shell:allow-spawn",
-      "allow": [{ "name": "openremote-daemon", "sidecar": true }]
-    },
-    "shell:allow-stdin-write"
+    "allow-daemon-info",
+    "allow-daemon-restart",
+    "allow-tray-prefs",
+    "allow-set-tray-prefs",
+    "allow-browser-open",
+    "allow-browser-tabs",
+    "allow-browser-close",
+    "allow-browser-set-bounds",
+    "allow-browser-show",
+    "allow-browser-hide",
+    "allow-browser-navigate",
+    "allow-browser-back",
+    "allow-browser-forward",
+    "allow-browser-reload",
+    "allow-browser-capture",
+    "allow-browser-cdp",
+    "allow-browser-stop",
+    "allow-browser-zoom",
+    "allow-browser-find",
+    "allow-browser-print",
+    "allow-browser-devtools",
+    "allow-browser-viewport",
+    "allow-browser-clear-site",
+    "allow-browser-open-external",
+    "allow-browser-reveal"
   ]
 }
