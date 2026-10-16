@@ -16,6 +16,7 @@ import {
   ImageSquare,
   CaretDown,
   CaretRight,
+  ArrowBendUpLeft,
 } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
 import { chatAccess, deviceName, signedIn } from './cloud.js'
@@ -43,8 +44,12 @@ import { ChatImages, chatImageDataUrl } from './chat-images.jsx'
 import { findDevServers, noteDevServers } from './devservers.js'
 import { isBrowsing, requestBrowser } from './browser-placement.js'
 import { browserTool, foldsResult, isBrowserTool } from './browser-tools.js'
+import { foldsTeamResult, isTeamTool, teamTool } from './team.js'
+import { requestBeside } from './team-placement.js'
+import TeamBar from './TeamBar.jsx'
 import './chatview.css'
 import './composer.css'
+import './team.css'
 
 // The harnesses that run one process per prompt cannot take a message
 // mid-turn: Steer interrupts the turn and runs the message next there.
@@ -103,7 +108,7 @@ function DevServerChips({ text, chatId }) {
 
 /// A tool's output row. A page read as text runs long, so it folds until
 /// asked for.
-function OutRow({ out, fold }) {
+function OutRow({ out, fold, what = 'the page text' }) {
   const [open, setOpen] = useState(!fold)
   return (
     <>
@@ -114,14 +119,14 @@ function OutRow({ out, fold }) {
         ) : (
           <button type="button" className="cv-fold" onClick={() => setOpen(true)} aria-expanded={false}>
             <CaretRight size={11} />
-            Show the page text
+            Show {what}
           </button>
         )}
       </div>
       {open && fold && (
         <button type="button" className="cv-fold cv-fold--under" onClick={() => setOpen(false)} aria-expanded>
           <CaretDown size={11} />
-          Fold the page text
+          Fold {what}
         </button>
       )}
       {open && out.hidden > 0 && (
@@ -152,6 +157,41 @@ function BrowserFacts({ facts }) {
         ))}
     </>
   )
+}
+
+/// Who a message came from when it was another agent's word, not the
+/// user's: "from <title>", opening that chat beside this one - and, on a
+/// worker's first message, "Started by <lead>" (its way back to the lead).
+function OriginChip({ origin, chatId, started }) {
+  const { sessions } = useConsole()
+  const known = sessions.some((s) => s.id === origin.chat)
+  return (
+    <button
+      type="button"
+      className="cv-origin"
+      disabled={!known}
+      onClick={() => requestBeside({ from: chatId, chat: origin.chat })}
+      title={
+        started
+          ? 'This chat was started by another chat\'s agent - open it beside this one'
+          : origin.report
+            ? 'A report from a worker, not from you - open its chat beside this one'
+            : 'Another agent sent this, not you - open its chat beside this one'
+      }
+    >
+      <ArrowBendUpLeft size={11} />
+      <span className="pv">
+        {started ? 'Started by ' : 'from '}
+        {origin.title}
+      </span>
+    </button>
+  )
+}
+
+/// A team tool's argument worth reading before saying yes (the brief it
+/// starts a worker with, the message it sends), in the words it was written.
+function TeamFacts({ facts }) {
+  return facts.detail ? <p className="cv-bt-detail pv">{facts.detail}</p> : null
 }
 
 const STATUS_LABEL = {
@@ -211,7 +251,8 @@ function ReasoningBlock({ text, live }) {
 /// action. On answer the amber drains back to a settled card and the
 /// buttons fade out over 0.3s - only for a decision this view watched
 /// pending, never for history reopened already answered.
-function DecisionCard({ item, onAnswer }) {
+function DecisionCard({ item, onAnswer, chatId }) {
+  const { sessions } = useConsole()
   const [leaving, setLeaving] = useState(false)
   const wasPending = useRef(item.pending)
   useEffect(() => {
@@ -234,6 +275,12 @@ function DecisionCard({ item, onAnswer }) {
   // A browser action asks in words: what it acts on, where, and what it
   // types or runs - never a JSON dump.
   const browser = !question && isBrowserTool(item.toolName) ? browserTool(item.toolName, item.input) : null
+  // A team tool asks in words too: whom it starts, stops or writes to, and
+  // the brief or message it carries.
+  const team =
+    !question && isTeamTool(item.toolName)
+      ? teamTool(item.toolName, item.input, { ask: true, sessions, chatId })
+      : null
   // An approval's input rides its tool card once the answer settles it -
   // the run card is the one full record, so the settled card keeps the
   // answer line alone (never the same command twice). The 0.3s fade
@@ -252,7 +299,8 @@ function DecisionCard({ item, onAnswer }) {
         </div>
       )}
       {keepBody && browser && <BrowserFacts facts={browser} />}
-      {keepBody && item.input && !question && !command && !browser && (
+      {keepBody && team && <TeamFacts facts={team} />}
+      {keepBody && item.input && !question && !command && !browser && !team && (
         <div className="cv-decision-io pv">
           <span className="cv-io-label">In</span>
           <code>{typeof item.input === 'string' ? item.input : JSON.stringify(item.input, null, 2)}</code>
@@ -319,6 +367,7 @@ export default function ChatView({ chat, onBack, focused = true }) {
     resumeQueue,
     renameChat,
     chats,
+    sessions,
     apiFor,
   } = useConsole()
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -344,6 +393,10 @@ export default function ChatView({ chat, onBack, focused = true }) {
   const composerRef = useRef(null)
   const inputRef = useRef(null)
   const rail = railItems(chat)
+  // A worker's first message is the brief its lead gave it.
+  const firstBrief = chat.parent
+    ? (rail.find((item) => item.kind === 'message' && item.role === 'user')?.id ?? null)
+    : null
   const pendingDecision = rail.find((item) => item.kind === 'decision' && item.pending)
   // Every tool call riding the rail, keyed the way the duplicate checks
   // pair a decision with its run: (name, input). A settled approval
@@ -871,6 +924,9 @@ export default function ChatView({ chat, onBack, focused = true }) {
         </p>
         {chat.lastError && chat.status === 'failed' && <p className="cv-facts cv-error pv">{chat.lastError}</p>}
       </header>
+      {/* The workers this chat's agent started: each one's state, a way
+          into it, Stop. Only for a chat that has workers. */}
+      <TeamBar chat={chat} canAct={reachable} />
       <div className="cv-scroll" ref={scrollRef}>
         <div className="cv-thread">
           {rail.length === 0 && <p className="cv-node cv-note">The transcript will appear here.</p>}
@@ -900,6 +956,20 @@ export default function ChatView({ chat, onBack, focused = true }) {
             }
             if (item.kind === 'message') {
               if (item.role === 'user') {
+                // Another agent's word (a lead's brief, a worker's report)
+                // says whose it is; the chat's first such message, when this
+                // chat is a worker, says who started it. Its words are
+                // markdown, like any agent's.
+                if (item.origin) {
+                  const started = !item.origin.report && item.id === firstBrief
+                  return (
+                    <div key={item.id} className="cv-user cv-user--agent">
+                      <OriginChip origin={item.origin} chatId={chat.id} started={started} />
+                      <MarkdownBody text={item.text} className="cv-agent cv-origin-body pv" />
+                      <ChatImages images={item.images} chat={chat} label="Attached picture" />
+                    </div>
+                  )
+                }
                 // The words, then the pictures sent with them.
                 return (
                   <div key={item.id} className="cv-user">
@@ -954,7 +1024,16 @@ export default function ChatView({ chat, onBack, focused = true }) {
               // One of OpenRemote's browser tools reads as "Browser ·
               // click" with what it acted on, never as a JSON dump.
               const browser = isBrowserTool(item.name) ? browserTool(item.name, item.input) : null
-              const shownIn = item.input && !command && !edit && !browser
+              // One of the team tools reads as "Started a Codex worker:
+              // Fix the parser" with its brief, never as a JSON dump.
+              const team = isTeamTool(item.name)
+                ? teamTool(item.name, item.input, {
+                    sessions,
+                    chatId: chat.id,
+                    result: item.result,
+                  })
+                : null
+              const shownIn = item.input && !command && !edit && !browser && !team
                 ? capLines(typeof item.input === 'string' ? item.input : JSON.stringify(item.input, null, 2))
                 : null
               const shownOut = item.result ? capLines(item.result) : null
@@ -968,8 +1047,8 @@ export default function ChatView({ chat, onBack, focused = true }) {
               return (
                 <div key={item.id} className={`cv-node cv-node--${item.state}`}>
                   <div className="cv-tool-line">
-                    <span className="cv-tool-name" title={browser ? item.name : undefined}>
-                      {browser ? browser.label : item.name}
+                    <span className="cv-tool-name" title={browser || team ? item.name : undefined}>
+                      {browser ? browser.label : team ? team.label : item.name}
                     </span>
                     {inFlight ? (
                       <span className="cv-tool-status">
@@ -1015,6 +1094,7 @@ export default function ChatView({ chat, onBack, focused = true }) {
                     </div>
                   )}
                   {browser && <BrowserFacts facts={browser} />}
+                  {team && <TeamFacts facts={team} />}
                   {(shownIn || shownOut) && !edit && (
                     <div className="cv-io pv">
                       {shownIn && (
@@ -1028,7 +1108,13 @@ export default function ChatView({ chat, onBack, focused = true }) {
                           )}
                         </>
                       )}
-                      {shownOut && <OutRow out={shownOut} fold={Boolean(browser) && foldsResult(item.name)} />}
+                      {shownOut && (
+                        <OutRow
+                          out={shownOut}
+                          fold={(Boolean(browser) && foldsResult(item.name)) || (Boolean(team) && foldsTeamResult(item.name))}
+                          what={team ? 'what came back' : 'the page text'}
+                        />
+                      )}
                     </div>
                   )}
                   {/* What the tool answered with besides words - an
@@ -1058,10 +1144,15 @@ export default function ChatView({ chat, onBack, focused = true }) {
             return (
               <div key={item.id} className={`cv-node cv-node--${item.pending ? 'pending' : 'done'}`}>
                 <div className="cv-tool-line">
-                  <span className="cv-tool-name" title={isBrowserTool(item.toolName) ? item.toolName : undefined}>
+                  <span
+                    className="cv-tool-name"
+                    title={isBrowserTool(item.toolName) || isTeamTool(item.toolName) ? item.toolName : undefined}
+                  >
                     {isBrowserTool(item.toolName)
                       ? browserTool(item.toolName, item.input).label
-                      : item.toolName ?? 'Decision'}
+                      : isTeamTool(item.toolName)
+                        ? teamTool(item.toolName, item.input, { ask: true, sessions, chatId: chat.id }).label
+                        : item.toolName ?? 'Decision'}
                   </span>
                   <span className="cv-tool-state">
                     {item.pending ? (
@@ -1073,7 +1164,7 @@ export default function ChatView({ chat, onBack, focused = true }) {
                     )}
                   </span>
                 </div>
-                <DecisionCard item={item} onAnswer={answer} />
+                <DecisionCard item={item} onAnswer={answer} chatId={chat.id} />
               </div>
             )
           })}
