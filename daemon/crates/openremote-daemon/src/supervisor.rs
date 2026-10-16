@@ -17,9 +17,9 @@ use std::time::{Duration, Instant};
 
 use openremote_core::{
     AutomationRule, Decision, DecisionId, DecisionState, Event, EventPayload, Harness, ImageRef,
-    Machine, MachineId, MachineStatus, MachineView, McpServerEntry, Project, ProjectId,
-    QueuedMessage, Receipt, RuleId, Session, SessionId, SessionStatus, Store, TriggerKind,
-    TurnOutcome, now_ms,
+    Machine, MachineId, MachineStatus, MachineView, McpServerEntry, Origin, ParentLink, Project,
+    ProjectId, QueuedMessage, Receipt, RuleId, Session, SessionId, SessionStatus, Store,
+    TriggerKind, TurnOutcome, now_ms,
 };
 use openremote_harness::{DriverEvent, Resolution};
 use serde_json::Value;
@@ -281,7 +281,7 @@ pub struct Supervisor {
     /// A message steered into a harness that cannot take input mid-turn
     /// (one process per prompt): the turn was interrupted for it, and the
     /// turn's end sends it before anything queued.
-    steer_next: StdMutex<HashMap<SessionId, String>>,
+    steer_next: StdMutex<HashMap<SessionId, (String, Option<Origin>)>>,
     /// The daemon's own machine - sessions run here, plugins ride from here.
     this_machine: MachineId,
     /// Each harness's command list per workspace, as the composer's /
@@ -302,6 +302,14 @@ pub struct Supervisor {
 
 /// Where the note riding each delivered message comes from.
 type PromptNote = Box<dyn Fn() -> Option<String> + Send + Sync>;
+
+/// What a harness reads ahead of a message another agent sent: who it is
+/// from, and that it is not the user - a lead or a worker never takes an
+/// agent's words for the user's.
+fn origin_line(origin: &Origin) -> String {
+    let title = origin.title.replace('"', "'").replace(['\n', '\r'], " ");
+    format!("[Message from agent \"{title}\", not from the user]")
+}
 
 /// One poisoning policy for every mutex that routes through this helper
 /// (the store, the sync maps, the schedule's arming, the webhooks'
@@ -1215,6 +1223,36 @@ impl Supervisor {
         fast: bool,
         executor: Option<openremote_core::DeviceId>,
     ) -> Result<Session, SupervisorError> {
+        self.create_session_in(
+            harness,
+            workspace,
+            model,
+            effort,
+            permission_mode,
+            fast,
+            executor,
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// `create_session`, for a chat that starts out somewhere: in a team (it
+    /// is born with its parent, so no copy of it ever shows it on its own)
+    /// and under a name its starter gave it.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn create_session_in(
+        self: &Arc<Self>,
+        harness: &str,
+        workspace: Option<std::path::PathBuf>,
+        model: Option<String>,
+        effort: Option<String>,
+        permission_mode: Option<String>,
+        fast: bool,
+        executor: Option<openremote_core::DeviceId>,
+        parent: Option<ParentLink>,
+        title: Option<String>,
+    ) -> Result<Session, SupervisorError> {
         let Some(backend) = self.backend(harness) else {
             return Err(SupervisorError::Harness(format!(
                 "harness '{harness}' is not available"
@@ -1256,11 +1294,11 @@ impl Supervisor {
             fast,
             approved_tools: Vec::new(),
             executor,
-            title: None,
+            title,
             queue: Vec::new(),
             queue_paused: false,
             mentioned_chats: Vec::new(),
-            parent: None,
+            parent,
         };
         let id = session.id;
         self.emit_all(&id, vec![EventPayload::SessionCreated { session }])?;
@@ -1325,7 +1363,19 @@ impl Supervisor {
 
     /// Send a prompt: turn + user message events, then the envelope.
     pub async fn prompt(&self, id: &SessionId, text: &str) -> Result<(), SupervisorError> {
-        self.prompt_kept(id, text, &[]).await
+        self.prompt_kept(id, text, &[], None).await
+    }
+
+    /// A message another agent sent (a lead's brief to its worker): the chat
+    /// shows whose it is, and the harness reads it behind a line saying it
+    /// did not come from the user.
+    pub async fn prompt_from(
+        &self,
+        id: &SessionId,
+        text: &str,
+        origin: &Origin,
+    ) -> Result<(), SupervisorError> {
+        self.prompt_kept(id, text, &[], Some(origin)).await
     }
 
     /// A message with pictures (the composer's attachments): kept for the
@@ -1337,7 +1387,7 @@ impl Supervisor {
         images: Vec<NewImage>,
     ) -> Result<(), SupervisorError> {
         let kept = self.keep_images(id, &images)?;
-        self.prompt_kept(id, text, &kept).await
+        self.prompt_kept(id, text, &kept, None).await
     }
 
     /// A prompt whose pictures are already kept.
@@ -1346,14 +1396,16 @@ impl Supervisor {
         id: &SessionId,
         text: &str,
         images: &[ImageRef],
+        origin: Option<&Origin>,
     ) -> Result<(), SupervisorError> {
         self.ensure_here(id)?;
         let entry = self.entry(id).await?;
         // Built before anything is written: a picture that can't be read
         // leaves no turn behind.
-        let prompt = self.harness_prompt(&entry, text, images).await?;
+        let prompt = self.harness_prompt(&entry, text, images, origin).await?;
         let order = entry.order.lock().await;
-        self.open_prompt_locked(id, &entry, text, images).await?;
+        self.open_prompt_locked(id, &entry, text, images, origin)
+            .await?;
         drop(order);
         self.send_prompt_text(id, &entry, &prompt).await
     }
@@ -1399,12 +1451,18 @@ impl Supervisor {
         entry: &SessionEntry,
         text: &str,
         images: &[ImageRef],
+        origin: Option<&Origin>,
     ) -> Result<openremote_harness::Prompt, SupervisorError> {
         let (as_files, rides_mcp) = {
             let driver = entry.driver.lock().await;
             (driver.reads_image_files(), driver.rides_mcp())
         };
-        let mut words = text.to_string();
+        // Another agent's message is read behind a line that says so: an
+        // agent must never take it for the user's word.
+        let mut words = match origin {
+            Some(origin) => format!("{}\n{text}", origin_line(origin)),
+            None => text.to_string(),
+        };
         // A message that starts with a command goes without the note, so
         // the note never becomes that command's arguments.
         if rides_mcp && self.controls.get().is_some() && !text.trim_start().starts_with('/') {
@@ -1445,6 +1503,7 @@ impl Supervisor {
         entry: &SessionEntry,
         text: &str,
         images: &[ImageRef],
+        origin: Option<&Origin>,
     ) -> Result<(), SupervisorError> {
         // The Working gate (harness audit F8): a driver that runs one
         // process per prompt cannot take a second while a turn is open -
@@ -1495,7 +1554,7 @@ impl Supervisor {
                 role: openremote_core::MessageRole::User,
                 text: text.to_string(),
                 images: images.to_vec(),
-                origin: None,
+                origin: origin.cloned(),
             },
         };
         let payloads = if steering {
@@ -2087,6 +2146,31 @@ impl Supervisor {
     ) -> Result<Session, SupervisorError> {
         self.ensure_here(id)?;
         let kept = self.keep_images(id, &images)?;
+        self.queue_add_kept(id, text, kept, None).await
+    }
+
+    /// Queue a message another agent sent: it waits behind the running
+    /// turn like any other, and the chat shows whose it is. A worker's
+    /// report replaces its own earlier one that is still waiting - the
+    /// lead wants where the worker stands now, once.
+    pub async fn queue_add_from(
+        &self,
+        id: &SessionId,
+        text: &str,
+        origin: Origin,
+    ) -> Result<Session, SupervisorError> {
+        self.ensure_here(id)?;
+        self.queue_add_kept(id, text, Vec::new(), Some(origin))
+            .await
+    }
+
+    async fn queue_add_kept(
+        &self,
+        id: &SessionId,
+        text: &str,
+        kept: Vec<ImageRef>,
+        origin: Option<Origin>,
+    ) -> Result<Session, SupervisorError> {
         {
             let order = self.order_of(id).await;
             let _guard = match &order {
@@ -2095,12 +2179,19 @@ impl Supervisor {
             };
             let session = self.session(id)?;
             let mut queue = session.queue;
+            if let Some(report) = origin.as_ref().filter(|o| o.report) {
+                queue.retain(|m| {
+                    !m.origin
+                        .as_ref()
+                        .is_some_and(|o| o.report && o.chat == report.chat)
+                });
+            }
             queue.push(QueuedMessage {
                 id: Uuid::new_v4().to_string(),
                 text: text.to_string(),
                 at: now_ms(),
                 images: kept,
-                origin: None,
+                origin,
             });
             self.emit_queue(id, queue, session.queue_paused)?;
         }
@@ -2142,7 +2233,17 @@ impl Supervisor {
         id: &SessionId,
         text: &str,
     ) -> Result<(), SupervisorError> {
-        self.steer_kept(id, text, &[]).await
+        self.steer_kept(id, text, &[], None).await
+    }
+
+    /// Steer a message another agent sent into the running turn.
+    pub async fn steer_from(
+        self: &Arc<Self>,
+        id: &SessionId,
+        text: &str,
+        origin: &Origin,
+    ) -> Result<(), SupervisorError> {
+        self.steer_kept(id, text, &[], Some(origin)).await
     }
 
     /// Steer a message with pictures, kept first.
@@ -2153,7 +2254,7 @@ impl Supervisor {
         images: Vec<NewImage>,
     ) -> Result<(), SupervisorError> {
         let kept = self.keep_images(id, &images)?;
-        self.steer_kept(id, text, &kept).await
+        self.steer_kept(id, text, &kept, None).await
     }
 
     /// Steer a message whose pictures are already kept. A harness that
@@ -2164,6 +2265,7 @@ impl Supervisor {
         id: &SessionId,
         text: &str,
         images: &[ImageRef],
+        origin: Option<&Origin>,
     ) -> Result<(), SupervisorError> {
         self.ensure_here(id)?;
         if !self.session(id)?.status.is_alive() {
@@ -2176,11 +2278,11 @@ impl Supervisor {
             SessionStatus::Working | SessionStatus::Waiting
         );
         if per_prompt && turn_open {
-            lock_recovering(&self.steer_next).insert(*id, text.to_string());
+            lock_recovering(&self.steer_next).insert(*id, (text.to_string(), origin.cloned()));
             entry.driver.lock().await.interrupt().await?;
             return Ok(());
         }
-        self.prompt_kept(id, text, images).await
+        self.prompt_kept(id, text, images, origin).await
     }
 
     /// Steer one queued message: it leaves the queue and goes in now. If
@@ -2205,7 +2307,10 @@ impl Supervisor {
             self.emit_queue(id, queue, session.queue_paused)?;
             message
         };
-        if let Err(err) = self.steer_kept(id, &message.text, &message.images).await {
+        if let Err(err) = self
+            .steer_kept(id, &message.text, &message.images, message.origin.as_ref())
+            .await
+        {
             let order = self.order_of(id).await;
             let _guard = match &order {
                 Some(o) => Some(o.lock().await),
@@ -2267,10 +2372,10 @@ impl Supervisor {
         // Built before the queue changes: a picture that can't be read
         // leaves the message where it was.
         let prompt = self
-            .harness_prompt(&entry, &next.text, &next.images)
+            .harness_prompt(&entry, &next.text, &next.images, next.origin.as_ref())
             .await?;
         self.emit_queue(id, queue, false)?;
-        self.open_prompt_locked(id, &entry, &next.text, &next.images)
+        self.open_prompt_locked(id, &entry, &next.text, &next.images, next.origin.as_ref())
             .await?;
         drop(order);
         self.send_prompt_text(id, &entry, &prompt).await
@@ -2280,7 +2385,7 @@ impl Supervisor {
     async fn after_turn(&self, id: &SessionId) {
         let steered = lock_recovering(&self.steer_next).remove(id);
         let sent = match steered {
-            Some(text) => self.prompt(id, &text).await,
+            Some((text, origin)) => self.prompt_kept(id, &text, &[], origin.as_ref()).await,
             None => self.drain_queue(id).await,
         };
         if let Err(err) = sent {
