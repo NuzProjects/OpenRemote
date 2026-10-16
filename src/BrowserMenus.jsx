@@ -38,6 +38,7 @@ import { bareAddress, security } from './browser-omnibox.js'
 import { tabTitle } from './browser-tabs.js'
 import { inFolder } from './browser-bookmarks.js'
 import { fileName, hostOf, originOf, permissionName, permissionRows, zoomLabel } from './browser-chrome.js'
+import { DeviceIcon } from './BrowserLiveView.jsx'
 
 const canRecord = typeof MediaRecorder !== 'undefined'
 
@@ -176,10 +177,32 @@ export function menuItems(menu, ctx) {
       { header: `${tabs.length} open ${tabs.length === 1 ? 'tab' : 'tabs'}` },
       ...tabs.map((t) => ({
         label: tabTitle(t),
-        icon: t.private ? <Detective size={14} /> : t.favicon ? <img className="bw-menu-icon" src={t.favicon} alt="" /> : <Globe size={14} />,
+        icon: t.remote ? (
+          <DeviceIcon platform={t.remote.platform} size={14} />
+        ) : t.private ? (
+          <Detective size={14} />
+        ) : t.favicon ? (
+          <img className="bw-menu-icon" src={t.favicon} alt="" />
+        ) : (
+          <Globe size={14} />
+        ),
         hint: t.key === active ? 'Showing' : '',
         onSelect: () => act.select(t.key),
       })),
+      // The user's other devices with a browser open: their tabs, shown
+      // live here with a pick.
+      ...(ctx.remote ?? []).flatMap(({ device, tabs: there }) => [
+        { divider: true },
+        { header: `Tabs on ${device.name}` },
+        ...(there.length
+          ? there.map((t) => ({
+              label: t.title || bareAddress(t.url) || 'New tab',
+              icon: <DeviceIcon platform={device.platform} size={14} />,
+              hint: 'Live',
+              onSelect: () => act.openRemote(device, t),
+            }))
+          : [{ label: 'No tabs open', disabled: true }]),
+      ]),
     ]
   }
 

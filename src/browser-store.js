@@ -169,6 +169,26 @@ export function openUrl(url) {
   return tab.key
 }
 
+// Show a tab of another of the user's devices, live, in a tab of its own:
+// `device` is { id, name, platform }, `tab` the other device's tab as its
+// list gave it. One already showing it comes forward instead. Such a tab
+// has no page of this device's to put away or bring back: it is never
+// saved, never reopened, and ends the view when it closes.
+export function openRemote(device, tab) {
+  const known = state.tabs.find((t) => t.remote?.device === device.id && t.remote.tab === tab.id)
+  if (known) {
+    setState(() => ({ active: known.key }))
+    return known.key
+  }
+  const shown = newTab({
+    remote: { device: device.id, name: device.name, platform: device.platform, tab: tab.id },
+    url: tab.url ?? '',
+    title: tab.title ?? '',
+  })
+  setState((s) => ({ tabs: [...s.tabs, shown], active: shown.key }))
+  return shown.key
+}
+
 // The names the phone's view and its callers know these by.
 export const openInBrowser = openUrl
 export const focusNative = focusTab
@@ -187,7 +207,9 @@ export function removeTab(key) {
     const last = next.closed
     // Private tabs leave no trace, the reopen list included.
     const closed =
-      last?.url && !last.private ? [{ url: last.url, title: last.title ?? '' }, ...s.closed].slice(0, 25) : s.closed
+      last?.url && !last.private && !last.remote
+        ? [{ url: last.url, title: last.title ?? '' }, ...s.closed].slice(0, 25)
+        : s.closed
     return {
       tabs: next.tabs,
       active: next.active,

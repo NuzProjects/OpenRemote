@@ -110,6 +110,10 @@ export class DaemonApi {
     this.url = clean
     this.token = token
     this.prefix = prefix
+    // This device's id in Cloud, set once it is known: a message sent from
+    // here says so, and the chat's agent opens its browser tabs where the
+    // user last wrote from.
+    this.fromDevice = null
   }
 
   /** The same client, aimed at another of the user's devices. */
@@ -315,6 +319,7 @@ export class DaemonApi {
         text,
         ...(mentionedChats.length ? { mentioned_chats: mentionedChats } : {}),
         ...(attachments.length ? { attachments } : {}),
+        ...(this.fromDevice ? { from_device: this.fromDevice } : {}),
       },
       attachments.length ? { timeoutMs: UPLOAD_TIMEOUT_MS } : undefined,
     )
@@ -412,6 +417,7 @@ export class DaemonApi {
         text,
         ...(mentionedChats.length ? { mentioned_chats: mentionedChats } : {}),
         ...(attachments.length ? { attachments } : {}),
+        ...(this.fromDevice ? { from_device: this.fromDevice } : {}),
       },
       attachments.length ? { timeoutMs: UPLOAD_TIMEOUT_MS } : undefined,
     )
@@ -445,6 +451,7 @@ export class DaemonApi {
         text,
         ...(mentionedChats.length ? { mentioned_chats: mentionedChats } : {}),
         ...(attachments.length ? { attachments } : {}),
+        ...(this.fromDevice ? { from_device: this.fromDevice } : {}),
       },
       { timeoutMs: BOOT_TIMEOUT_MS },
     )

@@ -1,0 +1,320 @@
+/* A tab of another device, shown live: a header (where it is, and the
+   hand on it), the picture on a canvas in the page's shape, and the
+   covers for connecting and for a view that ended. App colours only. */
+
+.bl {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-app);
+}
+
+/* ---- header ---- */
+
+.bl-head {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-side);
+}
+
+.bl-where {
+  display: flex;
+  flex: 1 1 200px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.bl-live {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+.bl-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dot-idle);
+}
+
+/* Live is the app's one sign of life: green, breathing. */
+.bl-live.on {
+  color: var(--text-2);
+}
+
+.bl-live.on .bl-dot {
+  background: var(--green);
+  animation: bl-breathe 2.4s ease-in-out infinite;
+}
+
+@keyframes bl-breathe {
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.bl-device {
+  flex: none;
+  color: var(--text-3);
+}
+
+.bl-names {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.bl-device-name {
+  flex: none;
+  color: var(--text-1);
+  font-weight: 600;
+}
+
+.bl-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bl-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.bl-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.bl-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.bl-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.bl-btn.icon {
+  width: 30px;
+  padding: 0;
+}
+
+.bl-btn.on {
+  background: var(--bg-active);
+  color: var(--text-1);
+}
+
+/* The one primary action: amber, the app's accent. */
+.bl-btn.primary {
+  border-color: rgba(220, 162, 75, 0.35);
+  background: rgba(220, 162, 75, 0.07);
+  color: var(--accent);
+}
+
+.bl-btn.primary:hover:not(:disabled) {
+  background: rgba(220, 162, 75, 0.12);
+  color: var(--accent);
+}
+
+.bl-note {
+  flex: none;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-side);
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.bl-note strong {
+  color: var(--text-1);
+  font-weight: 600;
+}
+
+/* ---- the picture ---- */
+
+/* Touch is read here, not by the browser: a drag scrolls the other
+   device's page and two fingers zoom the picture. */
+.bl-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-app);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.bl-zoom {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 0;
+}
+
+.bl-canvas {
+  position: absolute;
+  display: block;
+  background: var(--bg-side);
+  pointer-events: none;
+}
+
+.bl-cover {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px;
+  background: var(--bg-app);
+  color: var(--text-2);
+  font-size: 13px;
+  text-align: center;
+}
+
+.bl-cover p {
+  margin: 0;
+  max-width: 320px;
+}
+
+.bl-cover.quiet {
+  background: none;
+  color: var(--text-3);
+}
+
+.bl-hint {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  max-width: calc(100% - 28px);
+  padding: 7px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg-side);
+  color: var(--text-1);
+  font-size: 12.5px;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+/* The textarea that takes the typing: there, so a keyboard has somewhere
+   to type, and not seen. */
+.bl-keys {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  opacity: 0;
+  resize: none;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* A phone: bigger targets, and the buttons share the line below the name. */
+@media (pointer: coarse) {
+  .bl-btn {
+    height: 36px;
+  }
+
+  .bl-btn.icon {
+    width: 36px;
+  }
+
+  .bl-actions {
+    flex: 1 1 100%;
+    justify-content: flex-end;
+    margin-left: 0;
+  }
+}
+
+/* Reduced motion, both ways: the system's setting and the app's own. */
+@media (prefers-reduced-motion: reduce) {
+  .bl-live.on .bl-dot {
+    animation: none;
+  }
+
+  .bl-btn {
+    transition: none;
+  }
+}
+
+html[data-reduce-motion] .bl-live.on .bl-dot {
+  animation: none;
+}
+
+html[data-reduce-motion] .bl-btn {
+  transition: none;
+}
+
+/* ---- where it sits ---- */
+
+/* In a page area: the live view fills it, like a page would. */
+.bw-page > .bl,
+.bp-page > .bl {
+  position: absolute;
+  inset: 0;
+}
+
+/* The tab grid's "Live" mark beside another device's tabs. */
+.bl-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.bl-badge .bl-dot {
+  background: var(--green);
+  animation: bl-breathe 2.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bl-badge .bl-dot {
+    animation: none;
+  }
+}
+
+html[data-reduce-motion] .bl-badge .bl-dot {
+  animation: none;
+}

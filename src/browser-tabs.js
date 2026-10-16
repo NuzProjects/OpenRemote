@@ -52,15 +52,17 @@ export function tabTitle(tab) {
   return 'New tab'
 }
 
-// A tab waiting for its page: it has a web address but no webview yet.
+// A tab waiting for its page: it has a web address but no webview yet. (A
+// tab showing another device's tab live has an address too, and no webview
+// of its own to wait for.)
 export function isDormant(tab) {
-  return Boolean(tab?.url) && !tab.native && !internalPage(tab.url)
+  return Boolean(tab?.url) && !tab.native && !tab.remote && !internalPage(tab.url)
 }
 
 // The tabs saved for the next start: every tab with an address, never a
 // private one, and which of them was showing.
 export function sessionOf(tabs, active) {
-  const kept = tabs.filter((t) => !t.private && t.url && t.url !== 'about:blank')
+  const kept = tabs.filter((t) => !t.private && !t.remote && t.url && t.url !== 'about:blank')
   const at = kept.findIndex((t) => t.key === active)
   return { tabs: kept.map((t) => ({ url: t.url, title: t.title ?? '' })), active: Math.max(0, at) }
 }

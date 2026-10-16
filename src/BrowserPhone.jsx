@@ -44,12 +44,13 @@ import {
   X,
 } from '@phosphor-icons/react'
 import { hasTauri } from './platform.js'
-import { SEARCH_ENGINES, omnibox, searchUrl, security } from './browser-omnibox.js'
+import { SEARCH_ENGINES, bareAddress, omnibox, searchUrl, security } from './browser-omnibox.js'
 import { closeTab, newTab, tabTitle } from './browser-tabs.js'
-import { adopt, call, getState, patchTab, setState, subscribe } from './browser-store.js'
+import { adopt, call, getState, openRemote, patchTab, setState, subscribe } from './browser-store.js'
 import { fileName } from './browser-chrome.js'
 import { useConsole } from './state/console.jsx'
 import { useBack } from './use-back.js'
+import BrowserLiveView, { DeviceIcon, useRemoteTabs } from './BrowserLiveView.jsx'
 import './browser-phone.css'
 
 // The tab grid's pictures, at most this many CSS pixels wide.
@@ -162,7 +163,7 @@ function useShellEvent(name, handler) {
 // ---- the view ----
 
 export default function BrowserPhone() {
-  const { api } = useConsole()
+  const { api, cloud } = useConsole()
   // `prompts` are sites' requests waiting for an answer (the desktop's bars
   // too): the phone calls them asks.
   const { tabs, active, downloads, finds, prompts: asks } = useSyncExternalStore(subscribe, getState)
@@ -184,6 +185,9 @@ export default function BrowserPhone() {
   const findingRef = useRef(false)
   findingRef.current = finding
   const covered = Boolean(surface || editing)
+  // The user's other devices with a browser open, for the tab grid: their
+  // tabs can be shown live here.
+  const remote = useRemoteTabs(api, Boolean(cloud?.device) && surface === 'tabs')
   const coveredRef = useRef(covered)
   coveredRef.current = covered
 
@@ -351,7 +355,8 @@ export default function BrowserPhone() {
     setEditing(false)
     setSurface(null)
     let tab = activeTab()
-    if (fresh || !tab) {
+    // Another device's tab isn't this phone's to navigate: the address opens in a tab of its own.
+    if (fresh || !tab || tab.remote) {
       tab = newTab({ private: priv ?? false })
       const made = tab
       setState((s) => ({ tabs: [...s.tabs, made], active: made.key }))
@@ -381,7 +386,7 @@ export default function BrowserPhone() {
     if (tab?.native) call('browser_close', { tab: tab.native })
     setState((s) => {
       const next = closeTab(s.tabs, key, s.active)
-      const url = next.closed?.private ? null : next.closed?.url
+      const url = next.closed?.private || next.closed?.remote ? null : next.closed?.url
       const show = then && next.tabs.some((t) => t.key === then) ? then : next.active
       return { tabs: next.tabs, active: show, closed: url ? [url, ...s.closed].slice(0, 25) : s.closed }
     })
@@ -414,7 +419,7 @@ export default function BrowserPhone() {
   // one, one put away for memory, or one the app opened for a link (the
   // store's openUrl, from a chat's "Open beside chat" or a tapped link).
   useEffect(() => {
-    if (!current || current.native || !(current.restore || current.url) || covered) return
+    if (!current || current.native || current.remote || !(current.restore || current.url) || covered) return
     go(current.url)
   }, [current?.key, covered])
 
@@ -422,7 +427,7 @@ export default function BrowserPhone() {
   useEffect(() => {
     if (!api?.ready || !restored) return undefined
     const timer = setTimeout(() => {
-      const list = tabs.filter((t) => !t.private && t.url && t.url !== 'about:blank')
+      const list = tabs.filter((t) => !t.private && !t.remote && t.url && t.url !== 'about:blank')
       const at = Math.max(0, list.findIndex((t) => t.key === active))
       api
         .call('POST', '/browser/session', { tabs: list.map((t) => ({ url: t.url, title: t.title ?? '' })), active: at })
@@ -640,7 +645,11 @@ export default function BrowserPhone() {
                   <Lock size={16} className="bp-address-lock" />
                 ))}
               <span className={`bp-address-text${live ? '' : ' quiet'}`}>
-                {live ? host || current.url : 'Search or type a web address'}
+                {live
+                  ? host || current.url
+                  : current?.remote
+                    ? `${current.remote.name}: ${host || current.title || 'a tab'}`
+                    : 'Search or type a web address'}
               </span>
             </button>
             <button type="button" className="bp-count" aria-label={`${sameMode.length} open tabs`} onClick={openGrid}>
@@ -676,7 +685,19 @@ export default function BrowserPhone() {
 
       <div className="bp-page" ref={pageRef}>
         <img ref={pictureRef} className="bp-picture" alt="" />
-        {(!current?.native || current.home) && (
+        {current?.remote && (
+          <BrowserLiveView
+            key={current.key}
+            api={api}
+            device={{ id: current.remote.device, name: current.remote.name, platform: current.remote.platform }}
+            tab={current.remote.tab}
+            title={current.title}
+            active={!covered}
+            onInfo={(i) => patchTab(current.key, { url: i.url, title: i.title })}
+            onStop={() => close(current.key)}
+          />
+        )}
+        {(!current?.native || current.home) && !current?.remote && (
           <NewTabPage
             api={api}
             engineName={engineName}
@@ -736,6 +757,11 @@ export default function BrowserPhone() {
           tabs={tabs}
           active={active}
           thumbs={thumbs}
+          remote={remote.devices}
+          onRemote={(device, tab) => {
+            openRemote(device, tab)
+            setSurface(null)
+          }}
           onPick={(key) => {
             setState(() => ({ active: key }))
             setSurface(null)
@@ -1074,7 +1100,7 @@ function Omnibox({ api, engine, current, onGo, onClose, onCopied, onShare }) {
 
 // ---- the tab grid ----
 
-function TabGrid({ tabs, active, thumbs, onPick, onClose, onNew, onDone }) {
+function TabGrid({ tabs, active, thumbs, remote = [], onRemote, onPick, onClose, onNew, onDone }) {
   const normal = tabs.filter((t) => !t.private)
   const kept = tabs.filter((t) => t.private)
   const card = (t) => {
@@ -1091,7 +1117,13 @@ function TabGrid({ tabs, active, thumbs, onPick, onClose, onNew, onDone }) {
         }}
       >
         <div className="bp-card-head">
-          {t.favicon ? <img className="bp-card-icon" src={t.favicon} alt="" /> : <Globe size={14} className="bp-card-globe" />}
+          {t.remote ? (
+            <DeviceIcon platform={t.remote.platform} size={14} className="bp-card-globe" />
+          ) : t.favicon ? (
+            <img className="bp-card-icon" src={t.favicon} alt="" />
+          ) : (
+            <Globe size={14} className="bp-card-globe" />
+          )}
           <span className="bp-card-title">{tabTitle(t)}</span>
           <button
             type="button"
@@ -1144,6 +1176,44 @@ function TabGrid({ tabs, active, thumbs, onPick, onClose, onNew, onDone }) {
         ) : (
           <p className="bp-quiet">Private tabs keep no history, and agents don't see them.</p>
         )}
+        {remote.map(({ device, tabs: there }) => (
+          <div key={device.id}>
+            <div className="bp-section">
+              <DeviceIcon platform={device.platform} size={16} />
+              <span>Tabs on {device.name}</span>
+              <span className="bl-badge">
+                <span className="bl-dot" />
+                Live
+              </span>
+            </div>
+            {there.length ? (
+              <div className="bp-grid">
+                {there.map((t) => (
+                  <div
+                    key={t.id}
+                    role="button"
+                    tabIndex={0}
+                    className="bp-card"
+                    onClick={() => onRemote(device, t)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') onRemote(device, t)
+                    }}
+                  >
+                    <div className="bp-card-head">
+                      <DeviceIcon platform={device.platform} size={14} className="bp-card-globe" />
+                      <span className="bp-card-title">{t.title || bareAddress(t.url) || 'New tab'}</span>
+                    </div>
+                    <div className="bp-card-shot">
+                      <span className="bp-card-blank">{t.url ? initial(t.url, t.title) : <MagnifyingGlass size={22} />}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="bp-quiet">No tabs open.</p>
+            )}
+          </div>
+        ))}
       </div>
     </div>
   )

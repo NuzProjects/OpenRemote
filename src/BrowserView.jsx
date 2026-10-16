@@ -22,6 +22,7 @@ import {
   getState,
   notify,
   onKey,
+  openRemote,
   patchTab,
   recordTab,
   removeTab,
@@ -57,6 +58,7 @@ import { BrowserDeviceBar, BrowserFindBar } from './BrowserFindBar.jsx'
 import BrowserNewTab from './BrowserNewTab.jsx'
 import BrowserPages from './BrowserPages.jsx'
 import BrowserRegion from './BrowserRegion.jsx'
+import BrowserLiveView, { ViewedBar, useRemoteTabs, useViews } from './BrowserLiveView.jsx'
 import { menuItems } from './BrowserMenus.jsx'
 import './panels.css'
 import './browser.css'
@@ -127,7 +129,7 @@ function BrowserDesktop({ paneFocused }) {
   )
   const data = useBrowserData()
   const rec = useSyncExternalStore(subscribeRecording, recording)
-  const { api, chats } = useConsole()
+  const { api, chats, cloud } = useConsole()
   const kb = useKeyboard()
   const kbRef = useRef(kb)
   kbRef.current = kb
@@ -140,6 +142,11 @@ function BrowserDesktop({ paneFocused }) {
   // stays in the page, so a picture is decoded in it before it shows.
   const pictureRef = useRef(null)
   const [menu, setMenu] = useState(null)
+  // The user's other devices (in Cloud): their tabs for the tab list, and who
+  // is showing this device's tabs live.
+  const inCloud = Boolean(cloud?.device)
+  const remote = useRemoteTabs(api, inCloud && menu?.kind === 'tabs')
+  const views = useViews(api, inCloud)
   const [editor, setEditor] = useState(null)
   const [region, setRegion] = useState(null)
   // The browser's keys act while it has focus (see the tracker below).
@@ -279,6 +286,8 @@ function BrowserDesktop({ paneFocused }) {
     const url = omnibox(text, engine)
     const tab = activeTab()
     if (!url || !tab) return
+    // Another device's tab isn't this window's to navigate: the address opens here.
+    if (tab.remote) return openUrl(url, { newTab: true, show: true })
     if (tab.native) return call('browser_navigate', { tab: tab.native, url })
     return openNative(tab.key, url)
   }
@@ -530,6 +539,7 @@ function BrowserDesktop({ paneFocused }) {
     openFile: (path) => openUrl(fileUrl(path), { newTab: true, show: true }),
     openExternal: (url) => call('browser_open_external', { url }),
     select,
+    openRemote,
     close,
     closeOthers,
     reopen,
@@ -656,6 +666,7 @@ function BrowserDesktop({ paneFocused }) {
     icons,
     permissions: data.permissions,
     live,
+    remote: remote.devices,
     picking: Boolean(picking) && picking === current?.native,
     rec,
     barSetting,
@@ -694,6 +705,7 @@ function BrowserDesktop({ paneFocused }) {
         />
       )}
       {!full && current?.controller && <AgentBar controller={current.controller} onControl={control} />}
+      {!full && current?.native && <ViewedBar views={views} tab={current.native} />}
       {!full && ctx.picking && <PickBar onCancel={pick} />}
       {!full && find && live && (
         <BrowserFindBar find={find} state={findState} inputRef={findRef} onFind={runFind} onClose={closeFind} />
@@ -704,7 +716,19 @@ function BrowserDesktop({ paneFocused }) {
 
       <div className={`bw-page${device ? ' device' : ''}`} ref={pageRef}>
         <img ref={pictureRef} className="bw-picture" alt="" />
+        {current?.remote && (
+          <BrowserLiveView
+            key={current.key}
+            api={api}
+            device={{ id: current.remote.device, name: current.remote.name, platform: current.remote.platform }}
+            tab={current.remote.tab}
+            title={current.title}
+            onInfo={(i) => patchTab(current.key, { url: i.url, title: i.title })}
+            onStop={() => close(current.key)}
+          />
+        )}
         {!live &&
+          !current?.remote &&
           (page && page !== 'newtab' ? (
             <BrowserPages page={page} api={api} icons={icons} marks={data.bookmarks} downloads={downloads} act={act} />
           ) : ntp ? (
@@ -729,7 +753,7 @@ function BrowserDesktop({ paneFocused }) {
           y={menu.y}
           items={menuItems(menu, ctx)}
           onClose={() => setMenu(null)}
-          className={menu.kind === 'main' ? 'bw-menu' : undefined}
+          className={menu.kind === 'main' || menu.kind === 'tabs' ? 'bw-menu' : undefined}
         />
       )}
       {editor && (

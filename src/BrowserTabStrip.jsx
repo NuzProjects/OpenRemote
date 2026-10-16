@@ -7,12 +7,14 @@ import { CaretDown, ClockCounterClockwise, Detective, DownloadSimple, Globe, Plu
 import { internalPage } from './browser-omnibox.js'
 import { tabTitle } from './browser-tabs.js'
 import { usePrivacyMode } from './privacy.js'
+import { DeviceIcon } from './BrowserLiveView.jsx'
 
 const PAGE_ICONS = { history: ClockCounterClockwise, downloads: DownloadSimple, bookmarks: Star }
 
 // A tab's icon: the ring while its page loads, the browser's own page's
 // icon, the private mark, the site's icon, or a globe.
 export function TabIcon({ tab, size = 14 }) {
+  if (tab.remote) return <DeviceIcon platform={tab.remote.platform} size={size} className="bw-tab-icon" />
   if (tab.loading && tab.native) return <span className="bw-spinner" aria-label="Loading" />
   const Page = PAGE_ICONS[internalPage(tab.url)]
   if (Page) return <Page size={size} className="bw-tab-icon" />

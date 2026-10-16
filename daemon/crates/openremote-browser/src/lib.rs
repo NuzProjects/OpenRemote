@@ -330,12 +330,23 @@ pub enum Input {
         #[serde(default = "one")]
         count: u32,
     },
-    /// The left button pressed: a drag starts.
-    Down { x: f64, y: f64 },
+    /// The left button pressed (the second press of a double click has
+    /// `clicks` 2): a drag starts.
+    Down {
+        x: f64,
+        y: f64,
+        #[serde(default = "one")]
+        clicks: u32,
+    },
     /// The pointer moved (dragging, while the button is down).
     Move { x: f64, y: f64 },
     /// The left button released: the drag ends.
-    Up { x: f64, y: f64 },
+    Up {
+        x: f64,
+        y: f64,
+        #[serde(default = "one")]
+        clicks: u32,
+    },
     /// The wheel (a swipe on a phone): scroll by `dx`, `dy` at a point.
     Wheel { x: f64, y: f64, dx: f64, dy: f64 },
     /// Text typed where the focus is (a phone's keyboard).

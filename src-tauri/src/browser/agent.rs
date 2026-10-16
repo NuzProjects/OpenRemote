@@ -853,10 +853,10 @@ mod page {
                 }
                 look = true;
             }
-            Input::Down { x, y } => {
+            Input::Down { x, y, clicks } => {
                 let at = point(x, y)?;
                 mouse(w, "mouseMoved", at, "none", 0).await?;
-                mouse(w, "mousePressed", at, "left", 1).await?;
+                mouse(w, "mousePressed", at, "left", clicks.clamp(1, 3)).await?;
             }
             Input::Move { x, y } => {
                 let (x, y) = point(x, y)?;
@@ -867,8 +867,8 @@ mod page {
                 )
                 .await?;
             }
-            Input::Up { x, y } => {
-                mouse(w, "mouseReleased", point(x, y)?, "left", 1).await?;
+            Input::Up { x, y, clicks } => {
+                mouse(w, "mouseReleased", point(x, y)?, "left", clicks.clamp(1, 3)).await?;
                 look = true;
             }
             Input::Wheel { x, y, dx, dy } => {

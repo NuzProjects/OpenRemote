@@ -1,7 +1,8 @@
 // The new tab page (Chrome's): a search box, up to eight shortcuts - the
 // user's own first, then the sites visited most (GET /browser/tiles) -
-// and one quiet row of the dev servers seen in chats. A private tab's page
-// says what private means instead.
+// and one quiet row of the dev servers seen in chats, and another of the
+// tabs open on the user's other devices (shown live here). A private tab's
+// page says what private means instead.
 
 import { useEffect, useState } from 'react'
 import { Detective, DotsThreeVertical, MagnifyingGlass, PencilSimple, Plus, Terminal, Trash, X } from '@phosphor-icons/react'
@@ -9,6 +10,8 @@ import ContextMenu from './ContextMenu.jsx'
 import { addressKind, bareAddress, engineName, omnibox } from './browser-omnibox.js'
 import { hostOf, originOf } from './browser-chrome.js'
 import { recentDevServers, subscribeDevServers } from './devservers.js'
+import { DeviceIcon, useRemoteTabs } from './BrowserLiveView.jsx'
+import { useConsole } from './state/console.jsx'
 import { usePrivacyMode } from './privacy.js'
 import './devices.css'
 import './panels.css'
@@ -123,6 +126,9 @@ export default function BrowserNewTab({ privateTab, engine, api, icons, chats, a
   const [servers, setServers] = useState(() => recentDevServers())
   useEffect(() => subscribeDevServers(() => setServers(recentDevServers())), [])
   const privacy = usePrivacyMode()
+  const { cloud } = useConsole()
+  const remote = useRemoteTabs(api, Boolean(cloud?.device) && !privateTab)
+  const elsewhere = remote.devices.flatMap(({ device, tabs }) => tabs.slice(0, 6).map((tab) => ({ device, tab })))
 
   const load = async () => {
     if (!api?.ready) return
@@ -224,6 +230,23 @@ export default function BrowserNewTab({ privateTab, engine, api, icons, chats, a
               </button>
             )
           })}
+        </div>
+      )}
+      {elsewhere.length > 0 && (
+        <div className="bw-ntp-servers">
+          <span className="bw-ntp-label">Tabs on your other devices</span>
+          {elsewhere.slice(0, 8).map(({ device, tab }) => (
+            <button
+              key={`${device.id}:${tab.id}`}
+              type="button"
+              className="bw-chip"
+              title={`${tab.url}, on ${device.name}`}
+              onClick={() => act.openRemote(device, tab)}
+            >
+              <DeviceIcon platform={device.platform} size={12} />
+              <span className="pv">{tab.title || bareAddress(tab.url) || 'New tab'}</span>
+            </button>
+          ))}
         </div>
       )}
       {menu && (

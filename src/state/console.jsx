@@ -85,6 +85,13 @@ export function ConsoleProvider({ children }) {
     }
   }, [api])
 
+  // Every message says which device it was written on (the desktop's and
+  // the phone's composers alike), so a chat's agent opens its browser tabs
+  // where the user is.
+  useEffect(() => {
+    api.fromDevice = cloud?.device?.id ?? null
+  }, [api, cloud?.device?.id])
+
   // In the desktop shell the daemon is a sidecar: ask the shell for its
   // address once on boot before falling back to the saved connection.
   useEffect(() => {
