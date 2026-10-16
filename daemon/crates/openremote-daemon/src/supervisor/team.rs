@@ -983,13 +983,24 @@ impl Supervisor {
     /// Returns how many were running.
     pub async fn stop_team_of(&self, lead: &SessionId) -> usize {
         let tree = Tree::new(self.sessions());
-        let mut stopped = 0;
-        for member in tree.descendants(lead) {
-            if member.status.is_alive() && self.stop_only(&member.id).await.is_ok() {
-                stopped += 1;
-            }
-        }
-        stopped
+        let running: Vec<SessionId> = tree
+            .descendants(lead)
+            .iter()
+            .filter(|member| member.status.is_alive())
+            .map(|member| member.id)
+            .collect();
+        self.stop_all(running).await
+    }
+
+    /// Stop these chats together: each stop waits for its chat's last words
+    /// to land, and a team stopped one by one would outlast the console's
+    /// patience. Returns how many stopped.
+    async fn stop_all(&self, ids: Vec<SessionId>) -> usize {
+        futures_util::future::join_all(ids.iter().map(|id| self.stop_only(id)))
+            .await
+            .into_iter()
+            .filter(Result::is_ok)
+            .count()
     }
 
     /// Stop a chat, with the workers it still has running when the user's
@@ -1021,14 +1032,8 @@ impl Supervisor {
             order.push(*id);
         }
         order.extend(tree.descendants(id).iter().map(|s| s.id));
-        let mut stopped = 0;
-        for member in order {
-            let alive = tree.get(&member).is_some_and(|s| s.status.is_alive());
-            if alive && self.stop_only(&member).await.is_ok() {
-                stopped += 1;
-            }
-        }
-        stopped
+        order.retain(|member| tree.get(member).is_some_and(|s| s.status.is_alive()));
+        self.stop_all(order).await
     }
 
     // ---- reports ----
