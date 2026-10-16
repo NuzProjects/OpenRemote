@@ -1,0 +1,63 @@
+{
+  "api": 1,
+  "name": "text-tools",
+  "version": "0.1.0",
+  "description": "Three small agent tools compiled to WebAssembly: a slug for a title, counts for a text, and a web page's title. An example of a WASM plugin.",
+  "runtime": "wasm",
+  "entry": "text_tools.wasm",
+  "powers": ["network"],
+  "contributes": {
+    "tools": [
+      {
+        "name": "slugify",
+        "description": "Turn a title into a URL slug: lowercase words joined by the separator set for the plugin.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "text": { "type": "string", "description": "The title." }
+          },
+          "required": ["text"]
+        },
+        "read_only": true
+      },
+      {
+        "name": "stats",
+        "description": "Count the words, lines, sentences and characters in a piece of text.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "text": { "type": "string", "description": "The text to count." }
+          },
+          "required": ["text"]
+        },
+        "read_only": true
+      },
+      {
+        "name": "page_title",
+        "description": "Fetch a web page and answer its title.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "url": { "type": "string", "description": "The page's https address." }
+          },
+          "required": ["url"]
+        },
+        "read_only": true,
+        "timeout_secs": 40
+      }
+    ],
+    "settings": [
+      {
+        "key": "separator",
+        "type": "enum",
+        "label": "Slug separator",
+        "help": "What joins the words of a slug.",
+        "options": [
+          { "value": "-", "label": "Dash" },
+          { "value": "_", "label": "Underscore" }
+        ],
+        "default": "-"
+      }
+    ]
+  }
+}
