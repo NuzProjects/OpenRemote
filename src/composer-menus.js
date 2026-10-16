@@ -120,46 +120,120 @@ function rankBy(query, name, description = '') {
   return 0
 }
 
-// The / menu: the harness's commands and the plugins' (minus the names
-// OpenRemote takes over), then OpenRemote's own, best matches first.
-export function commandItems(query, { harnessCommands = [], own = [] } = {}) {
+// A harness reports everything it knows, the user's whole skill library
+// and its own internals included; a menu of a hundred rows helps nobody.
+// What reads as a skill (a plugin-scoped name, or a description written
+// as "use this skill when...") is kept apart from the commands, names the
+// harness keeps for itself (a leading underscore) and ones it calls
+// removed or deprecated are left out, and descriptions are cut to one
+// short line.
+const SKILL_WORDS = /^(use (this skill|when)|read this skill|this skill)\b/i
+const NOISE_WORDS = /^\((removed|deprecated)\)|\bdeprecated\b/i
+
+// The harness commands most people reach for, shown before any typing
+// when the harness has them.
+const EVERYDAY = ['compact', 'init', 'review', 'security-review', 'pr-comments', 'context', 'cost', 'todos']
+
+function shortDescription(text = '') {
+  const first = text.split(/(?<=[.!?])\s/)[0].trim()
+  return first.length > 80 ? `${first.slice(0, 79).trimEnd()}…` : first
+}
+
+// An argument hint worth showing: short and plain, not a usage line.
+function shortHint(hint = '') {
+  return hint && hint.length <= 24 && !hint.includes('--') ? hint : ''
+}
+
+export function commandKind(c) {
+  if (c.name.startsWith('_') || NOISE_WORDS.test(c.description ?? '')) return 'hidden'
+  if (c.name.includes(':') || SKILL_WORDS.test(c.description ?? '')) return 'skill'
+  return 'command'
+}
+
+function commandRow(c, group, score) {
+  return {
+    key: `cmd:${c.name}`,
+    kind: 'command',
+    group,
+    label: `/${c.name}`,
+    detail: shortDescription(c.description),
+    hint: shortHint(c.argument_hint),
+    badge: c.source === 'plugin' ? 'plugin' : null,
+    disabled: c.available === false,
+    why: c.why ?? null,
+    insertion: `/${c.name}`,
+    score,
+  }
+}
+
+function note(text) {
+  return { key: `note:${text}`, kind: 'note', note: true, detail: text, disabled: true, insertion: '' }
+}
+
+// The / menu. Before any typing: OpenRemote's own commands, the ones used
+// lately, a few everyday harness commands, and how much more a search
+// finds. While typing: the best matches, grouped, a dozen or so at most.
+export function commandItems(query, { harnessCommands = [], own = [], recent = [] } = {}) {
   const taken = new Set(own.map((c) => c.name))
-  const items = []
-  for (const c of harnessCommands) {
-    if (taken.has(c.name)) continue
-    const names = [c.name, ...(c.aliases ?? [])]
-    const score = Math.max(...names.map((n) => rankBy(query, n, c.description ?? '')))
-    if (!score) continue
-    items.push({
-      key: `cmd:${c.name}`,
-      kind: 'command',
-      label: `/${c.name}`,
-      detail: c.description ?? '',
-      hint: c.argument_hint || '',
-      badge: c.source === 'plugin' ? 'plugin' : null,
-      disabled: c.available === false,
-      why: c.why ?? null,
-      insertion: `/${c.name}`,
-      score,
-    })
+  const known = harnessCommands.filter((c) => !taken.has(c.name) && commandKind(c) !== 'hidden')
+  const commands = known.filter((c) => commandKind(c) === 'command')
+  const skills = known.filter((c) => commandKind(c) === 'skill')
+  const ownRow = (c, score) => ({
+    key: `own:${c.name}`,
+    kind: 'openremote',
+    group: 'OpenRemote',
+    label: `/${c.name}`,
+    detail: c.description,
+    hint: '',
+    badge: null,
+    disabled: false,
+    why: null,
+    insertion: `/${c.name}`,
+    score,
+  })
+
+  if (!query) {
+    const items = own.map((c) => ownRow(c, 1))
+    const byName = new Map(known.map((c) => [c.name, c]))
+    const lately = recent.filter((n) => byName.has(n)).slice(0, 5)
+    for (const name of lately) items.push(commandRow(byName.get(name), 'Recent', 1))
+    for (const name of EVERYDAY) {
+      if (lately.includes(name) || !byName.has(name)) continue
+      if (commandKind(byName.get(name)) === 'command') items.push(commandRow(byName.get(name), 'Commands', 1))
+    }
+    const shown = items.length - own.length
+    const more = commands.length + skills.length - shown
+    if (more > 0) {
+      const parts = []
+      if (commands.length) parts.push(`${commands.length} commands`)
+      if (skills.length) parts.push(`${skills.length} skills`)
+      items.push(note(`Type to search ${parts.join(' and ')}`))
+    }
+    return items
   }
-  for (const c of own) {
-    const score = rankBy(query, c.name, c.description)
-    if (!score) continue
-    items.push({
-      key: `own:${c.name}`,
-      kind: 'openremote',
-      label: `/${c.name}`,
-      detail: c.description,
-      hint: '',
-      badge: 'OpenRemote',
-      disabled: false,
-      why: null,
-      insertion: `/${c.name}`,
-      score,
-    })
-  }
-  return items.sort((a, b) => b.score - a.score || a.label.localeCompare(b.label)).slice(0, 50)
+
+  const scored = (list) =>
+    list
+      .map((c) => ({
+        c,
+        score: Math.max(...[c.name, ...(c.aliases ?? [])].map((n) => rankBy(query, n, c.description ?? ''))),
+      }))
+      .filter((x) => x.score)
+      .sort((a, b) => b.score - a.score || a.c.name.localeCompare(b.c.name))
+  const ownHits = own
+    .map((c) => ({ c, score: rankBy(query, c.name, c.description) }))
+    .filter((x) => x.score)
+    .sort((a, b) => b.score - a.score || a.c.name.localeCompare(b.c.name))
+  const commandHits = scored(commands)
+  const skillHits = scored(skills)
+  const items = [
+    ...ownHits.map((x) => ownRow(x.c, x.score)),
+    ...commandHits.slice(0, 6).map((x) => commandRow(x.c, 'Commands', x.score)),
+    ...skillHits.slice(0, 6).map((x) => commandRow(x.c, 'Skills', x.score)),
+  ]
+  const hidden = Math.max(0, commandHits.length - 6) + Math.max(0, skillHits.length - 6)
+  if (hidden > 0) items.push(note(`${hidden} more - keep typing to narrow`))
+  return items
 }
 
 // The @ menu: files and folders, agents, MCP servers, other chats -

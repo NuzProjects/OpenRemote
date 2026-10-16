@@ -13,6 +13,7 @@ export const FLOATING = [
   '.si-backdrop',
   '.ab-backdrop',
   '.sb-backdrop',
+  '.vp-backdrop',
 ].join(',')
 
 export function overlaps(a, b) {

@@ -94,6 +94,8 @@ export default function NewChat({
     if (!presetProject) return
     setTarget(null)
     setProjectId(presetProject.id)
+    // Straight to typing: the project is chosen, the message is next.
+    requestAnimationFrame(() => inputRef.current?.focus())
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [presetProject?.nonce])
 
@@ -638,6 +640,21 @@ export default function NewChat({
                 }
               />
             )}
+            {currentHarness?.fast_supported && (
+              <button
+                className={`nc-meta nc-fast${fast ? ' on' : ''}`}
+                onClick={() => setFast((v) => !v)}
+                aria-pressed={fast}
+                title={hintFast("The harness's own fast mode - its speed tier, never a model switch")}
+              >
+                <Lightning size={13} weight={fast ? 'fill' : 'light'} />
+                Fast
+              </button>
+            )}
+          </div>
+          <div className="nc-send-group">
+            {/* What the agent may do without asking sits by the send button:
+                the last thing to check before a message goes. */}
             {permissionWords.length > 0 && (
               <button
                 type="button"
@@ -674,19 +691,6 @@ export default function NewChat({
                 }
               />
             )}
-            {currentHarness?.fast_supported && (
-              <button
-                className={`nc-meta nc-fast${fast ? ' on' : ''}`}
-                onClick={() => setFast((v) => !v)}
-                aria-pressed={fast}
-                title={hintFast("The harness's own fast mode - its speed tier, never a model switch")}
-              >
-                <Lightning size={13} weight={fast ? 'fill' : 'light'} />
-                Fast
-              </button>
-            )}
-          </div>
-          <div className="nc-send-group">
             <button className="nc-send" onClick={start} disabled={!canSend} title="Start task">
               <ArrowUp size={15} weight="bold" />
             </button>

@@ -22,6 +22,14 @@ export default function ComposerMenu({ items, active, onPick, onHover }) {
       onMouseDown={(e) => e.preventDefault()}
     >
       {items.map((item, i) => {
+        // A note (how much more a search finds) is read, never picked.
+        if (item.note) {
+          return (
+            <div key={item.key} className="cm-note">
+              {item.detail}
+            </div>
+          )
+        }
         const header = item.group && item.group !== group ? item.group : null
         if (header) group = header
         // File paths and chat names are the user's own: blurred in
