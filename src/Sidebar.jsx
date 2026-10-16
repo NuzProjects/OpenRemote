@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   Archive,
@@ -43,6 +43,7 @@ import { useMoveChat } from './useMoveChat.jsx'
 import { usePersistedList, useUnseen } from './useSidebarMarks.js'
 import { KEYS, toggled } from './sidebar-marks.js'
 import { DOT_WORDS, dotKind, rollup } from './sidebar-groups.js'
+import SidebarNote, { useNote } from './SidebarNote.jsx'
 import { useChatDrag } from './useChatDrag.js'
 import { wouldMove } from './move-chat.js'
 import './sidebar.css'
@@ -171,6 +172,22 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
     setChatArchived(id, true)
     if (id === active) onSelect('new')
   }
+
+  // Archiving is forgiving: a quiet note offers Undo for a few seconds. A
+  // chat is archived from many places (the row's button, its menu, the
+  // shortcut, a pane's menu) and all of them end in the console's archived
+  // set, so the note watches that set rather than each way in.
+  const { note, say, dismiss } = useNote()
+  const archivedBefore = useRef(archived)
+  useEffect(() => {
+    const before = archivedBefore.current
+    archivedBefore.current = archived
+    const added = [...archived].filter((id) => !before.has(id))
+    if (added.length === 0) return
+    const id = added[added.length - 1]
+    say('Archived.', { label: 'Undo', run: () => setChatArchived(id, false) })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [archived])
 
   // Right-click on a chat: the same actions as the hover buttons, plus the
   // split directions.
@@ -386,6 +403,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
         </div>
       </div>
 
+      <div className="sb-body">
       <nav className="sb-list" aria-label={pluginViews.length > 0 ? 'Plugins, projects and chats' : 'Projects and chats'} ref={listRef}>
         {/* The views plugins add, each a tile that opens in a pane. A
             plugin runs in this console, so the group shows in Local and
@@ -514,6 +532,8 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
           <p className="sb-empty">No chats match “{query.trim()}”.</p>
         )}
       </nav>
+      <SidebarNote note={note} onDismiss={dismiss} />
+      </div>
 
       <footer className="sb-foot">
         {/* The footer's views, as icons: account, mobile, metrics, the

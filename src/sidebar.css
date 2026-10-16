@@ -258,6 +258,15 @@ button.side-tile:active {
   color: var(--text-1);
 }
 
+/* The list and the note that can rest on its foot. */
+.sb-body {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .sb-list {
   flex: 1;
   overflow-y: auto;
@@ -864,4 +873,47 @@ html[data-reduce-motion] .chat-archive {
 
 .nc-meta[aria-haspopup='listbox']::after {
   right: 7px;
+}
+
+/* The sidebar's one quiet note ("Archived. Undo"): a 1px line on the
+   sidebar's own ground, no shadow, resting on the foot of the list. No
+   motion - it appears and goes. */
+.sb-note {
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+  left: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-side);
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.sb-note-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Amber marks the one thing to press (DESIGN.md). */
+.sb-note-action {
+  flex: none;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--accent);
+  font-size: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.sb-note-action:hover {
+  background: var(--bg-hover);
 }
