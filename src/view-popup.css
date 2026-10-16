@@ -1,0 +1,94 @@
+/* Settings, Metrics and Mobile as windows over the app: large enough for
+   each view's own layout, the app dimmed behind. */
+
+.vp-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  padding: 28px;
+  background: rgba(4, 6, 9, 0.55);
+  animation: vp-fade 0.12s ease-out;
+}
+
+.vp-window {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(1040px, 100%);
+  height: min(86vh, 860px);
+  max-height: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: var(--bg-app);
+  overflow: hidden;
+}
+
+.vp-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.vp-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.vp-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+@keyframes vp-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+/* A phone (or a narrow window): the view fills the screen. */
+@media (max-width: 640px) {
+  .vp-backdrop {
+    padding: 0;
+  }
+
+  .vp-window {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    border-radius: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vp-backdrop {
+    animation: none;
+  }
+
+  .vp-close {
+    transition: none;
+  }
+}
+
+html[data-reduce-motion] .vp-backdrop {
+  animation: none;
+}
+
+html[data-reduce-motion] .vp-close {
+  transition: none;
+}

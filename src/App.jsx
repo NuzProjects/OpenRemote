@@ -25,6 +25,8 @@ import SplitArea from './SplitArea.jsx'
 import ContextMenu from './ContextMenu.jsx'
 import CommandPalette from './CommandPalette.jsx'
 import ShortcutSheet from './ShortcutSheet.jsx'
+import ViewPopup from './ViewPopup.jsx'
+import { POPUP_VIEWS, onPopup } from './popups.js'
 import { KeyboardProvider, useKeyboard, useShortcut } from './keyboard.jsx'
 import {
   MAX_PANES,
@@ -162,7 +164,9 @@ function Shell() {
   // chats, so it has neither.
   const OTHER_MODE = { local: ['machines'], cloud: isMobile ? ['plugins', 'automations'] : [] }
   const stored = history[hIndex]
-  const view = OTHER_MODE[mode].includes(stored) ? 'new' : stored
+  // Settings, Metrics and Mobile open over the app (popups.js), never in
+  // a pane; one left in the history from before opens New chat.
+  const view = OTHER_MODE[mode].includes(stored) || POPUP_VIEWS.includes(stored) ? 'new' : stored
   const chat = STATIC_VIEWS.includes(view) ? null : chats[view] ?? null
 
   // Every chat on screen streams live - the primary's and each pane's -
@@ -415,10 +419,17 @@ function Shell() {
   const kb = useKeyboard()
   const desk = onboarded && !isMobile
   const [palette, setPalette] = useState(false)
+  // The view open over the app, if any: settings, metrics or mobile.
+  const [popup, setPopup] = useState(null)
+  useEffect(() => onPopup((name) => setPopup(name)), [])
   const [sheet, setSheet] = useState(false)
   const [presetProject, setPresetProject] = useState(null)
   const [openDevice, setOpenDevice] = useState(null)
   const goView = (id) => {
+    if (POPUP_VIEWS.includes(id)) {
+      setPopup(id)
+      return
+    }
     // Machines is Cloud's; plugins and automations live in both modes.
     const needs = { machines: 'cloud' }[id]
     if (needs && mode !== needs) keepMode(needs)
@@ -572,10 +583,10 @@ function Shell() {
           {sidebarOpen && <div className="sb-backdrop" onClick={() => setSidebarOpen(false)} />}
           <Sidebar
             open={sidebarOpen}
-            active={(focused?.view ?? view) === 'new' ? null : (focused?.view ?? view)}
+            active={popup ?? ((focused?.view ?? view) === 'new' ? null : (focused?.view ?? view))}
             mode={mode}
             onMode={switchMode}
-            onSelect={openInFocus}
+            onSelect={(id) => (POPUP_VIEWS.includes(id) ? setPopup(id) : openInFocus(id))}
             onSplit={openBeside}
             onAddProject={addProject}
             onNewChatIn={newChatIn}
@@ -615,6 +626,34 @@ function Shell() {
             />
           )}
           {sheet && <ShortcutSheet onClose={() => setSheet(false)} />}
+          {popup && (
+            <ViewPopup
+              label={{ settings: 'Settings', metrics: 'Metrics', mobile: 'Mobile' }[popup]}
+              onClose={() => setPopup(null)}
+            >
+              {popup === 'settings' ? (
+                <SettingsView
+                  onReplay={() => {
+                    setPopup(null)
+                    replayOnboarding()
+                  }}
+                  onOpenChat={(id) => {
+                    setPopup(null)
+                    openSession(id)
+                  }}
+                />
+              ) : popup === 'metrics' ? (
+                <MetricsView />
+              ) : (
+                <MobileView
+                  onOpenChat={(id) => {
+                    setPopup(null)
+                    openSession(id)
+                  }}
+                />
+              )}
+            </ViewPopup>
+          )}
         </div>
       )}
     </>
