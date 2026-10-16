@@ -258,6 +258,15 @@ button.side-tile:active {
   color: var(--text-1);
 }
 
+/* The list and the note that can rest on its foot. */
+.sb-body {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .sb-list {
   flex: 1;
   overflow-y: auto;
@@ -341,9 +350,9 @@ button.side-tile:active {
   color: var(--text-3);
 }
 
-/* the Projects head: the title, the one way a folder becomes a project
-   (the +), and - per project - the unregister button. The section titles
-   stack with a little air: Projects, then the flat Chats list. */
+/* the Projects head: the title and the one way a folder becomes a project
+   (the +). The section titles stack with a little air: Projects, then the
+   flat Chats list. */
 .sb-projects-head {
   display: flex;
   align-items: center;
@@ -397,11 +406,18 @@ button.side-tile:active {
   margin-top: 14px;
 }
 
+/* The Pinned group sits between Plugins and Projects, with the same air
+   the other groups have between them. */
+.sb-plugins + .sb-pinned,
+.sb-pinned + .sb-projects-head {
+  margin-top: 14px;
+}
+
 .project {
   position: relative;
 }
 
-/* A project's own new chat and unregister live on its head row, revealed
+/* A project's own new chat and menu live on its head row, revealed
    on hover and keyboard focus (and always there on touch screens, which
    have no hover). The row makes room so the name never runs under them. */
 .project:hover .project-head,
@@ -433,7 +449,7 @@ button.side-tile:active {
 
 .project:hover .sb-project-new,
 .project:focus-within .sb-project-new,
-.project:focus-within .sb-project-remove {
+.project:focus-within .sb-project-more {
   opacity: 1;
 }
 
@@ -443,7 +459,8 @@ button.side-tile:active {
 }
 
 @media (hover: none) {
-  .sb-project-new {
+  .sb-project-new,
+  .sb-project-more {
     opacity: 1;
   }
 
@@ -452,8 +469,8 @@ button.side-tile:active {
   }
 }
 
-/* Unregister: a quiet action that never touches the disk. */
-.sb-project-remove {
+/* The project's menu: a quiet ... that opens what a right click opens. */
+.sb-project-more {
   position: absolute;
   top: 6px;
   right: 6px;
@@ -470,13 +487,25 @@ button.side-tile:active {
   transition: opacity 0.12s ease;
 }
 
-.project:hover .sb-project-remove {
+.project:hover .sb-project-more {
   opacity: 1;
 }
 
-.sb-project-remove:hover {
+.sb-project-more:hover {
   background: var(--bg-active);
   color: var(--text-1);
+}
+
+/* A project of another machine wears that machine's name beside its own. */
+.project-device {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-3);
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .chat-row {
@@ -644,7 +673,7 @@ html[data-reduce-motion] .sidebar.collapsed,
 html[data-reduce-motion] .machines-reveal,
 html[data-reduce-motion] .machines-reveal > *,
 html[data-reduce-motion] .sb-project-new,
-html[data-reduce-motion] .sb-project-remove {
+html[data-reduce-motion] .sb-project-more {
   transition: none;
 }
 
@@ -665,7 +694,7 @@ button:focus-visible {
   .machines-reveal,
   .machines-reveal > *,
   .sb-project-new,
-  .sb-project-remove {
+  .sb-project-more {
     transition: none;
   }
 }
@@ -701,11 +730,55 @@ button:focus-visible {
   background: #f87171;
 }
 
+/* Done, not seen: the turn ended or failed while another chat was on
+   screen. A solid bright dot - the text colour, so no new colour joins the
+   amber, red and green - and the title brightens with it. It goes when the
+   chat is opened. */
+.dot--unseen {
+  background: var(--text-1);
+}
+
+.chat-row[data-unseen] .chat-title {
+  color: var(--text-1);
+}
+
 .sb-empty {
   margin: 10px 14px;
   color: var(--text-3);
   font-size: 12px;
   line-height: 1.5;
+}
+
+/* "Show N more": a quiet line under a list that has more, level with the
+   chats' names; a dot at the right edge, in the dots' own column, says what
+   the chats it leaves out are up to. */
+.sb-more {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 6px 10px 6px 34px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-3);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sb-more:hover {
+  background: var(--bg-hover);
+  color: var(--text-2);
+}
+
+.sb-more .dot {
+  margin-left: auto;
+}
+
+/* A project with no chats yet: one quiet line, level with its name. */
+.sb-empty.sb-project-empty {
+  margin: 0;
+  padding: 2px 8px 8px 28px;
 }
 
 /* ---- phone width: the sidebar overlays instead of pushing ---- */
@@ -846,4 +919,75 @@ html[data-reduce-motion] .chat-archive {
 
 .nc-meta[aria-haspopup='listbox']::after {
   right: 7px;
+}
+
+/* The sidebar's one quiet note ("Archived. Undo"): a 1px line on the
+   sidebar's own ground, no shadow, resting on the foot of the list. No
+   motion - it appears and goes. */
+.sb-note {
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+  left: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-side);
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.sb-note-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Amber marks the one thing to press (DESIGN.md). */
+.sb-note-action {
+  flex: none;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--accent);
+  font-size: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.sb-note-action:hover {
+  background: var(--bg-hover);
+}
+
+/* A chat's name being edited in its row: the row lights in the accent (the
+   same outline a drop target wears - amber marks interaction), the field
+   takes the title's place and metrics so nothing shifts. */
+.chat-row.renaming {
+  background: var(--bg-active);
+  outline: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: -1px;
+  cursor: text;
+}
+
+.chat-rename {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: none;
+  color: var(--text-1);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.chat-rename::placeholder {
+  color: var(--text-3);
 }

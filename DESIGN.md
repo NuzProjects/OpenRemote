@@ -73,12 +73,16 @@ spacing.
   The whole bar is a drag region.
 - **Sidebar (264px, collapsible):** mode switch (Local/Cloud), New chat tile,
   search, then nav tiles - Plugins and Automations in Local, Machines in
-  Cloud (grid-rows reveal, reduced-motion aware); then the two sections -
-  Projects (the registered ones, each with collapse caret and count, the
-  `+` in the section head, unregister on hover; a project's chats grouped
-  under it) and the flat Chats list (every chat that belongs to no
-  project), each row led by its harness's brand mark with the status dot
-  at the row's right edge; the footer is an icon row - Account, Mobile,
+  Cloud (grid-rows reveal, reduced-motion aware); then Pinned (the chats
+  pinned on this device, in the order pinned) and the two sections -
+  Projects (every registered project, empty ones too, each with collapse
+  caret and count, a `+` for a new chat and a `...` menu on hover, focus
+  and always on touch; its five most recent chats, then "Show N more"; the
+  `+` in the section head adds a project; in Cloud and on the phone a
+  machine's projects group that machine's chats, the machine a small label)
+  and the flat Chats list (every chat that belongs to no project, fifteen
+  then "Show N more"), each row led by its harness's brand mark with the
+  status dot at the row's right edge; the footer is an icon row - Account, Mobile,
   Metrics, Settings - spaced evenly. The Mobile tile is the phones'
   status without words: green tile + black glyph while one is
   reachable, a hollow corner dot while away, quiet when there is none.
@@ -91,8 +95,13 @@ spacing.
 ## Components
 
 - **Status dots (`dot--*`):** 6px pills of truth - `running` green (breathing),
-  `waiting` amber, `idle` hidden. The same dot language everywhere. The
-  chat header's facts dot breathes too, on the same 2.4s cycle.
+  `waiting` amber, `failed` red, `idle` hidden. The same dot language
+  everywhere. The chat header's facts dot breathes too, on the same 2.4s
+  cycle. One more lives in the sidebar: `unseen` (done, not seen) - a solid
+  dot in the primary text colour, no new hue and no motion - for a chat whose
+  turn ended or failed while another chat was on screen, until it is opened.
+  A folded project row wears the most urgent of its chats' dots: waiting,
+  then failed, then done-not-seen, then running.
 - **Tool status (`cv-tool-status`):** every tool card carries its state,
   right-aligned on the name line - a breathing green dot and "Running" while
   in flight, a green check and "Done" when the result lands, a red check

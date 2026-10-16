@@ -4,7 +4,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { DaemonApi, clearConnection, loadConnection, saveConnection, sessionGone } from '../api/daemon.js'
-import { chatFromSession, foldEvent, mergeSessionIntoChat, vanishedChatIds } from './reducer.js'
+import { chatFromSession, firstPromptText, foldEvent, mergeSessionIntoChat, titleFrom, vanishedChatIds } from './reducer.js'
 import { isMobile, openExternal } from '../platform.js'
 import { loadArchived, saveArchived, withArchived } from '../archive.js'
 import { learnHarnessNames } from '../harness-names.js'
@@ -41,6 +41,9 @@ export function ConsoleProvider({ children }) {
   // The registered projects - daemon-side, the one list every surface
   // reads (the sidebar's groups, the composer's picker, the pill).
   const [projects, setProjects] = useState([])
+  // Bumped when a project is added or removed on any machine: what the
+  // sidebar's per-machine project lists (useMachineProjects) refresh on.
+  const [projectsRev, setProjectsRev] = useState(0)
   const [chats, setChats] = useState({})
   const [modelsByHarness, setModelsByHarness] = useState({})
   // Cloud: this computer's account state, and the account's devices.
@@ -421,7 +424,68 @@ export function ConsoleProvider({ children }) {
     [api],
   )
 
-  const renameChat = useCallback(async (chatId, title) => api.rename(chatId, title), [api])
+  // Rename a chat. The daemon answers with the renamed session, so the
+  // sidebar and the chat's header take the new name at once, not at the
+  // next poll.
+  const renameChat = useCallback(
+    async (chatId, title) => {
+      const reply = await api.rename(chatId, title)
+      const session = reply?.result ?? null
+      if (session?.id === chatId && session.title) {
+        setSessions((current) =>
+          current.map((s) =>
+            s.id === chatId ? { ...s, title: session.title, updated_at: session.updated_at ?? s.updated_at } : s,
+          ),
+        )
+        setChats((current) =>
+          current[chatId] ? { ...current, [chatId]: { ...current[chatId], title: session.title } } : current,
+        )
+      }
+      return session
+    },
+    [api],
+  )
+
+  // The first words a chat was asked, read from the start of its event
+  // stream: for a chat whose transcript this console has not folded.
+  const readFirstPrompt = useCallback(
+    (chatId) =>
+      new Promise((resolve) => {
+        let stop = null
+        let timer = null
+        const done = (words) => {
+          clearTimeout(timer)
+          stop?.()
+          resolve(words)
+        }
+        timer = setTimeout(() => done(null), 8000)
+        stop = api.events(chatId, {
+          after: null,
+          onEvent: (event) => {
+            const message = event.type === 'message.added' ? event.message : null
+            if (message?.role === 'user' && message.text?.trim()) done(message.text)
+          },
+          onClose: () => done(null),
+        })
+      }),
+    [api],
+  )
+
+  // Back to the name the chat was given from its first message. The daemon
+  // refuses an empty name, so the name is made the way the daemon made it:
+  // from the words of the first message (the folded transcript when this
+  // console has it, else the start of the event stream). A chat already
+  // named that way is left alone: a rename would only move it up the list.
+  const restoreChatTitle = useCallback(
+    async (chatId, current = null) => {
+      const words = firstPromptText(chatsRef.current[chatId]?.timeline) ?? (await readFirstPrompt(chatId))
+      const name = words ? titleFrom(words).trim() : ''
+      if (!name) throw new Error('This chat has no first message to name it from')
+      if (name === current) return null
+      return renameChat(chatId, name)
+    },
+    [renameChat, readFirstPrompt],
+  )
 
   // Move a chat into one of its machine's projects (null: out of every
   // project). The sidebar regroups at once; the open chat and the user's
@@ -992,16 +1056,19 @@ export function ConsoleProvider({ children }) {
     async (folders, { deviceId = null } = {}) => {
       const project = await api.device(deviceId).createProject({ folders })
       await refreshProjects()
+      setProjectsRev((n) => n + 1)
       return project
     },
     [api, refreshProjects],
   )
 
   // Unregister a project - its chats stay, they just stop being grouped.
+  // Like adding one, it is done on the machine that owns the folder.
   const removeProject = useCallback(
-    async (projectId) => {
-      await api.removeProject(projectId)
+    async (projectId, { deviceId = null } = {}) => {
+      await api.device(deviceId).removeProject(projectId)
       await refreshProjects()
+      setProjectsRev((n) => n + 1)
     },
     [api, refreshProjects],
   )
@@ -1035,6 +1102,7 @@ export function ConsoleProvider({ children }) {
       removeMarketplace,
       automations,
       projects,
+      projectsRev,
       chats,
       watchChats,
       connect,
@@ -1049,6 +1117,7 @@ export function ConsoleProvider({ children }) {
       commandsFor,
       filesFor,
       renameChat,
+      restoreChatTitle,
       moveChat,
       capabilitiesFor,
       refreshCloud,
@@ -1111,6 +1180,7 @@ export function ConsoleProvider({ children }) {
       removeMarketplace,
       automations,
       projects,
+      projectsRev,
       chats,
       watchChats,
       connect,
@@ -1124,6 +1194,7 @@ export function ConsoleProvider({ children }) {
       commandsFor,
       filesFor,
       renameChat,
+      restoreChatTitle,
       moveChat,
       capabilitiesFor,
       refreshCloud,

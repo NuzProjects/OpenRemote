@@ -29,6 +29,7 @@ const modelSwitches = Array.from({ length: 9 }, (_, i) => ({
 
 export const ACTIONS = [
   { id: 'new-chat', group: 'navigation', label: 'New chat', keys: 'Mod+N' },
+  { id: 'new-chat-in-project', group: 'navigation', label: 'New chat in this project', keys: 'Mod+Shift+N' },
   { id: 'palette', group: 'navigation', label: 'Command palette', keys: 'Mod+K' },
   { id: 'cheat-sheet', group: 'navigation', label: 'Keyboard shortcuts', keys: 'Mod+/' },
   { id: 'search-chats', group: 'navigation', label: 'Search chats', keys: 'Mod+F' },

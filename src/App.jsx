@@ -531,8 +531,8 @@ function Shell() {
   // A new chat already in a project (the sidebar's + on a project, the
   // palette's project rows): the home screen with that project chosen and
   // its message box focused.
-  const newChatIn = (id) => {
-    setPresetProject({ id, nonce: Date.now() })
+  const newChatIn = (id, device = null) => {
+    setPresetProject({ id, device, nonce: Date.now() })
     focusPrimary()
     navigate('new')
     if (typeof window !== 'undefined' && !window.matchMedia('(min-width: 640px)').matches)
@@ -631,6 +631,7 @@ function Shell() {
           addProjectOpen={addProjectOpen}
           onAddProjectDone={() => setAddProjectOpen(false)}
           presetProject={presetProject}
+          onPresetDone={() => setPresetProject(null)}
           focused={primaryFocused}
           onOpenPlugins={() => goView('plugins')}
         />
