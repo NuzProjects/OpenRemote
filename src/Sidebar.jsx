@@ -256,11 +256,6 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
             </button>
           )}
         </label>
-        {/* The browser is this device's own, in Local and Cloud alike. */}
-        <button className={`side-tile${active === 'browser' ? ' on' : ''}`} onClick={() => onSelect('browser')}>
-          <Globe size={17} />
-          Browser
-        </button>
         {/* Plugins and automations act on this computer, so they belong
             to Local; Machines belongs to Cloud. The tiles reveal and
             collapse with the mode switch (the grid-rows transition). */}
@@ -365,9 +360,9 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
       </nav>
 
       <footer className="sb-foot">
-        {/* The footer's views, as icons: account, mobile, metrics, then
-            settings. Each opens its view in the primary pane. */}
-        <div className="sb-foot-row" role="group" aria-label="Account, mobile, metrics, settings">
+        {/* The footer's views, as icons: account, mobile, metrics, the
+            browser, then settings. Each opens its view in the primary pane. */}
+        <div className="sb-foot-row" role="group" aria-label="Account, mobile, metrics, browser, settings">
           <button
             type="button"
             className={`sb-icon-btn${active === 'account' ? ' on' : ''}`}
@@ -411,6 +406,17 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
             onClick={() => onSelect('metrics')}
           >
             <ChartBar size={20} />
+          </button>
+          {/* The browser is this device's own, in Local and Cloud alike. */}
+          <button
+            type="button"
+            className={`sb-icon-btn${active === 'browser' ? ' on' : ''}`}
+            aria-pressed={active === 'browser'}
+            title="Browser"
+            aria-label="Browser"
+            onClick={() => onSelect('browser')}
+          >
+            <Globe size={20} />
           </button>
           <button
             type="button"

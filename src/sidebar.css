@@ -533,7 +533,7 @@ button.side-tile:active {
   border-top: 1px solid var(--line);
 }
 
-/* The footer's icon row: account, mobile, metrics, settings - square
+/* The footer's icon row: account, mobile, metrics, browser, settings - square
    ghost buttons, spaced evenly across the footer. */
 .sb-foot-row {
   display: flex;
