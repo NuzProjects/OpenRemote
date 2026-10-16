@@ -30,8 +30,9 @@ pub use model::{
     ApprovedCommand, AutomationRule, ChatMessage, Decision, DecisionKind, DecisionOption,
     DecisionState, Harness, ImageRef, InstallSpec, InstalledPlugin, LOCAL_MARKETPLACE, Machine,
     MachineStatus, MachineView, MarketplaceRecord, MarketplaceSource, McpServerEntry, MessageRole,
-    PluginPower, PluginRuntime, PluginScope, PluginSource, Project, QueuedMessage, Receipt,
-    ReceiptStatus, Session, SessionStatus, Trigger, TriggerKind, TurnOutcome,
+    Origin, ParentLink, PluginPower, PluginRuntime, PluginScope, PluginSource, Project,
+    QueuedMessage, Receipt, ReceiptStatus, Session, SessionStatus, Trigger, TriggerKind,
+    TurnOutcome,
 };
 pub use store::Store;
 

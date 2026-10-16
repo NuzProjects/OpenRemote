@@ -1260,6 +1260,7 @@ impl Supervisor {
             queue: Vec::new(),
             queue_paused: false,
             mentioned_chats: Vec::new(),
+            parent: None,
         };
         let id = session.id;
         self.emit_all(&id, vec![EventPayload::SessionCreated { session }])?;
@@ -1494,6 +1495,7 @@ impl Supervisor {
                 role: openremote_core::MessageRole::User,
                 text: text.to_string(),
                 images: images.to_vec(),
+                origin: None,
             },
         };
         let payloads = if steering {
@@ -2098,6 +2100,7 @@ impl Supervisor {
                 text: text.to_string(),
                 at: now_ms(),
                 images: kept,
+                origin: None,
             });
             self.emit_queue(id, queue, session.queue_paused)?;
         }
@@ -2391,6 +2394,7 @@ impl Supervisor {
                             role: openremote_core::MessageRole::Assistant,
                             text,
                             images: Vec::new(),
+                            origin: None,
                         },
                     }],
                 )?;
@@ -2794,6 +2798,7 @@ mod tests {
             queue: Vec::new(),
             queue_paused: false,
             mentioned_chats: Vec::new(),
+            parent: None,
         };
         let id = session.id;
         supervisor
@@ -3127,6 +3132,7 @@ mod tests {
                             role: openremote_core::MessageRole::Assistant,
                             text: format!("tail {i}"),
                             images: Vec::new(),
+                            origin: None,
                         },
                     }],
                 ) {

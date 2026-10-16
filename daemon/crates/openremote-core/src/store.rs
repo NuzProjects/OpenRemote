@@ -1581,6 +1581,12 @@ impl Store {
                 if let Some(existing) = self.state.sessions.get(&session.id) {
                     session.queue = existing.queue.clone();
                     session.queue_paused = existing.queue_paused;
+                    // Who started a chat is fixed when it is created: an
+                    // update from a device that predates teams carries no
+                    // parent and must not take the chat out of its tree.
+                    if session.parent.is_none() {
+                        session.parent = existing.parent.clone();
+                    }
                 }
                 self.state.sessions.insert(session.id, session);
             }
@@ -1693,6 +1699,7 @@ mod tests {
             queue: Vec::new(),
             queue_paused: false,
             mentioned_chats: Vec::new(),
+            parent: None,
         }
     }
 
@@ -1816,6 +1823,36 @@ mod tests {
     }
 
     #[test]
+    fn a_worker_keeps_its_place_in_the_tree_through_updates_from_older_devices() {
+        let mut store = Store::open(tempdir()).unwrap();
+        let mut worker = session();
+        worker.parent = Some(crate::model::ParentLink {
+            chat: SessionId::new(),
+            depth: 1,
+            role: Some("worker".into()),
+            brief: "fix the parser".into(),
+            spawned_at: 1,
+        });
+        store
+            .append(
+                worker.id,
+                EventPayload::SessionCreated {
+                    session: worker.clone(),
+                },
+            )
+            .unwrap();
+        // A device that predates teams writes its copy without the field.
+        let mut raw = serde_json::to_value(&worker).unwrap();
+        raw.as_object_mut().unwrap().remove("parent");
+        let older: Session = serde_json::from_value(raw).unwrap();
+        assert!(older.parent.is_none());
+        store
+            .append(worker.id, EventPayload::SessionUpdated { session: older })
+            .unwrap();
+        assert_eq!(store.session(&worker.id).unwrap().parent, worker.parent);
+    }
+
+    #[test]
     fn events_round_trip_through_the_log() {
         let dir = tempdir();
         let mut store = Store::open(dir.clone()).unwrap();
@@ -1842,6 +1879,7 @@ mod tests {
                         role: crate::model::MessageRole::Assistant,
                         text: "hi".into(),
                         images: Vec::new(),
+                        origin: None,
                     },
                 },
             )
@@ -1925,6 +1963,7 @@ mod tests {
                 role: MessageRole::User,
                 text: text.into(),
                 images: Vec::new(),
+                origin: None,
             },
         }
     }

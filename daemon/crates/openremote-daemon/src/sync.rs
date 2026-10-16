@@ -705,6 +705,7 @@ mod tests {
             queue: Vec::new(),
             queue_paused: false,
             mentioned_chats: Vec::new(),
+            parent: None,
         };
         let private = session(None);
         let mut synced = session(Some(DeviceId::new()));
@@ -716,6 +717,7 @@ mod tests {
                 role: openremote_core::MessageRole::User,
                 text: "private words".into(),
                 images: Vec::new(),
+                origin: None,
             },
         };
         {
