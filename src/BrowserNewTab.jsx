@@ -3,7 +3,7 @@
 // and one quiet row of the dev servers seen in chats. A private tab's page
 // says what private means instead.
 
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useState } from 'react'
 import { Detective, DotsThreeVertical, MagnifyingGlass, PencilSimple, Plus, Terminal, Trash, X } from '@phosphor-icons/react'
 import ContextMenu from './ContextMenu.jsx'
 import { addressKind, bareAddress, engineName, omnibox } from './browser-omnibox.js'
@@ -118,7 +118,10 @@ export default function BrowserNewTab({ privateTab, engine, api, icons, chats, a
   const [tiles, setTiles] = useState([])
   const [menu, setMenu] = useState(null)
   const [dialog, setDialog] = useState(null)
-  const servers = useSyncExternalStore(subscribeDevServers, recentDevServers, recentDevServers)
+  // Read again on every change, so a list rebuilt on each read works as
+  // well as one kept.
+  const [servers, setServers] = useState(() => recentDevServers())
+  useEffect(() => subscribeDevServers(() => setServers(recentDevServers())), [])
   const privacy = usePrivacyMode()
 
   const load = async () => {

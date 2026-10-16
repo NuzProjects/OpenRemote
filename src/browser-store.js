@@ -372,19 +372,29 @@ async function wire() {
     setState((s) => ({ picking: p.on ? p.tab : s.picking === p.tab ? null : s.picking }))
   })
   listen('browser:frame', ({ payload }) => recordFrame(payload))
-  // The console reloaded while the shell kept its pages (a development
-  // reload, a crash of the console's page): take them back, hidden until
-  // the view shows one, rather than leave them on screen, orphaned.
+  // Pages the shell already holds, taken back hidden until the view shows
+  // one rather than left on screen, orphaned. After a reload of the console
+  // (in development, or its page crashing) they are the tabs as they were.
+  // At the browser's first open in a run they are tabs agents opened before
+  // it: they join behind the new tab page, which the last session may yet
+  // replace.
   const open = await call('browser_tabs')
   if (open?.length) {
-    tookBack = true
     for (const t of open) await call('browser_hide', { tab: t.id })
     const tabs = open.map((t) => newTab({ native: t.id, ...fieldsOf(t) }))
-    setState(() => ({ tabs, active: tabs[0].key }))
+    if (restoredThisRun()) setState(() => ({ tabs, active: tabs[0].key }))
+    else setState((s) => ({ tabs: [...s.tabs, ...tabs] }))
   }
 }
 
-let tookBack = false
+function restoredThisRun() {
+  try {
+    return sessionStorage.getItem(RESTORED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
 const wired = hasTauri && !isMobile ? wire() : Promise.resolve()
 
 // ---- the session: brought back once, saved as it changes ----
@@ -402,19 +412,19 @@ function startBrowser() {
       return
     }
     mergeDownloads(data.downloads)
-    let first = true
+    const first = !restoredThisRun()
     try {
-      first = sessionStorage.getItem(RESTORED_KEY) !== '1'
       sessionStorage.setItem(RESTORED_KEY, '1')
     } catch {
-      /* storage unavailable: restore, as a fresh start would */
+      /* storage unavailable: a console reload would restore again */
     }
-    if (first && !tookBack && browserSetting(data.settings, 'startup') === 'continue') {
+    if (first && browserSetting(data.settings, 'startup') === 'continue') {
       const { tabs, active } = restoredTabs(data.session)
       if (tabs.length) {
         setState((s) => {
           // The empty tab the browser started with gives way; tabs that
-          // opened meanwhile (an agent's, one the user is already in) stay.
+          // opened meanwhile (an agent's, one the user is already in) stay
+          // after the restored ones, and one the user is in stays shown.
           const kept = s.tabs.filter((t) => t.native || t.url)
           const busy = kept.some((t) => t.key === s.active)
           return { tabs: [...tabs, ...kept], active: busy ? s.active : tabs[active].key }
