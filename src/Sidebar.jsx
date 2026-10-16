@@ -45,6 +45,7 @@ import { usePlugins } from './plugins-host.jsx'
 import { PluginIcon } from './plugin-icons.jsx'
 import { useMoveChat } from './useMoveChat.jsx'
 import { usePersistedList, usePinned, useUnseen } from './useSidebarMarks.js'
+import { useMachineProjects } from './useMachineProjects.js'
 import { KEYS, toggled } from './sidebar-marks.js'
 import { CHATS_PAGE, DOT_WORDS, PROJECT_PAGE, dotKind, pageOf, pinnedRows, rollup } from './sidebar-groups.js'
 import SidebarChat from './SidebarChat.jsx'
@@ -59,7 +60,7 @@ import './move.css'
 const FLAT_KEY = '@chats'
 
 export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit, onAddProject, onNewChatIn, onReveal }) {
-  const { connection, sessions, chats, devices, thisDevice, projects, removeProject, archived, setChatArchived, deleteChat, renameChat, restoreChatTitle } = useConsole()
+  const { connection, sessions, chats, devices, thisDevice, projects, projectsRev, apiFor, removeProject, archived, setChatArchived, deleteChat, renameChat, restoreChatTitle } = useConsole()
   const privacy = usePrivacyMode()
   // The views enabled plugins add: the Plugins group's tiles.
   const pluginViews = usePlugins()?.views ?? []
@@ -135,11 +136,36 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   // place only: they leave their project's list (and the flat one). A
   // project knows how many of its chats went there, so it never claims to
   // have none.
+  //
+  // In Cloud, and on the phone (which has no projects of its own), a chat
+  // that runs on another machine groups under that machine's project: the
+  // project stays the group and the machine is a small label. Their lists
+  // are asked of the machines, as New chat does.
+  const machineLists = useMachineProjects({
+    enabled: mode === 'cloud',
+    devices,
+    thisDevice,
+    apiFor,
+    connected: connection.state === 'connected',
+    rev: projectsRev,
+  })
+  const remote = useMemo(
+    () =>
+      mode === 'cloud'
+        ? {
+            thisDevice,
+            machines: (devices ?? [])
+              .filter((d) => machineLists[d.id])
+              .map((d) => ({ id: d.id, name: d.name, projects: machineLists[d.id] })),
+          }
+        : null,
+    [mode, thisDevice, devices, machineLists],
+  )
   const pins = useMemo(() => pinnedRows(visible, pinned), [visible, pinned])
   const grouped = useMemo(() => {
     const pinnedIds = new Set(pins.map((row) => row.id))
     const apart = (items) => items.filter((row) => !pinnedIds.has(row.id))
-    const all = sections(projects, visible)
+    const all = sections(projects, visible, remote)
     return {
       projects: all.projects.map((g) => {
         const items = apart(g.items)
@@ -147,7 +173,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
       }),
       flat: apart(all.flat),
     }
-  }, [projects, visible, pins])
+  }, [projects, visible, pins, remote])
   const searching = query.trim() !== ''
   const groups = searching ? grouped.projects.filter((g) => g.items.length > 0) : grouped.projects
 
@@ -180,11 +206,8 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
       : pageOf(items, { page, pages: more[key] ?? 0, keep: keepShown })
   const projectViews = groups.map((g) => ({
     ...g,
-    key: g.project.id,
-    device: null,
-    deviceName: null,
-    folded: isFolded(g.project.id),
-    page: pageFor(g.project.id, g.items, PROJECT_PAGE),
+    folded: isFolded(g.key),
+    page: pageFor(g.key, g.items, PROJECT_PAGE),
   }))
   const flatPage = pageFor(FLAT_KEY, grouped.flat, CHATS_PAGE)
 
@@ -236,6 +259,11 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   // The project a chat belongs to, with the machine it lives on (null: this
   // computer's), or null for a chat outside every project.
   const projectOf = (session) => {
+    if (session.executor && session.executor !== thisDevice) {
+      const list = remote?.machines.find((m) => m.id === session.executor)?.projects
+      const project = projectFor(list, session.workspace)
+      return project ? { project, device: session.executor } : null
+    }
     const project = projectFor(projects, session.workspace)
     return project ? { project, device: null } : null
   }
@@ -359,7 +387,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   }
   const removeHere = async (v) => {
     try {
-      await removeProject(v.project.id)
+      await removeProject(v.project.id, { deviceId: v.device })
       setFolded((list) => toggled(list, v.key, false))
     } catch (err) {
       say(`Couldn't remove the project: ${err?.message ?? err}`, null, { veiled: true })
@@ -372,7 +400,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
         label: 'New chat here',
         icon: <Plus size={14} />,
         // The key says what it does only for the open chat's project.
-        hint: openProject?.project.id === v.project.id && !v.device ? keysHere : undefined,
+        hint: openProject?.project.id === v.project.id && openProject.device === v.device ? keysHere : undefined,
         onSelect: () => onNewChatIn?.(v.project.id, v.device),
       },
       // The file manager is the desktop app's, and the folder this

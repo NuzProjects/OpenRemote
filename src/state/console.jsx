@@ -41,6 +41,9 @@ export function ConsoleProvider({ children }) {
   // The registered projects - daemon-side, the one list every surface
   // reads (the sidebar's groups, the composer's picker, the pill).
   const [projects, setProjects] = useState([])
+  // Bumped when a project is added or removed on any machine: what the
+  // sidebar's per-machine project lists (useMachineProjects) refresh on.
+  const [projectsRev, setProjectsRev] = useState(0)
   const [chats, setChats] = useState({})
   const [modelsByHarness, setModelsByHarness] = useState({})
   // Cloud: this computer's account state, and the account's devices.
@@ -1053,16 +1056,19 @@ export function ConsoleProvider({ children }) {
     async (folders, { deviceId = null } = {}) => {
       const project = await api.device(deviceId).createProject({ folders })
       await refreshProjects()
+      setProjectsRev((n) => n + 1)
       return project
     },
     [api, refreshProjects],
   )
 
   // Unregister a project - its chats stay, they just stop being grouped.
+  // Like adding one, it is done on the machine that owns the folder.
   const removeProject = useCallback(
-    async (projectId) => {
-      await api.removeProject(projectId)
+    async (projectId, { deviceId = null } = {}) => {
+      await api.device(deviceId).removeProject(projectId)
       await refreshProjects()
+      setProjectsRev((n) => n + 1)
     },
     [api, refreshProjects],
   )
@@ -1096,6 +1102,7 @@ export function ConsoleProvider({ children }) {
       removeMarketplace,
       automations,
       projects,
+      projectsRev,
       chats,
       watchChats,
       connect,
@@ -1173,6 +1180,7 @@ export function ConsoleProvider({ children }) {
       removeMarketplace,
       automations,
       projects,
+      projectsRev,
       chats,
       watchChats,
       connect,
