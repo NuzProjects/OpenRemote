@@ -34,6 +34,53 @@ export const CLAUDE_PART_LABEL = {
   mcp: 'MCP servers',
 }
 
+// Who a plugin is for, as the install screen offers it.
+export const SCOPE_LABEL = {
+  global: 'Every device',
+  machine: 'This machine',
+  project_local: 'One project, outside its repo',
+  project: 'One project, in its repo',
+}
+
+// What each scope means, under the picker.
+export const SCOPE_HINT = {
+  global: 'Approved once for your account and installed on each of your devices. Any device can turn it off for itself.',
+  machine: 'Only this computer gets it.',
+  project_local: "Only chats in the project get it. Its files stay in OpenRemote's folder.",
+  project:
+    'Only chats in the project get it. Its files go into the project at .openremote/plugins, so whoever clones it has them - and reviews it before it runs.',
+}
+
+// The scope an installed row shows; a project install names its project.
+export function scopeLabel(plugin, projectName) {
+  const project = projectName ? `Project ${projectName}` : 'A project'
+  if (plugin.scope === 'project_local') return project
+  if (plugin.scope === 'project') return `${project}, in its repo`
+  return SCOPE_LABEL[plugin.scope] ?? plugin.scope
+}
+
+// The scope the install screen starts on: where the copy it replaces is,
+// the project it was read from, else this machine - if allowed.
+export function defaultScope(staged) {
+  const allowed = staged?.scopes ?? ['machine']
+  const wanted = staged?.installed_scope ?? (staged?.for_project ? 'project' : 'machine')
+  return allowed.includes(wanted) ? wanted : allowed.includes('machine') ? 'machine' : allowed[0]
+}
+
+// What a plugin adds to OpenRemote, a line per kind, for the review.
+export function contributionLines(contributes) {
+  const c = contributes ?? {}
+  const names = (list, key) => (list ?? []).map((x) => x[key]).join(', ')
+  const lines = []
+  if (c.harnesses?.length) lines.push(`${c.harnesses.length === 1 ? 'A harness' : 'Harnesses'}: ${names(c.harnesses, 'name')}`)
+  if (c.tools?.length) lines.push(`Agent tool${c.tools.length === 1 ? '' : 's'}: ${names(c.tools, 'name')}`)
+  if (c.composer_inputs?.length)
+    lines.push(`Composer button${c.composer_inputs.length === 1 ? '' : 's'}: ${names(c.composer_inputs, 'label')}`)
+  if (c.views?.length) lines.push(`View${c.views.length === 1 ? '' : 's'}: ${names(c.views, 'title')}`)
+  if (c.settings?.length) lines.push(`Setting${c.settings.length === 1 ? '' : 's'}: ${names(c.settings, 'label')}`)
+  return lines
+}
+
 // A plugin that runs programs itself - a program, or a Claude plugin's
 // hooks and MCP servers - runs as the user, outside any sandbox. JS and
 // WebAssembly plugins are sandboxed whatever they ask for.
