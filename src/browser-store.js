@@ -4,12 +4,14 @@
 // owns the pages; this keeps what the console knows about them and hears
 // the shell's `browser:*` events.
 
-import { hasTauri, isMobile } from './platform.js'
-import { insertAfter, newTab } from './browser-tabs.js'
+import { hasTauri } from './platform.js'
+import { closeTab, insertAfter, newTab } from './browser-tabs.js'
 
+// `asks` are sites' permission requests waiting for an answer; `pending` is
+// an address something outside the browser asked it to open.
 let state = (() => {
   const first = newTab()
-  return { tabs: [first], active: first.key, closed: [], downloads: [], finds: {} }
+  return { tabs: [first], active: first.key, closed: [], downloads: [], finds: {}, asks: [], pending: null }
 })()
 const listeners = new Set()
 const keyHandlers = new Set()
@@ -52,8 +54,13 @@ export function adopt(key, native) {
   patchTab(key, { native, ...said })
 }
 
+// What a shell may say about a tab beyond the basics (the phone's shell
+// says all of these): copied only when said, so a shell that says less
+// never blanks what the console keeps.
+const EXTRA = ['progress', 'opener', 'controller', 'private', 'shared', 'fullscreen', 'desktop', 'crashed', 'live', 'problem', 'isolated']
+
 function fieldsOf(p) {
-  return {
+  const fields = {
     url: p.url,
     title: p.title,
     loading: p.loading,
@@ -61,6 +68,22 @@ function fieldsOf(p) {
     canBack: p.can_back,
     canForward: p.can_forward,
   }
+  for (const key of EXTRA) if (p[key] !== undefined) fields[key] = p[key]
+  return fields
+}
+
+// Something outside the browser (a link in a chat) wants an address opened
+// in it: the browser's view opens it in a new tab when it shows.
+export function openInBrowser(url) {
+  setState(() => ({ pending: url }))
+}
+
+// The tab showing the shell's page `native`, made the one the browser shows.
+export function focusNative(native) {
+  setState((s) => {
+    const tab = s.tabs.find((t) => t.native === native)
+    return tab ? { active: tab.key } : {}
+  })
 }
 
 async function wire() {
@@ -73,6 +96,10 @@ async function wire() {
       }
       // A page opened a window: a new tab beside its opener, shown.
       const opener = s.tabs.find((t) => t.native && t.native === p.opener)
+      if (!opener && p.controller) {
+        // An agent opened it: it joins the tabs without taking the view.
+        return { tabs: [...s.tabs, newTab({ native: p.id, ...fields })] }
+      }
       if (!opener) {
         // A tab still opening: a fast page can finish loading before the
         // console hears which tab it is. Kept until it does (adopt).
@@ -96,6 +123,32 @@ async function wire() {
   listen('browser:key', ({ payload }) => {
     for (const fn of keyHandlers) fn(payload.chord)
   })
+  // The shell closed a tab itself (a page closed its window, an agent
+  // closed it): its place goes the way a closed tab's does.
+  listen('browser:closed', ({ payload }) => {
+    early.delete(payload.id)
+    setState((s) => {
+      const tab = s.tabs.find((t) => t.native === payload.id)
+      if (!tab) return {}
+      const next = closeTab(s.tabs, tab.key, s.active)
+      const url = next.closed?.private ? null : next.closed?.url
+      return {
+        tabs: next.tabs,
+        active: next.active,
+        closed: url ? [url, ...s.closed].slice(0, 25) : s.closed,
+        asks: s.asks.filter((a) => a.tab !== payload.id),
+      }
+    })
+  })
+  // An agent asked for one of its tabs to be the one shown.
+  listen('browser:select', ({ payload }) => focusNative(payload.id))
+  // A site's request (camera, location...), or its end.
+  listen('browser:permission', ({ payload: a }) => {
+    setState((s) => {
+      const rest = s.asks.filter((x) => x.id !== a.id)
+      return { asks: a.gone ? rest : [...rest, a] }
+    })
+  })
   // The console reloaded while the shell kept its pages (a development
   // reload, a crash of the console's page): take them back, hidden until
   // the view shows one, rather than leave them on screen, orphaned.
@@ -107,7 +160,7 @@ async function wire() {
   }
 }
 
-if (hasTauri && !isMobile) wire()
+if (hasTauri) wire()
 
 // Editing this module in development reloads the console (the restore
 // above then takes the pages back) instead of starting a second tab list.
