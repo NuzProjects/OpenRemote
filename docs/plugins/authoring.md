@@ -57,7 +57,7 @@ installs and runs those too (its runtime is shown as "Claude plugin").
 | `version` | no | Shown at install; updates compare it. |
 | `description` | no | One line, shown at install. |
 | `runtime` | yes | `process`, `wasm`, `js` or `content` (below). |
-| `entry` | for `process` and `wasm` | What it runs (below). |
+| `entry` | when it contributes something that runs | What it runs (below): a process plugin's program, needed for harnesses, tools, views and composer buttons; a wasm plugin's module, needed for tools. |
 | `powers` | no | What it may do (below). |
 | `contributes` | no | What it adds to OpenRemote (below). |
 
