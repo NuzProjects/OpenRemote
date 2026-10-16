@@ -729,50 +729,14 @@ impl Supervisor {
         let events = self
             .with_store(|s| s.events_after(&member.id, None))
             .map_err(|e| e.to_string())?;
-        let mut parts: Vec<String> = Vec::new();
-        for event in &events {
-            match &event.payload {
-                EventPayload::MessageAdded { message } => {
-                    let who = match message.role {
-                        MessageRole::User => match &message.origin {
-                            Some(origin) => format!("From agent \"{}\"", origin.title),
-                            None => "User".to_string(),
-                        },
-                        MessageRole::Assistant => "Assistant".to_string(),
-                    };
-                    parts.push(format!("\n{who}: {}\n", message.text.trim()));
-                }
-                EventPayload::ToolStarted { name, .. } => parts.push(format!("[tool: {name}]\n")),
-                _ => {}
-            }
-        }
-        // `tail` counts messages: the tool lines between them ride along.
-        if let Some(tail) = tail.filter(|t| *t > 0) {
-            let mut seen = 0;
-            let mut from = 0;
-            for (i, part) in parts.iter().enumerate().rev() {
-                if part.starts_with("\n") {
-                    seen += 1;
-                    if seen == tail {
-                        from = i;
-                        break;
-                    }
-                }
-            }
-            parts = parts.split_off(from);
-        }
-        let body = keep_end(&parts.concat(), REPORT_LIMIT);
+        // The same condensed chat the read-a-chat tool gives, with the
+        // worker's state ahead of it.
         Ok(format!(
-            "Worker \"{}\" - {}, {} (id {})\n{}",
-            name_of(member),
+            "{} - {}
+{}",
             self.harness_name(&member.harness),
             state_word(member.status),
-            member.id,
-            if body.trim().is_empty() {
-                "\n(it has said nothing yet)"
-            } else {
-                &body
-            }
+            super::composer::condensed(member, &events, tail)
         ))
     }
 

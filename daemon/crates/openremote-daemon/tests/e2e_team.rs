@@ -275,7 +275,7 @@ async fn the_users_limits_and_the_team_boundary_hold() {
         json!({"agent": &worker[..8], "tail": 1}),
     )
     .await;
-    assert!(!error && text.contains("Worker \"One\""), "{text}");
+    assert!(!error && text.contains("Chat \"One\""), "{text}");
 
     // Stopping the lead takes down the worker still running under it.
     until_status(&daemon, &worker, &["idle"]).await;
