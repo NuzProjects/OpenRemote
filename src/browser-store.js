@@ -6,7 +6,7 @@
 // also brings the last session's tabs back, saves the open ones for the
 // next start, and puts pages away when too many are open.
 
-import { hasTauri, isMobile } from './platform.js'
+import { hasTauri } from './platform.js'
 import { closeTab, insertAfter, newTab, restoredTabs, sessionOf, toDiscard } from './browser-tabs.js'
 import { originOf } from './browser-chrome.js'
 import { elementAttachment } from './browser-attach.js'
@@ -169,6 +169,10 @@ export function openUrl(url) {
   return tab.key
 }
 
+// The names the phone's view and its callers know these by.
+export const openInBrowser = openUrl
+export const focusNative = focusTab
+
 // Close a tab (its page with it). Answers the page that closed, if any.
 export function removeTab(key) {
   const tab = state.tabs.find((t) => t.key === key)
@@ -254,6 +258,12 @@ export function answerPrompt(prompt, allow, remember) {
 }
 
 async function onPermission(p) {
+  // A request that ended (the page moved on, the shell turned it down): its
+  // bar goes. The phone's shell says so.
+  if (p.gone) {
+    setState((s) => ({ prompts: s.prompts.filter((q) => q.id !== p.id) }))
+    return
+  }
   // A private tab always asks, and nothing it answers is remembered.
   const isPrivate = state.tabs.some((t) => t.native === p.tab && t.private)
   if (!isPrivate) {
@@ -292,7 +302,7 @@ export { stopRecording }
 // Only what the event says: a field the shell leaves out keeps what the
 // console knows (a private tab stays private on a shell that doesn't say).
 function fieldsOf(p) {
-  return {
+  const fields = {
     url: p.url,
     title: p.title,
     loading: p.loading,
@@ -303,7 +313,13 @@ function fieldsOf(p) {
     ...(p.private !== undefined ? { private: Boolean(p.private) } : {}),
     ...(p.shared !== undefined ? { shared: Boolean(p.shared) } : {}),
   }
+  for (const key of PHONE_FIELDS) if (p[key] !== undefined) fields[key] = p[key]
+  return fields
 }
+
+// What the phone's shell says about a tab beyond the basics, copied only
+// when said so a shell that says less never blanks what the console keeps.
+const PHONE_FIELDS = ['progress', 'desktop', 'crashed', 'live', 'zoom', 'problem', 'isolated', 'agents']
 
 function withIcon(icons, url, icon) {
   const origin = originOf(url)
@@ -399,6 +415,16 @@ async function wire() {
     for (const fn of keyHandlers) fn(payload.chord, payload.tab)
   })
   listen('browser:permission', ({ payload }) => onPermission(payload))
+  // The shell closed a tab itself (a page closed its window, an agent
+  // closed it): its place goes the way a closed tab's does. The phone's
+  // shell says so; the desktop's tabs close from here.
+  listen('browser:closed', ({ payload }) => {
+    early.delete(payload.id)
+    const tab = state.tabs.find((t) => t.native === payload.id)
+    if (tab) removeTab(tab.key)
+  })
+  // An agent asked for one of its tabs to be the one shown.
+  listen('browser:select', ({ payload }) => focusTab(payload.id))
   listen('browser:fullscreen', ({ payload: p }) => {
     setState((s) => ({ fullscreen: p.on ? p.tab : s.fullscreen === p.tab ? null : s.fullscreen }))
   })
@@ -430,7 +456,8 @@ function restoredThisRun() {
   }
 }
 
-const wired = hasTauri && !isMobile ? wire() : Promise.resolve()
+// The phone's shell speaks the same events, so the store listens there too.
+const wired = hasTauri ? wire() : Promise.resolve()
 
 // ---- the session: brought back once, saved as it changes ----
 

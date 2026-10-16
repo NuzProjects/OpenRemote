@@ -13,6 +13,8 @@ mod browser;
 mod desktop;
 #[cfg(target_os = "android")]
 mod mobile;
+#[cfg(target_os = "android")]
+mod mobile_browser;
 #[cfg(desktop)]
 mod tray;
 #[cfg(desktop)]

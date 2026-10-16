@@ -14,6 +14,9 @@ import MobileView from './MobileView.jsx'
 import MetricsView from './MetricsView.jsx'
 // Loaded on first use: the browser costs nothing until it is opened.
 const BrowserView = lazy(() => import('./BrowserView.jsx'))
+// The phone's browser is its own layout (Chrome Android's), a chunk of its
+// own so the desktop never loads it and the phone never loads the desktop's.
+const BrowserPhone = lazy(() => import('./BrowserPhone.jsx'))
 import { ConsoleProvider, useConsole } from './state/console.jsx'
 import { needsSignIn } from './cloud.js'
 import CloudNotices from './CloudNotices.jsx'
@@ -607,7 +610,7 @@ function Shell() {
   ) : view === 'browser' ? (
     // The browser is this device's, in Local and Cloud alike.
     <Suspense fallback={null}>
-      <BrowserView focused={primaryFocused} />
+      {isMobile ? <BrowserPhone /> : <BrowserView focused={primaryFocused} />}
     </Suspense>
   ) : view === 'plugins' ? (
     // Plugins and automations are this computer's: no Cloud sign-in needed.
