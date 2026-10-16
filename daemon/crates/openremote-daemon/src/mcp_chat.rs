@@ -1,6 +1,8 @@
 //! `openremote-daemon mcp-chat`: OpenRemote's MCP server for one chat - its
-//! read-a-chat tool (the first of OpenRemote Controls) and the built-in
-//! browser's tools. A chat's harness starts it over stdio (MCP's
+//! read-a-chat tool (the first of OpenRemote Controls), the built-in
+//! browser's tools, and the agent tools of the plugins the chat gets
+//! (`<plugin>__<tool>`, run by the daemon in the plugin's program or WASM
+//! module). A chat's harness starts it over stdio (MCP's
 //! newline-delimited JSON-RPC). It reads the API token from the data
 //! folder, never from its command line, and asks the daemon on loopback:
 //! for a chat the user pointed this chat at with @ (the daemon refuses any
@@ -74,6 +76,7 @@ pub async fn run(args: &[String]) -> ExitCode {
             "tools/list" => {
                 let mut tools = vec![tool()];
                 tools.extend(browser_tools(&config, &token).await);
+                tools.extend(plugin_tools(&config, &token).await);
                 Ok(json!({"tools": tools}))
             }
             "tools/call" => Ok(call(&config, &token, &params).await),
@@ -165,12 +168,80 @@ async fn browser_call(config: &Config, token: &str, params: &Value) -> Value {
     }
 }
 
+/// The installed plugins' agent tools this chat gets (`<plugin>__<tool>`),
+/// as the daemon lists them for the chat's project and machine.
+async fn plugin_tools(config: &Config, token: &str) -> Vec<Value> {
+    let url = format!(
+        "http://127.0.0.1:{}/sessions/{}/plugins/tools",
+        config.port,
+        encode(&config.session)
+    );
+    let bearer = format!("Bearer {token}");
+    let http = openremote_cloud::https::Http::new();
+    let Ok(response) = http
+        .request("GET", &url, &[("authorization", bearer.as_str())], None)
+        .await
+    else {
+        return Vec::new();
+    };
+    serde_json::from_slice::<Value>(&response.body)
+        .ok()
+        .and_then(|v| v.get("tools").and_then(Value::as_array).cloned())
+        .unwrap_or_default()
+}
+
+/// A plugin tool: the daemon runs it in the plugin (its program, started
+/// if it isn't, or its WASM module) and answers its MCP result.
+async fn plugin_call(config: &Config, token: &str, params: &Value) -> Value {
+    let url = format!(
+        "http://127.0.0.1:{}/sessions/{}/plugins/call",
+        config.port,
+        encode(&config.session)
+    );
+    let bearer = format!("Bearer {token}");
+    let body = json!({
+        "name": params.get("name").cloned().unwrap_or(Value::Null),
+        "arguments": params.get("arguments").cloned().unwrap_or_else(|| json!({})),
+    });
+    let body = serde_json::to_vec(&body).expect("a call serializes");
+    let http = openremote_cloud::https::Http::new();
+    // Past the longest a plugin tool may take, so the daemon's own answer
+    // (even "it timed out") is what arrives.
+    match http
+        .request_within(
+            std::time::Duration::from_secs(660),
+            "POST",
+            &url,
+            &[("authorization", bearer.as_str())],
+            Some(("application/json", body)),
+        )
+        .await
+    {
+        Ok(response) if response.status == 200 => serde_json::from_slice(&response.body)
+            .unwrap_or_else(|_| failure("OpenRemote answered oddly")),
+        Ok(response) => {
+            let body: Value = serde_json::from_slice(&response.body).unwrap_or(Value::Null);
+            failure(
+                body.get("error")
+                    .and_then(Value::as_str)
+                    .unwrap_or("OpenRemote refused the call"),
+            )
+        }
+        Err(e) => failure(&format!("OpenRemote is not reachable: {e}")),
+    }
+}
+
 /// The tool's answer: the daemon's condensed chat, or its refusal as a
 /// tool error the agent can read.
 async fn call(config: &Config, token: &str, params: &Value) -> Value {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
     if name.starts_with("browser_") {
         return browser_call(config, token, params).await;
+    }
+    // A plugin's tools are named `<plugin>__<tool>`; OpenRemote's own
+    // never carry a double underscore.
+    if name.contains("__") {
+        return plugin_call(config, token, params).await;
     }
     if name != "read_chat" {
         return failure(&format!("there is no tool named {name}"));

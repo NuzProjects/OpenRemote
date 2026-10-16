@@ -171,23 +171,21 @@ impl Supervisor {
                 "'{harness}' is not installed on this machine"
             )));
         };
-        let cwd = workspace.unwrap_or_else(Self::home_dir);
-        let (plugins, data_dir) = self.with_store(|s| {
-            let plugins: Vec<openremote_core::InstalledPlugin> = s
-                .installed_plugins()
-                .into_iter()
-                .filter(|p| p.enabled)
-                .cloned()
-                .collect();
-            (plugins, s.dir().to_path_buf())
+        // The plugins a chat here gets: this machine's and, in a project,
+        // that project's.
+        let active = self.with_store(|s| {
+            let data_dir = s.dir().to_path_buf();
+            crate::plugin_runtime::scope::active(s, &data_dir, workspace.as_deref())
         });
-        // Each enabled plugin: its id, its folder, the name its commands carry.
-        let folders: Vec<(String, PathBuf, String)> = plugins
-            .iter()
-            .map(|p| {
-                let dir = crate::plugins::plugin_dir(&data_dir, &p.marketplace, &p.name);
-                let prefix = manifest_name(&dir).unwrap_or_else(|| p.name.clone());
-                (p.id(), dir, prefix)
+        let cwd = workspace.unwrap_or_else(Self::home_dir);
+        let plugins: Vec<openremote_core::InstalledPlugin> =
+            active.iter().map(|a| a.plugin.clone()).collect();
+        // Each plugin: its id, its folder, the name its commands carry.
+        let folders: Vec<(String, PathBuf, String)> = active
+            .into_iter()
+            .map(|a| {
+                let prefix = manifest_name(&a.dir).unwrap_or_else(|| a.plugin.name.clone());
+                (a.plugin.id(), a.dir, prefix)
             })
             .collect();
         let runs_plugins = backend.runs_plugins();
@@ -347,9 +345,15 @@ impl Supervisor {
                     "this chat was not pointed at {wanted}; the user points a chat at another with @"
                 ))
             })?;
-        let chat = self.session(&target)?;
+        self.condensed_chat(&target)
+    }
+
+    /// A chat condensed to its messages, as an agent or a plugin with the
+    /// power to read chats is handed it.
+    pub fn condensed_chat(&self, id: &SessionId) -> Result<String, SupervisorError> {
+        let chat = self.session(id)?;
         let events = self
-            .with_store(|s| s.events_after(&target, None))
+            .with_store(|s| s.events_after(id, None))
             .map_err(store_error)?;
         Ok(condensed(&chat, &events))
     }

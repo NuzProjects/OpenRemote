@@ -70,6 +70,11 @@ pub struct Manifest {
     /// It runs programs as the user, outside any sandbox - said before the
     /// user approves (a JS or WASM plugin is sandboxed; a program is not).
     pub not_sandboxed: bool,
+    /// What it runs, in a line: its program and arguments, or its file.
+    pub entry: Option<String>,
+    /// What it adds to OpenRemote: harnesses, agent tools, composer
+    /// inputs, views, settings.
+    pub contributes: openremote_core::PluginContributions,
 }
 
 #[derive(Deserialize, Default)]
@@ -222,6 +227,14 @@ pub fn read_manifest(dir: &Path, builtin_ids: &[String]) -> Result<Manifest, Plu
     if runtime == PluginRuntime::Process || has_hooks || has_mcp || has_lsp {
         powers.push(PluginPower::RunPrograms);
     }
+    // What it runs and adds (openremote.json's entry and contributes).
+    let section = match read_json::<Value>(&dir.join("openremote.json"))? {
+        Some(raw) => {
+            crate::plugin_runtime::manifest::read_section(&raw, dir, &name, runtime, builtin_ids)?
+        }
+        None => Default::default(),
+    };
+    powers.extend(section.implied.iter().copied());
     powers.sort();
     powers.dedup();
     let not_sandboxed = powers.contains(&PluginPower::RunPrograms)
@@ -241,6 +254,8 @@ pub fn read_manifest(dir: &Path, builtin_ids: &[String]) -> Result<Manifest, Plu
         powers,
         claude_parts,
         not_sandboxed,
+        entry: section.entry.as_ref().map(|e| e.describe()),
+        contributes: section.contributes,
     })
 }
 
@@ -439,6 +454,12 @@ pub enum SourceRequest {
         #[serde(default)]
         approve_command: Option<String>,
     },
+    /// A plugin a registered project's repo carries
+    /// (`.openremote/plugins/<name>`), read for this machine's approval.
+    Project {
+        project: String,
+        name: String,
+    },
 }
 
 impl SourceRequest {
@@ -468,7 +489,7 @@ impl SourceRequest {
                     location: location.clone(),
                 },
             ),
-            SourceRequest::Marketplace { .. } => return None,
+            SourceRequest::Marketplace { .. } | SourceRequest::Project { .. } => return None,
         };
         Some(StageRequest {
             fetch,
@@ -537,6 +558,11 @@ impl Staged {
     pub fn id(&self) -> String {
         format!("{}@{}", self.name, self.marketplace)
     }
+
+    /// The fetched plugin folder, before it is placed.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
 }
 
 /// The plugin folders on this machine, and the installs waiting for an
@@ -599,6 +625,7 @@ impl PluginHost {
                 apply_entry(&root, entry)?;
             }
             let manifest = read_manifest(&root, &builtin_ids)?;
+            crate::plugin_runtime::check_staged(&root, &manifest)?;
             write_bare_claude_manifest(&root, &manifest)?;
             Ok((root, manifest, resolved))
         }
@@ -656,6 +683,12 @@ impl PluginHost {
         let result = swap_in(&self.root, &staged.root, &target);
         let _ = std::fs::remove_dir_all(&staged.dir);
         result
+    }
+
+    /// A staged install's leftovers, once its folder was placed elsewhere
+    /// (a project's own folder).
+    pub fn discard(&self, staged: Staged) {
+        let _ = std::fs::remove_dir_all(&staged.dir);
     }
 
     pub fn uninstall(&self, marketplace: &str, name: &str) -> Result<(), PluginError> {
@@ -1468,7 +1501,7 @@ fn write_bare_claude_manifest(root: &Path, manifest: &Manifest) -> Result<(), Pl
 
 /// Unpack a .zip or .tar.gz into `to`, refusing any entry that would land
 /// outside it and any archive that unpacks past the size limit.
-fn unpack(bytes: &[u8], to: &Path) -> Result<(), PluginError> {
+pub(crate) fn unpack(bytes: &[u8], to: &Path) -> Result<(), PluginError> {
     std::fs::create_dir_all(to)?;
     let mut total: u64 = 0;
     if bytes.starts_with(b"PK\x03\x04") {

@@ -25,6 +25,8 @@ pub enum Backend {
     Pi(openremote_pi::Resolution),
     Opencode(openremote_opencode::Resolution),
     Agy(openremote_agy::Resolution),
+    /// A harness an installed plugin drives through the plugin protocol.
+    Plugin(crate::plugin_runtime::harness::PluginBackend),
 }
 
 /// A live session's driver, dispatch-only - every method reaches the
@@ -36,6 +38,7 @@ pub enum SessionDriver {
     Pi(openremote_pi::Driver),
     Opencode(openremote_opencode::Driver),
     Agy(openremote_agy::Driver),
+    Plugin(crate::plugin_runtime::harness::PluginDriver),
 }
 
 impl SessionDriver {
@@ -47,6 +50,7 @@ impl SessionDriver {
             SessionDriver::Pi(driver) => driver.send_prompt(text).await,
             SessionDriver::Opencode(driver) => driver.send_prompt(text).await,
             SessionDriver::Agy(driver) => driver.send_prompt(text).await,
+            SessionDriver::Plugin(driver) => driver.send_prompt(text).await,
         }
     }
 
@@ -70,6 +74,8 @@ impl SessionDriver {
                 ))
             }
             SessionDriver::Pi(driver) => driver.apply_settings(settings).await,
+            // A plugin harness says itself what it can change live.
+            SessionDriver::Plugin(driver) => driver.apply_settings(settings).await,
         }
     }
 
@@ -81,6 +87,7 @@ impl SessionDriver {
             SessionDriver::Pi(driver) => driver.interrupt().await,
             SessionDriver::Opencode(driver) => driver.interrupt().await,
             SessionDriver::Agy(driver) => driver.interrupt().await,
+            SessionDriver::Plugin(driver) => driver.interrupt().await,
         }
     }
 
@@ -132,6 +139,9 @@ impl SessionDriver {
                 driver.answer(harness_ref, choice, request).await?;
                 Ok(AnswerOutcome::default())
             }
+            // A plugin harness answers with its own semantics (whether the
+            // choice interrupts the turn, what it grants the session).
+            SessionDriver::Plugin(driver) => driver.answer(harness_ref, choice, request).await,
         }
     }
 
@@ -143,6 +153,7 @@ impl SessionDriver {
             SessionDriver::Pi(driver) => driver.shutdown().await,
             SessionDriver::Opencode(driver) => driver.shutdown().await,
             SessionDriver::Agy(driver) => driver.shutdown().await,
+            SessionDriver::Plugin(driver) => driver.shutdown().await,
         }
     }
 
@@ -154,7 +165,10 @@ impl SessionDriver {
     /// (harness audit F8) - the driver advertises its own semantics, so no
     /// call site matches harness ids.
     pub fn per_prompt_process(&self) -> bool {
-        matches!(self, SessionDriver::Grok(_) | SessionDriver::Agy(_))
+        match self {
+            SessionDriver::Plugin(driver) => driver.per_prompt_process(),
+            _ => matches!(self, SessionDriver::Grok(_) | SessionDriver::Agy(_)),
+        }
     }
 
     /// Whether a message sent while a turn is working lands inside that
@@ -165,7 +179,10 @@ impl SessionDriver {
     /// would never complete. Pi and opencode stay out until their own
     /// mid-turn behavior is verified on a real install.
     pub fn steers_mid_turn(&self) -> bool {
-        matches!(self, SessionDriver::Claude(_) | SessionDriver::Codex(_))
+        match self {
+            SessionDriver::Plugin(driver) => driver.steers_mid_turn(),
+            _ => matches!(self, SessionDriver::Claude(_) | SessionDriver::Codex(_)),
+        }
     }
 }
 
@@ -200,6 +217,10 @@ impl Backend {
             Backend::Agy(resolution) => {
                 let (driver, rx) = openremote_agy::Driver::spawn(resolution, opts)?;
                 Ok((SessionDriver::Agy(driver), rx))
+            }
+            Backend::Plugin(backend) => {
+                let (driver, rx) = backend.spawn(opts).await?;
+                Ok((SessionDriver::Plugin(driver), rx))
             }
         }
     }
@@ -243,6 +264,8 @@ impl Backend {
                 .await
                 .map(Some),
             Backend::Grok(_) | Backend::Agy(_) => Ok(None),
+            // The plugin's own list, when it keeps one.
+            Backend::Plugin(backend) => backend.commands(cwd).await,
         }
     }
 
@@ -277,6 +300,8 @@ impl Backend {
             Backend::Opencode(_) => Ok(None),
             // Antigravity's `agy models` prints its own catalog (TSV).
             Backend::Agy(resolution) => openremote_agy::driver::models(resolution).await.map(Some),
+            // The manifest's list, else the plugin's own answer.
+            Backend::Plugin(backend) => backend.models().await,
         }
     }
 
@@ -306,6 +331,7 @@ impl Backend {
             // Antigravity's own settings file - the same source its
             // banner shows, verbatim (the effort rides inside the name).
             Backend::Agy(_) => openremote_agy::config::default_model().map(|m| (m, None)),
+            Backend::Plugin(backend) => backend.default_model(),
         }
     }
 }
@@ -317,6 +343,9 @@ struct RegistryEntry {
 
 pub struct HarnessRegistry {
     entries: Vec<RegistryEntry>,
+    /// The harnesses installed plugins drive, set by the plugin runtime
+    /// whenever plugins change (a probe never finds them).
+    plugins: Vec<RegistryEntry>,
     /// The overrides this registry was probed with - an install re-probes
     /// with the same ones.
     overrides: HashMap<String, PathBuf>,
@@ -345,6 +374,7 @@ fn harness_from(id: &str, name: &str, resolution: &Resolution, version: Option<&
         default_effort: None,
         permission_modes: permission_modes(id).iter().map(|s| s.to_string()).collect(),
         default_permission: default_permission(id).map(String::from),
+        plugin: None,
     }
 }
 
@@ -354,6 +384,7 @@ impl HarnessRegistry {
     pub fn none() -> Self {
         Self {
             entries: Vec::new(),
+            plugins: Vec::new(),
             overrides: HashMap::new(),
             node_version: None,
         }
@@ -446,6 +477,7 @@ impl HarnessRegistry {
 
         Self {
             entries,
+            plugins: Vec::new(),
             overrides: overrides.clone(),
             node_version: v_node,
         }
@@ -469,7 +501,7 @@ impl HarnessRegistry {
     /// install or a sign-in already re-probes, so the harness comes back
     /// the moment it is really there again.
     pub fn mark_unavailable(&mut self, id: &str) {
-        for entry in &mut self.entries {
+        for entry in self.entries.iter_mut().chain(self.plugins.iter_mut()) {
             if entry.harness.id == id {
                 entry.harness.available = false;
                 entry.backend = None;
@@ -485,14 +517,38 @@ impl HarnessRegistry {
     }
 
     pub fn harnesses(&self) -> Vec<Harness> {
-        self.entries.iter().map(|e| e.harness.clone()).collect()
+        self.entries
+            .iter()
+            .chain(self.plugins.iter())
+            .map(|e| e.harness.clone())
+            .collect()
     }
 
     pub fn backend(&self, id: &str) -> Option<&Backend> {
         self.entries
             .iter()
+            .chain(self.plugins.iter())
             .find(|e| e.harness.id == id && e.harness.available)
             .and_then(|e| e.backend.as_ref())
+    }
+
+    /// Replace the plugin harnesses. One whose id a built-in harness holds
+    /// is left out: the built-in six keep their ids.
+    pub fn set_plugins(&mut self, plugins: Vec<(Harness, Option<Backend>)>) {
+        let builtin: Vec<String> = self.entries.iter().map(|e| e.harness.id.clone()).collect();
+        self.plugins = plugins
+            .into_iter()
+            .filter(|(h, _)| !builtin.contains(&h.id))
+            .map(|(harness, backend)| RegistryEntry { harness, backend })
+            .collect();
+    }
+
+    /// The plugin harnesses, to carry into a fresh probe.
+    pub fn plugins(&self) -> Vec<(Harness, Option<Backend>)> {
+        self.plugins
+            .iter()
+            .map(|e| (e.harness.clone(), e.backend.clone()))
+            .collect()
     }
 
     /// Whether this harness slot is fixture-backed - the e2e suite

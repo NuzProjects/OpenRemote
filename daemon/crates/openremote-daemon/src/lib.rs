@@ -12,6 +12,7 @@ pub mod http;
 pub mod install;
 pub mod marketplace;
 pub mod mcp_chat;
+pub mod plugin_runtime;
 pub mod plugins;
 pub mod registry;
 pub mod signin;
