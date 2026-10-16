@@ -419,9 +419,20 @@ function Shell() {
   const [presetProject, setPresetProject] = useState(null)
   const [openDevice, setOpenDevice] = useState(null)
   const goView = (id) => {
-    const needs = { plugins: 'local', automations: 'local', machines: 'cloud' }[id]
+    // Machines is Cloud's; plugins and automations live in both modes.
+    const needs = { machines: 'cloud' }[id]
     if (needs && mode !== needs) keepMode(needs)
     openInFocus(id)
+  }
+  // A new chat already in a project (the sidebar's + on a project, the
+  // palette's project rows): the home screen with that project chosen and
+  // its message box focused.
+  const newChatIn = (id) => {
+    setPresetProject({ id, nonce: Date.now() })
+    focusPrimary()
+    navigate('new')
+    if (typeof window !== 'undefined' && !window.matchMedia('(min-width: 640px)').matches)
+      setSidebarOpen(false)
   }
   const focusPrimary = () =>
     setLayout((l) => focusLeaf(l, leaves(l.root).find((p) => p.view === null).id))
@@ -567,6 +578,7 @@ function Shell() {
             onSelect={openInFocus}
             onSplit={openBeside}
             onAddProject={addProject}
+            onNewChatIn={newChatIn}
             onReveal={() => setSidebarOpen(true)}
           />
           <main className="main" onContextMenu={onMainContextMenu}>
@@ -595,11 +607,7 @@ function Shell() {
               recentChatIds={recentChatIds}
               onClose={() => setPalette(false)}
               onOpenChat={openInFocus}
-              onOpenProject={(id) => {
-                setPresetProject({ id, nonce: Date.now() })
-                focusPrimary()
-                navigate('new')
-              }}
+              onOpenProject={newChatIn}
               onOpenMachine={(id) => {
                 setOpenDevice({ id, nonce: Date.now() })
                 goView('machines')

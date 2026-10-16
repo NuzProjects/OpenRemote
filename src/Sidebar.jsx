@@ -35,7 +35,7 @@ import { usePrivacyMode } from './privacy.js'
 import { useHint, useShortcut } from './keyboard.jsx'
 import './sidebar.css'
 
-export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit, onAddProject, onReveal }) {
+export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit, onAddProject, onNewChatIn, onReveal }) {
   const { connection, sessions, chats, devices, thisDevice, projects, removeProject, archived, setChatArchived, deleteChat } = useConsole()
   const privacy = usePrivacyMode()
   const [query, setQuery] = useState('')
@@ -324,6 +324,17 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
                 </span>
                 <span className="project-name pv">{project.folders[0].split(/[\\/]/).filter(Boolean).pop()}</span>
                 <span className="project-count">{items.length}</span>
+              </button>
+              {/* A new chat already in this project, straight from its
+                  row: no trip through the home screen's project picker. */}
+              <button
+                type="button"
+                className="sb-project-new"
+                title={`New chat in ${project.folders[0].split(/[\\/]/).filter(Boolean).pop()}`}
+                aria-label={`New chat in ${project.folders[0].split(/[\\/]/).filter(Boolean).pop()}`}
+                onClick={() => onNewChatIn?.(project.id)}
+              >
+                <Plus size={12} weight="bold" />
               </button>
               {/* Unregistering keeps the chats - they fall to the flat
                   list below; the folder on disk is never touched. */}
