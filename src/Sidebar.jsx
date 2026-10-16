@@ -26,6 +26,7 @@ import {
 } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
 import { sections } from './projects.js'
+import { chatStatus } from './state/reducer.js'
 import { activeSessions } from './archive.js'
 import { deviceName, isPhone, sessionsForMode } from './cloud.js'
 import { isMobile } from './platform.js'
@@ -61,7 +62,10 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
       return {
         id: session.id,
         title: chats[session.id]?.title ?? session.title ?? 'A new task',
-        status: chats[session.id]?.status ?? 'idle',
+        // A chat never opened here has no record, but the poll still
+        // carries its status: without it a chat running in the background
+        // (started on another device, or by an automation) showed no dot.
+        status: chats[session.id]?.status ?? chatStatus(session.status),
         harness: session.harness,
         workspace: session.workspace ?? null,
         updatedAt: session.updated_at ?? 0,
