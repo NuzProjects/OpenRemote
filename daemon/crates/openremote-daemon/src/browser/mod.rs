@@ -9,8 +9,14 @@
 //! over, and every result saying where it came from.
 //!
 //! A daemon with no app around it (one started by hand, or a machine's
-//! service) has no browser, and its tools say so.
+//! service) has no browser of its own. In Cloud its agents still reach the
+//! browsers on the user's other devices ([`remote`]): new tabs open where
+//! the user last messaged from, and any device's tab can be read and used.
+//! Any device can also show another's tab live ([`live`]).
 
+pub mod live;
+pub mod peer;
+pub mod remote;
 pub mod routes;
 pub mod store;
 pub mod tools;
@@ -18,19 +24,22 @@ pub mod tools;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use openremote_browser::{Call, Caps, Controller, DownloadInfo, FromHost, TabInfo, ToHost};
+use openremote_core::DeviceId;
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
+
+use crate::app::App;
 
 /// How the daemon reaches the browser: hands it one call.
 pub type Sender = Arc<dyn Fn(ToHost) + Send + Sync>;
 
 /// What an agent is told when there's no browser to use.
 pub const NO_BROWSER: &str = "There's no browser on this computer right now: OpenRemote's app isn't running here. Ask the user to open the OpenRemote app on this computer, then try again.";
-const TAKEN_OVER: &str = "The user has taken over this tab, so you can read it but not act in it. Wait for them to hand it back, or ask them in your reply.";
+pub(crate) const TAKEN_OVER: &str = "The user has taken over this tab, so you can read it but not act in it. Wait for them to hand it back, or ask them in your reply.";
 
 /// A chat's hold on a tab ends this long after its agent's last action.
 const LEASE_IDLE: Duration = Duration::from_secs(60);
@@ -69,11 +78,53 @@ pub struct BrowserService {
     next: AtomicU64,
     tabs: Mutex<Vec<TabInfo>>,
     leases: Mutex<HashMap<String, Lease>>,
-    /// The tab each chat used last: its tools' default.
-    current: Mutex<HashMap<String, String>>,
+    /// The tab each chat used last: its tools' default (on this device or
+    /// another).
+    current: Mutex<HashMap<String, TabRef>>,
+    /// The device each chat's user last sent a message from: where its
+    /// agent's new tabs open.
+    origins: Mutex<HashMap<String, DeviceId>>,
     downloads: Mutex<Vec<DownloadInfo>>,
     recorded: Mutex<HashMap<String, Recorded>>,
     pub store: Mutex<store::BrowserStore>,
+    /// Live views: this device's tabs shown elsewhere, and other devices'
+    /// tabs shown here.
+    pub live: live::Live,
+    /// The app this service belongs to, for the mesh (set once at start).
+    app: OnceLock<Weak<App>>,
+}
+
+/// A tab as a chat's tools name it: on this device, or on another of the
+/// user's devices (`key:tab`, the key being the device's plain name).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TabRef {
+    pub device: Option<(DeviceId, String)>,
+    pub tab: String,
+}
+
+impl TabRef {
+    fn here(tab: &str) -> Self {
+        Self {
+            device: None,
+            tab: tab.to_string(),
+        }
+    }
+
+    fn on(device: &remote::Device, tab: &str) -> Self {
+        Self {
+            device: Some((device.id, device.key.clone())),
+            tab: tab.to_string(),
+        }
+    }
+
+    /// The id agents see: plain for this device's tabs, `key:tab` for
+    /// another's.
+    pub fn shown(&self) -> String {
+        match &self.device {
+            Some((_, key)) => format!("{key}:{}", self.tab),
+            None => self.tab.clone(),
+        }
+    }
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -96,10 +147,22 @@ impl BrowserService {
             tabs: Mutex::new(Vec::new()),
             leases: Mutex::new(HashMap::new()),
             current: Mutex::new(HashMap::new()),
+            origins: Mutex::new(HashMap::new()),
             downloads: Mutex::new(Vec::new()),
             recorded: Mutex::new(HashMap::new()),
             store: Mutex::new(store::BrowserStore::open(data_dir)),
+            live: live::Live::default(),
+            app: OnceLock::new(),
         }
+    }
+
+    /// Ties the service to its app, which it reaches the mesh through.
+    pub fn attach(&self, app: &Arc<App>) {
+        let _ = self.app.set(Arc::downgrade(app));
+    }
+
+    pub(crate) fn app(&self) -> Option<Arc<App>> {
+        self.app.get().and_then(Weak::upgrade)
     }
 
     /// An app hosts this daemon and will bring a browser.
@@ -107,9 +170,50 @@ impl BrowserService {
         self.hosted.store(true, Ordering::SeqCst);
     }
 
-    /// Whether agents get browser tools here.
+    /// Whether agents get browser tools here: where an app brings a
+    /// browser, and in Cloud, where the user's other devices bring theirs
+    /// (a machine with no browser of its own still opens tabs where its
+    /// user is).
     pub fn offers_tools(&self) -> bool {
-        self.hosted.load(Ordering::SeqCst) || self.connected()
+        self.hosted.load(Ordering::SeqCst)
+            || self.connected()
+            || self.app().is_some_and(|app| app.cloud.mesh().is_some())
+    }
+
+    /// The user sent a chat a message from this device: its agent's new
+    /// tabs open there from now on.
+    pub fn note_origin(&self, chat: &str, device: Option<DeviceId>) {
+        let mut origins = lock(&self.origins);
+        match device {
+            Some(device) => {
+                origins.insert(chat.to_string(), device);
+            }
+            None => {
+                origins.remove(chat);
+            }
+        }
+    }
+
+    /// The device a chat's user last messaged from, if known.
+    pub fn origin(&self, chat: &str) -> Option<DeviceId> {
+        lock(&self.origins).get(chat).copied()
+    }
+
+    /// Whether a tab may be shown to, and used by, the user's other
+    /// devices: open here and not private (a private tab never leaves this
+    /// device, handed to agents or not).
+    pub fn shared_with_peers(&self, tab: &str) -> bool {
+        lock(&self.tabs).iter().any(|t| t.id == tab && !t.private)
+    }
+
+    /// The tabs another of the user's devices may see.
+    pub fn peer_tabs(&self) -> Vec<TabInfo> {
+        self.tabs().into_iter().filter(|t| !t.private).collect()
+    }
+
+    /// One tab, with who holds it.
+    pub fn tab_info(&self, tab: &str) -> Option<TabInfo> {
+        self.tabs().into_iter().find(|t| t.id == tab)
     }
 
     pub fn connected(&self) -> bool {
@@ -130,6 +234,7 @@ impl BrowserService {
         for (_, waiting) in lock(&self.pending).drain() {
             let _ = waiting.send(Err("the browser closed".into()));
         }
+        live::host_gone(self, "the browser there closed");
     }
 
     /// One message from the browser.
@@ -147,6 +252,7 @@ impl BrowserService {
                 lock(&self.tabs).clear();
                 lock(&self.leases).clear();
                 *lock(&self.link) = Some(Link { send, engine, caps });
+                live::host_gone(self, "the browser there restarted");
             }
             FromHost::Reply { id, ok, error } => {
                 if let Some(waiting) = lock(&self.pending).remove(&id) {
@@ -168,7 +274,8 @@ impl BrowserService {
                 lock(&self.tabs).retain(|t| t.id != tab);
                 lock(&self.leases).remove(&tab);
                 lock(&self.recorded).remove(&tab);
-                lock(&self.current).retain(|_, t| *t != tab);
+                lock(&self.current).retain(|_, t| t.device.is_some() || t.tab != tab);
+                live::tab_closed(self, &tab);
             }
             FromHost::Download { download } => {
                 let mut downloads = lock(&self.downloads);
@@ -176,6 +283,12 @@ impl BrowserService {
                 downloads.insert(0, download);
                 downloads.truncate(50);
             }
+            FromHost::Frame {
+                tab,
+                data,
+                width,
+                height,
+            } => live::frame(self, &tab, &data, width, height),
         }
     }
 
@@ -227,19 +340,21 @@ impl BrowserService {
         }
     }
 
-    /// Tells the browser who holds a tab now, without waiting.
-    fn mark(&self, tab: &str, controller: Option<Controller>) {
+    /// Hands the browser a call without waiting for its answer.
+    pub(crate) fn tell(&self, call: Call) {
         let send = lock(&self.link).as_ref().map(|l| l.send.clone());
         if let Some(send) = send {
             let id = self.next.fetch_add(1, Ordering::SeqCst) + 1;
-            send(ToHost {
-                id,
-                call: Call::Mark {
-                    tab: tab.into(),
-                    controller,
-                },
-            });
+            send(ToHost { id, call });
         }
+    }
+
+    /// Tells the browser who holds a tab now, without waiting.
+    fn mark(&self, tab: &str, controller: Option<Controller>) {
+        self.tell(Call::Mark {
+            tab: tab.into(),
+            controller,
+        });
     }
 
     /// The open tabs, each with who holds it.
@@ -296,6 +411,86 @@ impl BrowserService {
             self.mark(tab, Some(controller));
         }
         Ok(())
+    }
+
+    /// A chat's agent reading a tab it holds keeps its hold fresh.
+    fn touch(&self, tab: &str, chat: &str) {
+        if let Some(lease) = lock(&self.leases).get_mut(tab) {
+            if lease.controller.chat() == chat {
+                lease.last = Instant::now();
+            }
+        }
+    }
+
+    /// A tab the browser just opened for a chat's agent: the chat's from
+    /// the start, and known here before the browser's own news of it.
+    fn adopt_opened(&self, tab: &TabInfo, controller: Controller) {
+        lock(&self.leases).insert(
+            tab.id.clone(),
+            Lease {
+                controller,
+                last: Instant::now(),
+            },
+        );
+        let mut tabs = lock(&self.tabs);
+        if !tabs.iter().any(|t| t.id == tab.id) {
+            tabs.push(tab.clone());
+        }
+    }
+
+    /// The user's hand on a tab through a live view on another device:
+    /// taking control pauses an agent using the tab, letting go hands it
+    /// back, so the two never act on the page at once. Answers whether an
+    /// agent's hold changed.
+    pub(crate) fn viewer_control(&self, tab: &str, take: bool) -> bool {
+        let held = lock(&self.leases).get(tab).map(|l| l.controller.clone());
+        match (held, take) {
+            (Some(Controller::Agent { .. }), true) => self.control(tab, "take_over").is_ok(),
+            (Some(Controller::Paused { .. }), false) => self.control(tab, "hand_back").is_ok(),
+            _ => false,
+        }
+    }
+
+    /// A call from an agent on another of the user's devices, on this
+    /// device's browser: the same hold and take-over rule as this device's
+    /// own agents, and a tab it opens is marked with its chat.
+    pub(crate) async fn run_for_peer(
+        &self,
+        chat: &str,
+        title: &str,
+        call: Call,
+    ) -> Result<Value, String> {
+        let wait = wait_for(&call);
+        match call {
+            Call::Open { url, .. } => {
+                let controller = Controller::Agent {
+                    chat: chat.into(),
+                    title: title.into(),
+                };
+                let opened = self
+                    .call(
+                        Call::Open {
+                            url,
+                            controller: Some(controller.clone()),
+                        },
+                        wait,
+                    )
+                    .await?;
+                let tab: TabInfo =
+                    serde_json::from_value(opened).map_err(|_| "the browser answered oddly")?;
+                self.adopt_opened(&tab, controller);
+                Ok(serde_json::to_value(self.tab_info(&tab.id).unwrap_or(tab)).unwrap_or_default())
+            }
+            call => {
+                let tab = call.tab().unwrap_or_default().to_string();
+                if call.reads() {
+                    self.touch(&tab, chat);
+                } else {
+                    self.hold(&tab, chat, title)?;
+                }
+                self.call(call, wait).await
+            }
+        }
     }
 
     /// The user's hand on a tab an agent holds: take it over, hand it
@@ -356,33 +551,54 @@ impl BrowserService {
         }
     }
 
-    /// The tab a chat's tool means: the one it names, else the one the chat
-    /// used last, else the only tab open.
-    fn resolve_tab(&self, chat: &str, named: Option<&str>) -> Result<String, String> {
-        let tabs = lock(&self.tabs);
-        if let Some(named) = named.filter(|n| !n.trim().is_empty()) {
-            // "tab-3", "3" and "tab 3" all name the browser's tab-3.
-            let bare = named
-                .trim()
-                .trim_start_matches("tab")
-                .trim_start_matches(['-', ' '])
-                .to_string();
-            return tabs
-                .iter()
-                .find(|t| t.id == named.trim() || t.id.trim_start_matches("tab-") == bare)
-                .map(|t| t.id.clone())
-                .ok_or_else(|| format!("there's no tab {named}; browser_tabs lists them"));
+    /// The tab a chat's tool means: the one it names (here, or `key:tab` on
+    /// another of the user's devices), else the one the chat used last,
+    /// else the only tab open here.
+    fn resolve_tab(
+        &self,
+        app: Option<&Arc<App>>,
+        chat: &str,
+        named: Option<&str>,
+    ) -> Result<TabRef, String> {
+        if let Some(named) = named.map(str::trim).filter(|n| !n.is_empty()) {
+            let Some((prefix, tab)) = named.split_once(':') else {
+                return self.local_tab(named).map(|t| TabRef::here(&t));
+            };
+            let devices = app.map(|app| remote::devices(app)).unwrap_or_default();
+            let device = remote::find(&devices, prefix).ok_or_else(|| {
+                format!("there's no device called {prefix}; browser_tabs lists the devices and their tabs")
+            })?;
+            if device.this {
+                return self.local_tab(tab).map(|t| TabRef::here(&t));
+            }
+            return Ok(TabRef::on(device, &remote::tab_id(tab)));
         }
-        if let Some(tab) = lock(&self.current).get(chat) {
-            if tabs.iter().any(|t| &t.id == tab) {
-                return Ok(tab.clone());
+        let tabs = lock(&self.tabs);
+        if let Some(current) = lock(&self.current).get(chat) {
+            if current.device.is_some() || tabs.iter().any(|t| t.id == current.tab) {
+                return Ok(current.clone());
             }
         }
         match tabs.as_slice() {
-            [only] => Ok(only.id.clone()),
+            [only] => Ok(TabRef::here(&only.id)),
             [] => Err("no tab is open: open one with browser_tab_open".into()),
             _ => Err("several tabs are open: name one (browser_tabs lists them)".into()),
         }
+    }
+
+    /// One of this device's tabs by any of its names: "tab-3", "3" and
+    /// "tab 3" all name the browser's tab-3.
+    fn local_tab(&self, named: &str) -> Result<String, String> {
+        let named = named.trim();
+        let bare = named
+            .trim_start_matches("tab")
+            .trim_start_matches(['-', ' '])
+            .to_string();
+        lock(&self.tabs)
+            .iter()
+            .find(|t| t.id == named || t.id.trim_start_matches("tab-") == bare)
+            .map(|t| t.id.clone())
+            .ok_or_else(|| format!("there's no tab {named}; browser_tabs lists them"))
     }
 
     fn header_for(&self, tab: &str) -> String {
@@ -403,89 +619,184 @@ impl BrowserService {
 
     async fn run(&self, chat: &Chat, name: &str, args: &Value) -> Result<Value, String> {
         let tool = tools::find(name).ok_or_else(|| format!("no browser tool named {name}"))?;
-        if !self.connected() {
-            return Err(NO_BROWSER.into());
-        }
+        let app = self.app();
+        let app = app.as_ref();
         match name {
-            "browser_tabs" => return Ok(tools::text_result(self.tab_list(&chat.id))),
-            "browser_downloads" => return Ok(tools::text_result(self.download_list())),
-            "browser_tab_open" => {
-                let url = args
-                    .get("url")
-                    .and_then(Value::as_str)
-                    .filter(|u| !u.trim().is_empty())
-                    .ok_or("'url' is needed")?;
-                let controller = Controller::Agent {
-                    chat: chat.id.clone(),
-                    title: chat.title.clone(),
-                };
-                let opened = self
-                    .call(
-                        Call::Open {
-                            url: url.trim().into(),
-                            controller: Some(controller.clone()),
-                        },
-                        Duration::from_secs(45),
-                    )
-                    .await?;
-                let tab: TabInfo =
-                    serde_json::from_value(opened).map_err(|_| "the browser answered oddly")?;
-                lock(&self.leases).insert(
-                    tab.id.clone(),
-                    Lease {
-                        controller,
-                        last: Instant::now(),
-                    },
-                );
-                {
-                    let mut tabs = lock(&self.tabs);
-                    if !tabs.iter().any(|t| t.id == tab.id) {
-                        tabs.push(tab.clone());
-                    }
+            "browser_tabs" => return Ok(tools::text_result(self.tab_list(app, &chat.id).await)),
+            "browser_downloads" => {
+                if !self.connected() {
+                    return Err(NO_BROWSER.into());
                 }
-                lock(&self.current).insert(chat.id.clone(), tab.id.clone());
-                return Ok(tools::text_result(format!(
-                    "{}\nOpened. Take a snapshot to read it.",
-                    tools::header(&tab.id, &tab.url, &tab.title)
-                )));
+                return Ok(tools::text_result(self.download_list()));
             }
+            "browser_tab_open" => return self.open_tab(app, chat, args).await,
             _ => {}
         }
-        let tab = self.resolve_tab(&chat.id, args.get("tab").and_then(Value::as_str))?;
-        lock(&self.current).insert(chat.id.clone(), tab.clone());
+        let target = self.resolve_tab(app, &chat.id, args.get("tab").and_then(Value::as_str))?;
+        lock(&self.current).insert(chat.id.clone(), target.clone());
         if name == "browser_tab_select" {
             return Ok(tools::text_result(format!(
                 "{}\nLater browser tools use this tab.",
-                self.header_for(&tab)
+                self.header_of(&target)
             )));
         }
-        if !tool.reads {
-            self.hold(&tab, &chat.id, &chat.title)?;
-        } else if let Some(lease) = lock(&self.leases).get_mut(&tab) {
-            if lease.controller.chat() == chat.id {
-                lease.last = Instant::now();
+        let mut call = tools::to_call(name, args, target.tab.clone())?;
+        let wait = wait_for(&call);
+        let answer = match &target.device {
+            Some((id, _)) => {
+                if matches!(call, Call::Upload { .. }) {
+                    return Err("Files can only go into tabs on this computer, where this chat's folder is.".into());
+                }
+                let app = app.ok_or(NO_BROWSER)?;
+                let device = remote::devices(app)
+                    .into_iter()
+                    .find(|d| d.id == *id)
+                    .ok_or("that device is no longer one of the user's; browser_tabs lists them")?;
+                // The device that shows the tab holds it: its user's Take
+                // over applies there.
+                remote::call(app, &device, chat, call, wait)
+                    .await
+                    .map_err(remote::Failure::message)?
+            }
+            None => {
+                if !self.connected() {
+                    return Err(NO_BROWSER.into());
+                }
+                if !tool.reads {
+                    self.hold(&target.tab, &chat.id, &chat.title)?;
+                } else {
+                    self.touch(&target.tab, &chat.id);
+                }
+                if let Call::Upload { paths, .. } = &mut call {
+                    *paths = inside_workspace(chat.workspace.as_deref(), paths)?;
+                }
+                self.call(call, wait).await?
+            }
+        };
+        Ok(self.result(name, &target, &answer))
+    }
+
+    /// A new tab for a chat's agent, where its user is: on the device they
+    /// last messaged from, or the device the agent names. This computer's
+    /// own addresses (localhost and its files) always open here, and so
+    /// does a tab whose device can't be reached right now, which the
+    /// result says.
+    async fn open_tab(
+        &self,
+        app: Option<&Arc<App>>,
+        chat: &Chat,
+        args: &Value,
+    ) -> Result<Value, String> {
+        let raw = args
+            .get("url")
+            .and_then(Value::as_str)
+            .filter(|u| !u.trim().is_empty())
+            .ok_or("'url' is needed")?;
+        let url = remote::normalize(raw);
+        let controller = Controller::Agent {
+            chat: chat.id.clone(),
+            title: chat.title.clone(),
+        };
+        let mut note = None;
+        if let Some(app) = app {
+            let devices = remote::devices(app);
+            let named = args
+                .get("device")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|d| !d.is_empty());
+            let origin = self
+                .origin(&chat.id)
+                .and_then(|id| devices.iter().find(|d| d.id == id));
+            let target = match named {
+                Some(named) => Some(remote::find(&devices, named).ok_or_else(|| {
+                    format!("there's no device called {named}; browser_tabs lists them")
+                })?),
+                None if remote::is_local(&url) => {
+                    if let Some(origin) = origin.filter(|d| !d.this) {
+                        note = Some(format!(
+                            "This address only works on this computer, so the tab opened here; the user can watch it live from {}.",
+                            origin.name
+                        ));
+                    }
+                    None
+                }
+                None => origin,
+            };
+            if let Some(device) = target.filter(|d| !d.this) {
+                let open = Call::Open {
+                    url: url.clone(),
+                    controller: Some(controller.clone()),
+                };
+                match remote::call(app, device, chat, open, Duration::from_secs(45)).await {
+                    Ok(opened) => {
+                        let tab: TabInfo = serde_json::from_value(opened)
+                            .map_err(|_| "the browser answered oddly")?;
+                        let target = TabRef::on(device, &tab.id);
+                        lock(&self.current).insert(chat.id.clone(), target.clone());
+                        return Ok(tools::text_result(format!(
+                            "{}\nOpened on {}, where the user is. Take a snapshot to read it.",
+                            tools::header(&target.shown(), &tab.url, &tab.title),
+                            device.name
+                        )));
+                    }
+                    // A device the agent named itself: it hears why, and
+                    // chooses again.
+                    Err(remote::Failure::Unavailable(why)) if named.is_some() => {
+                        return Err(format!("{} isn't available right now: {why}.", device.name));
+                    }
+                    Err(remote::Failure::Unavailable(why)) => {
+                        note = Some(format!(
+                            "{} isn't available right now ({why}), so the tab opened on this computer instead.",
+                            device.name
+                        ));
+                    }
+                    Err(remote::Failure::Refused(why)) => return Err(why),
+                }
             }
         }
-        let mut call = tools::to_call(name, args, tab.clone())?;
-        if let Call::Upload { paths, .. } = &mut call {
-            *paths = inside_workspace(chat.workspace.as_deref(), paths)?;
+        if !self.connected() {
+            return Err(match note {
+                Some(note) => format!("{note} But {}", lowercase_first(NO_BROWSER)),
+                None => NO_BROWSER.into(),
+            });
         }
-        let wait = match &call {
-            Call::Wait { ms, .. } => Duration::from_millis(ms.unwrap_or(30_000) + 5_000),
-            _ => Duration::from_secs(45),
-        };
-        let answer = self.call(call, wait).await?;
-        Ok(self.result(name, &tab, &answer))
+        let opened = self
+            .call(
+                Call::Open {
+                    url,
+                    controller: Some(controller.clone()),
+                },
+                Duration::from_secs(45),
+            )
+            .await?;
+        let tab: TabInfo =
+            serde_json::from_value(opened).map_err(|_| "the browser answered oddly")?;
+        self.adopt_opened(&tab, controller);
+        lock(&self.current).insert(chat.id.clone(), TabRef::here(&tab.id));
+        let note = note.map(|n| format!("\n{n}")).unwrap_or_default();
+        Ok(tools::text_result(format!(
+            "{}{note}\nOpened. Take a snapshot to read it.",
+            tools::header(&tab.id, &tab.url, &tab.title)
+        )))
+    }
+
+    /// A tab's first line when the browser's answer didn't say where it is.
+    fn header_of(&self, tab: &TabRef) -> String {
+        match tab.device {
+            None => self.header_for(&tab.tab),
+            Some(_) => format!("[{}]", tab.shown()),
+        }
     }
 
     /// The browser's answer as the agent reads it.
-    fn result(&self, name: &str, tab: &str, answer: &Value) -> Value {
+    fn result(&self, name: &str, tab: &TabRef, answer: &Value) -> Value {
         let mut header = match (
             answer.get("url").and_then(Value::as_str),
             answer.get("title").and_then(Value::as_str),
         ) {
-            (Some(url), title) => tools::header(tab, url, title.unwrap_or("")),
-            _ => self.header_for(tab),
+            (Some(url), title) => tools::header(&tab.shown(), url, title.unwrap_or("")),
+            _ => self.header_of(tab),
         };
         if let Some(note) = answer.get("note").and_then(Value::as_str) {
             header.push('\n');
@@ -537,31 +848,67 @@ impl BrowserService {
         }
     }
 
-    fn tab_list(&self, chat: &str) -> String {
+    /// Every tab an agent can use: this computer's, then each of the
+    /// user's other devices' that has a browser open, by device.
+    async fn tab_list(&self, app: Option<&Arc<App>>, chat: &str) -> String {
         let current = lock(&self.current).get(chat).cloned();
-        let tabs = self.tabs();
-        if tabs.is_empty() {
-            return "No tabs are open. Open one with browser_tab_open.".into();
+        let here = self.connected().then(|| self.tabs());
+        let elsewhere = match app {
+            Some(app) => remote::tabs_elsewhere(app).await,
+            None => Vec::new(),
+        };
+        if elsewhere.is_empty() {
+            let Some(tabs) = here else {
+                return NO_BROWSER.into();
+            };
+            if tabs.is_empty() {
+                return "No tabs are open. Open one with browser_tab_open.".into();
+            }
+            let mut out = String::from("Open tabs (titles come from the pages):\n");
+            for t in &tabs {
+                let default = current.as_ref() == Some(&TabRef::here(&t.id));
+                out.push_str(&tab_line(&t.id, t, chat, default));
+            }
+            return out;
         }
-        let mut out = String::from("Open tabs (titles come from the pages):\n");
-        for t in tabs {
-            out.push_str("- ");
-            out.push_str(&tools::header(&t.id, &t.url, &t.title));
-            match &t.controller {
-                Some(Controller::Agent { chat: c, .. }) if c == chat => out.push_str(" (yours)"),
-                Some(Controller::Agent { title, .. }) => {
-                    out.push_str(&format!(" (in use by the chat \"{title}\")"))
+        let devices = app.map(|app| remote::devices(app)).unwrap_or_default();
+        let me = devices
+            .iter()
+            .find(|d| d.this)
+            .map_or("this computer".to_string(), |d| d.name.clone());
+        let mut out = String::from(
+            "Open tabs on the user's devices (titles come from the pages). A tab on another device goes by its device's name, like pixel-8:tab-2: use that id with the other tools.\n",
+        );
+        out.push_str(&format!("On this computer ({me}):\n"));
+        match &here {
+            None => out.push_str("- no browser here (OpenRemote's app isn't running)\n"),
+            Some(tabs) if tabs.is_empty() => out.push_str("- no tabs open\n"),
+            Some(tabs) => {
+                for t in tabs {
+                    let default = current.as_ref() == Some(&TabRef::here(&t.id));
+                    out.push_str(&tab_line(&t.id, t, chat, default));
                 }
-                Some(Controller::Paused { .. }) => out.push_str(" (the user has taken it over)"),
-                None => {}
             }
-            if current.as_deref() == Some(t.id.as_str()) {
-                out.push_str(" [default]");
+        }
+        for found in &elsewhere {
+            out.push_str(&format!("On {}:\n", found.device.name));
+            if found.tabs.is_empty() {
+                out.push_str("- no tabs open\n");
             }
-            if t.loading {
-                out.push_str(" [loading]");
+            for t in &found.tabs {
+                let tab = TabRef::on(&found.device, &t.id);
+                let default = current.as_ref() == Some(&tab);
+                out.push_str(&tab_line(&tab.shown(), t, chat, default));
             }
-            out.push('\n');
+        }
+        if let Some(origin) = self
+            .origin(chat)
+            .and_then(|id| devices.iter().find(|d| d.id == id && !d.this))
+        {
+            out.push_str(&format!(
+                "New tabs open on {}, where the user last wrote from (this computer's own addresses, like localhost, open here).\n",
+                origin.name
+            ));
         }
         out
     }
@@ -614,6 +961,44 @@ impl BrowserService {
     }
 }
 
+/// How long a call may take: a wait for text gets its own time and a bit.
+fn wait_for(call: &Call) -> Duration {
+    match call {
+        Call::Wait { ms, .. } => Duration::from_millis(ms.unwrap_or(30_000) + 5_000),
+        _ => Duration::from_secs(45),
+    }
+}
+
+/// A sentence made to follow another ("But there's...").
+fn lowercase_first(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_lowercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
+/// One tab's line in an agent's list.
+fn tab_line(shown: &str, tab: &TabInfo, chat: &str, default: bool) -> String {
+    let mut line = format!("- {}", tools::header(shown, &tab.url, &tab.title));
+    match &tab.controller {
+        Some(Controller::Agent { chat: c, .. }) if c == chat => line.push_str(" (yours)"),
+        Some(Controller::Agent { title, .. }) => {
+            line.push_str(&format!(" (in use by the chat \"{title}\")"))
+        }
+        Some(Controller::Paused { .. }) => line.push_str(" (the user has taken it over)"),
+        None => {}
+    }
+    if default {
+        line.push_str(" [default]");
+    }
+    if tab.loading {
+        line.push_str(" [loading]");
+    }
+    line.push('\n');
+    line
+}
+
 /// The chat a tool call comes from.
 pub struct Chat {
     pub id: String,
@@ -664,6 +1049,7 @@ pub fn start_sweeper(app: &Arc<crate::app::App>) {
                 return;
             };
             app.browser.sweep();
+            live::sweep(&app);
         }
     });
 }

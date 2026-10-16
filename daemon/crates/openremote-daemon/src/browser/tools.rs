@@ -27,7 +27,7 @@ impl Tool {
 }
 
 fn tab_prop() -> Value {
-    json!({"type": "string", "description": "The tab's id (from browser_tabs). Leave out for the tab you used last."})
+    json!({"type": "string", "description": "The tab's id from browser_tabs: tab-2 here, or pixel-8:tab-2 for a tab on another of the user's devices. Leave out for the tab you used last."})
 }
 
 fn target_props() -> serde_json::Map<String, Value> {
@@ -57,19 +57,23 @@ fn only_tab() -> Value {
 pub const TOOLS: &[Tool] = &[
     Tool {
         name: "browser_tabs",
-        description: "List the tabs open in the user's OpenRemote browser: id, address, title, and which chat's agent is using each. The browser is shared: the user sees every tab you open and act on.",
+        description: "List the tabs open in the user's OpenRemote browser, on this computer and on the user's other devices (a phone, another computer): id, address, title, and which chat's agent is using each. The browser is shared: the user sees every tab you open and act on.",
         reads: true,
         schema: || object(serde_json::Map::new(), &[]),
     },
     Tool {
         name: "browser_tab_open",
-        description: "Open a new tab in the user's OpenRemote browser at an address. The user sees it, marked with this chat's name.",
+        description: "Open a new tab in the user's OpenRemote browser at an address. It opens where the user is: on the device they last messaged you from (an address on this computer, like localhost, always opens here, and they can watch it live). The user sees it, marked with this chat's name.",
         reads: false,
         schema: || {
             let mut props = serde_json::Map::new();
             props.insert(
                 "url".into(),
                 json!({"type": "string", "description": "The address to open."}),
+            );
+            props.insert(
+                "device".into(),
+                json!({"type": "string", "description": "Open it on this device instead (its name from browser_tabs). Leave out to open it where the user is."}),
             );
             object(props, &["url"])
         },
@@ -279,7 +283,7 @@ pub const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "browser_upload",
-        description: "Put files from this chat's folder into a file picker (by its ref).",
+        description: "Put files from this chat's folder into a file picker (by its ref), in a tab on this computer.",
         reads: false,
         schema: || {
             let mut props = target_props();
@@ -332,9 +336,10 @@ pub fn to_call(name: &str, args: &Value, tab: String) -> Result<Call, String> {
     let target = || need(args, "ref").map(|r| r.trim_start_matches("ref=").to_string());
     Ok(match name {
         "browser_tab_close" => Call::Close { tab },
+        // Made whole here ("localhost:3000" reads as a scheme otherwise).
         "browser_navigate" => Call::Navigate {
             tab,
-            url: need(args, "url")?,
+            url: super::remote::normalize(&need(args, "url")?),
         },
         "browser_go" => match need(args, "direction")?.as_str() {
             "back" => Call::Back { tab },
@@ -443,9 +448,10 @@ pub fn to_call(name: &str, args: &Value, tab: String) -> Result<Call, String> {
     })
 }
 
-/// A result's first line: which tab, where, what it's called.
+/// A result's first line: which tab, where, what it's called. A tab on
+/// another device keeps its device's name (`pixel-8:tab-2`).
 pub fn header(tab: &str, url: &str, title: &str) -> String {
-    let tab = if tab.starts_with("tab") {
+    let tab = if tab.starts_with("tab") || tab.contains(':') {
         tab.to_string()
     } else {
         format!("tab {tab}")

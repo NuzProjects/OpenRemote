@@ -77,10 +77,12 @@ pub fn router(app: Arc<App>) -> Router {
 }
 
 /// The API as the user's other devices see it: the same handlers, behind
-/// `peer_gate`. No daemon token: the mesh already proved the caller is one
-/// of the account's devices.
+/// `peer_gate`, plus what they may ask of this device's browser. No daemon
+/// token: the mesh already proved the caller is one of the account's
+/// devices.
 pub fn peer_router(app: Arc<App>) -> Router {
     api_routes()
+        .merge(crate::browser::peer::routes())
         .route_layer(middleware::from_fn_with_state(Arc::clone(&app), peer_gate))
         .with_state(app)
 }
@@ -93,6 +95,11 @@ enum Tier {
     Machine,
     /// Acting on one chat: a machine, and the chat is synced and runs here.
     Chat,
+    /// Using this device's browser (its tabs, their agents' calls, live
+    /// views): any of the account's devices - a phone is a "desktop", so
+    /// the machine tier wouldn't let it in - while a browser runs here.
+    /// Private tabs never answer, and saved passwords are never on it.
+    Browser,
 }
 
 /// What another of the user's devices may ask of this one. MCP servers,
@@ -130,6 +137,13 @@ const PEER_ROUTES: &[(&str, &str, Tier)] = &[
     ("POST", "/sessions/{id}/resume", Tier::Chat),
     ("POST", "/sessions/{id}/title", Tier::Chat),
     ("POST", "/decisions/{id}/answer", Tier::Chat),
+    // This device's browser: its tabs for another device's agents and
+    // lists, their calls, and live views of its tabs.
+    ("GET", "/browser/tabs", Tier::Browser),
+    ("POST", "/browser/rpc", Tier::Browser),
+    ("POST", "/browser/views", Tier::Browser),
+    ("DELETE", "/browser/views/{id}", Tier::Browser),
+    ("POST", "/browser/views/{id}/control", Tier::Browser),
 ];
 
 async fn peer_gate(
@@ -147,6 +161,12 @@ async fn peer_gate(
         return error(StatusCode::FORBIDDEN, "not available to your other devices");
     };
     if *tier == Tier::Sync {
+        return next.run(request).await;
+    }
+    if *tier == Tier::Browser {
+        if !app.browser.connected() {
+            return crate::browser::peer::no_browser();
+        }
         return next.run(request).await;
     }
     // A desktop that isn't a machine only ever syncs; nobody else drives it.
@@ -2189,6 +2209,10 @@ struct PromptBody {
     /// agent may read them, and only them.
     #[serde(default)]
     mentioned_chats: Vec<String>,
+    /// The device the user wrote this from (the console's own, in Cloud):
+    /// the chat's agent opens its new browser tabs there.
+    #[serde(default)]
+    from_device: Option<String>,
 }
 
 fn mentioned(body: &PromptBody) -> Vec<SessionId> {
@@ -2196,6 +2220,29 @@ fn mentioned(body: &PromptBody) -> Vec<SessionId> {
         .iter()
         .filter_map(|id| SessionId::parse(id))
         .collect()
+}
+
+/// Remembers which device the user messaged a chat from, for where its
+/// agent's new browser tabs open: the device the mesh vouches for when the
+/// message came from another device, else the one the console names (if
+/// it is one of the account's), else this one.
+fn note_origin(
+    app: &App,
+    chat: &str,
+    peer: Option<&axum::Extension<crate::host::PeerOrigin>>,
+    named: Option<&str>,
+) {
+    let Some(chat) = SessionId::parse(chat) else {
+        return;
+    };
+    let known = |id: &openremote_core::DeviceId| {
+        app.cloud.mesh().is_some_and(|mesh| mesh.peer(*id).is_some())
+    };
+    let origin = peer
+        .map(|peer| peer.0.0.device_id)
+        .or_else(|| named.and_then(openremote_core::DeviceId::parse).filter(known))
+        .or_else(|| app.cloud.device_id());
+    app.browser.note_origin(&chat.to_string(), origin);
 }
 
 #[derive(Deserialize)]
@@ -2261,6 +2308,7 @@ async fn post_settings(
 async fn post_prompt(
     State(app): State<Arc<App>>,
     AxumPath(id): AxumPath<String>,
+    peer: Option<axum::Extension<crate::host::PeerOrigin>>,
     Json(body): Json<PromptBody>,
 ) -> Response {
     if let Some(receipt) = app.supervisor.receipt(&body.request_id) {
@@ -2269,6 +2317,7 @@ async fn post_prompt(
     let Some(session_id) = SessionId::parse(&id) else {
         return error(StatusCode::BAD_REQUEST, "bad session id");
     };
+    note_origin(&app, &id, peer.as_ref(), body.from_device.as_deref());
     let accepted = Receipt {
         request_id: body.request_id.clone(),
         session_id: Some(session_id),

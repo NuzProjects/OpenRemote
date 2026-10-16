@@ -1,7 +1,8 @@
 //! The browser's routes, for this device's console and the chats' MCP
-//! server only: none of them answers the user's other devices. Writes are
-//! keyed (a bookmark's id, a setting's name) and the latest one wins, so a
-//! retried request lands the same way twice; they need no receipts.
+//! server only: none of them answers the user's other devices (what they
+//! may ask is in `peer`). Writes are keyed (a bookmark's id, a setting's
+//! name) and the latest one wins, so a retried request lands the same way
+//! twice; they need no receipts.
 
 use std::sync::Arc;
 
@@ -35,6 +36,9 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/browser/tabs/{tab}/control", post(control))
         .route("/browser/tools", get(tool_list))
         .route("/sessions/{id}/browser/call", post(call_tool))
+        // The user's other devices' tabs, and live views both ways.
+        .route("/browser/remote", get(super::remote::remote_tabs))
+        .merge(super::live::routes())
 }
 
 fn bad(status: StatusCode, message: &str) -> Response {
@@ -196,8 +200,9 @@ async fn control(
     }
 }
 
-/// The browser tools a chat's MCP server lists: none where no app hosts a
-/// browser (a machine's service, a daemon started by hand).
+/// The browser tools a chat's MCP server lists: none where no browser can
+/// be reached (a daemon started by hand, or a machine's service outside
+/// Cloud; in Cloud its tabs open on the user's other devices).
 async fn tool_list(State(app): State<Arc<App>>) -> Response {
     let tools: Vec<Value> = if app.browser.offers_tools() {
         tools::TOOLS.iter().map(tools::Tool::listing).collect()

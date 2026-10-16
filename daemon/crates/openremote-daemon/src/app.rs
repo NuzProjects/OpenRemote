@@ -87,6 +87,7 @@ impl App {
             port: OnceLock::new(),
             sync: crate::sync::SyncState::default(),
         });
+        app.browser.attach(&app);
         crate::sync::start_pusher(&app);
         crate::browser::start_sweeper(&app);
         app.start_cloud();

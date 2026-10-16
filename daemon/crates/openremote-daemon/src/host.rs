@@ -61,8 +61,25 @@ impl CloudHost for DaemonHost {
     }
 
     fn note(&self, peer: PeerContext, note: Value) {
-        if let Some(app) = self.app.upgrade() {
+        let Some(app) = self.app.upgrade() else {
+            return;
+        };
+        // A live view's acknowledgements, input and news; everything else
+        // is chat sync.
+        if note["type"]
+            .as_str()
+            .is_some_and(|t| t.starts_with("browser."))
+        {
+            crate::browser::live::on_note(&app, peer, note);
+        } else {
             crate::sync::on_note(&app, peer, note);
+        }
+    }
+
+    /// A live view's picture of another device's tab.
+    fn note_bin(&self, peer: PeerContext, payload: Vec<u8>) {
+        if let Some(app) = self.app.upgrade() {
+            crate::browser::live::on_bin(&app, peer, payload);
         }
     }
 
