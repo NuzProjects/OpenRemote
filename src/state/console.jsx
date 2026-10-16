@@ -417,6 +417,26 @@ export function ConsoleProvider({ children }) {
 
   const renameChat = useCallback(async (chatId, title) => api.rename(chatId, title), [api])
 
+  // Move a chat into one of its machine's projects (null: out of every
+  // project). The sidebar regroups at once; the open chat and the user's
+  // other devices hear it from the daemon's session.updated.
+  const moveChat = useCallback(
+    async (chatId, projectId) => {
+      const reply = await api.moveChat(chatId, projectId)
+      const session = reply?.result ?? null
+      if (session?.id === chatId) {
+        setSessions((current) => current.map((s) => (s.id === chatId ? session : s)))
+        setChats((current) =>
+          current[chatId]
+            ? { ...current, [chatId]: mergeSessionIntoChat(current[chatId], session) }
+            : current,
+        )
+      }
+      return session
+    },
+    [api],
+  )
+
   // The API of another of the user's devices, through this daemon.
   const apiFor = useCallback((deviceId) => api.device(deviceId), [api])
 
@@ -1017,6 +1037,7 @@ export function ConsoleProvider({ children }) {
       commandsFor,
       filesFor,
       renameChat,
+      moveChat,
       capabilitiesFor,
       refreshCloud,
       signInCloud,
@@ -1091,6 +1112,7 @@ export function ConsoleProvider({ children }) {
       commandsFor,
       filesFor,
       renameChat,
+      moveChat,
       capabilitiesFor,
       refreshCloud,
       signInCloud,
