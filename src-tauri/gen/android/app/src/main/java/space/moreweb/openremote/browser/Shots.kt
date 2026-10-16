@@ -125,6 +125,9 @@ class Shots(private val browser: Browser) {
   fun capture(tab: Tab, clip: Clip?, maxCss: Double?, done: (String?) -> Unit) {
     val page = tab.page
     if (page == null) return done(tab.thumbnail)
+    // A thumbnail of a page out of sight: the one taken as it left the
+    // screen (a hidden page may draw blank).
+    if (maxCss != null && clip == null && !browser.onScreen(tab) && tab.thumbnail != null) return done(tab.thumbnail)
     val scale = tab.frame?.scale ?: browser.density
     val widest = maxCss?.takeIf { it > 0 }?.let { (it * scale).roundToInt() } ?: page.width
     // A small picture is a thumbnail: it needn't be sharp.
