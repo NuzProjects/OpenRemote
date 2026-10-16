@@ -118,7 +118,22 @@ impl Http {
         headers: &[(&str, &str)],
         body: Option<(&str, Vec<u8>)>,
     ) -> Result<Response, HttpError> {
-        tokio::time::timeout(limit, self.send(method, url, headers, body))
+        tokio::time::timeout(limit, self.send(method, url, headers, body, MAX_BODY))
+            .await
+            .map_err(|_| HttpError::Timeout)?
+    }
+
+    /// A GET whose answer may be large - a plugin's archive runs to tens of
+    /// megabytes - with its own size cap and time limit in place of the
+    /// defaults, which are sized for the registry and sign-in.
+    pub async fn download(
+        &self,
+        limit: Duration,
+        max_body: usize,
+        url: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<Response, HttpError> {
+        tokio::time::timeout(limit, self.send("GET", url, headers, None, max_body))
             .await
             .map_err(|_| HttpError::Timeout)?
     }
@@ -129,6 +144,7 @@ impl Http {
         url: &str,
         headers: &[(&str, &str)],
         body: Option<(&str, Vec<u8>)>,
+        max_body: usize,
     ) -> Result<Response, HttpError> {
         let uri: http::Uri = url.parse().map_err(|_| HttpError::Url(url.to_string()))?;
         let stream = self.connect(&uri).await?;
@@ -173,7 +189,7 @@ impl Http {
             .map_err(|e| HttpError::Protocol(e.to_string()))?;
         let status = response.status().as_u16();
         let headers = response.headers().clone();
-        let body = Limited::new(response.into_body(), MAX_BODY)
+        let body = Limited::new(response.into_body(), max_body)
             .collect()
             .await
             .map_err(|e| HttpError::Protocol(e.to_string()))?
