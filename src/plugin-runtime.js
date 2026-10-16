@@ -122,7 +122,7 @@ export function readSettings(list) {
       options,
       min: typeof raw.min === 'number' ? raw.min : null,
       max: typeof raw.max === 'number' ? raw.max : null,
-      sendTo: raw.type === 'secret' && typeof raw.sendTo === 'string' ? raw.sendTo : null,
+      sendTo: raw.type === 'secret' ? (raw.send_to ?? raw.sendTo ?? null) : null,
     })
   }
   return out
@@ -140,7 +140,7 @@ export function readContributions(manifest) {
   const ids = new Set()
   const fresh = (item) => item && typeof item === 'object' && ID.test(item.id ?? '') && !ids.has(item.id)
   const inputs = []
-  for (const item of Array.isArray(contributes.composer) ? contributes.composer : []) {
+  for (const item of Array.isArray(contributes.composer_inputs) ? contributes.composer_inputs : []) {
     if (!entry || !fresh(item) || inputs.length >= MAX_INPUTS) continue
     ids.add(item.id)
     inputs.push({ id: item.id, label: text(item.label, 40) ?? item.id, icon: iconName(item.icon) })
@@ -157,8 +157,8 @@ export function readContributions(manifest) {
     entry,
     inputs,
     views,
-    background: Boolean(contributes.background) && Boolean(entry),
-    settings: readSettings(m.settings),
+    background: Boolean(m.background) && Boolean(entry),
+    settings: readSettings(contributes.settings),
   }
 }
 

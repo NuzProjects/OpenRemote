@@ -27,11 +27,13 @@ pub mod store;
 pub use events::{Event, EventPayload};
 pub use ids::{DecisionId, DeviceId, MachineId, ProjectId, RuleId, SessionId};
 pub use model::{
-    ApprovedCommand, AutomationRule, ChatMessage, Decision, DecisionKind, DecisionOption,
-    DecisionState, Harness, ImageRef, InstallSpec, InstalledPlugin, LOCAL_MARKETPLACE, Machine,
-    MachineStatus, MachineView, MarketplaceRecord, MarketplaceSource, McpServerEntry, MessageRole,
-    PluginPower, PluginRuntime, PluginScope, PluginSource, Project, QueuedMessage, Receipt,
-    ReceiptStatus, Session, SessionStatus, Trigger, TriggerKind, TurnOutcome,
+    ApprovedCommand, AutomationRule, ChatMessage, ComposerInputContribution, Decision,
+    DecisionKind, DecisionOption, DecisionState, GlobalPluginRecord, Harness, HarnessContribution,
+    ImageRef, InstallSpec, InstalledPlugin, LOCAL_MARKETPLACE, Machine, MachineStatus, MachineView,
+    MarketplaceRecord, MarketplaceSource, McpServerEntry, MessageRole, PluginContributions,
+    PluginModel, PluginPower, PluginRuntime, PluginScope, PluginSource, Project, QueuedMessage,
+    Receipt, ReceiptStatus, Session, SessionStatus, SettingField, SettingKind, SettingOption,
+    ToolContribution, Trigger, TriggerKind, TurnOutcome, ViewContribution, plugin_id,
 };
 pub use store::Store;
 

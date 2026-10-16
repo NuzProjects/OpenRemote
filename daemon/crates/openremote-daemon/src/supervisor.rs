@@ -242,8 +242,13 @@ const STDERR_REASON_LINES: usize = 4;
 /// ride into the session record whole.
 const STDERR_LINE_BOUND: usize = 300;
 
-/// The resolved CLI behind a backend - every variant holds one, and the
-/// sign-in relay drives it with the same resolution the sessions do.
+/// A plugin harness has no CLI of its own here: nothing to sign in to,
+/// no files to look for when a spawn fails.
+static NO_CLI: openremote_harness::Resolution = openremote_harness::Resolution::Unavailable;
+
+/// The resolved CLI behind a backend - every built-in variant holds one,
+/// and the sign-in relay drives it with the same resolution the sessions
+/// do.
 fn backend_resolution(backend: &crate::registry::Backend) -> &openremote_harness::Resolution {
     match backend {
         crate::registry::Backend::Claude(r) => r,
@@ -252,6 +257,7 @@ fn backend_resolution(backend: &crate::registry::Backend) -> &openremote_harness
         crate::registry::Backend::Pi(r) => r,
         crate::registry::Backend::Opencode(r) => r,
         crate::registry::Backend::Agy(r) => r,
+        crate::registry::Backend::Plugin(_) => &NO_CLI,
     }
 }
 
@@ -367,11 +373,20 @@ impl Supervisor {
     pub fn harnesses(&self) -> Vec<Harness> {
         let mut list = self.registry.read().expect("registry lock").harnesses();
         self.with_store(|s| {
-            for harness in &mut list {
+            // A plugin harness is on or off with its plugin.
+            for harness in list.iter_mut().filter(|h| h.plugin.is_none()) {
                 harness.enabled = s.builtin_enabled(&harness.id);
             }
         });
         list
+    }
+
+    /// The harnesses installed plugins drive, from the plugin runtime.
+    pub fn set_plugin_harnesses(&self, plugins: Vec<(Harness, Option<crate::registry::Backend>)>) {
+        self.registry
+            .write()
+            .expect("registry lock")
+            .set_plugins(plugins);
     }
 
     /// The models a harness advertises, in its own words, with the
@@ -763,8 +778,11 @@ impl Supervisor {
             .expect("registry lock")
             .overrides()
             .clone();
-        let fresh = HarnessRegistry::probe(&overrides).await;
-        *self.registry.write().expect("registry lock") = fresh;
+        let mut fresh = HarnessRegistry::probe(&overrides).await;
+        // A probe finds the CLIs; the plugin harnesses carry over.
+        let mut registry = self.registry.write().expect("registry lock");
+        fresh.set_plugins(registry.plugins());
+        *registry = fresh;
     }
 
     // ---- MCP servers ----
@@ -809,16 +827,16 @@ impl Supervisor {
             .map_err(store_error)
     }
 
-    /// The folders of the plugins installed here and left on that claude
+    /// The folders of the plugins a chat in `workspace` gets that claude
     /// can load - each has Claude's own plugin.json (the install writes
-    /// one where Claude parts arrived without it).
-    fn plugin_dirs(&self) -> Vec<std::path::PathBuf> {
+    /// one where Claude parts arrived without it). A chat in a project
+    /// gets that project's plugins too.
+    fn plugin_dirs(&self, workspace: Option<&std::path::Path>) -> Vec<std::path::PathBuf> {
         self.with_store(|s| {
             let data_dir = s.dir().to_path_buf();
-            s.installed_plugins()
+            crate::plugin_runtime::scope::active(s, &data_dir, workspace)
                 .into_iter()
-                .filter(|p| p.enabled)
-                .map(|p| crate::plugins::plugin_dir(&data_dir, &p.marketplace, &p.name))
+                .map(|active| active.dir)
                 .filter(|dir| dir.join(".claude-plugin").join("plugin.json").is_file())
                 .collect()
         })
@@ -1286,7 +1304,7 @@ impl Supervisor {
             include_deltas: true,
             fast: current.fast,
             mcp_servers: self.mcp_servers_for(&id),
-            plugin_dirs: self.plugin_dirs(),
+            plugin_dirs: self.plugin_dirs(current.workspace.as_deref()),
             allowed_tools: self.allowed_tools(),
         };
         match backend.spawn(opts).await {
@@ -1940,7 +1958,7 @@ impl Supervisor {
             include_deltas: true,
             fast: session.fast,
             mcp_servers: self.mcp_servers_for(id),
-            plugin_dirs: self.plugin_dirs(),
+            plugin_dirs: self.plugin_dirs(session.workspace.as_deref()),
             allowed_tools: self.allowed_tools(),
         };
         let (driver, rx) = match backend.spawn(opts).await {

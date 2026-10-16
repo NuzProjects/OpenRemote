@@ -1,39 +1,35 @@
 //! What a JavaScript plugin reaches through the console that hosts it. The
-//! console loads a plugin's page from the plugin's own files into a
-//! sandboxed frame and answers the frame's calls; whatever needs this
-//! machine - the plugin's settings, the network, the chats - comes here,
-//! and each route checks the power the user approved at install.
+//! console loads a plugin's page from the plugin's own files (the plugin
+//! runtime's files route) into a sandboxed frame and answers the frame's
+//! calls; whatever needs this machine - the network, the chats - comes
+//! here, and each route checks the power the user approved at install.
 //!
-//! A plugin's secrets never leave this daemon. The settings route says only
-//! whether one is set, and a secret reaches the outside world only inside
-//! the plugin's own request, written into the header that names it - and,
-//! when the plugin declares it so, only toward the address the user typed
-//! in another of its settings.
+//! A plugin's secrets never leave this daemon. The plugin runtime's
+//! settings route says only whether one is set, and a secret reaches the
+//! outside world only inside the plugin's own request, written into the
+//! header that names it - and, when the plugin declares it so, only toward
+//! the address the user typed in another of its settings.
 //!
 //! Console-only, like the browser's routes: none of these answers the
 //! user's other devices.
 
-use std::collections::{BTreeMap, HashSet};
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::{DefaultBodyLimit, Path as AxumPath, State};
-use axum::http::{StatusCode, Uri, header};
+use axum::http::{StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine;
 use openremote_cloud::https::HttpError;
-use openremote_core::{EventPayload, InstalledPlugin, MessageRole, PluginPower, SessionId};
-use serde::{Deserialize, Serialize};
+use openremote_core::{
+    EventPayload, InstalledPlugin, MessageRole, PluginPower, SessionId, SettingField, SettingKind,
+};
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::app::App;
-
-/// A plugin file is refused past this size: pages, scripts and pictures,
-/// not media libraries.
-const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
 
 /// A plugin's request arrives as base64 inside JSON: room for about 32 MB
 /// of bytes, past the 25 MB the common transcription services accept.
@@ -66,13 +62,8 @@ const METHODS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPT
 /// A chat read for a plugin carries at most its last this many entries.
 const MAX_READ_ENTRIES: usize = 2000;
 
-/// One save at a time: a save reads the file, changes it and writes it back.
-static SETTINGS_WRITE: StdMutex<()> = StdMutex::new(());
-
 pub fn routes() -> Router<Arc<App>> {
     Router::new()
-        .route("/plugins/{id}/files/{*path}", get(file))
-        .route("/plugins/{id}/settings", get(settings).post(save_settings))
         .route(
             "/plugins/{id}/fetch",
             post(fetch).layer(DefaultBodyLimit::max(MAX_FETCH_BODY)),
@@ -131,389 +122,6 @@ fn granted(plugin: &InstalledPlugin, power: PluginPower) -> Result<(), Refusal> 
     Ok(())
 }
 
-// ---- files: the plugin's page, scripts and pictures ----
-
-/// A file of an installed plugin, for the console that builds the plugin's
-/// page from it. Only what sits inside the plugin's own folder: no `..`,
-/// and no link that points out of it.
-async fn file(
-    State(app): State<Arc<App>>,
-    AxumPath((id, path)): AxumPath<(String, String)>,
-) -> Response {
-    let plugin = match installed(&app, &id) {
-        Ok(plugin) => plugin,
-        Err(refusal) => return refused(refusal),
-    };
-    if !crate::plugins::relative_inside(&path) {
-        return bad(
-            StatusCode::BAD_REQUEST,
-            "that path leaves the plugin's folder",
-        );
-    }
-    let missing = || {
-        bad(
-            StatusCode::NOT_FOUND,
-            &format!("{} has no file {path}", plugin.name),
-        )
-    };
-    let folder = app.plugins.dir_of(&plugin.marketplace, &plugin.name);
-    let (Ok(root), Ok(target)) = (
-        std::fs::canonicalize(&folder),
-        std::fs::canonicalize(folder.join(&path)),
-    ) else {
-        return missing();
-    };
-    if !target.starts_with(&root) {
-        return missing();
-    }
-    match std::fs::metadata(&target) {
-        Ok(meta) if meta.is_file() && meta.len() <= MAX_FILE_BYTES => {}
-        Ok(meta) if meta.is_file() => {
-            return bad(StatusCode::PAYLOAD_TOO_LARGE, "that file is too large");
-        }
-        _ => return missing(),
-    }
-    match tokio::fs::read(&target).await {
-        Ok(bytes) => (
-            [
-                (header::CONTENT_TYPE, content_type(&target)),
-                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
-                (header::CACHE_CONTROL, "no-store"),
-            ],
-            bytes,
-        )
-            .into_response(),
-        Err(_) => missing(),
-    }
-}
-
-fn content_type(path: &Path) -> &'static str {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .unwrap_or_default();
-    match ext.as_str() {
-        "html" | "htm" => "text/html; charset=utf-8",
-        "js" | "mjs" => "text/javascript; charset=utf-8",
-        "css" => "text/css; charset=utf-8",
-        "json" => "application/json",
-        "svg" => "image/svg+xml",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "ico" => "image/x-icon",
-        "woff" => "font/woff",
-        "woff2" => "font/woff2",
-        "ttf" => "font/ttf",
-        "otf" => "font/otf",
-        "wasm" => "application/wasm",
-        "mp3" => "audio/mpeg",
-        "wav" => "audio/wav",
-        "ogg" | "oga" => "audio/ogg",
-        "webm" => "audio/webm",
-        "mp4" => "video/mp4",
-        "txt" | "md" => "text/plain; charset=utf-8",
-        _ => "application/octet-stream",
-    }
-}
-
-// ---- settings: the form the console draws, the values the plugin reads ----
-
-/// One setting a plugin's openremote.json declares. The console draws the
-/// form from the same list (with its label and help); here only what a
-/// value must be matters.
-#[derive(Deserialize, Clone, Debug)]
-struct Setting {
-    key: String,
-    #[serde(rename = "type")]
-    kind: SettingKind,
-    #[serde(default)]
-    default: Option<Value>,
-    /// An enum's choices: plain strings, or `{value, label}`.
-    #[serde(default)]
-    options: Vec<Value>,
-    #[serde(default)]
-    min: Option<f64>,
-    #[serde(default)]
-    max: Option<f64>,
-    /// A secret's guard: it is written into a request only when the request
-    /// goes to the address this other (string) setting holds.
-    #[serde(default, rename = "sendTo")]
-    send_to: Option<String>,
-}
-
-#[derive(Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
-#[serde(rename_all = "lowercase")]
-enum SettingKind {
-    String,
-    Secret,
-    Boolean,
-    Number,
-    Enum,
-}
-
-fn valid_key(key: &str) -> bool {
-    !key.is_empty()
-        && key.len() <= 64
-        && key
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-}
-
-fn option_value(option: &Value) -> Option<&str> {
-    option
-        .as_str()
-        .or_else(|| option.get("value").and_then(Value::as_str))
-}
-
-/// The settings a plugin folder's openremote.json declares, in its order.
-/// A plugin without the file, or without settings, has none.
-fn schema(dir: &Path) -> Result<Vec<Setting>, String> {
-    #[derive(Deserialize)]
-    struct Declared {
-        #[serde(default)]
-        settings: Vec<Setting>,
-    }
-    let raw = match std::fs::read(dir.join("openremote.json")) {
-        Ok(raw) => raw,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(format!("openremote.json could not be read: {e}")),
-    };
-    let declared: Declared = serde_json::from_slice(&raw)
-        .map_err(|e| format!("openremote.json's settings are not valid: {e}"))?;
-    let mut seen = HashSet::new();
-    for setting in &declared.settings {
-        if !valid_key(&setting.key) {
-            return Err(format!(
-                "'{}' is not a setting name: lowercase letters, digits and underscores",
-                setting.key
-            ));
-        }
-        if !seen.insert(setting.key.as_str()) {
-            return Err(format!("the setting {} is declared twice", setting.key));
-        }
-        if setting.kind == SettingKind::Enum && setting.options.is_empty() {
-            return Err(format!("the setting {} offers no options", setting.key));
-        }
-        if let Some(to) = &setting.send_to {
-            let target = declared.settings.iter().find(|s| &s.key == to);
-            if setting.kind != SettingKind::Secret
-                || target.is_none_or(|s| s.kind != SettingKind::String)
-            {
-                return Err(format!(
-                    "the setting {}'s sendTo must name a text setting, and only a secret has one",
-                    setting.key
-                ));
-            }
-        }
-    }
-    Ok(declared.settings)
-}
-
-/// A plugin's settings on disk: the values it may read back, and its
-/// secrets. One private file per plugin, like the token.
-#[derive(Serialize, Deserialize, Default)]
-struct Stored {
-    #[serde(default)]
-    values: Map<String, Value>,
-    #[serde(default)]
-    secrets: BTreeMap<String, String>,
-}
-
-fn settings_dir(data_dir: &Path) -> PathBuf {
-    data_dir.join("plugin-settings")
-}
-
-fn settings_file(data_dir: &Path, marketplace: &str, name: &str) -> PathBuf {
-    settings_dir(data_dir)
-        .join(marketplace)
-        .join(format!("{name}.json"))
-}
-
-fn load(path: &Path) -> Stored {
-    std::fs::read(path)
-        .ok()
-        .and_then(|raw| serde_json::from_slice(&raw).ok())
-        .unwrap_or_default()
-}
-
-fn store(data_dir: &Path, path: &Path, stored: &Stored) -> std::io::Result<()> {
-    openremote_core::fsx::create_private_dir(&settings_dir(data_dir))?;
-    if let Some(parent) = path.parent() {
-        openremote_core::fsx::create_private_dir(parent)?;
-    }
-    openremote_core::fsx::write_private(
-        path,
-        &serde_json::to_vec_pretty(stored).expect("settings serialize"),
-    )
-}
-
-/// A removed plugin's settings go with it, its secrets included.
-pub fn forget_settings(data_dir: &Path, marketplace: &str, name: &str) {
-    let _ = std::fs::remove_file(settings_file(data_dir, marketplace, name));
-}
-
-/// The settings as the console and the plugin read them: every value (the
-/// plugin's default where none was saved) and, for each secret, only
-/// whether it is set.
-fn view(schema: &[Setting], stored: &Stored) -> Value {
-    let mut values = Map::new();
-    let mut secrets = Map::new();
-    for setting in schema {
-        if setting.kind == SettingKind::Secret {
-            let set = stored
-                .secrets
-                .get(&setting.key)
-                .is_some_and(|v| !v.is_empty());
-            secrets.insert(
-                setting.key.clone(),
-                Value::String(if set { "set" } else { "unset" }.into()),
-            );
-        } else {
-            let value = stored
-                .values
-                .get(&setting.key)
-                .cloned()
-                .or_else(|| setting.default.clone())
-                .unwrap_or(Value::Null);
-            values.insert(setting.key.clone(), value);
-        }
-    }
-    json!({"values": values, "secrets": secrets})
-}
-
-/// A value as its setting takes it, or what is wrong with it in plain words.
-fn checked(setting: &Setting, value: &Value) -> Result<Value, String> {
-    let key = &setting.key;
-    match setting.kind {
-        SettingKind::String => value
-            .as_str()
-            .map(|s| Value::String(s.to_string()))
-            .ok_or_else(|| format!("{key} takes text")),
-        SettingKind::Boolean => value
-            .as_bool()
-            .map(Value::Bool)
-            .ok_or_else(|| format!("{key} is on or off")),
-        SettingKind::Number => {
-            let n = value
-                .as_f64()
-                .filter(|n| n.is_finite())
-                .ok_or_else(|| format!("{key} takes a number"))?;
-            let low = setting.min.is_some_and(|min| n < min);
-            let high = setting.max.is_some_and(|max| n > max);
-            if low || high {
-                return Err(match (setting.min, setting.max) {
-                    (Some(min), Some(max)) => format!("{key} takes a number from {min} to {max}"),
-                    (Some(min), None) => format!("{key} takes a number of at least {min}"),
-                    _ => format!(
-                        "{key} takes a number of at most {}",
-                        setting.max.unwrap_or_default()
-                    ),
-                });
-            }
-            Ok(value.clone())
-        }
-        SettingKind::Enum => {
-            let chosen = value
-                .as_str()
-                .ok_or_else(|| format!("{key} takes one of its options"))?;
-            if setting
-                .options
-                .iter()
-                .any(|o| option_value(o) == Some(chosen))
-            {
-                Ok(Value::String(chosen.to_string()))
-            } else {
-                Err(format!("{chosen} is not one of {key}'s options"))
-            }
-        }
-        SettingKind::Secret => Err(format!("{key} is a secret")),
-    }
-}
-
-async fn settings(State(app): State<Arc<App>>, AxumPath(id): AxumPath<String>) -> Response {
-    let plugin = match installed(&app, &id) {
-        Ok(plugin) => plugin,
-        Err(refusal) => return refused(refusal),
-    };
-    let declared = match schema(&app.plugins.dir_of(&plugin.marketplace, &plugin.name)) {
-        Ok(declared) => declared,
-        Err(why) => return bad(StatusCode::BAD_REQUEST, &why),
-    };
-    let stored = load(&settings_file(
-        &app.data_dir,
-        &plugin.marketplace,
-        &plugin.name,
-    ));
-    Json(view(&declared, &stored)).into_response()
-}
-
-/// The console's save. A setting not named keeps its value; a value of
-/// null goes back to the plugin's default. A secret is replaced only when
-/// the save names it - with text it is replaced, with null or nothing it
-/// is cleared. Nothing is written unless every value is right. Keyed by
-/// setting name, so a retried save lands the same way twice.
-#[derive(Deserialize)]
-struct SaveBody {
-    #[serde(default)]
-    values: Map<String, Value>,
-}
-
-async fn save_settings(
-    State(app): State<Arc<App>>,
-    AxumPath(id): AxumPath<String>,
-    Json(body): Json<SaveBody>,
-) -> Response {
-    let plugin = match installed(&app, &id) {
-        Ok(plugin) => plugin,
-        Err(refusal) => return refused(refusal),
-    };
-    let declared = match schema(&app.plugins.dir_of(&plugin.marketplace, &plugin.name)) {
-        Ok(declared) => declared,
-        Err(why) => return bad(StatusCode::BAD_REQUEST, &why),
-    };
-    let path = settings_file(&app.data_dir, &plugin.marketplace, &plugin.name);
-    let _one_at_a_time = crate::supervisor::lock_recovering(&SETTINGS_WRITE);
-    let mut stored = load(&path);
-    for (key, value) in &body.values {
-        let Some(setting) = declared.iter().find(|s| &s.key == key) else {
-            return bad(
-                StatusCode::BAD_REQUEST,
-                &format!("{} has no setting {key}", plugin.name),
-            );
-        };
-        if setting.kind == SettingKind::Secret {
-            match value {
-                Value::String(secret) if !secret.is_empty() => {
-                    stored.secrets.insert(key.clone(), secret.clone());
-                }
-                Value::Null | Value::String(_) => {
-                    stored.secrets.remove(key);
-                }
-                _ => return bad(StatusCode::BAD_REQUEST, &format!("{key} takes text")),
-            }
-        } else if value.is_null() {
-            stored.values.remove(key);
-        } else {
-            match checked(setting, value) {
-                Ok(value) => {
-                    stored.values.insert(key.clone(), value);
-                }
-                Err(why) => return bad(StatusCode::BAD_REQUEST, &why),
-            }
-        }
-    }
-    if let Err(e) = store(&app.data_dir, &path, &stored) {
-        return bad(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("the settings could not be saved: {e}"),
-        );
-    }
-    Json(view(&declared, &stored)).into_response()
-}
-
 // ---- fetch: the network, for a plugin given it ----
 
 /// A plugin's request, as its frame made it: the console carries it here
@@ -568,8 +176,8 @@ fn goes_to(url: &str, base: &str) -> bool {
 /// out, so a service that needs no key gets none.
 fn fill_secrets(
     value: &str,
-    declared: &[Setting],
-    stored: &Stored,
+    declared: &[SettingField],
+    stored: &Map<String, Value>,
     url: &str,
 ) -> Result<Option<String>, (StatusCode, String)> {
     let mut out = String::new();
@@ -593,12 +201,15 @@ fn fill_secrets(
                 format!("{name} is not one of the plugin's secrets"),
             ));
         };
-        let Some(secret) = stored.secrets.get(name).filter(|s| !s.is_empty()) else {
+        let Some(secret) = stored
+            .get(name)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        else {
             return Ok(None);
         };
         if let Some(guard) = &setting.send_to {
             let address = stored
-                .values
                 .get(guard)
                 .and_then(Value::as_str)
                 .map(str::to_string)
@@ -670,19 +281,12 @@ async fn fetch(
     // The secrets are read only when a header names one.
     let names_secret = body.headers.iter().any(|(_, v)| v.contains(SECRET_OPEN));
     let (declared, stored) = if names_secret {
-        match schema(&app.plugins.dir_of(&plugin.marketplace, &plugin.name)) {
-            Ok(declared) => (
-                declared,
-                load(&settings_file(
-                    &app.data_dir,
-                    &plugin.marketplace,
-                    &plugin.name,
-                )),
-            ),
-            Err(why) => return bad(StatusCode::BAD_REQUEST, &why),
-        }
+        (
+            plugin.contributes.settings.clone(),
+            app.plugin_runtime.settings.load(&plugin.id()),
+        )
     } else {
-        (Vec::new(), Stored::default())
+        (Vec::new(), Map::new())
     };
     let mut headers: Vec<(String, String)> = Vec::new();
     let mut content_type = None;

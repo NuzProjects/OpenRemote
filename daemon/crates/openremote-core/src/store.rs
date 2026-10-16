@@ -35,9 +35,9 @@ fn slug(name: &str) -> String {
 use crate::events::{Event, EventPayload};
 use crate::ids::{DecisionId, DeviceId, MachineId, ProjectId, RuleId, SessionId};
 use crate::model::{
-    AutomationRule, Decision, DecisionState, InstalledPlugin, Machine, MachineStatus,
-    MarketplaceRecord, McpServerEntry, MessageRole, Project, Receipt, ReceiptStatus, Session,
-    SessionStatus,
+    AutomationRule, Decision, DecisionState, GlobalPluginRecord, InstalledPlugin, Machine,
+    MachineStatus, MarketplaceRecord, McpServerEntry, MessageRole, Project, Receipt, ReceiptStatus,
+    Session, SessionStatus,
 };
 
 #[derive(Debug, Error)]
@@ -120,6 +120,11 @@ struct State {
     /// The built-in harness plugins the user turned off.
     #[serde(default)]
     disabled_builtins: BTreeSet<String>,
+    /// The account's Global plugins as this device last heard of them,
+    /// by id - removed ones included, so an uninstall reaches every
+    /// device.
+    #[serde(default)]
+    global_plugins: BTreeMap<String, GlobalPluginRecord>,
     /// The plugin marketplaces on this machine, by catalog name.
     #[serde(default)]
     marketplaces: BTreeMap<String, MarketplaceRecord>,
@@ -802,6 +807,30 @@ impl Store {
         let out = plugin.clone();
         self.persist()?;
         Ok(out)
+    }
+
+    // ---- Global plugins: the account's records ----
+
+    pub fn global_plugins(&self) -> Vec<&GlobalPluginRecord> {
+        self.state.global_plugins.values().collect()
+    }
+
+    pub fn global_plugin(&self, id: &str) -> Option<&GlobalPluginRecord> {
+        self.state.global_plugins.get(id)
+    }
+
+    /// Keep a record when it is a later write than the one held (or the
+    /// first). True when it was kept.
+    pub fn merge_global_plugin(&mut self, record: GlobalPluginRecord) -> Result<bool, StoreError> {
+        let id = record.id();
+        if let Some(held) = self.state.global_plugins.get(&id) {
+            if !record.newer_than(held) {
+                return Ok(false);
+            }
+        }
+        self.state.global_plugins.insert(id, record);
+        self.persist()?;
+        Ok(true)
     }
 
     pub fn builtin_enabled(&self, id: &str) -> bool {

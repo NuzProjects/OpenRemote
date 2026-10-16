@@ -31,26 +31,30 @@ my-plugin/
   "runtime": "js",
   "entry": "main.js",
   "powers": ["network"],
+  "background": false,
   "contributes": {
-    "composer": [{ "id": "go", "label": "Do the thing", "icon": "sparkle" }],
-    "views": [{ "id": "main", "title": "My plugin", "icon": "notebook", "entry": "view.html" }],
-    "background": false
-  },
-  "settings": [
-    { "key": "base_url", "type": "string", "label": "Address", "help": "Where it goes.", "default": "https://example.com/v1" },
-    { "key": "api_key", "type": "secret", "label": "API key", "sendTo": "base_url" }
-  ]
+    "composer_inputs": [{ "id": "go", "label": "Do the thing", "icon": "sparkle" }],
+    "views": [{ "id": "main", "title": "My plugin", "icon": "notebook", "place": "sidebar", "entry": "view.html" }],
+    "settings": [
+      { "key": "base_url", "type": "string", "label": "Address", "help": "Where it goes.", "default": "https://example.com/v1" },
+      { "key": "api_key", "type": "secret", "label": "API key", "send_to": "base_url" }
+    ]
+  }
 }
 ```
+
+This is the same `openremote.json` every plugin runtime reads (see
+`authoring.md`); a JavaScript plugin uses the `composer_inputs`, `views` and
+`settings` parts of it.
 
 | Field | Meaning |
 |---|---|
 | `entry` | The page, a path inside the folder: a `.js` (or `.mjs`) file, or an `.html` page. |
 | `powers` | Any of `read_chats`, `agent_tools`, `network`, `microphone` (and `run_programs`, which a JavaScript plugin never gets to use). The user approves them at install; nothing else is ever answered. |
-| `contributes.composer` | Up to 3 buttons for the composer's foot: `id` (lowercase letters, digits, dashes), `label`, `icon`. A button needs `entry`. |
-| `contributes.views` | Up to 6 views, each a tile in the sidebar's Plugins group that opens in a pane: `id`, `title`, `icon`, and an optional `entry` of its own (the plugin's `entry` otherwise). |
-| `contributes.background` | `true` loads the plugin's page as soon as the app is up. Otherwise a plugin with composer buttons is loaded on the first click of one, and costs nothing until then. |
-| `settings` | The plugin's settings, in order; see below. |
+| `contributes.composer_inputs` | Up to 3 buttons for the composer's foot: `id` (lowercase letters, digits, dashes), `label`, `icon`. The plugin's own `entry` answers them unless a button names an `entry` of its own. |
+| `contributes.views` | Up to 6 views, each a tile in the sidebar's Plugins group that opens in a pane: `id`, `title`, `icon`, `place` (`sidebar`), and the page's `entry`. |
+| `background` | `true` loads the plugin's page as soon as the app is up. Otherwise a plugin with composer buttons is loaded on the first click of one, and costs nothing until then. |
+| `contributes.settings` | The plugin's settings, in order; see below. |
 | `displayName` | The name people read. Without it, the plugin's name with its first letter raised. |
 
 Icons are a fixed set from the app's own icons: `microphone`, `waveform`,
@@ -73,7 +77,7 @@ Each setting is an object with:
 | `placeholder` | The field's hint (text and numbers). |
 | `min`, `max` | A number's bounds. |
 | `options` | An enum's choices: strings, or `{ "value": "...", "label": "..." }`. |
-| `sendTo` | A secret only: the `key` of a `string` setting holding an address. The secret is then written only into requests to that address (the same scheme, host and port, and a path at or under it). |
+| `send_to` | A secret only: the `key` of a `string` setting holding an address. The secret is then written only into requests to that address (the same scheme, host and port, and a path at or under it). |
 
 The form is Settings > Plugins > your plugin's name, and the Installed
 tab's Settings button opens it. A secret is write-only: once saved, no
@@ -172,7 +176,7 @@ cookies:
 - Redirects come back as they are; answers are up to 4 MB.
 - A header value can name one of your secrets as `{{secret:key}}`:
   OpenRemote writes the secret in on the way out. A header whose secret
-  is not set is left out. With `sendTo`, a request to any other address
+  is not set is left out. With `send_to`, a request to any other address
   is refused.
 
 ```js

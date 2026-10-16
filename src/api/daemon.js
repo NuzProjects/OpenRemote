@@ -504,8 +504,14 @@ export class DaemonApi {
     return this.call('POST', '/plugins/stage', { request_id: newRequestId(), source }, { timeoutMs: 180_000 })
   }
 
-  installStagedPlugin(stageId) {
-    return this.call('POST', `/plugins/stage/${stageId}/install`, { request_id: newRequestId() })
+  // Who it is for: { scope: 'global' | 'machine' | 'project_local' |
+  // 'project', project } - the daemon's default is this machine.
+  installStagedPlugin(stageId, { scope, project } = {}) {
+    return this.call('POST', `/plugins/stage/${stageId}/install`, {
+      request_id: newRequestId(),
+      ...(scope ? { scope } : {}),
+      ...(project ? { project } : {}),
+    })
   }
 
   cancelStagedPlugin(stageId) {

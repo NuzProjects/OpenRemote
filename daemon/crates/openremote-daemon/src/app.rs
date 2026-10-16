@@ -31,6 +31,9 @@ pub struct App {
     /// The built-in browser: the app's tabs, the agents' tools, and the
     /// browser's own data (bookmarks, history, settings).
     pub browser: crate::browser::BrowserService,
+    /// The installed plugins at work: their programs and modules, their
+    /// settings, their harnesses and tools, the account's Global ones.
+    pub plugin_runtime: Arc<crate::plugin_runtime::PluginRuntime>,
 }
 
 pub struct AppOptions {
@@ -74,7 +77,15 @@ impl App {
         let plugins = crate::plugins::PluginHost::new(&options.data_dir);
         let marketplaces = crate::marketplace::MarketplaceHost::new(&options.data_dir);
         let browser = crate::browser::BrowserService::new(&options.data_dir);
+        let plugin_runtime = crate::plugin_runtime::PluginRuntime::new(
+            &options.data_dir,
+            Arc::clone(&store),
+            Arc::downgrade(&supervisor),
+        );
+        // The pickers list the installed plugins' harnesses from the start.
+        plugin_runtime.refresh_harnesses();
         let app = Arc::new(Self {
+            plugin_runtime,
             browser,
             token: options.token,
             data_dir: options.data_dir,
