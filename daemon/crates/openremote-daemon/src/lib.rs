@@ -14,6 +14,7 @@ pub mod marketplace;
 pub mod mcp_chat;
 pub mod plugins;
 pub mod registry;
+pub mod shutdown;
 pub mod signin;
 pub mod supervisor;
 pub mod sync;

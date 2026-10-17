@@ -2,8 +2,8 @@
 //!
 //! - `openremote-daemon`: the desktop app's sidecar. Prints
 //!   `READY 127.0.0.1:<port>` on stdout when it is listening (all logs go to
-//!   stderr) and exits when stdin closes - the desktop shell owns its
-//!   lifetime.
+//!   stderr) and exits when stdin closes or the app that started it is
+//!   gone - the desktop shell owns its lifetime.
 //! - `openremote-daemon agent`: a machine's long-running service (systemd
 //!   runs it). No stdin watchdog; exits 78 when this computer isn't in
 //!   OpenRemote Cloud, so the service manager stops retrying.
@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use openremote_cloud::{Cloud, CloudConfig};
 use openremote_daemon::app::{self, App, AppOptions};
+use openremote_daemon::shutdown;
 
 /// sysexits' EX_CONFIG: not enrolled, and retrying won't change that.
 const NOT_ENROLLED: u8 = 78;
@@ -68,6 +69,11 @@ async fn serve(agent: bool) -> ExitCode {
         return ExitCode::from(NOT_ENROLLED);
     }
     let token = app::load_or_create_token(&data_dir).expect("token");
+    // Before the first child starts (the registry probe below): every
+    // process this daemon starts ends with it, and none of them holds the
+    // daemon's own pipes (shutdown.rs says why).
+    shutdown::hold_children();
+    shutdown::keep_pipes_private();
     // Bind and announce BEFORE the app assembles: the registry probe
     // spawns each harness's `--version` (bounded), and the shell should
     // know the address long before that finishes. The listener's
@@ -104,9 +110,7 @@ async fn serve(agent: bool) -> ExitCode {
         let app = Arc::clone(&app);
         tokio::spawn(async move {
             shutdown_signal().await;
-            eprintln!("openremote-daemon: stopping");
-            app.supervisor.shutdown_all().await;
-            std::process::exit(0);
+            shutdown::leave(app, "stopping").await;
         });
     } else {
         // The app's sidecar: the app's browser talks to us over these same
@@ -116,6 +120,9 @@ async fn serve(agent: bool) -> ExitCode {
         // The sidecar watchdog: when the shell dies, our stdin closes, and
         // the daemon must not outlive its owner. Same sweep for the same
         // reason - the children belong to this process, not to the shell.
+        // The shell's process is watched too, in case a pipe end ever
+        // outlives it.
+        shutdown::watch_parent(Arc::clone(&app));
         let app = Arc::clone(&app);
         tokio::spawn(async move {
             use tokio::io::AsyncBufReadExt;
@@ -132,10 +139,7 @@ async fn serve(agent: bool) -> ExitCode {
                     Ok(None) | Err(_) => break,
                 }
             }
-            eprintln!("openremote-daemon: stdin closed, exiting");
-            app.browser.disconnect();
-            app.supervisor.shutdown_all().await;
-            std::process::exit(0);
+            shutdown::leave(app, "stdin closed").await;
         });
     }
 

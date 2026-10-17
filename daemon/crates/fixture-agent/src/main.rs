@@ -27,6 +27,7 @@ mod codex;
 mod grok;
 mod opencode;
 mod pi;
+mod sidecar;
 
 use std::io::{BufRead, Write};
 
@@ -52,6 +53,11 @@ fn main() {
         let version =
             std::env::var("FIXTURE_AGENT_VERSION").unwrap_or_else(|_| "9.9.9".to_string());
         println!("fixture-agent {version}");
+        return;
+    }
+    // Not a harness: the desktop app's side of the daemon sidecar.
+    if argv.first().is_some_and(|a| a == "sidecar-host") {
+        sidecar::main_sidecar_host(&argv);
         return;
     }
     if argv.iter().any(|a| a == "app-server") {
