@@ -96,6 +96,21 @@ pub struct SpawnOptions {
     /// (OpenRemote's browser tools that only read: claude
     /// `--allowedTools`). A harness that asks for nothing ignores it.
     pub allowed_tools: Vec<String>,
+    /// Environment the harness process starts with on top of the
+    /// daemon's own: how a chat runs under one of several accounts
+    /// (claude `CLAUDE_CONFIG_DIR`, codex `CODEX_HOME`, each pointing at
+    /// that account's own folder). Empty for the harness's default
+    /// account, which keeps its normal home.
+    pub env: Vec<(String, std::ffi::OsString)>,
+}
+
+/// Put an account's environment on a harness command. One helper so
+/// every driver, the sign-in relay and the status probes apply it the
+/// same way.
+pub fn apply_env(command: &mut tokio::process::Command, env: &[(String, std::ffi::OsString)]) {
+    for (key, value) in env {
+        command.env(key, value);
+    }
 }
 
 /// One MCP server a session should start, from an enabled plugin on the
