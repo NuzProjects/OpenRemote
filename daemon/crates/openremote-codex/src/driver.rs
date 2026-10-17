@@ -26,6 +26,18 @@ use uuid::Uuid;
 /// word for "ask me before running things".
 const DEFAULT_APPROVAL_POLICY: &str = "on-request";
 const DEFAULT_SANDBOX: &str = "workspace-write";
+/// The sandbox that goes with never asking: Codex's own Full Access pairs
+/// the `never` policy with no sandbox, and OpenRemote's Full access rung
+/// is that pairing. Every other policy keeps the workspace sandbox.
+const FULL_ACCESS_SANDBOX: &str = "danger-full-access";
+
+/// The sandbox a thread starts with, read from its approval word.
+fn sandbox_for(approval: Option<&str>) -> &'static str {
+    match approval {
+        Some("never") => FULL_ACCESS_SANDBOX,
+        _ => DEFAULT_SANDBOX,
+    }
+}
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -733,7 +745,7 @@ fn thread_params(opts: &SpawnOptions) -> Value {
     let mut params = json!({
         "cwd": opts.cwd,
         "approvalPolicy": opts.permission_mode.clone().unwrap_or_else(|| DEFAULT_APPROVAL_POLICY.to_string()),
-        "sandbox": DEFAULT_SANDBOX,
+        "sandbox": sandbox_for(opts.permission_mode.as_deref()),
         "ephemeral": false,
     });
     if let Some(model) = &opts.model {
@@ -1086,6 +1098,14 @@ mod tests {
         };
         let params = thread_params(&opts);
         assert_eq!(params["approvalPolicy"].as_str(), Some("never"));
+        // never asking is codex's Full Access: the sandbox lifts with it
+        assert_eq!(params["sandbox"].as_str(), Some("danger-full-access"));
+        let asking = SpawnOptions {
+            cwd: PathBuf::from("/w"),
+            permission_mode: Some("untrusted".into()),
+            ..Default::default()
+        };
+        assert_eq!(thread_params(&asking)["sandbox"].as_str(), Some("workspace-write"));
     }
 
     #[test]

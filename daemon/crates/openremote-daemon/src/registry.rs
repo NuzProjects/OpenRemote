@@ -343,8 +343,12 @@ fn harness_from(id: &str, name: &str, resolution: &Resolution, version: Option<&
         signed_in: None,
         default_model: None,
         default_effort: None,
-        permission_modes: permission_modes(id).iter().map(|s| s.to_string()).collect(),
-        default_permission: default_permission(id).map(String::from),
+        // The permission ladder (ladder.rs) is the one table: the rungs
+        // this harness offers, and the words older consoles still offer.
+        permission_modes: crate::ladder::legacy_words(id, version),
+        default_permission: crate::ladder::legacy_default(id, version),
+        permission_ladder: crate::ladder::offer_list(id, version),
+        default_rung: crate::ladder::default_rung(id).map(|r| r.id().to_string()),
     }
 }
 
@@ -537,40 +541,6 @@ fn fast_supported(id: &str, version: Option<&str>) -> bool {
     }
 }
 
-/// The permission words each harness's own CLI takes, in its spelling -
-/// terminology parity: claude `--permission-mode default …`, codex
-/// `approvalPolicy untrusted …` (the app-server's thread words), grok
-/// `--permission-mode` (the six its own docs name). Agy, pi, and opencode
-/// have no enumerable words their drivers pass - empty, so the console
-/// renders no picker for them.
-fn permission_modes(id: &str) -> &'static [&'static str] {
-    match id {
-        "claude" => &["default", "acceptEdits", "bypassPermissions", "plan"],
-        "codex" => &["untrusted", "on-failure", "on-request", "never"],
-        "grok" => &[
-            "default",
-            "acceptEdits",
-            "auto",
-            "dontAsk",
-            "bypassPermissions",
-            "plan",
-        ],
-        _ => &[],
-    }
-}
-
-/// The word the harness runs when nothing is picked - its own default,
-/// not ours: claude and grok run `default`, codex's app-server thread
-/// starts `on-request`. `None` where the harness has no words at all.
-fn default_permission(id: &str) -> Option<&'static str> {
-    match id {
-        "claude" => Some("default"),
-        "codex" => Some("on-request"),
-        "grok" => Some("default"),
-        _ => None,
-    }
-}
-
 /// The first `d.d.d` run in a CLI's `--version` output, whatever else it
 /// prints (`2.1.287 (Claude Code)`, `codex-cli 0.160.0`, …).
 fn parse_version(text: &str) -> Option<String> {
@@ -589,7 +559,7 @@ fn parse_version(text: &str) -> Option<String> {
 }
 
 /// Lexicographic `d.d.d` compare, shorter versions padded with zeros.
-fn version_at_least(version: &str, min: (u64, u64, u64)) -> bool {
+pub(crate) fn version_at_least(version: &str, min: (u64, u64, u64)) -> bool {
     let parts: Vec<u64> = version
         .split('.')
         .map(|p| p.parse::<u64>().unwrap_or(0))
@@ -777,45 +747,41 @@ mod tests {
     }
 
     #[test]
-    fn permission_words_come_from_each_harnesss_own_vocab() {
-        // claude's own --permission-mode words
-        assert_eq!(
-            permission_modes("claude"),
-            &["default", "acceptEdits", "bypassPermissions", "plan"]
+    fn the_harness_row_carries_the_ladder_and_the_older_consoles_words() {
+        let claude = harness_from(
+            "claude",
+            "Claude Code",
+            &Resolution::Unavailable,
+            Some("2.1.300"),
         );
-        assert_eq!(default_permission("claude"), Some("default"));
-        // codex's own approvalPolicy words - the app-server's thread
-        // vocabulary, `on-request` its default
+        // claude's own --permission-mode words, in the ladder's order;
+        // 2.1.300 spells asking first `manual`
         assert_eq!(
-            permission_modes("codex"),
-            &["untrusted", "on-failure", "on-request", "never"]
+            claude.permission_modes,
+            ["plan", "manual", "acceptEdits", "auto", "bypassPermissions"]
         );
-        assert_eq!(default_permission("codex"), Some("on-request"));
-        // grok's own --permission-mode words, as its docs spell them
+        assert_eq!(claude.default_permission.as_deref(), Some("manual"));
         assert_eq!(
-            permission_modes("grok"),
-            &[
-                "default",
-                "acceptEdits",
-                "auto",
-                "dontAsk",
-                "bypassPermissions",
-                "plan"
-            ]
+            claude
+                .permission_ladder
+                .iter()
+                .map(|r| r.id.as_str())
+                .collect::<Vec<_>>(),
+            ["plan", "ask", "edits", "auto", "full"]
         );
-        assert_eq!(default_permission("grok"), Some("default"));
-        // the drivers pass no flag the others would read: no words, no
-        // default, no picker in the console
-        for id in ["pi", "opencode", "agy"] {
-            assert!(permission_modes(id).is_empty(), "{id} has no words");
-            assert_eq!(default_permission(id), None);
-        }
+        assert_eq!(claude.default_rung.as_deref(), Some("ask"));
+        // pi has no permission setting: no ladder, no words, no picker
+        let pi = harness_from("pi", "Pi Agent", &Resolution::Unavailable, None);
+        assert!(pi.permission_ladder.is_empty());
+        assert!(pi.permission_modes.is_empty());
+        assert_eq!(pi.default_rung, None);
         // every default must be one of its own words - a default outside
         // the vocabulary would be a picker that can't render it
         for id in ["claude", "codex", "grok"] {
-            let default = default_permission(id).expect("words but no default");
+            let row = harness_from(id, id, &Resolution::Unavailable, None);
+            let default = row.default_permission.expect("words but no default");
             assert!(
-                permission_modes(id).contains(&default),
+                row.permission_modes.contains(&default),
                 "{id}'s default {default} is not one of its words"
             );
         }

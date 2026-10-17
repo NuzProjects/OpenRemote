@@ -10,6 +10,7 @@ pub mod fsdirs;
 pub mod host;
 pub mod http;
 pub mod install;
+pub mod ladder;
 pub mod marketplace;
 pub mod mcp_chat;
 pub mod plugins;

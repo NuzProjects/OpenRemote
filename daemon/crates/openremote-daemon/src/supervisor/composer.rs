@@ -530,6 +530,24 @@ fn build_view(
 /// Past the limit the oldest part is cut - the end of a chat is the part
 /// an agent pointed at it most likely needs.
 fn condensed(chat: &Session, events: &[Event]) -> String {
+    let body = keep_end(transcript(events), READ_LIMIT);
+    format!(
+        "Chat \"{}\" ({}{}), id {}\n{}",
+        chat.title.as_deref().unwrap_or("untitled"),
+        chat.harness,
+        chat.model
+            .as_deref()
+            .map(|m| format!(", {m}"))
+            .unwrap_or_default(),
+        chat.id,
+        body
+    )
+}
+
+/// A chat's messages in order, each tool call a one-line note, and a line
+/// where the chat moved from one harness to another. Shared by the
+/// read-a-chat tool and the hand-over a harness switch seeds.
+pub(super) fn transcript(events: &[Event]) -> String {
     let mut body = String::new();
     for event in events {
         match &event.payload {
@@ -543,27 +561,26 @@ fn condensed(chat: &Session, events: &[Event]) -> String {
             EventPayload::ToolStarted { name, .. } => {
                 body.push_str(&format!("[tool: {name}]\n"));
             }
+            EventPayload::HarnessSwitched { from, to } => {
+                body.push_str(&format!("\n[the chat moved from {from} to {to} here]\n"));
+            }
             _ => {}
         }
     }
-    if body.len() > READ_LIMIT {
-        let mut cut = body.len() - READ_LIMIT;
-        while !body.is_char_boundary(cut) {
-            cut += 1;
-        }
-        body = format!("[earlier messages cut]\n{}", &body[cut..]);
+    body
+}
+
+/// At most `limit` bytes of a transcript, its end kept - the end of a chat
+/// is the part a reader most likely needs.
+pub(super) fn keep_end(body: String, limit: usize) -> String {
+    if body.len() <= limit {
+        return body;
     }
-    format!(
-        "Chat \"{}\" ({}{}), id {}\n{}",
-        chat.title.as_deref().unwrap_or("untitled"),
-        chat.harness,
-        chat.model
-            .as_deref()
-            .map(|m| format!(", {m}"))
-            .unwrap_or_default(),
-        chat.id,
-        body
-    )
+    let mut cut = body.len() - limit;
+    while !body.is_char_boundary(cut) {
+        cut += 1;
+    }
+    format!("[earlier messages cut]\n{}", &body[cut..])
 }
 
 #[cfg(test)]

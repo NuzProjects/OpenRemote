@@ -592,7 +592,10 @@ impl Store {
     /// Record a live model, effort, or fast change. A `None` field is left
     /// as it was; fast is only written when the caller changed it.
     /// Permission is start-time everywhere - the write lands on the next
-    /// resume, never on a live process.
+    /// resume, never on a live process. The rung and the harness's word
+    /// for it move together: `permission` names the rung, and
+    /// `permission_mode` is that harness's word (None where the harness
+    /// has no setting for it).
     #[allow(clippy::too_many_arguments)]
     pub fn update_session_settings(
         &mut self,
@@ -601,6 +604,7 @@ impl Store {
         effort: Option<String>,
         fast: Option<bool>,
         permission_mode: Option<String>,
+        permission: Option<String>,
     ) -> Result<Session, StoreError> {
         let session = self
             .state
@@ -616,13 +620,32 @@ impl Store {
         if let Some(fast) = fast {
             session.fast = fast;
         }
-        if permission_mode.is_some() {
+        if permission.is_some() {
+            session.permission = permission;
+            session.permission_mode = permission_mode;
+        } else if permission_mode.is_some() {
             session.permission_mode = permission_mode;
         }
         session.updated_at = crate::now_ms();
         let updated = session.clone();
         self.persist()?;
         Ok(updated)
+    }
+
+    /// Whether the chat's next message carries the conversation so far to
+    /// a harness it just moved to. Set by a harness switch, cleared once
+    /// that message reached the new harness. Not history - no event.
+    pub fn set_seed_pending(&mut self, id: &SessionId, pending: bool) -> Result<(), StoreError> {
+        let session = self
+            .state
+            .sessions
+            .get_mut(id)
+            .ok_or_else(|| StoreError::NotFound(format!("session {id}")))?;
+        if session.seed_pending != pending {
+            session.seed_pending = pending;
+            self.persist()?;
+        }
+        Ok(())
     }
 
     pub fn decisions(&self, session_id: &SessionId) -> Vec<&Decision> {
@@ -1119,16 +1142,18 @@ impl Store {
     }
 
     /// Session metadata from the harness (`init` frame): its conversation
-    /// id for resume, and the model / permission mode it actually runs.
-    /// Metadata, not history - nothing here is an event. Returns whether
-    /// anything the console renders actually changed (a same-model repeat
-    /// init is not a change).
+    /// id for resume, and the model / permission mode it actually runs -
+    /// the harness's own word, and the ladder rung that word stands for
+    /// when the caller could read one. Metadata, not history - nothing
+    /// here is an event. Returns whether anything the console renders
+    /// actually changed (a same-model repeat init is not a change).
     pub fn note_session(
         &mut self,
         session_id: &SessionId,
         harness_ref: Option<String>,
         model: Option<String>,
         permission_mode: Option<String>,
+        permission: Option<String>,
     ) -> Result<bool, StoreError> {
         let session = self
             .state
@@ -1151,6 +1176,12 @@ impl Store {
         if let Some(p) = permission_mode {
             if session.permission_mode.as_deref() != Some(p.as_str()) {
                 session.permission_mode = Some(p);
+                changed = true;
+            }
+        }
+        if let Some(rung) = permission {
+            if session.permission.as_deref() != Some(rung.as_str()) {
+                session.permission = Some(rung);
                 changed = true;
             }
         }
@@ -1623,7 +1654,8 @@ impl Store {
             | EventPayload::ReasoningDelta { .. }
             | EventPayload::ThinkingTokens { .. }
             | EventPayload::NoteAdded { .. }
-            | EventPayload::DaemonError { .. } => {
+            | EventPayload::DaemonError { .. }
+            | EventPayload::HarnessSwitched { .. } => {
                 if let Some(session) = self.state.sessions.get_mut(&event.session_id) {
                     session.updated_at = now;
                 }
@@ -1661,6 +1693,8 @@ mod tests {
             model: None,
             effort: None,
             permission_mode: None,
+            permission: None,
+            seed_pending: false,
             harness_session_ref: None,
             created_at: 0,
             updated_at: 0,

@@ -176,6 +176,12 @@ async fn spawn_serve(
     opts: SpawnOptions,
 ) -> Result<(Driver, mpsc::Receiver<DriverEvent>), DriverError> {
     let password = Uuid::new_v4().to_string();
+    // The chat's permission rung is OpenCode's own permission config,
+    // which it reads from this variable at start and merges over the
+    // user's - the chat's choice wins for this chat only.
+    if let Some(permission) = &opts.permission_mode {
+        command.env("OPENCODE_PERMISSION", permission);
+    }
     command
         .args(["serve", "--port", "0", "--hostname", "127.0.0.1"])
         .env("OPENCODE_SERVER_PASSWORD", &password)

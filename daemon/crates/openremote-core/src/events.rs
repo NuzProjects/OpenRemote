@@ -104,6 +104,12 @@ pub enum EventPayload {
         queue: Vec<QueuedMessage>,
         paused: bool,
     },
+    /// The chat moved to another harness: it stays one thread, and this
+    /// marks where the new harness took over. The session's new facts
+    /// ride the `session.updated` beside it; a device that predates the
+    /// switch keeps the event and skips it.
+    #[serde(rename = "harness.switched")]
+    HarnessSwitched { from: String, to: String },
 }
 
 impl Event {
@@ -129,6 +135,7 @@ impl Event {
             EventPayload::DecisionResponded { .. } => "decision.responded",
             EventPayload::DaemonError { .. } => "daemon.error",
             EventPayload::QueueChanged { .. } => "queue.changed",
+            EventPayload::HarnessSwitched { .. } => "harness.switched",
         }
     }
 }

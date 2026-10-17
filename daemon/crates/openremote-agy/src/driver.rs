@@ -94,9 +94,16 @@ impl Driver {
         if let Some(model) = &self.opts.model {
             command.arg("--model").arg(model);
         }
-        if let Some(mode) = &self.opts.permission_mode {
+        match self.opts.permission_mode.as_deref() {
+            // Never asking is its own flag in Antigravity, not a mode.
+            Some("dangerously-skip-permissions") => {
+                command.arg("--dangerously-skip-permissions");
+            }
             // Antigravity's own execution-mode words.
-            command.arg("--mode").arg(mode);
+            Some(mode) => {
+                command.arg("--mode").arg(mode);
+            }
+            None => {}
         }
         if let Some(conversation) = self.shared.conversation.lock().unwrap().clone() {
             command.arg("--conversation").arg(conversation);

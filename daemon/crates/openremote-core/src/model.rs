@@ -41,17 +41,35 @@ pub struct Harness {
     pub default_effort: Option<String>,
     /// The permission words the harness's own CLI takes (claude
     /// `--permission-mode`, codex `approvalPolicy`, grok
-    /// `--permission-mode`) - its vocabulary, so the console's picker
-    /// offers only what the harness understands. Empty where the
-    /// harness has no enumerable words (agy, pi, opencode): no picker,
-    /// no dead UI.
+    /// `--permission-mode`), for consoles that predate the permission
+    /// ladder: they offer these words and send them back, and the daemon
+    /// reads each as its rung. Empty for harnesses those consoles never
+    /// offered words for.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub permission_modes: Vec<String>,
-    /// The word the harness runs when none is picked - its own default
-    /// (claude `default`, codex `on-request`), `None` where the harness
-    /// has no words at all.
+    /// The word the harness runs when none is picked - its own default -
+    /// for the same older consoles.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_permission: Option<String>,
+    /// OpenRemote's permission ladder as this harness offers it, safest
+    /// first: each rung with the harness's own setting it stands for.
+    /// Empty where the harness has no permission setting at all (pi) -
+    /// it decides on its own, and no picker renders.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permission_ladder: Vec<RungOffer>,
+    /// The rung the harness runs when none is picked, where its own
+    /// default is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_rung: Option<String>,
+}
+
+/// One rung of the permission ladder on one harness: the rung's id
+/// (`plan`, `ask`, `edits`, `auto`, `full`) and the harness's own word for
+/// it, shown only as a hint - the ladder's words are what the UI says.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub struct RungOffer {
+    pub id: String,
+    pub word: String,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
@@ -96,8 +114,20 @@ pub struct Session {
     /// The harness's own effort word for this chat, when one was chosen.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    /// The harness's own word for the chat's permission rung - what the
+    /// harness is told at start. Derived from `permission`; kept on the
+    /// wire for devices that predate the ladder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<String>,
+    /// The chat's rung on OpenRemote's permission ladder (`plan`, `ask`,
+    /// `edits`, `auto`, `full`). None: nothing was picked, the harness's
+    /// own default holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission: Option<String>,
+    /// The chat moved to another harness and the new one hasn't had a
+    /// message yet: the next message carries the conversation so far.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub seed_pending: bool,
     /// The harness's own conversation id (`session_id` on the wire) - data, never identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness_session_ref: Option<String>,
@@ -443,9 +473,10 @@ pub struct AutomationRule {
     pub harness: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    /// The harness's own permission word the rule's chat opens with
-    /// (claude `--permission-mode`, codex `approvalPolicy`). Unset means
-    /// the harness's own default holds.
+    /// The permission rung the rule's chat opens with (`ask`, `edits`,
+    /// ...). Rules saved before the ladder hold the harness's own word
+    /// here (claude `acceptEdits`, codex `never`); the chat reads either.
+    /// Unset means the harness's own default holds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<String>,
     /// The chat's workspace - absolute, validated at save time.

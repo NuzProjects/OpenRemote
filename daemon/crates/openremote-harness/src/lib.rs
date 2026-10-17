@@ -67,9 +67,10 @@ pub fn creation_flags() -> u32 {
 pub struct SpawnOptions {
     pub cwd: PathBuf,
     pub model: Option<String>,
-    /// The harness's own permission/approval policy word, passed verbatim
-    /// (terminology parity: claude `--permission-mode`, codex
-    /// `approvalPolicy`, grok `--permission-mode`, …).
+    /// The harness's own word for the chat's permission rung (the daemon's
+    /// ladder picks it): claude and grok `--permission-mode`, codex
+    /// `approvalPolicy` (its sandbox follows from it), Antigravity `--mode`
+    /// or its skip-permissions flag, OpenCode's permission config.
     pub permission_mode: Option<String>,
     /// The chat's effort in the harness's own word, set at every start -
     /// the first spawn and each resume (claude `--effort`, codex
