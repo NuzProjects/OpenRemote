@@ -11,7 +11,9 @@
 //! A daemon with no app around it (one started by hand, or a machine's
 //! service) has no browser, and its tools say so.
 
+pub mod keystore;
 pub mod routes;
+pub mod seal;
 pub mod store;
 pub mod tools;
 

@@ -2826,9 +2826,11 @@ version = "0.3.2"
 dependencies = [
  "axum",
  "base64 0.22.1",
+ "chacha20poly1305",
  "chrono",
  "flate2",
  "futures-util",
+ "getrandom 0.3.4",
  "libc",
  "openremote-agy",
  "openremote-browser",
@@ -2851,6 +2853,7 @@ dependencies = [
  "tower",
  "tower-http",
  "uuid",
+ "windows-sys 0.61.2",
  "zip",
 ]
 

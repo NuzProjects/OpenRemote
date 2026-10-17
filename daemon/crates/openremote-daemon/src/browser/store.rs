@@ -6,8 +6,13 @@
 //! one file per device, each operation stamped with a hybrid logical clock.
 //! The value of a key is the one with the latest stamp (deleting writes an
 //! empty value), so logs from several devices can be merged in any order and
-//! agree. Today only this device writes; syncing the profile between devices
-//! later is a matter of exchanging these operations.
+//! agree. Syncing the profile between the user's devices exchanges these
+//! operations (`profile`): this device's own stay in its log here, the
+//! others' arrive sealed and are merged in memory.
+//!
+//! Cookies and sites' storage are secrets (a cookie is a signed-in
+//! session), so their values are sealed in the log with this device's key,
+//! which the operating system's keystore holds (`keystore`).
 
 use std::collections::HashMap;
 use std::fs::OpenOptions;
@@ -17,12 +22,18 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use super::keystore::{self, DeviceKey};
+use super::seal;
+
 /// History older than this is dropped when the log is compacted (Chrome
 /// keeps 90 days too).
 const HISTORY_DAYS: i64 = 90;
 /// The log is rewritten with only what is still true once it holds this
 /// many superseded operations.
 const COMPACT_AFTER: usize = 20_000;
+/// Collections whose values are sealed in the log: a cookie is a signed-in
+/// session, and sites keep sign-ins in their storage too.
+pub const SEALED: &[&str] = &["cookie", "storage"];
 
 /// A hybrid logical clock stamp: wall-clock milliseconds, a counter for
 /// operations within one millisecond, and the device as the tie-break.
@@ -33,13 +44,41 @@ pub struct Stamp {
     pub dev: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct Op {
+impl Stamp {
+    /// The stamp as one short string (`ms.n.device`), for records that
+    /// only compare stamps.
+    pub fn short(&self) -> String {
+        format!("{}.{}.{}", self.ms, self.n, self.dev)
+    }
+}
+
+/// One write: a key of a collection set to a value (null deletes it).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Op {
+    pub at: Stamp,
+    pub col: String,
+    pub key: String,
+    #[serde(default)]
+    pub val: Value,
+}
+
+/// An operation as a line of the log: the value sealed with this device's
+/// key for the collections that hold secrets.
+#[derive(Serialize, Deserialize)]
+struct Line {
     at: Stamp,
     col: String,
     key: String,
     #[serde(default)]
     val: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sealed: Option<String>,
+}
+
+/// What a sealed value is bound to: its slot, so it can't be moved to
+/// another one.
+fn rest_place(col: &str, key: &str) -> Vec<u8> {
+    format!("rest\u{1f}{col}\u{1f}{key}").into_bytes()
 }
 
 /// One page in history.
@@ -99,6 +138,14 @@ pub struct BrowserStore {
     /// (collection, key) -> the latest operation's stamp and value.
     state: HashMap<(String, String), (Stamp, Value)>,
     ops_written: usize,
+    /// This device's key for sealed values, fetched from the keystore the
+    /// first time one is read or written (a machine without a browser never
+    /// needs it).
+    key: Option<DeviceKey>,
+    /// This device's operations since the profile's sync last took them,
+    /// kept only while it takes them.
+    fresh: Vec<Op>,
+    collecting: bool,
 }
 
 impl BrowserStore {
@@ -117,9 +164,75 @@ impl BrowserStore {
             device,
             state: HashMap::new(),
             ops_written: 0,
+            key: None,
+            fresh: Vec::new(),
+            collecting: false,
         };
         store.load();
         store
+    }
+
+    /// This device's id in the browser's logs.
+    pub fn device(&self) -> &str {
+        &self.device
+    }
+
+    /// The folder the browser's data lives in.
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    /// This device's key for what rests sealed on its disk.
+    pub fn device_key(&mut self) -> [u8; 32] {
+        if self.key.is_none() {
+            self.key = Some(keystore::device_key(&self.dir));
+        }
+        self.key.as_ref().map(|k| k.key).unwrap_or_default()
+    }
+
+    /// What holds this device's key, once it was needed.
+    pub fn key_holder(&self) -> Option<&'static str> {
+        self.key.as_ref().map(|k| k.held_by)
+    }
+
+    fn line_for(&mut self, op: &Op) -> String {
+        let sealed = (SEALED.contains(&op.col.as_str()) && !op.val.is_null()).then(|| {
+            let key = self.device_key();
+            seal::seal(&key, &rest_place(&op.col, &op.key), op.val.to_string().as_bytes())
+        });
+        let line = Line {
+            at: op.at.clone(),
+            col: op.col.clone(),
+            key: op.key.clone(),
+            val: if sealed.is_some() {
+                Value::Null
+            } else {
+                op.val.clone()
+            },
+            sealed,
+        };
+        serde_json::to_string(&line).expect("an op serializes")
+    }
+
+    fn op_from(&mut self, line: Line) -> Option<Op> {
+        let val = match line.sealed {
+            Some(sealed) => {
+                let key = self.device_key();
+                // A value sealed under another key (the folder came from
+                // another computer, or the keystore lost the key) can't be
+                // read here: it is skipped, and the user's other devices
+                // send it again.
+                let plain = seal::open(&key, &rest_place(&line.col, &line.key), &sealed)?;
+                serde_json::from_slice(&plain).ok()?
+            }
+            None => line.val,
+        };
+        Some(Op {
+            at: line.at,
+            col: line.col,
+            key: line.key,
+            val,
+        })
     }
 
     fn log_path(&self, device: &str) -> PathBuf {
@@ -140,17 +253,21 @@ impl BrowserStore {
             };
             for line in BufReader::new(file).lines().map_while(Result::ok) {
                 // A line cut short by a crash is skipped, not fatal.
-                if let Ok(op) = serde_json::from_str::<Op>(&line) {
-                    if op.at.dev == self.device {
-                        self.ops_written += 1;
-                    }
+                let Ok(line) = serde_json::from_str::<Line>(&line) else {
+                    continue;
+                };
+                if line.at.dev == self.device {
+                    self.ops_written += 1;
+                }
+                if let Some(op) = self.op_from(line) {
                     self.apply(op);
                 }
             }
         }
     }
 
-    fn apply(&mut self, op: Op) {
+    /// Takes an operation in; true when it is now the key's value.
+    fn apply(&mut self, op: Op) -> bool {
         if op.at > self.last {
             self.last = Stamp {
                 ms: op.at.ms,
@@ -160,11 +277,71 @@ impl BrowserStore {
         }
         let slot = (op.col, op.key);
         match self.state.get(&slot) {
-            Some((at, _)) if *at >= op.at => {}
+            Some((at, _)) if *at >= op.at => false,
             _ => {
                 self.state.insert(slot, (op.at, op.val));
+                true
             }
         }
+    }
+
+    /// Another device's operation, arrived through the profile's sync: kept
+    /// in memory only (its sealed copy stays in that device's log here).
+    /// True when it changed the key's value.
+    pub fn merge(&mut self, op: Op) -> bool {
+        if op.at.dev == self.device {
+            // This device's own operations come from its own log alone.
+            return false;
+        }
+        self.apply(op)
+    }
+
+    /// Starts or stops keeping this device's new operations for the
+    /// profile's sync.
+    pub fn collect(&mut self, on: bool) {
+        self.collecting = on;
+        if !on {
+            self.fresh.clear();
+        }
+    }
+
+    /// This device's operations since the last take.
+    pub fn take_fresh(&mut self) -> Vec<Op> {
+        std::mem::take(&mut self.fresh)
+    }
+
+    /// A key's latest operation, a deletion included.
+    pub fn entry(&self, col: &str, key: &str) -> Option<(&Stamp, &Value)> {
+        self.state
+            .get(&(col.to_string(), key.to_string()))
+            .map(|(at, val)| (at, val))
+    }
+
+    /// Every key of a collection with its latest operation, deletions
+    /// included.
+    pub fn entries<'a>(
+        &'a self,
+        col: &'a str,
+    ) -> impl Iterator<Item = (&'a str, &'a Stamp, &'a Value)> + 'a {
+        self.state
+            .iter()
+            .filter(move |((c, _), _)| c == col)
+            .map(|((_, k), (at, val))| (k.as_str(), at, val))
+    }
+
+    /// Everything this device wrote that is still true (deletions
+    /// included): what a fresh start of its synced log carries.
+    pub fn own_ops(&self) -> Vec<Op> {
+        self.state
+            .iter()
+            .filter(|(_, (at, _))| at.dev == self.device)
+            .map(|((col, key), (at, val))| Op {
+                at: at.clone(),
+                col: col.clone(),
+                key: key.clone(),
+                val: val.clone(),
+            })
+            .collect()
     }
 
     fn stamp(&mut self, now: i64) -> Stamp {
@@ -185,24 +362,30 @@ impl BrowserStore {
         stamp
     }
 
-    /// Writes one key (an empty value deletes it).
-    pub fn put(&mut self, col: &str, key: &str, val: Value) {
+    /// Writes one key (an empty value deletes it); answers the write's
+    /// stamp.
+    pub fn put(&mut self, col: &str, key: &str, val: Value) -> Stamp {
         let op = Op {
             at: self.stamp(openremote_core::now_ms()),
             col: col.into(),
             key: key.into(),
             val,
         };
-        let line = serde_json::to_string(&op).expect("an op serializes");
+        let line = self.line_for(&op);
         let path = self.log_path(&self.device);
         if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
             let _ = writeln!(file, "{line}");
         }
         self.ops_written += 1;
+        let stamp = op.at.clone();
+        if self.collecting {
+            self.fresh.push(op.clone());
+        }
         self.apply(op);
         if self.ops_written > self.live_count() + COMPACT_AFTER {
             self.compact();
         }
+        stamp
     }
 
     fn live_count(&self) -> usize {
@@ -232,17 +415,8 @@ impl BrowserStore {
         });
         let mut lines = String::new();
         let mut kept = 0;
-        for ((col, key), (at, val)) in &self.state {
-            if at.dev != self.device {
-                continue;
-            }
-            let op = Op {
-                at: at.clone(),
-                col: col.clone(),
-                key: key.clone(),
-                val: val.clone(),
-            };
-            lines.push_str(&serde_json::to_string(&op).expect("an op serializes"));
+        for op in self.own_ops() {
+            lines.push_str(&self.line_for(&op));
             lines.push('\n');
             kept += 1;
         }
