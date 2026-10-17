@@ -136,6 +136,14 @@ struct State {
     this_device: Option<DeviceId>,
     #[serde(default)]
     tombstones: BTreeMap<SessionId, Tombstone>,
+    /// The synced chats this device agreed to take over from the device
+    /// running them (Move to another machine). A hand-over arriving from a
+    /// peer makes this device a chat's runner only when the chat is listed
+    /// here, so a device never starts writing a log it didn't ask for - a
+    /// copy rebuilt from an old range, say, that passes a hand-over to
+    /// this device on its way to a later one.
+    #[serde(default)]
+    handoffs: BTreeMap<SessionId, DeviceId>,
 }
 
 pub struct Store {
@@ -1249,16 +1257,18 @@ impl Store {
         Ok(events)
     }
 
-    /// Extend this device's copy of a chat that runs on `runner` with
-    /// events from its log, verbatim. They must continue the copy exactly:
-    /// duplicates are skipped, a gap stops the append and is reported so the
-    /// caller pulls the missing range. Event types this build doesn't know
-    /// are kept as they are and skipped by state, so an older device never
-    /// stalls a newer one.
+    /// Extend this device's copy of a chat with events from its log,
+    /// verbatim, as a peer that says the chat runs on `runner` sent them.
+    /// They must continue the copy exactly: duplicates are skipped, a gap
+    /// stops the append and is reported so the caller pulls the missing
+    /// range. Event types this build doesn't know are kept as they are and
+    /// skipped by state, so an older device never stalls a newer one.
     ///
     /// A chat that started private and was synced later opens with a
     /// `session.created` that names no runner; the copy takes `runner` from
     /// its first event, so it is never mistaken for a private chat here.
+    /// From then on the log names the runner: a chat moved to another
+    /// machine carries the hand-over in its log, and the copy follows it.
     pub fn append_replicated(
         &mut self,
         session_id: SessionId,
@@ -1275,10 +1285,16 @@ impl Store {
                 "chat {session_id} was deleted"
             )));
         }
+        // The runner's own log is the source: it never takes a copy. Which
+        // device a peer names as the runner may be ahead of this copy or
+        // behind it - a chat handed to another machine names its new runner
+        // only from the hand-over on - so the log itself says who runs the
+        // chat, event by event, and a copy grows from whichever peer holds
+        // more of it. Every log stays a prefix of the current runner's.
         if let Some(session) = self.state.sessions.get(&session_id) {
-            if self.executes_here(session) || session.executor != Some(runner) {
+            if self.executes_here(session) {
                 return Err(StoreError::Conflict(format!(
-                    "chat {session_id} runs on another device"
+                    "chat {session_id} runs on this device"
                 )));
             }
         }
@@ -1309,13 +1325,40 @@ impl Store {
                             "a copy starts with session.created, and only there".into(),
                         ));
                     }
-                    if let EventPayload::SessionCreated { session } = &mut event.payload {
-                        if session.executor.is_some_and(|e| e != runner) {
-                            return Err(StoreError::BadState(
-                                "a replicated chat names another runner".into(),
-                            ));
+                    match &mut event.payload {
+                        // The device that created the chat runs it until a
+                        // hand-over says otherwise, so a named creator
+                        // stands even when the chat runs elsewhere now. One
+                        // that names none was synced after it started: the
+                        // copy names the device it was pulled for until the
+                        // sync itself names the runner. A copy never names
+                        // this device - it doesn't run what it copies.
+                        EventPayload::SessionCreated { session } => {
+                            if session.executor.is_none()
+                                || session.executor == self.state.this_device
+                            {
+                                session.executor = Some(runner);
+                            }
                         }
-                        session.executor = Some(runner);
+                        // A hand-over names the chat's new runner. This
+                        // device becomes it only when it agreed to take the
+                        // chat; otherwise the copy keeps the runner it had
+                        // (the log line itself stays verbatim).
+                        EventPayload::SessionUpdated { session } => {
+                            let current = self
+                                .state
+                                .sessions
+                                .get(&session_id)
+                                .and_then(|s| s.executor);
+                            if session.executor.is_some()
+                                && session.executor == self.state.this_device
+                                && current != self.state.this_device
+                                && self.state.handoffs.remove(&session_id).is_none()
+                            {
+                                session.executor = current;
+                            }
+                        }
+                        _ => {}
                     }
                     self.apply(&event)?;
                 }
