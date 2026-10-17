@@ -1,0 +1,13 @@
+{
+  "name": "ssh",
+  "version": "0.1.0",
+  "description": "Your SSH hosts in OpenRemote's Machines tab, for your agents to run commands on and read and write files on, through your own ssh keys.",
+  "author": {
+    "name": "moreweb",
+    "url": "https://moreweb.space"
+  },
+  "homepage": "https://github.com/morewebs/OpenRemote/tree/main/examples/plugins/ssh",
+  "repository": "https://github.com/morewebs/OpenRemote",
+  "license": "AGPL-3.0-only",
+  "keywords": ["ssh", "vps", "servers", "remote", "openremote"]
+}

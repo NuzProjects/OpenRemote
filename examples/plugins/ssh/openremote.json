@@ -1,0 +1,92 @@
+{
+  "api": 1,
+  "name": "ssh",
+  "displayName": "SSH machines",
+  "version": "0.1.0",
+  "description": "Your VPS hosts in the Machines tab: servers that run no OpenRemote, which your agents can run commands on and read and write files on, through your own ssh keys. Keys only, never passwords, and host keys are checked by you.",
+  "runtime": "process",
+  "entry": {
+    "command": "node",
+    "args": ["${OPENREMOTE_PLUGIN_ROOT}/plugin.js"]
+  },
+  "powers": ["run_programs", "agent_tools"],
+  "contributes": {
+    "tools": [
+      {
+        "name": "ssh_hosts",
+        "description": "List the SSH hosts the user has set up for you: each one's name, address and whether its host key is verified. These are servers that run no OpenRemote and no agent of their own; you work on them only through the ssh_ tools, by the names this returns. A host that is not verified cannot be used until the user verifies it in Machines > SSH.",
+        "input_schema": {
+          "type": "object",
+          "properties": {}
+        },
+        "read_only": true,
+        "timeout_secs": 15
+      },
+      {
+        "name": "ssh_run",
+        "description": "Run a shell command on one of the user's SSH hosts. The command goes, as written, to the login shell of the account the user set up for that host, and the answer is its exit code, stdout and stderr, labelled. There is no terminal and nothing can be typed in, so use non-interactive flags (apt-get -y; no editors or pagers). It is cut off after timeout_s seconds (default 60, at most 300) and may keep running on the host. If the output is longer than 200,000 characters its end is kept. The user may be asked to approve the exact host and command first.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "host": { "type": "string", "description": "A host name from ssh_hosts." },
+            "command": { "type": "string", "description": "The shell command line to run, up to 12,000 characters. For a longer script, write it with ssh_write_file and run that." },
+            "timeout_s": { "type": "integer", "minimum": 1, "maximum": 300, "description": "Seconds before the command is cut off. Default 60, at most 300." }
+          },
+          "required": ["host", "command"]
+        },
+        "read_only": false,
+        "timeout_secs": 450
+      },
+      {
+        "name": "ssh_read_file",
+        "description": "Read a text file from one of the user's SSH hosts. Returns the start of the file, up to max_bytes (default 100,000, at most 200,000), and says when the file goes on. A leading ~ means the account's home folder. A binary file is refused: look at one with ssh_run (file, strings, xxd).",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "host": { "type": "string", "description": "A host name from ssh_hosts." },
+            "path": { "type": "string", "description": "The file's path on the host." },
+            "max_bytes": { "type": "integer", "minimum": 1, "maximum": 200000, "description": "How much of the start of the file to read. Default 100,000." }
+          },
+          "required": ["host", "path"]
+        },
+        "read_only": true,
+        "timeout_secs": 210
+      },
+      {
+        "name": "ssh_write_file",
+        "description": "Write a text file on one of the user's SSH hosts: it replaces the file, or with append adds to its end. content is written exactly as given (UTF-8), up to 2,000,000 bytes; the folder must already exist. A leading ~ means the account's home folder. No copy of an overwritten file is kept, so read it first when that matters. The user may be asked to approve the host and path first.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "host": { "type": "string", "description": "A host name from ssh_hosts." },
+            "path": { "type": "string", "description": "The file's path on the host." },
+            "content": { "type": "string", "description": "The text to write." },
+            "append": { "type": "boolean", "description": "Add to the end of the file instead of replacing it. Default false." }
+          },
+          "required": ["host", "path", "content"]
+        },
+        "read_only": false,
+        "timeout_secs": 270
+      }
+    ],
+    "views": [
+      {
+        "id": "hosts",
+        "title": "SSH",
+        "place": "machines",
+        "icon": "HardDrives",
+        "entry": "ui/ssh.html"
+      }
+    ],
+    "settings": [
+      {
+        "key": "ssh_path",
+        "type": "string",
+        "label": "Path to ssh",
+        "help": "Leave empty to use the ssh on this computer's PATH. Set it when ssh lives somewhere else, like C:\\Program Files\\Git\\usr\\bin\\ssh.exe.",
+        "default": "",
+        "placeholder": "ssh"
+      }
+    ]
+  }
+}
