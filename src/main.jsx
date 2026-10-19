@@ -19,5 +19,6 @@ openLinksOutside(document)
 createRoot(document.getElementById('root')).render(
   <StrictMode>
     <App />
+    <Splash />
   </StrictMode>,
 )
