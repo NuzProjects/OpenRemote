@@ -82,8 +82,8 @@
   border-radius: 0;
   background: transparent;
   color: var(--text-2);
-  font-family: 'Segoe MDL2 Assets', 'Segoe Fluent Icons', sans-serif;
-  font-size: 10px;
+  display: grid;
+  place-items: center;
   cursor: pointer;
 }
 
@@ -106,8 +106,8 @@
   color: #fff;
 }
 
-/* The caption glyphs drawn for systems without Segoe MDL2: hairline
-   strokes in the button's own colour, like the Windows ones. */
+/* The caption glyphs (TitleBar.jsx draws them on every system): hairline
+   strokes in the button's own colour, MDL2's own 10px shapes. */
 .tb-glyph {
   display: block;
   fill: none;

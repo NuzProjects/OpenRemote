@@ -9,9 +9,11 @@ import './titlebar.css'
 
 const hasTauri = typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__
 
-// Windows draws its caption glyphs from Segoe MDL2 (the contract). Other
-// systems don't have that font, so the same 10px shapes are drawn here.
-const MDL2 = typeof navigator !== 'undefined' && /Windows/.test(navigator.userAgent)
+// The caption glyphs are drawn, not taken from Segoe MDL2: on a real
+// Windows 10 box the font resolved U+E8E7 through fallback to mojibake
+// (an "A" with an accent) while E921/E8BB rendered fine — per-codepoint
+// font roulette no button should ride. The shapes below are MDL2's own
+// 10px geometry, so every system draws the same caption buttons.
 
 // macOS draws its own traffic lights over the bar's left end (the overlay
 // titlebar, tauri.macos.conf.json), so the bar leaves them room and has
@@ -156,17 +158,17 @@ export default function TitleBar({
       {!MAC && (
       <div className="tb-controls">
         <button className="tb-btn" onClick={action('minimize')} title="Minimize">
-          {MDL2 ? '\uE921' : <CaptionGlyph kind="minimize" />}
+          {<CaptionGlyph kind="minimize" />}
         </button>
         <button
           className="tb-btn"
           onClick={action('toggleMaximize')}
           title={maximized ? 'Restore' : 'Maximize'}
         >
-          {MDL2 ? (maximized ? '\uE923' : '\uE8E7') : <CaptionGlyph kind={maximized ? 'restore' : 'maximize'} />}
+          <CaptionGlyph kind={maximized ? 'restore' : 'maximize'} />
         </button>
         <button className="tb-btn tb-close" onClick={action('close')} title="Close">
-          {MDL2 ? '\uE8BB' : <CaptionGlyph kind="close" />}
+          <CaptionGlyph kind="close" />
         </button>
       </div>
       )}
