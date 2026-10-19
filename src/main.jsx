@@ -7,6 +7,7 @@ import '@fontsource/geist-mono/400.css'
 import 'katex/dist/katex.min.css'
 import './privacy.css'
 import App from './App.jsx'
+import Splash from './Splash.jsx'
 import { restoreBootPrefs } from './settings.js'
 import { openLinksOutside } from './platform.js'
 
