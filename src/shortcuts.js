@@ -57,6 +57,11 @@ export const ACTIONS = [
   { id: 'toggle-mode', group: 'layout', label: 'Switch Local and Cloud', keys: 'Mod+Shift+M' },
   { id: 'split-right', group: 'layout', label: 'Split right', keys: 'Mod+\\' },
   { id: 'split-down', group: 'layout', label: 'Split down', keys: 'Mod+Shift+\\' },
+  // The panes in reading order, the way VS Code numbers editor groups.
+  { id: 'focus-pane-1', group: 'layout', label: 'Focus the first pane', keys: 'Mod+1' },
+  { id: 'focus-pane-2', group: 'layout', label: 'Focus the second pane', keys: 'Mod+2' },
+  { id: 'focus-pane-3', group: 'layout', label: 'Focus the third pane', keys: 'Mod+3' },
+  { id: 'focus-pane-4', group: 'layout', label: 'Focus the fourth pane', keys: 'Mod+4' },
   { id: 'close-pane', group: 'layout', label: 'Close the pane', keys: 'Mod+W' },
 ]
 

@@ -33,7 +33,10 @@
 }
 
 /* the divider straddles the cell's trailing edge: a 1px line with a wider
-   hit area, so it is easy to grab without taking layout space */
+   hit area, so it is easy to grab without taking layout space. The line
+   itself is a hair brighter on hover and while dragging, and the whole
+   strip carries the resize cursor - the pointer says "drag me" before the
+   colour does. */
 .split-divider {
   position: absolute;
   z-index: 3;
@@ -60,6 +63,7 @@
   content: '';
   position: absolute;
   background: var(--line);
+  transition: background 120ms ease;
 }
 
 .split-node--row > .split-cell > .split-divider::after {
@@ -76,11 +80,13 @@
   height: 1px;
 }
 
-.split-divider:hover::after {
+.split-divider:hover::after,
+.split-divider:active::after {
   background: var(--accent);
 }
 
 .split-pane {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -93,11 +99,13 @@
   box-shadow: inset 0 0 0 1px rgba(220, 162, 75, 0.35);
 }
 
+/* The pane header, VS Code's editor-group bar: the pane's title on the
+   left, its actions on the right. 30px, --bg-side, one hairline under it. */
 .split-bar {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 6px;
   height: 30px;
   padding: 0 6px 0 12px;
   border-bottom: 1px solid var(--line);
@@ -108,14 +116,30 @@
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  color: var(--text-2);
+  color: var(--text-3);
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* A chat title is a thing you can drag to another pane's edge. */
+.split-label[draggable='true'] {
+  cursor: grab;
+}
+
+.split-label[draggable='true']:active {
+  cursor: grabbing;
+}
+
 .split-pane.focused .split-label {
   color: var(--text-1);
+}
+
+.split-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 1px;
 }
 
 .split-btn {
@@ -140,6 +164,10 @@
   cursor: default;
 }
 
+.split-glyph {
+  display: block;
+}
+
 .split-body {
   position: relative;
   flex: 1;
@@ -149,16 +177,49 @@
   min-height: 0;
 }
 
-/* a pane is narrower than the window: the chat's gutters tighten to match */
-.split-body .cv-head {
+/* Where a dragged chat would land: the half (or the whole pane, for the
+   middle) it is about to take, tinted in the accent and outlined, over the
+   content and under nothing. */
+.split-drop {
+  position: absolute;
+  z-index: 4;
+  pointer-events: none;
+  background: rgba(220, 162, 75, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(220, 162, 75, 0.55);
+}
+
+.split-drop--center {
+  inset: 0;
+}
+
+.split-drop--left {
+  inset: 0 50% 0 0;
+}
+
+.split-drop--right {
+  inset: 0 0 0 50%;
+}
+
+.split-drop--top {
+  inset: 0 0 50% 0;
+}
+
+.split-drop--bottom {
+  inset: 50% 0 0 0;
+}
+
+/* a pane is narrower than the window: the chat's gutters tighten to match,
+   but only once the window is actually split - a single pane keeps the
+   full-window spacing */
+.split-area.is-split .split-body .cv-head {
   padding: 14px 18px 12px;
 }
 
-.split-body .cv-thread {
+.split-area.is-split .split-body .cv-thread {
   padding-right: 18px;
   padding-left: 18px;
 }
 
-.split-body .cv-composer {
+.split-area.is-split .split-body .cv-composer {
   padding: 0 14px 14px;
 }

@@ -95,6 +95,33 @@ spacing.
   width stacks the search and a horizontal tab strip above the pane.
 - **Main canvas:** one view at a time; views are flat lists/cards, not
   dashboards.
+- **Panes (the split view), modelled on VS Code's editor groups:**
+  - One pane is the whole main area and carries no header. Two or more
+    panes each get a 30px header (`--bg-side`, one hairline under it): the
+    pane's title on the left, then on the right the split action and an
+    overflow that names every direction in words - "Split right", "Split
+    down", "Split left", "Split up", each with its shortcut - then close
+    on every pane but the primary. Direction is a word, never a bare
+    directional glyph: the one icon-only button is split right and wears
+    VS Code's split-editor shape (a page divided down the middle), which
+    the titlebar's split toggle shares.
+  - Five ways to split, in the order people find them: the titlebar's
+    split toggle at the bar's right end, `Ctrl+\` (right) and
+    `Ctrl+Shift+\` (down), a chat's context menu in the sidebar or main
+    area, and dragging a chat - from the sidebar or from another pane's
+    title - onto a pane. The middle of a pane opens the chat there; an
+    outer band splits that pane on that side, with the half it is about to
+    take tinted in the accent while the chat hovers. Panes are read-only
+    drop targets for foreign drags: only a chat payload acts.
+  - Focus moves with `Ctrl+1`..`Ctrl+4` in reading order; the focused pane
+    carries a hairline accent inset and a brighter title.
+  - Dividers are a 7px strip over a 1px line, with the resize cursor on
+    the strip; dragging reallocates the two neighbours (neither below 15%)
+    and double-clicking evens out that split's panes.
+  - Four panes is the most. Every split action disables and says so at the
+    cap, and a chat dropped on an edge at the cap opens in that pane
+    instead of doing nothing.
+  - A phone has no panes: one view, no headers.
 
 ## Components
 

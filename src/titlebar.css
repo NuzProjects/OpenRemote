@@ -144,11 +144,6 @@
   color: var(--text-1);
 }
 
-/* The split-editor glyph (VS Code's own shape): one page divided down
-   the middle, sized to sit beside the 15px Phosphor toggles. */
-.tb-split {
-  display: block;
-}
 
 /* macOS: the system's traffic lights sit over the bar's left end */
 .titlebar.is-mac .tb-left {

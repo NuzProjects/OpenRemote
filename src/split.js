@@ -109,6 +109,43 @@ export function focusLeaf(layout, leafId) {
   return layout.focus === leafId || !leafById(layout, leafId) ? layout : { ...layout, focus: leafId }
 }
 
+/** Focus the nth pane, left to right and top to bottom. */
+export function focusByIndex(layout, index) {
+  const leaf = leaves(layout.root)[index]
+  return leaf ? focusLeaf(layout, leaf.id) : layout
+}
+
+/**
+ * Where a dropped chat lands in a pane: the middle keeps it in that pane,
+ * the outer band of each side splits the pane on that side. The nearest
+ * edge wins, so a corner resolves to whichever side is closer. `band` is
+ * a fraction of the pane's width or height - wide enough to hit on
+ * purpose, narrow enough that the middle stays a real target.
+ */
+export const DROP_BAND = 0.28
+
+export function dropZone(box, x, y) {
+  const edges = [
+    { zone: 'left', dir: 'row', before: true, at: (x - box.left) / box.width },
+    { zone: 'right', dir: 'row', before: false, at: (box.right - x) / box.width },
+    { zone: 'top', dir: 'col', before: true, at: (y - box.top) / box.height },
+    { zone: 'bottom', dir: 'col', before: false, at: (box.bottom - y) / box.height },
+  ]
+  const nearest = edges.reduce((a, b) => (b.at < a.at ? b : a))
+  if (nearest.at > DROP_BAND) return { zone: 'center' }
+  return { zone: nearest.zone, dir: nearest.dir, before: nearest.before }
+}
+
+/** Even out a split's children - a double-click on its divider. */
+export function balanceSplit(layout, splitId) {
+  const root = mapNode(layout.root, (node) => {
+    if (node.type !== 'split' || node.id !== splitId) return node
+    const even = 1 / node.children.length
+    return { ...node, sizes: node.children.map(() => even) }
+  })
+  return root === layout.root ? layout : { ...layout, root }
+}
+
 /**
  * Move the divider after child `index` of a split by `delta` (a fraction of
  * the split's whole size). Neither neighbour shrinks below MIN_SIZE.
@@ -170,4 +207,20 @@ function valid(layout) {
     panes.filter((l) => l.view === null).length === 1 &&
     panes.some((l) => l.id === layout.focus)
   )
+}
+
+/**
+ * A dragged chat travels as text/plain with this prefix: every drag source
+ * (a sidebar row, a pane's own title) writes it, and a drop only acts on a
+ * payload that carries it, so a stray file or text drop is ignored.
+ */
+export const CHAT_DRAG = 'openremote-chat:'
+
+export function chatDragPayload(id) {
+  return CHAT_DRAG + id
+}
+
+export function draggedChat(dataTransfer) {
+  const raw = dataTransfer?.getData('text/plain') ?? ''
+  return raw.startsWith(CHAT_DRAG) ? raw.slice(CHAT_DRAG.length) : ''
 }

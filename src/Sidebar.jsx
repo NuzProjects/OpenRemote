@@ -28,6 +28,7 @@ import { sections } from './projects.js'
 import { activeSessions } from './archive.js'
 import { deviceName, isPhone, sessionsForMode } from './cloud.js'
 import { isMobile } from './platform.js'
+import { chatDragPayload } from './split.js'
 import { HarnessMark } from './brand-marks.jsx'
 import ContextMenu from './ContextMenu.jsx'
 import DeleteChatModal from './DeleteChatModal.jsx'
@@ -113,7 +114,8 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   }
 
   // Right-click on a chat: the same actions as the hover buttons, plus the
-  // split directions.
+  // split directions - the same four words the pane header and the main
+  // area's own menu use.
   const menuItems = (row) => {
     const split = (dir, before) => () => onSplit(row.id, dir, before)
     const canSplit = onSplit && !isMobile
@@ -122,11 +124,10 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
       ...(canSplit
         ? [
             { divider: true },
-            { header: 'Open in a new split' },
-            { label: 'To the left', icon: <ArrowLeft size={14} />, onSelect: split('row', true) },
-            { label: 'To the right', icon: <ArrowRight size={14} />, onSelect: split('row', false) },
-            { label: 'Above', icon: <ArrowUp size={14} />, onSelect: split('col', true) },
-            { label: 'Below', icon: <ArrowDown size={14} />, onSelect: split('col', false) },
+            { label: 'Split right', icon: <ArrowRight size={14} />, onSelect: split('row', false) },
+            { label: 'Split down', icon: <ArrowDown size={14} />, onSelect: split('col', false) },
+            { label: 'Split left', icon: <ArrowLeft size={14} />, onSelect: split('row', true) },
+            { label: 'Split up', icon: <ArrowUp size={14} />, onSelect: split('col', true) },
           ]
         : []),
       { divider: true },
@@ -162,6 +163,14 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
     <div
       key={row.id}
       className="chat-item"
+      // A chat is a thing you can drag into a pane: the middle opens it
+      // there, an edge band splits. Right-click and the palette still do
+      // the same job for anyone who never drags.
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData('text/plain', chatDragPayload(row.id))
+        e.dataTransfer.effectAllowed = 'move'
+      }}
       onContextMenu={(e) => {
         e.preventDefault()
         setMenu({ x: e.clientX, y: e.clientY, row })

@@ -31,6 +31,7 @@ import { KeyboardProvider, useKeyboard, useShortcut } from './keyboard.jsx'
 import {
   MAX_PANES,
   closeLeaf,
+  focusByIndex,
   focusLeaf,
   leafById,
   leaves,
@@ -311,6 +312,26 @@ function Shell() {
     else setLayout(next)
   }
 
+  // A chat dropped on a pane: the middle opens it in that pane, an outer
+  // band splits the pane on that side and puts the chat there. At the pane
+  // cap there is nowhere to split, so an edge drop opens in the pane it
+  // landed on instead of doing nothing.
+  const dropInPane = (leafId, id, place) => {
+    const leaf = leafById(layout, leafId)
+    if (!leaf) return
+    const session = (sessions ?? []).find((s) => s.id === id)
+    if (session) ensureChat(session)
+    if (place.zone === 'center' || paneCount(layout) >= MAX_PANES) {
+      if (leaf.view === null) {
+        openSession(id)
+      } else {
+        setLayout((l) => focusLeaf(setLeafView(l, leaf.id, id), leaf.id))
+      }
+      return
+    }
+    setLayout((l) => splitLeaf(l, leafId, place.dir, id, place.before))
+  }
+
   // Right-click in the main area: split from the pane under the cursor,
   // and act on the chat it shows. Text, links and fields keep the
   // browser's own menu (copy, paste, spelling).
@@ -338,12 +359,14 @@ function Shell() {
     const v = leaf.view ?? view
     const full = paneCount(layout) >= MAX_PANES
     const split = (dir, before) => () => setLayout((l) => splitLeaf(l, leafId, dir, 'new', before))
+    // The same four words as the pane header's menu, so a split is called
+    // one thing everywhere it can be started.
     const items = [
-      { header: full ? 'New chat split (4 panes is the most)' : 'New chat split' },
-      { label: 'To the left', icon: <ArrowLeft size={14} />, disabled: full, onSelect: split('row', true) },
-      { label: 'To the right', icon: <ArrowRight size={14} />, hint: kb.label('split-right'), disabled: full, onSelect: split('row', false) },
-      { label: 'Above', icon: <ArrowUp size={14} />, disabled: full, onSelect: split('col', true) },
-      { label: 'Below', icon: <ArrowDown size={14} />, hint: kb.label('split-down'), disabled: full, onSelect: split('col', false) },
+      ...(full ? [{ header: `${MAX_PANES} panes is the most` }] : []),
+      { label: 'Split right', icon: <ArrowRight size={14} />, hint: kb.label('split-right'), disabled: full, onSelect: split('row', false) },
+      { label: 'Split down', icon: <ArrowDown size={14} />, hint: kb.label('split-down'), disabled: full, onSelect: split('col', false) },
+      { label: 'Split left', icon: <ArrowLeft size={14} />, disabled: full, onSelect: split('row', true) },
+      { label: 'Split up', icon: <ArrowUp size={14} />, disabled: full, onSelect: split('col', true) },
     ]
     const title = chats[v]?.title
     if (isChatView(v) && title) {
@@ -470,6 +493,12 @@ function Shell() {
   useShortcut('toggle-mode', () => switchMode(mode === 'local' ? 'cloud' : 'local'), desk)
   useShortcut('split-right', () => setLayout((l) => splitLeaf(l, l.focus, 'row')), desk)
   useShortcut('split-down', () => setLayout((l) => splitLeaf(l, l.focus, 'col')), desk)
+  // Ctrl+1..4: the panes in reading order, the way VS Code numbers its
+  // editor groups.
+  useShortcut('focus-pane-1', () => setLayout((l) => focusByIndex(l, 0)), desk)
+  useShortcut('focus-pane-2', () => setLayout((l) => focusByIndex(l, 1)), desk)
+  useShortcut('focus-pane-3', () => setLayout((l) => focusByIndex(l, 2)), desk)
+  useShortcut('focus-pane-4', () => setLayout((l) => focusByIndex(l, 3)), desk)
   // The primary pane is the window's own view; only a split pane closes.
   useShortcut(
     'close-pane',
@@ -594,16 +623,16 @@ function Shell() {
           />
           <main className="main" onContextMenu={onMainContextMenu}>
             <CloudNotices />
-            {paneCount(layout) > 1 ? (
-              <SplitArea
-                layout={layout}
-                setLayout={setLayout}
-                labelFor={paneLabel}
-                renderPane={renderPane}
-              />
-            ) : (
-              primaryContent
-            )}
+            {/* One frame for the main area, split or not: with a single
+                pane it is just the app's view (no header), and either way
+                it is where a dragged chat can land and split. */}
+            <SplitArea
+              layout={layout}
+              setLayout={setLayout}
+              labelFor={paneLabel}
+              renderPane={renderPane}
+              onDropInPane={dropInPane}
+            />
           </main>
           {paneMenu && (
             <ContextMenu

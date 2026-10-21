@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  DROP_BAND,
   MAX_PANES,
+  balanceSplit,
   closeLeaf,
+  dropZone,
+  focusByIndex,
   focusLeaf,
   leaves,
   newLayout,
@@ -130,4 +134,58 @@ test('restore trusts only a well-formed layout', () => {
   ]) {
     assert.equal(paneCount(restoreLayout(bad)), 1)
   }
+})
+
+test('a drop in the middle keeps the chat in that pane', () => {
+  const box = { left: 0, top: 0, right: 600, bottom: 400, width: 600, height: 400 }
+  assert.deepEqual(dropZone(box, 300, 200), { zone: 'center' })
+  // Just inside the band on two sides at once still counts as an edge.
+  assert.equal(dropZone(box, 300, 100).zone, 'top')
+})
+
+test('a drop near an edge splits on that side, nearest edge wins', () => {
+  const box = { left: 0, top: 0, right: 600, bottom: 400, width: 600, height: 400 }
+  const bandX = 600 * DROP_BAND
+  const bandY = 400 * DROP_BAND
+  assert.deepEqual(dropZone(box, bandX - 1, 200), { zone: 'left', dir: 'row', before: true })
+  assert.deepEqual(dropZone(box, 600 - bandX + 1, 200), { zone: 'right', dir: 'row', before: false })
+  assert.deepEqual(dropZone(box, 300, bandY - 1), { zone: 'top', dir: 'col', before: true })
+  assert.deepEqual(dropZone(box, 300, 400 - bandY + 1), { zone: 'bottom', dir: 'col', before: false })
+  // A corner belongs to the closer side, not the one it crossed first.
+  assert.equal(dropZone(box, 20, 380).zone, 'left')
+  assert.equal(dropZone(box, 580, 380).zone, 'right')
+  // A panes far from every edge is a center target.
+  assert.equal(dropZone(box, 300, 250).zone, 'center')
+})
+
+test('a short pane still has a middle: the band scales with the box', () => {
+  const box = { left: 100, top: 50, right: 500, bottom: 150, width: 400, height: 100 }
+  assert.equal(dropZone(box, 300, 100).zone, 'center')
+  assert.equal(dropZone(box, 300, 60).zone, 'top')
+})
+
+test('double-clicking a divider evens its children, and only them', () => {
+  let l = splitLeaf(newLayout(), 'p1', 'row')
+  const splitId = l.root.id
+  l = resizeSplit(l, splitId, 0, 0.2)
+  assert.notEqual(l.root.sizes[0], l.root.sizes[1])
+  assert.deepEqual(balanceSplit(l, splitId).root.sizes, [0.5, 0.5])
+  // A row of three evens to thirds, and the sum never drifts from 1.
+  const three = splitLeaf(l, 'p2', 'row')
+  assert.equal(three.root.children.length, 3)
+  const thirds = balanceSplit(three, splitId)
+  assert.deepEqual(thirds.root.sizes, [1 / 3, 1 / 3, 1 / 3])
+  assert.ok(Math.abs(thirds.root.sizes.reduce((a, b) => a + b, 0) - 1) < 1e-9)
+  assert.equal(paneCount(thirds), 3)
+  // An unknown split changes nothing (the same object comes back).
+  assert.equal(balanceSplit(l, 'nope'), l)
+})
+
+test('focus by index walks the panes in reading order', () => {
+  let l = splitLeaf(newLayout(), 'p1', 'row')
+  l = splitLeaf(l, 'p2', 'col')
+  assert.deepEqual(ids(l), ['p1', 'p2', 'p3'])
+  assert.equal(focusByIndex(l, 0).focus, 'p1')
+  assert.equal(focusByIndex(l, 2).focus, 'p3')
+  assert.equal(focusByIndex(l, 9), l)
 })
