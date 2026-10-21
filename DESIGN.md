@@ -69,8 +69,13 @@ spacing.
 ## Layout
 
 - **Frameless window, custom titlebar (36px, `--bg-side`):** sidebar toggle,
-  back/forward, centered title + about, Windows caption glyphs (Segoe MDL2).
-  The whole bar is a drag region.
+  back/forward on the left; the centered title + about; then at the right end
+  the split-view toggle (where VS Code keeps its split editor) and, on
+  Windows, the caption glyphs - minimize, maximize/restore, close, drawn as
+  MDL2's own 10px geometry rather than set in the font, because the font
+  resolves some codepoints through fallback on a real Windows 10 box. macOS
+  keeps its traffic lights at the left and draws no caption buttons. The
+  whole bar is a drag region.
 - **Sidebar (264px, collapsible):** mode switch (Local/Cloud), New chat tile,
   search, then nav tiles - Plugins and Automations in Local, Machines in
   Cloud (grid-rows reveal, reduced-motion aware); then the two sections -

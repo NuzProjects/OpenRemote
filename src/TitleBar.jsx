@@ -136,13 +136,6 @@ export default function TitleBar({
         <button className="tb-toggle" onClick={onForward} disabled={!canForward} title="Forward">
           <ArrowRight size={15} />
         </button>
-        {/* Another pane beside this one, for a second agent in the same
-            window (Ctrl+\; Ctrl+Shift+\ splits downward). */}
-        {onSplit && (
-          <button className="tb-toggle" onClick={onSplit} title={hintSplit('Split view')}>
-            <SplitGlyph />
-          </button>
-        )}
       </div>
       <div className="tb-title" data-tauri-drag-region>
         OpenRemote
@@ -155,23 +148,34 @@ export default function TitleBar({
           <Info size={12} />
         </button>
       </div>
-      {!MAC && (
-      <div className="tb-controls">
-        <button className="tb-btn" onClick={action('minimize')} title="Minimize">
-          {<CaptionGlyph kind="minimize" />}
-        </button>
-        <button
-          className="tb-btn"
-          onClick={action('toggleMaximize')}
-          title={maximized ? 'Restore' : 'Maximize'}
-        >
-          <CaptionGlyph kind={maximized ? 'restore' : 'maximize'} />
-        </button>
-        <button className="tb-btn tb-close" onClick={action('close')} title="Close">
-          <CaptionGlyph kind="close" />
-        </button>
+      {/* The split sits at the bar's right end, where VS Code keeps its own
+          split-editor button: next to the caption buttons on Windows, at the
+          edge on macOS (which draws no caption buttons). Another pane beside
+          this one is one click away (Ctrl+\; Ctrl+Shift+\ splits downward). */}
+      <div className="tb-right">
+        {onSplit && (
+          <button className="tb-toggle" onClick={onSplit} title={hintSplit('Split view')}>
+            <SplitGlyph />
+          </button>
+        )}
+        {!MAC && (
+        <div className="tb-controls">
+          <button className="tb-btn" onClick={action('minimize')} title="Minimize">
+            {<CaptionGlyph kind="minimize" />}
+          </button>
+          <button
+            className="tb-btn"
+            onClick={action('toggleMaximize')}
+            title={maximized ? 'Restore' : 'Maximize'}
+          >
+            <CaptionGlyph kind={maximized ? 'restore' : 'maximize'} />
+          </button>
+          <button className="tb-btn tb-close" onClick={action('close')} title="Close">
+            <CaptionGlyph kind="close" />
+          </button>
+        </div>
+        )}
       </div>
-      )}
       {about && <AboutModal onClose={() => setAbout(false)} daemonVersion={capabilities?.daemon ?? null} />}
     </header>
   )

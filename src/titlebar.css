@@ -71,6 +71,13 @@
   color: var(--text-1);
 }
 
+/* The bar's right end: the split toggle, then the caption buttons where
+   the system has them. One flex child, so the title stays centred. */
+.tb-right {
+  display: flex;
+  align-items: stretch;
+}
+
 .tb-controls {
   display: flex;
 }
