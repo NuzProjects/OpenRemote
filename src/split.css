@@ -27,7 +27,6 @@
   min-height: 0;
 }
 
-.split-cell > .split-pane,
 .split-cell > .split-node {
   flex: 1;
 }
@@ -87,6 +86,12 @@
 
 .split-pane {
   position: relative;
+  /* The pane takes the room it is given. This has to live here, not on
+     .split-cell: with a single pane the root leaf is a direct child of
+     .split-area, and without a grow of its own it would shrink to the
+     width of whatever it holds - the home screen would hug the sidebar
+     and its glow would paint into a narrow band. */
+  flex: 1 1 0%;
   display: flex;
   flex-direction: column;
   min-width: 0;
