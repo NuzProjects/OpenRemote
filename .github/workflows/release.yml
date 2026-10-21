@@ -13,11 +13,45 @@ name: Release
 # release job preflights the tag against the manifests, the notes file
 # and the previous release's Android versionCode before building
 # anything.
+#
+# Two channels share this one pipeline:
+#
+# - Stable: a `v*` tag. Its release is the newest release, so
+#   `releases/latest/download/<name>` follows it and the in-app updater's
+#   latest.json (written from that release) is what a stable install sees.
+# - Nightly: the scheduled run. It builds whatever is on the default
+#   branch and replaces the rolling `nightly` release, which is marked
+#   prerelease on purpose - a nightly must never become `latest`, or the
+#   stable download URLs and the updater would move to a test build. The
+#   release is deleted and recreated each night so its download URLs stay
+#   fixed (.../releases/download/nightly/OpenRemote-Setup-x64.exe) while
+#   the binaries follow main. The previous nightly's commit is written
+#   into the new notes, so the channel still reads as a history. Because
+#   last night's release goes before this one is built, a night that
+#   fails leaves the channel empty rather than serving a half-updated
+#   build; re-running the scheduled run publishes it. Nothing in this
+#   path touches the stable channel.
+#
+# Every published release also carries version-free names beside the
+# versioned assets (OpenRemote-Setup-x64.exe, -x64.msi, -x86_64.AppImage,
+# -amd64.deb, -universal.dmg, -universal.apk). A channel URL therefore
+# never carries a version, and a version bump never edits a download link.
 
 on:
   push:
     tags: ['v*']
+  # The nightly channel. GitHub disables a schedule after 60 days without
+  # repository activity, and a re-enabled one needs a manual run first;
+  # re-running a past scheduled run republishes that night.
+  schedule:
+    - cron: '17 3 * * *'
   workflow_dispatch:
+    inputs:
+      channel:
+        description: 'build-only publishes nothing; nightly publishes the rolling nightly from this branch'
+        type: choice
+        options: [build-only, nightly]
+        default: build-only
 
 permissions:
   contents: write
@@ -36,12 +70,78 @@ jobs:
           # The preflight below compares this tag against the previous
           # v* tag's tauri.conf.json (the versionCode check), so the
           # job needs the tags and their history, not just this tag's
-          # single commit.
+          # single commit. The nightly notes read the previous nightly
+          # tag out of the same history.
           fetch-depth: 0
+      # One name for the release everywhere below: the pushed tag, or
+      # `nightly` for the nightly channel (a scheduled run has no tag -
+      # GITHUB_REF_NAME would be the branch name). Publishing is
+      # `steps.ch.outputs.tag == 'nightly' || event != workflow_dispatch`
+      # below: a manual run stays a build-only run unless it asked for
+      # the nightly.
+      - name: channel
+        id: ch
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event.inputs.channel }}" = "nightly" ]; then
+            echo "tag=nightly" >> "$GITHUB_OUTPUT"
+            echo "TAG=nightly" >> "$GITHUB_ENV"
+          else
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+            echo "TAG=$GITHUB_REF_NAME" >> "$GITHUB_ENV"
+          fi
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*
           cache: npm
+      # Before anything is built: last night's release goes, tonight's
+      # takes its place. The tag is deleted with it (--cleanup-tag), so
+      # the release below recreates `nightly` at this run's commit; the
+      # commit is captured first, for the notes.
+      - name: clear the rolling nightly
+        if: steps.ch.outputs.tag == 'nightly'
+        run: |
+          set -euo pipefail
+          if git rev-parse -q --verify "nightly^{commit}" > /dev/null; then
+            git rev-parse --short "nightly^{commit}" > .nightly-previous
+            echo "PREVIOUS_NIGHTLY=$(cat .nightly-previous)" >> "$GITHUB_ENV"
+          fi
+          # A real failure here must fail the run: carrying on would
+          # upload tonight's binaries over last night's release page.
+          if gh release view nightly > /dev/null 2>&1; then
+            gh release delete nightly --yes --cleanup-tag
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: nightly notes
+        if: steps.ch.outputs.tag == 'nightly'
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse --short HEAD)"
+          {
+            echo "# OpenRemote nightly - $(date -u +%Y-%m-%d)"
+            echo
+            echo "Built from \`${GITHUB_REF_NAME}\` at \`${SHA}\` on $(date -u +'%Y-%m-%d %H:%M UTC')."
+            echo
+            echo "This is the automated nightly channel: unsigned test builds, replaced every night,"
+            echo "at URLs that never change - \`https://github.com/${GITHUB_REPOSITORY}/releases/download/nightly/OpenRemote-Setup-x64.exe\`,"
+            echo "and the same name for the msi, the AppImage, the deb, the dmg and the apk."
+            echo "The stable channel is \`releases/latest\`. Nightlies report the stable version in-app"
+            echo "(the build is not version-stamped yet) - this page's commit is the identity."
+            echo
+            if [ -n "${PREVIOUS_NIGHTLY:-}" ] && git cat-file -e "${PREVIOUS_NIGHTLY}^{commit}" 2>/dev/null; then
+              echo "## Since the last nightly (\`${PREVIOUS_NIGHTLY}\`)"
+            else
+              echo "## Recent commits"
+            fi
+            echo
+            if [ -n "${PREVIOUS_NIGHTLY:-}" ] && git cat-file -e "${PREVIOUS_NIGHTLY}^{commit}" 2>/dev/null; then
+              git log --oneline --no-decorate -n 60 "${PREVIOUS_NIGHTLY}..HEAD"
+            else
+              git log --oneline --no-decorate -n 25 HEAD
+            fi
+          } > nightly-notes.md
+          cat nightly-notes.md
       # Fail fast on paperwork that does not add up, before any build
       # toolchain or dependency is fetched: the tag must equal the
       # version in every manifest that carries it (a mismatch ships
@@ -50,7 +150,10 @@ jobs:
       # only after the full build), and the Android versionCode must
       # strictly exceed the previous release's - Android refuses an
       # update install otherwise, and the only way on is uninstalling
-      # the app, which wipes its private data.
+      # the app, which wipes its private data. A nightly has no version
+      # of its own to check and no notes file to require (its notes are
+      # generated above); the notices and the versionCode floor are
+      # checked below for both channels.
       - name: preflight (versions, notes, versionCode)
         if: github.event_name == 'push'
         run: |
@@ -130,6 +233,11 @@ jobs:
             }
             console.log(`preflight: ${tag} agrees with the manifests, release-notes/${tag}.md and THIRD-PARTY_NOTICES.md exist, Android versionCode ${code} is good`);
           '
+      # The nightly keeps the same applicationId and versionCode as the
+      # stable APK, so the two install over each other in either
+      # direction (same signature, same code). The versionCode floor
+      # still holds for stable tags, where the next release must
+      # strictly exceed the tag before it - see the preflight above.
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -142,14 +250,15 @@ jobs:
       # version implies, not an asset count: any other mix of assets
       # (a partial upload, a release created with only its notes) runs
       # the Windows build, so a re-pushed tag never leaves a release
-      # missing the msi or the nsis.
+      # missing the msi or the nsis. The nightly never skips: its
+      # release was just deleted, and its assets must follow main.
       - name: a rebuild, or a re-run
         id: build
-        if: github.event_name == 'push'
+        if: github.event_name != 'workflow_dispatch'
         run: |
           set -euo pipefail
-          ver="${GITHUB_REF_NAME#v}"
-          assets="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' 2>/dev/null || true)"
+          ver="${TAG#v}"
+          assets="$(gh release view "$TAG" --json assets --jq '.assets[].name' 2>/dev/null || true)"
           if [ -n "$assets" ] \
             && grep -qxF "OpenRemote_${ver}_x64_en-US.msi" <<< "$assets" \
             && grep -qxF "OpenRemote_${ver}_x64-setup.exe" <<< "$assets"; then
@@ -168,19 +277,35 @@ jobs:
       # so the globs stay version-proof.
       # Create on the first run; a tag that already has a release (a
       # re-pushed tag) uploads over the existing assets instead. A skipped
-      # rebuild has nothing new to upload.
-      - if: github.event_name == 'push' && steps.build.outputs.skip != '1'
+      # rebuild has nothing new to upload. Each bundle is uploaded twice:
+      # under its versioned name and under the channel's version-free one,
+      # so `/releases/latest/download/OpenRemote-Setup-x64.exe` (stable)
+      # and `/releases/download/nightly/OpenRemote-Setup-x64.exe`
+      # (nightly) never change with a version bump.
+      - name: publish the Windows installers
+        if: (steps.ch.outputs.tag == 'nightly' || github.event_name != 'workflow_dispatch') && steps.build.outputs.skip != '1'
         run: |
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" --clobber \
-              src-tauri/target/release/bundle/msi/*.msi \
-              src-tauri/target/release/bundle/nsis/*.exe
+          set -euo pipefail
+          cp src-tauri/target/release/bundle/nsis/*.exe OpenRemote-Setup-x64.exe
+          cp src-tauri/target/release/bundle/msi/*.msi OpenRemote-Setup-x64.msi
+          assets=(
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*.exe
+            OpenRemote-Setup-x64.msi
+            OpenRemote-Setup-x64.exe
+          )
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" --clobber "${assets[@]}"
+          elif [ "$TAG" = "nightly" ]; then
+            gh release create nightly "${assets[@]}" \
+              --target "$GITHUB_SHA" \
+              --prerelease \
+              --title "OpenRemote nightly - $(date -u +%Y-%m-%d)" \
+              --notes-file nightly-notes.md
           else
-            gh release create "$GITHUB_REF_NAME" \
-              src-tauri/target/release/bundle/msi/*.msi \
-              src-tauri/target/release/bundle/nsis/*.exe \
-              --title "OpenRemote ${GITHUB_REF_NAME#v}" \
-              --notes-file "release-notes/${GITHUB_REF_NAME}.md"
+            gh release create "$TAG" "${assets[@]}" \
+              --title "OpenRemote ${TAG#v}" \
+              --notes-file "release-notes/${TAG}.md"
           fi
         env:
           GH_TOKEN: ${{ github.token }}
@@ -197,6 +322,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: channel
+        id: ch
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event.inputs.channel }}" = "nightly" ]; then
+            echo "tag=nightly" >> "$GITHUB_OUTPUT"
+            echo "TAG=nightly" >> "$GITHUB_ENV"
+          else
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+            echo "TAG=$GITHUB_REF_NAME" >> "$GITHUB_ENV"
+          fi
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*
@@ -235,11 +371,19 @@ jobs:
       # The config's bundle targets are the Windows formats; the CLI
       # flag picks the Linux ones for this runner.
       - run: npx tauri build --bundles appimage,deb
-      - if: github.event_name == 'push'
-        run: >
-          gh release upload "$GITHUB_REF_NAME" --clobber
-          src-tauri/target/release/bundle/appimage/*.AppImage
-          src-tauri/target/release/bundle/deb/*.deb
+      # The version-free names ride beside the versioned ones, the way
+      # the Windows job uploads them.
+      - name: publish the Linux installers
+        if: steps.ch.outputs.tag == 'nightly' || github.event_name != 'workflow_dispatch'
+        run: |
+          set -euo pipefail
+          cp src-tauri/target/release/bundle/appimage/*.AppImage OpenRemote-x86_64.AppImage
+          cp src-tauri/target/release/bundle/deb/*.deb OpenRemote-amd64.deb
+          gh release upload "$TAG" --clobber \
+            src-tauri/target/release/bundle/appimage/*.AppImage \
+            src-tauri/target/release/bundle/deb/*.deb \
+            OpenRemote-x86_64.AppImage \
+            OpenRemote-amd64.deb
         env:
           GH_TOKEN: ${{ github.token }}
       # The machine installer's download: the daemon alone, named as
@@ -254,8 +398,8 @@ jobs:
           ( cd daemon && cargo zigbuild -p openremote-daemon --locked --release --target x86_64-unknown-linux-gnu.2.28 )
           cp daemon/target/x86_64-unknown-linux-gnu/release/openremote-daemon openremote-daemon-linux-x86_64
           sha256sum openremote-daemon-linux-x86_64 THIRD-PARTY_NOTICES.md > SHA256SUMS
-      - if: github.event_name == 'push'
-        run: gh release upload "$GITHUB_REF_NAME" openremote-daemon-linux-x86_64 THIRD-PARTY_NOTICES.md SHA256SUMS --clobber
+      - if: steps.ch.outputs.tag == 'nightly' || github.event_name != 'workflow_dispatch'
+        run: gh release upload "$TAG" openremote-daemon-linux-x86_64 THIRD-PARTY_NOTICES.md SHA256SUMS --clobber
         env:
           GH_TOKEN: ${{ github.token }}
       - if: github.event_name == 'workflow_dispatch'
@@ -278,6 +422,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: channel
+        id: ch
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event.inputs.channel }}" = "nightly" ]; then
+            echo "tag=nightly" >> "$GITHUB_OUTPUT"
+            echo "TAG=nightly" >> "$GITHUB_ENV"
+          else
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+            echo "TAG=$GITHUB_REF_NAME" >> "$GITHUB_ENV"
+          fi
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*
@@ -322,17 +477,18 @@ jobs:
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "sdk.dir=$ANDROID_HOME" > src-tauri/gen/android/local.properties
       # A re-pushed tag whose release already carries THIS version's APK
-      # skips the rebuild; the APK is already there. The gate matches
-      # the exact name this tag's version implies (the upload step
+      # skips the rebuild; the APK is already there. The gate matches the
+      # exact name this tag's version implies (the upload step
       # below names the file the same way), not just any APK - a
-      # re-pushed tag must not keep a previous commit's build.
+      # re-pushed tag must not keep a previous commit's build. The
+      # nightly never skips: its release was just deleted.
       - name: a rebuild, or a re-run
         id: build
-        if: github.event_name == 'push'
+        if: github.event_name != 'workflow_dispatch'
         run: |
           set -euo pipefail
-          assets="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' 2>/dev/null || true)"
-          if grep -qxF "OpenRemote_${GITHUB_REF_NAME#v}_universal.apk" <<< "$assets"; then
+          assets="$(gh release view "$TAG" --json assets --jq '.assets[].name' 2>/dev/null || true)"
+          if grep -qxF "OpenRemote_${TAG#v}_universal.apk" <<< "$assets"; then
             echo "skip=1" >> "$GITHUB_OUTPUT"
           fi
         env:
@@ -367,9 +523,11 @@ jobs:
           echo "APK: $APK"
           APKSIGNER="$(ls -1 "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n 1)"
           "$APKSIGNER" verify --verbose --print-certs "$APK" | head -n 12
-          cp "$APK" "OpenRemote_${GITHUB_REF_NAME#v}_universal.apk"
-      - run: gh release upload "$GITHUB_REF_NAME" "OpenRemote_${GITHUB_REF_NAME#v}_universal.apk" --clobber
-        if: github.event_name == 'push' && steps.build.outputs.skip != '1'
+          cp "$APK" "OpenRemote_${TAG#v}_universal.apk"
+          cp "$APK" OpenRemote-universal.apk
+      - name: publish the APK
+        if: (steps.ch.outputs.tag == 'nightly' || github.event_name != 'workflow_dispatch') && steps.build.outputs.skip != '1'
+        run: gh release upload "$TAG" "OpenRemote_${TAG#v}_universal.apk" OpenRemote-universal.apk --clobber
         env:
           GH_TOKEN: ${{ github.token }}
       - if: github.event_name == 'workflow_dispatch'
@@ -390,6 +548,17 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - name: channel
+        id: ch
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event.inputs.channel }}" = "nightly" ]; then
+            echo "tag=nightly" >> "$GITHUB_OUTPUT"
+            echo "TAG=nightly" >> "$GITHUB_ENV"
+          else
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+            echo "TAG=$GITHUB_REF_NAME" >> "$GITHUB_ENV"
+          fi
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*
@@ -403,14 +572,15 @@ jobs:
             daemon
             src-tauri
       # A re-pushed tag whose release already carries this version's dmg
-      # skips the rebuild - the same gate the other jobs use.
+      # skips the rebuild - the same gate the other jobs use. The nightly
+      # never skips.
       - name: a rebuild, or a re-run
         id: build
-        if: github.event_name == 'push'
+        if: github.event_name != 'workflow_dispatch'
         run: |
           set -euo pipefail
-          assets="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' 2>/dev/null || true)"
-          if grep -qxF "OpenRemote_${GITHUB_REF_NAME#v}_universal.dmg" <<< "$assets"; then
+          assets="$(gh release view "$TAG" --json assets --jq '.assets[].name' 2>/dev/null || true)"
+          if grep -qxF "OpenRemote_${TAG#v}_universal.dmg" <<< "$assets"; then
             echo "skip=1" >> "$GITHUB_OUTPUT"
           fi
         env:
@@ -457,8 +627,11 @@ jobs:
           codesign --verify --deep --strict "$APP"
           ls -la "$DMG"
           echo "DMG=$DMG" >> "$GITHUB_ENV"
-      - if: github.event_name == 'push' && steps.build.outputs.skip != '1'
-        run: gh release upload "$GITHUB_REF_NAME" "$DMG" --clobber
+      - if: (steps.ch.outputs.tag == 'nightly' || github.event_name != 'workflow_dispatch') && steps.build.outputs.skip != '1'
+        run: |
+          set -euo pipefail
+          cp "$DMG" OpenRemote-universal.dmg
+          gh release upload "$TAG" "$DMG" OpenRemote-universal.dmg --clobber
         env:
           GH_TOKEN: ${{ github.token }}
       - if: github.event_name == 'workflow_dispatch'

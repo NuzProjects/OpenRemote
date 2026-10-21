@@ -133,7 +133,15 @@ an old process is still alive; find it before re-running).
   exceed the installed build's.
 - `.github/workflows/release.yml` builds on `v*` tag pushes:
   stage the sidecar, `npx tauri build`, `gh release create` with the
-  notes from `release-notes/<tag>.md`. The Linux job also uploads the
+  notes from `release-notes/<tag>.md`. It also runs nightly (03:17 UTC)
+  to publish the rolling `nightly` prerelease from the default branch,
+  and a manual run stays build-only unless its channel input says
+  `nightly`. Every published release carries version-free asset names
+  beside the versioned ones (`OpenRemote-Setup-x64.exe`,
+  `-x86_64.AppImage`, `-universal.dmg`, and so on), so
+  `releases/latest/download/<name>` is the stable channel and
+  `releases/download/nightly/<name>` the nightly one. `docs/release-channels.md`
+  has the details and the nightly's prerelease rule. The Linux job also uploads the
   machine installer's download: `openremote-daemon-linux-x86_64` plus
   `SHA256SUMS`, cross-built with zig pinned to glibc 2.28 (a runner
   build links a glibc old servers don't have; install.sh verifies the
