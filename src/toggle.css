@@ -1,0 +1,56 @@
+/* The settings switch: 30x18 with a 14px knob, the geometry the
+   automations list sketched. Amber when on; green means running. */
+
+.tg-switch {
+  position: relative;
+  flex: none;
+  width: 30px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.1);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.tg-switch:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.tg-switch.on {
+  background: var(--accent);
+}
+
+.tg-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-1);
+  transition: transform 0.15s ease;
+}
+
+.tg-switch.on .tg-knob {
+  transform: translateX(12px);
+  background: #0a0c0f;
+}
+
+.tg-switch:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+html[data-reduce-motion] .tg-switch,
+html[data-reduce-motion] .tg-knob {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tg-switch,
+  .tg-knob {
+    transition: none;
+  }
+}

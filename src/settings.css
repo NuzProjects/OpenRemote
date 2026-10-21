@@ -1,38 +1,147 @@
-/* Settings as a view: a slim section rail on the left, the rows on the
-   right. The rail links to in-panel anchors - the panel scrolls, the
-   rail stays. */
+/* Settings as a window: a search-and-tabs sidebar on the left, the
+   selected section alone on the right. The panel scrolls; the tabs stay. */
 
 .settings {
-  display: flex;
-  gap: 28px;
+  display: grid;
+  grid-template-columns: 208px minmax(0, 1fr);
   width: 100%;
   height: 100%;
-  max-width: 860px;
-  margin: 0 auto;
-  padding: 26px 28px 40px;
-  box-sizing: border-box;
   overflow: hidden;
 }
 
-.stg-nav {
-  flex: 0 0 152px;
+.stg-side {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding-top: 6px;
+  gap: 14px;
+  min-height: 0;
+  padding: 18px 12px;
+  border-right: 1px solid var(--line);
+  background: var(--bg-side);
+}
+
+/* ── search ── */
+
+.stg-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  cursor: text;
+}
+
+.stg-search:focus-within {
+  border-color: rgba(255, 255, 255, 0.2);
+  background: var(--bg-hover);
+}
+
+.stg-search-icon {
+  flex: none;
+  color: var(--text-3);
+}
+
+.stg-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: none;
+  color: var(--text-1);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.stg-search input::placeholder {
+  color: var(--text-3);
+}
+
+.stg-search input::-webkit-search-decoration,
+.stg-search input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+}
+
+.stg-search-clear {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.stg-search-clear:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-1);
+}
+
+.stg-search-key {
+  flex: none;
+  min-width: 16px;
+  padding: 0 3px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--text-3);
+  font-family: 'Geist Mono', ui-monospace, Consolas, monospace;
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+}
+
+/* ── tabs ── */
+
+.stg-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.stg-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.stg-nav-group + .stg-nav-group {
+  margin-top: 10px;
+}
+
+.stg-nav-group-label {
+  padding: 0 9px 4px;
+  color: var(--text-3);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
 }
 
 .stg-nav-btn {
-  display: block;
-  padding: 7px 10px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  height: 32px;
+  padding: 0 9px;
   border: 0;
   border-radius: var(--radius);
   background: transparent;
   color: var(--text-2);
+  font: inherit;
   font-size: 12.5px;
   font-weight: 500;
-  text-decoration: none;
+  text-align: left;
   white-space: nowrap;
+  cursor: default;
 }
 
 .stg-nav-btn:hover {
@@ -40,48 +149,306 @@
   color: var(--text-1);
 }
 
-.stg-nav-btn:target {
+.stg-nav-btn.on {
   background: var(--bg-active);
   color: var(--text-1);
 }
 
-/* The panel: the only scrolling pane in the view. */
-.stg-panel {
+.stg-nav-btn.on::before {
+  content: '';
+  position: absolute;
+  top: 7px;
+  bottom: 7px;
+  left: 0;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+}
+
+.stg-nav-icon {
+  flex: none;
+  color: var(--text-3);
+}
+
+.stg-nav-btn.on .stg-nav-icon {
+  color: var(--accent);
+}
+
+.stg-nav-label {
   flex: 1;
   min-width: 0;
-  overflow-y: auto;
-  scrollbar-gutter: stable;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.stg-panel::-webkit-scrollbar {
-  width: 8px;
+.stg-nav-count {
+  flex: none;
+  color: var(--text-3);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
-.stg-panel::-webkit-scrollbar-thumb {
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.08);
+/* ── panel ── */
+
+.stg-panel {
+  min-height: 0;
+  padding: 28px 36px 40px;
+  align-items: stretch;
 }
 
-.stg-panel::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.14);
+.stg-panel:focus {
+  outline: none;
 }
 
-.stg-panel .pn-list,
-.stg-panel .pn-list--wide {
+.stg-results-view,
+.stg-section {
   width: 100%;
+}
+
+.stg-head {
+  margin-bottom: 16px;
+}
+
+.stg-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.stg-lead {
+  margin: 5px 0 0;
+  max-width: 62ch;
+  color: var(--text-3);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* the MCP section brings its own lead under the bare title */
+.stg-head + .pn-lead {
+  margin-top: 0;
+}
+
+/* ── grouped rows: one hairline card per list, dividers between rows ── */
+
+.stg-panel .pn-list {
+  width: min(620px, 100%);
+  gap: 0;
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  overflow: hidden;
+}
+
+.stg-panel .pn-list--wide {
+  width: min(740px, 100%);
+}
+
+.stg-panel .pn-row {
+  padding: 13px 16px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.stg-panel .pn-row + .pn-row {
+  border-top: 1px solid var(--line);
+}
+
+.stg-panel .pn-row--stack {
+  gap: 10px;
+}
+
+/* the row a search result landed on, until the next tab or search */
+.stg-panel .pn-row.stg-found {
+  background: rgba(220, 162, 75, 0.06);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* the keyboard section's groups are their own cards, each led by its name */
+.stg-panel .kb-set {
   margin-top: 12px;
 }
 
-.stg-panel .pn-section {
-  margin-top: 22px;
-  scroll-margin-top: 8px;
+.stg-panel .kb-set .kb-group-label {
+  padding: 9px 16px 3px;
+  font-size: 11px;
 }
 
-.stg-panel .pn-section:first-child {
-  margin-top: 6px;
+/* ── search results ── */
+
+.stg-results-view {
+  max-width: 740px;
 }
 
-/* Compact density: the rows and gutters pull in, type stays put. */
+.stg-result-list {
+  display: flex;
+  flex-direction: column;
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  overflow: hidden;
+}
+
+.stg-result {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  width: 100%;
+  padding: 11px 16px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: default;
+}
+
+.stg-result + .stg-result {
+  border-top: 1px solid var(--line);
+}
+
+.stg-result:hover {
+  background: var(--bg-hover);
+}
+
+.stg-result:focus-visible {
+  outline-offset: -2px;
+}
+
+.stg-result-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.stg-result-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-1);
+}
+
+.stg-result-detail {
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.stg-result-where {
+  flex: none;
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+.stg-more {
+  margin: 10px 0 0;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.stg-empty {
+  margin-top: 18px;
+}
+
+.stg-empty-name {
+  margin: 0;
+  color: var(--text-1);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.stg-empty-detail {
+  margin: 5px 0 0;
+  color: var(--text-3);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* ── the Keyboard tab's filter ── */
+
+.stg-kb-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: min(620px, 100%);
+}
+
+.stg-kb-filter {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: text;
+}
+
+.stg-kb-filter:focus-within {
+  border-color: rgba(255, 255, 255, 0.2);
+  background: var(--bg-hover);
+}
+
+.stg-kb-filter input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: none;
+  color: var(--text-1);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.stg-kb-filter input::placeholder {
+  color: var(--text-3);
+}
+
+.stg-kb-filter input::-webkit-search-decoration,
+.stg-kb-filter input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+}
+
+.stg-kb-clear {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.stg-kb-clear:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-1);
+}
+
+.stg-kb-count {
+  flex: none;
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.stg-kb-bar .pn-btn {
+  height: 28px;
+}
+
+/* ── compact density ── */
+
 html[data-density='compact'] .pn-row {
   padding-top: 7px;
   padding-bottom: 7px;
@@ -91,39 +458,76 @@ html[data-density='compact'] .pn-list {
   gap: 0;
 }
 
-html[data-density='compact'] .stg-panel .pn-section {
-  margin-top: 16px;
+html[data-density='compact'] .stg-nav-btn {
+  height: 28px;
 }
 
-/* phone width: the rail becomes a top scroller above the panel */
+html[data-density='compact'] .stg-side {
+  gap: 10px;
+}
+
+html[data-density='compact'] .stg-panel .pn-row {
+  padding-top: 9px;
+  padding-bottom: 9px;
+}
+
+/* ── phone: search and a horizontal tab strip above the pane ── */
+
 @media (max-width: 700px) {
   .settings {
-    flex-direction: column;
-    gap: 12px;
-    padding: 18px 16px 32px;
-    overflow-y: auto;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .stg-side {
+    gap: 8px;
+    padding: 12px 14px 8px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .stg-search {
+    height: 34px;
   }
 
   .stg-nav {
-    flex: none;
     flex-direction: row;
-    gap: 4px;
+    gap: 2px;
     overflow-x: auto;
-    padding-top: 0;
-    padding-bottom: 4px;
+    overflow-y: hidden;
+    padding-bottom: 2px;
     -webkit-overflow-scrolling: touch;
   }
 
+  /* the strip is flat: the group wrappers dissolve into the row */
+  .stg-nav-group {
+    display: contents;
+  }
+
+  .stg-nav-group + .stg-nav-group {
+    margin-top: 0;
+  }
+
+  .stg-nav-group-label {
+    display: none;
+  }
+
   .stg-nav-btn {
-    flex: none;
+    width: auto;
+    height: 30px;
+    padding: 0 10px;
+  }
+
+  .stg-nav-btn.on::before {
+    top: auto;
+    right: 10px;
+    bottom: 0;
+    left: 10px;
+    width: auto;
+    height: 2px;
   }
 
   .stg-panel {
-    overflow-y: visible;
+    padding: 18px 16px 32px;
   }
-}
-
-html[data-reduce-motion] .stg-nav-btn,
-html[data-reduce-motion] .stg-nav-btn:hover {
-  transition: none;
 }

@@ -82,9 +82,12 @@ spacing.
   Metrics, Settings - spaced evenly. The Mobile tile is the phones'
   status without words: green tile + black glyph while one is
   reachable, a hollow corner dot while away, quiet when there is none.
-- **Settings is a view, not a popup:** a slim section rail on the left
-  (New tasks, Appearance, Startup, Cloud, Daemon, Harnesses, This install),
-  the panel on the right. Phone width stacks the rail into a top scroller.
+- **Settings is a window over the app:** a sidebar with a settings search
+  and one tab per section, grouped General (New tasks, Appearance, Startup,
+  Keyboard), System (Cloud, Daemon, Harnesses, MCP servers), Chats (Archived
+  chats), and About (This install). Only the selected section fills the
+  right pane, its rows in hairline groups rather than floating cards. Phone
+  width stacks the search and a horizontal tab strip above the pane.
 - **Main canvas:** one view at a time; views are flat lists/cards, not
   dashboards.
 
@@ -119,6 +122,15 @@ spacing.
   recurring primary action, rewarded.
 - **PickerMenu:** the one dropdown engine - opens at the cursor, searches,
   optional groups, keyboard-navigated, viewport-clamped.
+- **Settings search:** one field above the tabs; searches every setting's
+  label, keywords and description across sections. Results name their
+  section, and choosing one opens that tab and marks the matching row.
+- **Keyboard filter:** the Keyboard tab carries its own filter beside a
+  Reset all action; an action answers by name, group, or current key
+  ("Ctrl+N"), and the row being rebound stays visible while it is captured.
+- **Switches (`tg-switch`):** real toggles for settings - 30x18 with a
+  sliding knob, amber when on; green stays reserved for running/ok. On/Off
+  words never stand in for a switch.
 - **Modals:** one family (Esc / backdrop / X close): onboarding panel, device,
   plugin, about, confirm. Panels, not surprise shapes.
 - **Context ring:** a 20px SVG donut of context-window usage (2px stroke,

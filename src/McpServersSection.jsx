@@ -61,7 +61,7 @@ export default function McpServersSection() {
           const state = serverState(p)
           const host = machineName(machines, p.machine)
           return (
-            <div key={p.id} className="pn-row pn-row--stack">
+            <div key={p.id} className="pn-row pn-row--stack" data-stg={`mcp-${p.id}`}>
               <div className="pn-row-main">
                 <div>
                   <div className="pn-name">{p.name}</div>
@@ -108,7 +108,7 @@ export default function McpServersSection() {
         })}
       </div>
       <div className="pn-list pn-list--tight">
-        <div className="pn-row">
+        <div className="pn-row" data-stg="mcp-add">
           <div>
             <div className="pn-name">Add an MCP server</div>
             <div className="pn-detail">Its launch command, as the machine would start it.</div>
