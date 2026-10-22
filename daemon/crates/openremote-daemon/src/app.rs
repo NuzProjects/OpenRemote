@@ -67,6 +67,29 @@ impl App {
             for preset in crate::marketplace::presets(openremote_core::now_ms()) {
                 let _ = store.seed_marketplace(preset);
             }
+            // Migrate an existing official marketplace record pointing at the
+            // older separate morewebs/openremote-plugins repository, resetting its
+            // source to the project's own repository and clearing any fetch error.
+            if let Ok(record) = store.marketplace(crate::marketplace::OFFICIAL) {
+                let stale = match &record.source {
+                    openremote_core::MarketplaceSource::Github { repo, .. } => {
+                        repo.eq_ignore_ascii_case("morewebs/openremote-plugins")
+                    }
+                    openremote_core::MarketplaceSource::Git { url, .. } => {
+                        url.to_ascii_lowercase().contains("openremote-plugins")
+                    }
+                    _ => false,
+                };
+                if stale {
+                    let mut updated = record.clone();
+                    updated.source = openremote_core::MarketplaceSource::Github {
+                        repo: crate::marketplace::OFFICIAL_REPO.to_string(),
+                        reference: None,
+                    };
+                    updated.error = None;
+                    let _ = store.put_marketplace(updated);
+                }
+            }
         }
         let plugins = crate::plugins::PluginHost::new(&options.data_dir);
         let marketplaces = crate::marketplace::MarketplaceHost::new(&options.data_dir);
@@ -326,6 +349,68 @@ mod tests {
             dir.join("token").is_dir(),
             "no token was minted over the unreadable path"
         );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn stale_official_marketplace_record_migrates_on_startup() {
+        let dir = std::env::temp_dir().join(format!("or-mig-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        {
+            let mut store = openremote_core::Store::open(dir.clone()).unwrap();
+            let stale = openremote_core::MarketplaceRecord {
+                name: crate::marketplace::OFFICIAL.to_string(),
+                source: openremote_core::MarketplaceSource::Github {
+                    repo: "morewebs/openremote-plugins".into(),
+                    reference: None,
+                },
+                enabled: true,
+                removable: false,
+                owner: None,
+                description: None,
+                plugin_count: 0,
+                added_at: 100,
+                refreshed_at: None,
+                error: Some(
+                    "git could not fetch https://github.com/morewebs/openremote-plugins.git".into(),
+                ),
+                heads: Default::default(),
+            };
+            store.seed_marketplace(stale).unwrap();
+            let custom = openremote_core::MarketplaceRecord {
+                name: "community".to_string(),
+                source: openremote_core::MarketplaceSource::Github {
+                    repo: "other/community-plugins".into(),
+                    reference: None,
+                },
+                enabled: true,
+                removable: true,
+                owner: None,
+                description: None,
+                plugin_count: 0,
+                added_at: 100,
+                refreshed_at: None,
+                error: Some("some error".into()),
+                heads: Default::default(),
+            };
+            store.seed_marketplace(custom).unwrap();
+        }
+        let app = App::new(AppOptions {
+            token: "test-token".into(),
+            data_dir: dir.clone(),
+            cloud: openremote_cloud::CloudConfig::from_env(),
+        }).await;
+        let store = crate::supervisor::lock_recovering(&app.store);
+        let migrated = store.marketplace(crate::marketplace::OFFICIAL).unwrap();
+        assert!(matches!(
+            &migrated.source,
+            openremote_core::MarketplaceSource::Github { repo, .. } if repo == crate::marketplace::OFFICIAL_REPO
+        ));
+        assert!(migrated.error.is_none());
+        let custom = store.marketplace("community").unwrap();
+        assert!(custom.error.is_some());
+        drop(store);
+        drop(app);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

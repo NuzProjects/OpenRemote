@@ -1,0 +1,42 @@
+{
+  "name": "openremote",
+  "owner": {
+    "name": "moreweb",
+    "url": "https://moreweb.space"
+  },
+  "metadata": {
+    "description": "OpenRemote's own plugins, each reviewed by moreweb before it is listed.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "dictation",
+      "displayName": "Dictation",
+      "description": "Speak into the composer: a microphone button that writes what you say at the cursor, through any OpenAI-compatible transcription service (OpenAI's own, another provider's, or a whisper server on your computer).",
+      "version": "0.1.0",
+      "author": {
+        "name": "moreweb",
+        "url": "https://moreweb.space"
+      },
+      "homepage": "https://github.com/morewebs/OpenRemote/tree/main/examples/plugins/dictation",
+      "license": "AGPL-3.0-only",
+      "category": "productivity",
+      "keywords": [
+        "dictation",
+        "voice",
+        "speech-to-text",
+        "whisper"
+      ],
+      "source": "./examples/plugins/dictation",
+      "metadata": {
+        "openremote": {
+          "runtime": "js",
+          "powers": [
+            "microphone",
+            "network"
+          ]
+        }
+      }
+    }
+  ]
+}

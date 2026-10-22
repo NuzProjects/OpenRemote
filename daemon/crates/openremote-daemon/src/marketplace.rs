@@ -23,7 +23,7 @@ use crate::plugins::{self, Fetch, PluginError};
 
 /// OpenRemote's own marketplace, and where it lives.
 pub const OFFICIAL: &str = "openremote";
-pub const OFFICIAL_REPO: &str = "morewebs/openremote-plugins";
+pub const OFFICIAL_REPO: &str = "morewebs/OpenRemote";
 /// Anthropic's directory of Claude Code plugins, added out of the box.
 pub const ANTHROPIC: &str = "claude-plugins-official";
 pub const ANTHROPIC_REPO: &str = "anthropics/claude-plugins-official";
@@ -197,7 +197,11 @@ pub fn check_name(name: &str, source: &MarketplaceSource) -> Result<(), PluginEr
         ));
     }
     let home = github_path(source);
-    if canonical == OFFICIAL && home.as_deref() != Some(OFFICIAL_REPO) {
+    if canonical == OFFICIAL
+        && !home
+            .as_deref()
+            .is_some_and(|h| h.eq_ignore_ascii_case(OFFICIAL_REPO))
+    {
         return Err(PluginError::Invalid(format!(
             "the name '{name}' belongs to OpenRemote's own marketplace ({OFFICIAL_REPO})"
         )));
@@ -960,7 +964,7 @@ mod tests {
         assert!(check_name("my-tools", &elsewhere).is_ok());
 
         let official = MarketplaceSource::Git {
-            url: "https://github.com/morewebs/openremote-plugins.git".into(),
+            url: "https://github.com/morewebs/OpenRemote.git".into(),
             reference: None,
         };
         assert!(check_name("openremote", &official).is_ok());
