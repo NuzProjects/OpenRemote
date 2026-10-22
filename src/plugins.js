@@ -78,13 +78,16 @@ export function isStale(record, now = Date.now()) {
 
 // Discover's filters: every word somewhere in the name, description,
 // author, category or tags; one category; one marketplace.
-export function filterEntries(entries, { query = '', category = '', marketplace = '' } = {}) {
+export function filterEntries(entries, filters = {}) {
+  const { query = '', category = '', marketplace = '' } = filters ?? {}
   const words = query.toLowerCase().split(/\s+/).filter(Boolean)
   return (entries ?? []).filter((e) => {
+    if (!e) return false
     if (category && e.category !== category) return false
     if (marketplace && e.marketplace !== marketplace) return false
     if (!words.length) return true
-    const hay = [e.name, e.display_name, e.description, e.author, e.category, ...(e.tags ?? [])]
+    const tags = Array.isArray(e.tags) ? e.tags : []
+    const hay = [e.name, e.display_name, e.description, e.author, e.category, ...tags]
       .filter(Boolean)
       .join(' ')
       .toLowerCase()
@@ -117,6 +120,27 @@ export function pluginInitials(name) {
   return single.toUpperCase()
 }
 
+// Recognized tool and author brand keys mapped from plugin id or name.
+// Maps github, gitlab, docker, android, aws, slack, pdf, jupyter, python, figma
+// to canonical brand keys, or returns null.
+export function resolvePluginBrand(id, name) {
+  const text = `${id ?? ''} ${name ?? ''}`.toLowerCase()
+  if (!text.trim()) return null
+
+  if (text.includes('gitlab')) return 'gitlab'
+  if (text.includes('github')) return 'github'
+  if (text.includes('docker')) return 'docker'
+  if (text.includes('android')) return 'android'
+  if (text.includes('slack')) return 'slack'
+  if (text.includes('jupyter')) return 'jupyter'
+  if (text.includes('python')) return 'python'
+  if (text.includes('figma')) return 'figma'
+  if (/(?:^|[^a-z0-9])aws(?:[^a-z0-9]|$)/.test(text)) return 'aws'
+  if (/(?:^|[^a-z0-9])pdf(?:[^a-z0-9]|$)/.test(text)) return 'pdf'
+
+  return null
+}
+
 function titleCase(text) {
   if (!text) return ''
   return text
@@ -131,6 +155,7 @@ function titleCase(text) {
 export function groupEntriesByCategory(entries) {
   const map = new Map()
   for (const entry of entries ?? []) {
+    if (!entry) continue
     const raw = (entry.category ?? '').trim()
     const cat = raw ? raw.toLowerCase() : 'general'
     if (!map.has(cat)) {
@@ -154,12 +179,14 @@ export function groupEntriesByCategory(entries) {
 // match > description match > author/marketplace) with safe substring
 // matching that handles regex characters without throwing. When query is
 // absent, results sort alphabetically by display name.
-export function searchEntries(entries, { query = '', category = '', marketplace = '' } = {}) {
+export function searchEntries(entries, filters = {}) {
+  const { query = '', category = '', marketplace = '' } = filters ?? {}
   const q = (query ?? '').trim().toLowerCase()
   const words = q.split(/\s+/).filter(Boolean)
   const catFilter = (category ?? '').trim().toLowerCase()
 
   const list = (entries ?? []).filter((e) => {
+    if (!e) return false
     if (catFilter) {
       const eCat = (e.category ?? '').trim().toLowerCase()
       if (catFilter === 'general') {
@@ -171,7 +198,8 @@ export function searchEntries(entries, { query = '', category = '', marketplace 
     if (marketplace && e.marketplace !== marketplace) return false
     if (!words.length) return true
 
-    const hay = [e.name, e.display_name, e.description, e.author, e.category, e.marketplace, ...(e.tags ?? [])]
+    const tags = Array.isArray(e.tags) ? e.tags : []
+    const hay = [e.name, e.display_name, e.description, e.author, e.category, e.marketplace, ...tags]
       .filter(Boolean)
       .join(' ')
       .toLowerCase()
@@ -190,7 +218,7 @@ export function searchEntries(entries, { query = '', category = '', marketplace 
     const disp = (e.display_name ?? '').toLowerCase()
     const desc = (e.description ?? '').toLowerCase()
     const author = (e.author ?? '').toLowerCase()
-    const tags = (e.tags ?? []).map((t) => String(t).toLowerCase())
+    const tags = (Array.isArray(e.tags) ? e.tags : []).map((t) => String(t).toLowerCase())
 
     // Exact matches
     if (name === q || disp === q) s += 1000

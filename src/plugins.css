@@ -387,6 +387,33 @@
   font-size: 12.5px;
 }
 
+.pg-icon-tile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-2);
+  user-select: none;
+  overflow: hidden;
+}
+
+.pg-icon-monogram {
+  font-family: 'Geist Mono', monospace;
+  font-weight: 500;
+  color: var(--text-2);
+  letter-spacing: 0.5px;
+  line-height: 1;
+}
+
+.pg-icon-svg {
+  display: block;
+}
+
 .pg-update {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);

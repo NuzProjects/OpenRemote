@@ -14,6 +14,7 @@ import {
   isStale,
   notSandboxed,
   pluginInitials,
+  resolvePluginBrand,
   searchEntries,
   sourceLabel,
   sourceRequest,
@@ -171,5 +172,58 @@ test('searchEntries filters by category and marketplace and sorts alphabetically
 
   const inCommunity = searchEntries(entries, { marketplace: 'community' })
   assert.deepEqual(inCommunity.map((e) => e.name), ['beta'])
+})
+
+test('resolvePluginBrand identifies recognized brands from id and name or returns null', () => {
+  assert.equal(resolvePluginBrand('gh-cli', 'github-tool'), 'github')
+  assert.equal(resolvePluginBrand('org.gitlab.runner', 'GitLab CI'), 'gitlab')
+  assert.equal(resolvePluginBrand('docker-compose', 'Docker Compose'), 'docker')
+  assert.equal(resolvePluginBrand('android-tools', 'Android Studio Bridge'), 'android')
+  assert.equal(resolvePluginBrand('aws-lambda', 'AWS Cloud Tools'), 'aws')
+  assert.equal(resolvePluginBrand('slack-notifications', 'Slack Bot'), 'slack')
+  assert.equal(resolvePluginBrand('pdf-reader', 'PDF Export'), 'pdf')
+  assert.equal(resolvePluginBrand('jupyter-lab', 'Jupyter Notebooks'), 'jupyter')
+  assert.equal(resolvePluginBrand('python-runner', 'Python Linter'), 'python')
+  assert.equal(resolvePluginBrand('figma-sync', 'Figma Exporter'), 'figma')
+
+  // Case insensitive and partial / token matching
+  assert.equal(resolvePluginBrand('GITHUB', 'tool'), 'github')
+  assert.equal(resolvePluginBrand(null, 'Slack'), 'slack')
+  assert.equal(resolvePluginBrand('docker', null), 'docker')
+
+  // Unrecognized tools return null
+  assert.equal(resolvePluginBrand('custom-plugin', 'My Custom Plugin'), null)
+  assert.equal(resolvePluginBrand('', ''), null)
+  assert.equal(resolvePluginBrand(null, null), null)
+})
+
+test('searchEntries and groupEntriesByCategory handle null entries, null filters, and malformed tags defensively', () => {
+  const malformedEntries = [
+    null,
+    undefined,
+    { name: 'alpha', category: 'tools', tags: 'not-an-array' },
+    { name: 'beta', category: 'tools', tags: null },
+    { name: 'gamma', tags: ['good'] },
+  ]
+
+  // searchEntries with null filters
+  assert.doesNotThrow(() => {
+    const res = searchEntries(malformedEntries, null)
+    assert.equal(res.length, 3)
+    assert.deepEqual(res.map((e) => e.name), ['alpha', 'beta', 'gamma'])
+  })
+
+  // searchEntries query on malformed tags and null entries
+  assert.doesNotThrow(() => {
+    const res = searchEntries(malformedEntries, { query: 'good' })
+    assert.equal(res.length, 1)
+    assert.equal(res[0].name, 'gamma')
+  })
+
+  // groupEntriesByCategory with null/undefined elements
+  assert.doesNotThrow(() => {
+    const groups = groupEntriesByCategory(malformedEntries)
+    assert.equal(groups.length, 2)
+  })
 })
 
