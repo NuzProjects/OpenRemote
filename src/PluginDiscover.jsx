@@ -15,7 +15,6 @@ import { useConsole } from './state/console.jsx'
 import PluginCard from './PluginCard.jsx'
 import PluginDetailModal from './PluginDetailModal.jsx'
 import {
-  categories,
   groupEntriesByCategory,
   isStale,
   searchEntries,
@@ -97,10 +96,14 @@ export default function PluginDiscover({ onInstall }) {
     return searchEntries(all, { query, category, marketplace: market })
   }, [isFiltering, all, query, category, market])
 
-  const groups = useMemo(() => {
-    if (isFiltering) return []
-    return groupEntriesByCategory(all)
-  }, [isFiltering, all])
+  const allGroups = useMemo(() => groupEntriesByCategory(all), [all])
+
+  const categoryOptions = useMemo(
+    () => allGroups.map((g) => ({ value: g.category, label: g.label })),
+    [allGroups],
+  )
+
+  const groups = isFiltering ? [] : allGroups
 
   if (!on.length) {
     return (
@@ -145,9 +148,9 @@ export default function PluginDiscover({ onInstall }) {
           aria-label="Category"
         >
           <option value="">All categories</option>
-          {categories(all).map((c) => (
-            <option key={c} value={c}>
-              {c}
+          {categoryOptions.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
             </option>
           ))}
         </select>

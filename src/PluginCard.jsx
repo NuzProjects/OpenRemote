@@ -32,10 +32,9 @@ export function PluginCard({ entry, onInstall, onInspect }) {
       className="pg-card"
       onClick={handleInspect}
       onKeyDown={handleKeyDown}
-      aria-label={displayName}
     >
       <PluginIcon
-        name={entry.name ?? displayName}
+        name={displayName}
         id={entry.id}
         category={entry.category}
         size={36}
@@ -85,7 +84,7 @@ export function PluginCard({ entry, onInstall, onInspect }) {
           <span className="pg-card-status pg-card-status--installed">Installed</span>
         )}
         {state === 'unavailable' && (
-          <span className="pg-card-status">Unavailable</span>
+          <span className="pg-card-status">Can&apos;t install</span>
         )}
       </div>
     </div>

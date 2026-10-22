@@ -390,4 +390,45 @@ test('groupEntriesByCategory handles groups of 6, missing categories, and empty 
   assert.deepEqual(groupEntriesByCategory(undefined), [])
 })
 
+test('category filter options and searchEntries handle General and case-insensitive categories', () => {
+  const mixedEntries = [
+    { name: 'alpha', category: 'developer-tools' },
+    { name: 'beta', category: 'SECURITY' },
+    { name: 'gamma', category: null },
+    { name: 'delta', category: 'General' },
+    { name: 'epsilon' },
+  ]
+
+  // Verify groupEntriesByCategory derives title-cased labels with General last
+  const groups = groupEntriesByCategory(mixedEntries)
+  const options = groups.map((g) => ({ value: g.category, label: g.label }))
+  assert.deepEqual(options, [
+    { value: 'developer-tools', label: 'Developer Tools' },
+    { value: 'security', label: 'Security' },
+    { value: 'general', label: 'General' },
+  ])
+
+  // searchEntries by category 'general' captures explicit General and uncategorized
+  const generalResults = searchEntries(mixedEntries, { category: 'general' })
+  assert.deepEqual(
+    generalResults.map((e) => e.name),
+    ['delta', 'epsilon', 'gamma'],
+  )
+
+  // searchEntries by category 'General' (title-case query) works identically
+  const generalTitleResults = searchEntries(mixedEntries, { category: 'General' })
+  assert.deepEqual(
+    generalTitleResults.map((e) => e.name),
+    ['delta', 'epsilon', 'gamma'],
+  )
+
+  // searchEntries by category 'security' matches case-insensitively
+  const secResults = searchEntries(mixedEntries, { category: 'security' })
+  assert.deepEqual(
+    secResults.map((e) => e.name),
+    ['beta'],
+  )
+})
+
+
 

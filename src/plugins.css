@@ -743,6 +743,7 @@
   .pg-card,
   .pg-expand-btn,
   .pg-search-input,
+  .pg-search-clear,
   .pg-select,
   .pg-add-input,
   .pg-spin {
@@ -755,6 +756,7 @@ html[data-reduce-motion] .pg-tab,
 html[data-reduce-motion] .pg-card,
 html[data-reduce-motion] .pg-expand-btn,
 html[data-reduce-motion] .pg-search-input,
+html[data-reduce-motion] .pg-search-clear,
 html[data-reduce-motion] .pg-select,
 html[data-reduce-motion] .pg-add-input,
 html[data-reduce-motion] .pg-spin {
@@ -766,7 +768,7 @@ html[data-reduce-motion] .pg-spin {
 /* ---- Plugin Detail Modal ---- */
 
 .pg-detail-modal {
-  width: 500px;
+  width: min(500px, 100%);
   display: flex;
   flex-direction: column;
   gap: 16px;
