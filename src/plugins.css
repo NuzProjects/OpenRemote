@@ -178,8 +178,29 @@
 }
 
 .pg-clash {
-  width: min(880px, 100%);
+  width: 100%;
   margin: 20px 0 0;
+}
+
+.pg-panel {
+  width: 100%;
+}
+
+.pg-head {
+  width: 100%;
+}
+
+.pg-installed-view,
+.pg-marketplaces-view {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.pg-list-full,
+.pn-list.pg-list-full {
+  width: 100%;
+  max-width: 100%;
 }
 
 /* ---- the three tabs ---- */
@@ -189,7 +210,7 @@
   gap: 4px;
   margin-top: 22px;
   border-bottom: 1px solid var(--line);
-  width: min(880px, 100%);
+  width: 100%;
 }
 
 .pg-tab {
@@ -628,7 +649,7 @@
 .pg-add-row {
   display: flex;
   gap: 8px;
-  width: min(880px, 100%);
+  width: 100%;
   margin-top: 12px;
 }
 
@@ -639,9 +660,47 @@
   padding: 0 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: transparent;
+  background: var(--bg-app);
   color: var(--text-1);
+  font: inherit;
   font-size: 12.5px;
+  outline: none;
+  transition: border-color 120ms ease;
+}
+
+.pg-add-input:focus {
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+.pg-author-badge {
+  margin-left: 6px;
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.pg-badge-marketplace {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-3);
+  font-family: 'Geist Mono', monospace;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.pg-mkt-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pg-mkt-status {
+  color: var(--text-3);
+  font-size: 12px;
 }
 
 .pg-icon-tile {
@@ -683,6 +742,9 @@
   .pg-tab,
   .pg-card,
   .pg-expand-btn,
+  .pg-search-input,
+  .pg-select,
+  .pg-add-input,
   .pg-spin {
     animation: none;
     transition: none;
@@ -692,6 +754,9 @@
 html[data-reduce-motion] .pg-tab,
 html[data-reduce-motion] .pg-card,
 html[data-reduce-motion] .pg-expand-btn,
+html[data-reduce-motion] .pg-search-input,
+html[data-reduce-motion] .pg-select,
+html[data-reduce-motion] .pg-add-input,
 html[data-reduce-motion] .pg-spin {
   animation: none;
   transition: none;

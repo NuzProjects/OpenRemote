@@ -61,7 +61,7 @@ export default function PluginMarketplaces() {
   }
 
   return (
-    <>
+    <div className="pg-marketplaces-view">
       <h2 className="pn-section">Add a marketplace</h2>
       <p className="pn-lead">
         Any Claude Code plugin marketplace works: owner/repo on GitHub, a git URL, a folder on this
@@ -92,9 +92,9 @@ export default function PluginMarketplaces() {
       {error && <p className="pn-error">{error}</p>}
 
       <h2 className="pn-section">Added</h2>
-      <div className="pn-list pn-list--wide">
+      <div className="pn-list pg-list-full">
         {(marketplaces ?? []).map((m) => (
-          <div className="pn-row pn-row--stack" key={m.name}>
+          <div className="pn-row pn-row--stack pg-mkt-card" key={m.name}>
             <div className="pn-row-main">
               <div>
                 <div className="pn-name">{m.name}</div>
@@ -138,9 +138,11 @@ export default function PluginMarketplaces() {
               </div>
             </div>
             <div className="pg-source pv">{sourceText(m.source)}</div>
-            <div className="pg-sub">
-              {m.refreshed_at && !m.error ? `${m.plugin_count} plugins · ` : ''}
-              {fetchedLabel(m)}
+            <div className="pg-sub pg-mkt-meta">
+              {m.refreshed_at && !m.error ? (
+                <span className="pg-chip">{m.plugin_count} {m.plugin_count === 1 ? 'plugin' : 'plugins'}</span>
+              ) : null}
+              <span className="pg-mkt-status">{fetchedLabel(m)}</span>
             </div>
             {m.error && <div className="pg-sub pg-failed">Couldn&apos;t fetch it: {m.error}</div>}
           </div>
@@ -149,6 +151,6 @@ export default function PluginMarketplaces() {
       <p className="pn-lead pg-mcp-note">
         Removing a marketplace keeps what you installed from it; those plugins just stop getting updates.
       </p>
-    </>
+    </div>
   )
 }

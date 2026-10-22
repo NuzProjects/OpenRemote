@@ -9,6 +9,7 @@ import { useConsole } from './state/console.jsx'
 import { HarnessMark } from './brand-marks.jsx'
 import InstallPluginModal from './InstallPluginModal.jsx'
 import PluginDiscover from './PluginDiscover.jsx'
+import PluginIcon from './PluginIcon.jsx'
 import PluginMarketplaces from './PluginMarketplaces.jsx'
 import { POWER_SHORT, RUNTIME_LABEL, clashes, notSandboxed, sourceLabel } from './plugins.js'
 import './devices.css'
@@ -28,8 +29,8 @@ export default function PluginsView() {
   const [installing, setInstalling] = useState(null)
 
   return (
-    <div className="panel">
-      <header className="dv-head pn-head">
+    <div className="panel pg-panel">
+      <header className="dv-head pn-head pg-head">
         <div>
           <h1 className="dv-title">Plugins</h1>
           <p className="dv-meta">
@@ -85,7 +86,7 @@ function InstalledPlugins({ onUpdate }) {
   }
 
   return (
-    <>
+    <div className="pg-installed-view">
       {clashing.map((c) => (
         <p key={c.name} className="pg-warn-block pg-clash">
           Two plugins named {c.name} are on: {c.ids.join(' and ')}. Their skills and commands share
@@ -95,11 +96,13 @@ function InstalledPlugins({ onUpdate }) {
 
       <h2 className="pn-section">Built in</h2>
       <p className="pn-lead">Off hides a harness from every picker. Its chats keep working.</p>
-      <div className="pn-list pn-list--tight">
+      <div className="pn-list pg-list-full pn-list--tight">
         {builtin.map((p) => (
           <div className="pn-row" key={p.id}>
             <div className="pg-main">
-              <HarnessMark harness={p.id} size={18} />
+              <div className="pg-icon-tile">
+                <HarnessMark harness={p.id} size={18} />
+              </div>
               <div>
                 <div className="pn-name">{p.name}</div>
                 <div className="pn-detail">
@@ -125,20 +128,30 @@ function InstalledPlugins({ onUpdate }) {
           or an archive.
         </p>
       )}
-      <div className="pn-list pn-list--wide">
+      <div className="pn-list pg-list-full">
         {installed.map((p) => {
           const entry = entries.get(p.id)
           const orphaned = p.marketplace !== 'local' && !known.has(p.marketplace)
+          const author = p.author ?? entry?.author
           return (
             <div className="pn-row pn-row--stack" key={p.id}>
               <div className="pn-row-main">
-                <div>
-                  <div className="pn-name">
-                    {p.name}
-                    {p.version && <span className="pg-version">{p.version}</span>}
-                    <span className="pg-id">@{p.marketplace}</span>
+                <div className="pg-main">
+                  <PluginIcon
+                    name={p.name}
+                    id={p.id}
+                    category={entry?.category}
+                    size={36}
+                  />
+                  <div>
+                    <div className="pn-name">
+                      {p.name}
+                      {p.version && <span className="pg-version">{p.version}</span>}
+                      {author && <span className="pg-author-badge">by {author}</span>}
+                      <span className="pg-badge-marketplace">@{p.marketplace}</span>
+                    </div>
+                    <div className="pn-detail">{p.description ?? RUNTIME_LABEL[p.runtime]}</div>
                   </div>
-                  <div className="pn-detail">{p.description ?? RUNTIME_LABEL[p.runtime]}</div>
                 </div>
                 <div className="pn-actions">
                   {entry?.update && (
@@ -190,6 +203,6 @@ function InstalledPlugins({ onUpdate }) {
       </div>
       <p className="pn-lead pg-mcp-note">MCP servers you set up by hand are in Settings, under MCP servers.</p>
       {error && <p className="pn-error">{error}</p>}
-    </>
+    </div>
   )
 }
