@@ -496,14 +496,16 @@
   background: rgba(255, 255, 255, 0.03);
 }
 
+.pg-grid,
 .pg-grid-2col {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: 12px;
   width: 100%;
 }
 
-@media (max-width: 840px) {
+@media (max-width: 680px) {
+  .pg-grid,
   .pg-grid-2col {
     grid-template-columns: minmax(0, 1fr);
   }
