@@ -10,8 +10,11 @@ import {
   entryState,
   fetchedLabel,
   filterEntries,
+  groupEntriesByCategory,
   isStale,
   notSandboxed,
+  pluginInitials,
+  searchEntries,
   sourceLabel,
   sourceRequest,
 } from './plugins.js'
@@ -94,3 +97,79 @@ test('an entry installs by its marketplace and name, a command only once approve
   assert.equal(entryState({ installable: true, installed: {}, update: false }), 'installed')
   assert.equal(entryState({ installable: true, installed: {}, update: true }), 'update')
 })
+
+test('pluginInitials derives 1-2 uppercase characters or PL fallback', () => {
+  assert.equal(pluginInitials('42crunch-api'), '42')
+  assert.equal(pluginInitials('agent-sdk'), 'AS')
+  assert.equal(pluginInitials('docker'), 'DO')
+  assert.equal(pluginInitials(''), 'PL')
+  assert.equal(pluginInitials('!!!'), 'PL')
+  assert.equal(pluginInitials('a'), 'A')
+  assert.equal(pluginInitials(null), 'PL')
+})
+
+test('groupEntriesByCategory clusters entries into title-cased categories and General fallback', () => {
+  const entries = [
+    { name: 'scanner', category: 'security' },
+    { name: 'linter', category: 'development' },
+    { name: 'debugger', category: 'development' },
+    { name: 'misc-tool' },
+    { name: 'empty-cat', category: '   ' },
+  ]
+  const groups = groupEntriesByCategory(entries)
+  assert.deepEqual(
+    groups.map((g) => ({ category: g.category, label: g.label })),
+    [
+      { category: 'development', label: 'Development' },
+      { category: 'security', label: 'Security' },
+      { category: 'general', label: 'General' },
+    ],
+  )
+  assert.deepEqual(groups[0].entries.map((e) => e.name), ['linter', 'debugger'])
+  assert.deepEqual(groups[1].entries.map((e) => e.name), ['scanner'])
+  assert.deepEqual(groups[2].entries.map((e) => e.name), ['misc-tool', 'empty-cat'])
+
+  assert.deepEqual(groupEntriesByCategory([]), [])
+  assert.deepEqual(groupEntriesByCategory(null), [])
+})
+
+test('searchEntries ranks exact and prefix matches ahead of description-only matches', () => {
+  const entries = [
+    { name: 'code-helper', description: 'Includes a lint feature' },
+    { name: 'linter', description: 'Checks JavaScript syntax' },
+    { name: 'lint', description: 'Exact match tool' },
+    { name: 'unrelated', description: 'Does other tasks' },
+  ]
+  const results = searchEntries(entries, { query: 'lint' })
+  assert.deepEqual(results.map((e) => e.name), ['lint', 'linter', 'code-helper'])
+})
+
+test('searchEntries handles regex characters safely without throwing', () => {
+  const entries = [
+    { name: 'regex-special.*[tool]', description: 'Has special.*[regex] characters' },
+    { name: 'normal-tool', description: 'Standard description' },
+  ]
+  assert.doesNotThrow(() => {
+    const results = searchEntries(entries, { query: 'special.*[regex]' })
+    assert.equal(results.length, 1)
+    assert.equal(results[0].name, 'regex-special.*[tool]')
+  })
+  assert.doesNotThrow(() => {
+    const emptyResults = searchEntries(entries, { query: 'notfound.*[pattern]' })
+    assert.equal(emptyResults.length, 0)
+  })
+})
+
+test('searchEntries filters by category and marketplace and sorts alphabetically when query is absent', () => {
+  const entries = [
+    { name: 'zebra', category: 'tools', marketplace: 'core' },
+    { name: 'alpha', category: 'tools', marketplace: 'core' },
+    { name: 'beta', category: 'other', marketplace: 'community' },
+  ]
+  const inTools = searchEntries(entries, { category: 'tools' })
+  assert.deepEqual(inTools.map((e) => e.name), ['alpha', 'zebra'])
+
+  const inCommunity = searchEntries(entries, { marketplace: 'community' })
+  assert.deepEqual(inCommunity.map((e) => e.name), ['beta'])
+})
+

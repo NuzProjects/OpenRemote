@@ -96,6 +96,139 @@ export function categories(entries) {
   return [...new Set((entries ?? []).map((e) => e.category).filter(Boolean))].sort()
 }
 
+// Derive 1-2 uppercase characters from a plugin name for its tile monogram.
+// Starts with two digits if present (e.g. '42crunch' -> '42'), initials of
+// the first two words (e.g. 'agent-sdk' -> 'AS'), the first two letters of a
+// single word ('docker' -> 'DO'), or 'PL' when empty or non-alphanumeric.
+export function pluginInitials(name) {
+  if (!name || typeof name !== 'string') return 'PL'
+  const trimmed = name.trim()
+  const leadingDigits = trimmed.match(/^(\d{2})/)
+  if (leadingDigits) return leadingDigits[1]
+  const words = trimmed.match(/[a-zA-Z0-9]+/g)
+  if (!words || words.length === 0) return 'PL'
+  if (words.length >= 2) {
+    return (words[0][0] + words[1][0]).toUpperCase()
+  }
+  const single = words[0]
+  if (single.length >= 2) {
+    return single.slice(0, 2).toUpperCase()
+  }
+  return single.toUpperCase()
+}
+
+function titleCase(text) {
+  if (!text) return ''
+  return text
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ')
+}
+
+// Groups catalog into sorted category clusters. Missing or blank categories
+// bucket into 'General' at the end. Categories with no entries are omitted.
+export function groupEntriesByCategory(entries) {
+  const map = new Map()
+  for (const entry of entries ?? []) {
+    const raw = (entry.category ?? '').trim()
+    const cat = raw ? raw.toLowerCase() : 'general'
+    if (!map.has(cat)) {
+      map.set(cat, {
+        category: cat,
+        label: titleCase(cat),
+        entries: [],
+      })
+    }
+    map.get(cat).entries.push(entry)
+  }
+  return [...map.values()].sort((a, b) => {
+    if (a.category === 'general' && b.category !== 'general') return 1
+    if (b.category === 'general' && a.category !== 'general') return -1
+    return a.label.localeCompare(b.label)
+  })
+}
+
+// Search catalog entries by query, category, and marketplace. When a text
+// query is provided, entries are scored by relevance (exact match > prefix
+// match > description match > author/marketplace) with safe substring
+// matching that handles regex characters without throwing. When query is
+// absent, results sort alphabetically by display name.
+export function searchEntries(entries, { query = '', category = '', marketplace = '' } = {}) {
+  const q = (query ?? '').trim().toLowerCase()
+  const words = q.split(/\s+/).filter(Boolean)
+  const catFilter = (category ?? '').trim().toLowerCase()
+
+  const list = (entries ?? []).filter((e) => {
+    if (catFilter) {
+      const eCat = (e.category ?? '').trim().toLowerCase()
+      if (catFilter === 'general') {
+        if (eCat && eCat !== 'general') return false
+      } else if (eCat !== catFilter) {
+        return false
+      }
+    }
+    if (marketplace && e.marketplace !== marketplace) return false
+    if (!words.length) return true
+
+    const hay = [e.name, e.display_name, e.description, e.author, e.category, e.marketplace, ...(e.tags ?? [])]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase()
+    return words.every((w) => hay.includes(w))
+  })
+
+  if (!q) {
+    return list.sort((a, b) =>
+      (a.display_name || a.name || '').localeCompare(b.display_name || b.name || ''),
+    )
+  }
+
+  function score(e) {
+    let s = 0
+    const name = (e.name ?? '').toLowerCase()
+    const disp = (e.display_name ?? '').toLowerCase()
+    const desc = (e.description ?? '').toLowerCase()
+    const author = (e.author ?? '').toLowerCase()
+    const tags = (e.tags ?? []).map((t) => String(t).toLowerCase())
+
+    // Exact matches
+    if (name === q || disp === q) s += 1000
+    // Prefix matches
+    else if (name.startsWith(q) || disp.startsWith(q)) s += 500
+    // Substring in name
+    else if (name.includes(q) || disp.includes(q)) s += 200
+
+    // Exact tag match
+    if (tags.includes(q)) s += 150
+
+    // Description contains full query
+    if (desc.includes(q)) s += 50
+
+    // Author match
+    if (author.includes(q)) s += 30
+
+    // Word-level scoring
+    for (const w of words) {
+      if (name.includes(w) || disp.includes(w)) s += 20
+      if (tags.some((t) => t.includes(w))) s += 15
+      if (desc.includes(w)) s += 10
+    }
+
+    return s
+  }
+
+  return list
+    .map((e) => ({ entry: e, score: score(e) }))
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score
+      const nameA = a.entry.display_name || a.entry.name || ''
+      const nameB = b.entry.display_name || b.entry.name || ''
+      return nameA.localeCompare(nameB)
+    })
+    .map((item) => item.entry)
+}
+
 // A Discover entry's install, as the daemon takes it. A command entry
 // stages only with the exact command the user was shown.
 export function entrySource(entry, approveCommand = null) {
