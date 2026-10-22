@@ -227,3 +227,167 @@ test('searchEntries and groupEntriesByCategory handle null entries, null filters
   })
 })
 
+test('pluginInitials handles edge cases including whitespace, symbols, numbers, and multi-segment names', () => {
+  // Empty string and whitespace
+  assert.equal(pluginInitials(''), 'PL')
+  assert.equal(pluginInitials('   '), 'PL')
+  assert.equal(pluginInitials('\t\n  '), 'PL')
+
+  // Symbols-only strings
+  assert.equal(pluginInitials('!@#$%'), 'PL')
+  assert.equal(pluginInitials('---_+++'), 'PL')
+  assert.equal(pluginInitials('   ***   '), 'PL')
+
+  // Numbers-only
+  assert.equal(pluginInitials('1234'), '12')
+  assert.equal(pluginInitials('7'), '7')
+
+  // Single-char
+  assert.equal(pluginInitials('x'), 'X')
+  assert.equal(pluginInitials('Z'), 'Z')
+
+  // Multi-segment
+  assert.equal(pluginInitials('alpha-beta-gamma'), 'AB')
+  assert.equal(pluginInitials('one_two_three_four'), 'OT')
+})
+
+test('searchEntries handles regex special characters safely in queries', () => {
+  const entries = [
+    {
+      name: 'regex-engine',
+      display_name: 'foo(bar)?',
+      description: 'Supports [a-z]+ and \\d+ patterns with ^start and *test*',
+    },
+    {
+      name: 'plain-engine',
+      display_name: 'Plain Engine',
+      description: 'Standard text tool',
+    },
+  ]
+
+  const regexQueries = ['[a-z]+', 'foo(bar)?', '*test*', '\\d+', '^start']
+  for (const q of regexQueries) {
+    assert.doesNotThrow(() => {
+      const results = searchEntries(entries, { query: q })
+      assert.equal(results.length, 1)
+      assert.equal(results[0].name, 'regex-engine')
+    })
+  }
+
+  // Non-matching regex strings safely return empty results
+  const nonMatching = ['[0-9]+', 'missing(pattern)?', '*notfound*', '\\s+', '^other']
+  for (const q of nonMatching) {
+    assert.doesNotThrow(() => {
+      const results = searchEntries(entries, { query: q })
+      assert.equal(results.length, 0)
+    })
+  }
+})
+
+test('searchEntries handles multiple whitespace runs, tabs, and leading/trailing whitespace in query', () => {
+  const entries = [
+    { name: 'alpha-tool', description: 'Primary alpha tool' },
+    { name: 'beta-tool', description: 'Beta utility' },
+    { name: 'alpha-beta-combo', description: 'Both alpha and beta integrated' },
+  ]
+
+  // Query with tab characters, multiple spaces, leading/trailing whitespace
+  const queryWithWhitespace = '  \t  alpha   \t  beta  '
+  const results = searchEntries(entries, { query: queryWithWhitespace })
+  assert.equal(results.length, 1)
+  assert.equal(results[0].name, 'alpha-beta-combo')
+
+  // Whitespace-only queries sort alphabetically without filtering
+  const blankResults = searchEntries(entries, { query: '   \t  \n  ' })
+  assert.equal(blankResults.length, 3)
+  assert.deepEqual(
+    blankResults.map((e) => e.name),
+    ['alpha-beta-combo', 'alpha-tool', 'beta-tool'],
+  )
+})
+
+test('searchEntries safely processes entries with missing fields', () => {
+  const sparseEntries = [
+    {
+      name: 'sparse-plugin',
+      description: null,
+      author: undefined,
+      tags: null,
+      category: undefined,
+    },
+    {
+      name: 'complete-plugin',
+      display_name: 'Complete Plugin',
+      description: 'Fully defined metadata',
+      author: 'Tester',
+      tags: ['tool', 'utility'],
+      category: 'developer',
+    },
+  ]
+
+  // Search by name of sparse entry
+  const resName = searchEntries(sparseEntries, { query: 'sparse' })
+  assert.equal(resName.length, 1)
+  assert.equal(resName[0].name, 'sparse-plugin')
+
+  // Search by query that matches nothing in sparse entry
+  const resMiss = searchEntries(sparseEntries, { query: 'nonexistent' })
+  assert.equal(resMiss.length, 0)
+
+  // Filtering by category general includes undefined category
+  const resGeneral = searchEntries(sparseEntries, { category: 'general' })
+  assert.equal(resGeneral.length, 1)
+  assert.equal(resGeneral[0].name, 'sparse-plugin')
+
+  // Filtering by developer category excludes undefined category
+  const resDev = searchEntries(sparseEntries, { category: 'developer' })
+  assert.equal(resDev.length, 1)
+  assert.equal(resDev[0].name, 'complete-plugin')
+})
+
+test('groupEntriesByCategory handles groups of 6, missing categories, and empty inputs', () => {
+  // Category with exactly 6 plugins
+  const sixEntries = Array.from({ length: 6 }, (_, i) => ({
+    name: `tool-${i + 1}`,
+    category: 'utilities',
+  }))
+  const sixGroups = groupEntriesByCategory(sixEntries)
+  assert.equal(sixGroups.length, 1)
+  assert.equal(sixGroups[0].category, 'utilities')
+  assert.equal(sixGroups[0].label, 'Utilities')
+  assert.equal(sixGroups[0].entries.length, 6)
+  assert.deepEqual(
+    sixGroups[0].entries.map((e) => e.name),
+    ['tool-1', 'tool-2', 'tool-3', 'tool-4', 'tool-5', 'tool-6'],
+  )
+
+  // Entries with missing category land in General
+  const missingCatEntries = [
+    { name: 'no-cat-1', category: undefined },
+    { name: 'no-cat-2', category: null },
+    { name: 'no-cat-3', category: '' },
+    { name: 'no-cat-4', category: '   ' },
+    { name: 'no-cat-5' },
+    { name: 'named-cat', category: 'monitoring' },
+  ]
+  const catGroups = groupEntriesByCategory(missingCatEntries)
+  assert.equal(catGroups.length, 2)
+  assert.equal(catGroups[0].category, 'monitoring')
+  assert.equal(catGroups[0].label, 'Monitoring')
+  assert.equal(catGroups[0].entries.length, 1)
+
+  assert.equal(catGroups[1].category, 'general')
+  assert.equal(catGroups[1].label, 'General')
+  assert.equal(catGroups[1].entries.length, 5)
+  assert.deepEqual(
+    catGroups[1].entries.map((e) => e.name),
+    ['no-cat-1', 'no-cat-2', 'no-cat-3', 'no-cat-4', 'no-cat-5'],
+  )
+
+  // Empty entries array returns empty array
+  assert.deepEqual(groupEntriesByCategory([]), [])
+  assert.deepEqual(groupEntriesByCategory(null), [])
+  assert.deepEqual(groupEntriesByCategory(undefined), [])
+})
+
+
