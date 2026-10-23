@@ -222,7 +222,7 @@ export class DaemonApi {
 
   // Creating the chat boots the harness (up to 60 s of CLI cold start
   // daemon-side) - the boot budget, not the normal one.
-  createSession({ harness, workspace, model, effort, permissionMode, fast, deviceId, synced }) {
+  createSession({ harness, workspace, model, effort, permissionMode, fast, endpointId, deviceId, synced }) {
     return this.call(
       'POST',
       '/sessions',
@@ -234,6 +234,7 @@ export class DaemonApi {
         ...(effort ? { effort } : {}),
         ...(permissionMode ? { permission_mode: permissionMode } : {}),
         ...(fast ? { fast: true } : {}),
+        ...(endpointId ? { endpoint_id: endpointId } : {}),
         ...(deviceId ? { device_id: deviceId } : {}),
         ...(synced ? { synced: true } : {}),
       },
@@ -612,6 +613,70 @@ export class DaemonApi {
   // budget, so a cold CLI is not cut off mid-handshake.
   models(harnessId) {
     return this.call('GET', `/harnesses/${harnessId}/models`, null, { timeoutMs: BOOT_TIMEOUT_MS })
+  }
+
+  // ---- custom model endpoints (machine-local, secret-safe) ----
+
+  // The endpoint records on the machine that answers, metadata only -
+  // the secret never leaves the daemon. `harness` narrows to one.
+  modelEndpoints({ harness = null } = {}) {
+    const query = harness ? `?harness=${encodeURIComponent(harness)}` : ''
+    return this.call('GET', `/model-endpoints${query}`)
+  }
+
+  // Create or replace one endpoint record. `id` edits; without it a new
+  // record is made. `authKind` is one of bearer, api_key, none. The
+  // answer is the metadata view - the key is never returned.
+  saveEndpoint({ id = null, harness, name, baseUrl, modelsPath = null, defaultModel = null, authKind, key = null, enabled = true, isDefault = false }) {
+    return this.call('POST', '/model-endpoints', {
+      request_id: newRequestId(),
+      ...(id ? { id } : {}),
+      harness,
+      name,
+      base_url: baseUrl,
+      ...(modelsPath ? { models_path: modelsPath } : {}),
+      ...(defaultModel ? { default_model: defaultModel } : {}),
+      auth_kind: authKind,
+      ...(key ? { key } : {}),
+      enabled,
+      is_default: isDefault,
+    })
+  }
+
+  removeEndpoint(id) {
+    return this.call('DELETE', `/model-endpoints/${id}?request_id=${encodeURIComponent(newRequestId())}`)
+  }
+
+  setEndpointEnabled(id, enabled) {
+    return this.call('POST', `/model-endpoints/${id}/enabled`, {
+      request_id: newRequestId(),
+      enabled,
+    })
+  }
+
+  // Name a harness's machine default endpoint, or clear it with no id.
+  setDefaultEndpoint(harness, id = null) {
+    return this.call('POST', '/model-endpoints/default', {
+      request_id: newRequestId(),
+      harness,
+      ...(id ? { id } : {}),
+    })
+  }
+
+  // The models a custom endpoint lists today, fetched live through its
+  // own key. A failing gateway answers as an error, never an empty
+  // advertisement the picker could mistake for "none".
+  endpointModels(id) {
+    return this.call('GET', `/model-endpoints/${id}/models`, null, { timeoutMs: BOOT_TIMEOUT_MS })
+  }
+
+  // Point a stopped chat at another endpoint (or back at the harness's
+  // own provider with no id). A live chat answers 409 - stop it first.
+  setSessionEndpoint(id, endpointId = null) {
+    return this.call('POST', `/sessions/${id}/endpoint`, {
+      request_id: newRequestId(),
+      ...(endpointId ? { endpoint_id: endpointId } : {}),
+    })
   }
 
   // ---- harness sign-in ----

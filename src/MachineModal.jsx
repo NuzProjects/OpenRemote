@@ -182,7 +182,7 @@ export default function MachineModal({ device, onOpenChat, onClose }) {
                 <div key={h.id} className="dv-install">
                   <div className="dv-install-body">
                     <span>{harnessName(h.id)}</span>
-                    <span className="dv-agent-sub">{h.signed_in === false ? 'Not signed in' : 'Ready'}</span>
+                    <span className="dv-agent-sub">{h.using_api_key && h.signed_in !== true ? 'Using API key' : h.signed_in === false ? 'Not signed in' : 'Ready'}</span>
                   </div>
                   {h.signed_in === false && SIGNIN_HARNESSES.has(h.id) && (
                     <button type="button" className="dv-act" onClick={() => setSignInFor(h.id)}>

@@ -26,6 +26,39 @@
   cursor: default;
 }
 
+/* ---- a model picker's custom-model row: type an id, use it ---- */
+
+.nc-model-custom {
+  display: flex;
+  gap: 6px;
+}
+
+.nc-model-custom input {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-1);
+  font-size: 12.5px;
+}
+
+.nc-model-custom input::placeholder {
+  color: var(--text-3);
+}
+
+.nc-model-custom button {
+  flex: none;
+  width: auto;
+  white-space: nowrap;
+}
+
+.nc-model-custom button:disabled {
+  opacity: 0.4;
+}
+
 .nc-meta svg {
   color: var(--text-3);
 }

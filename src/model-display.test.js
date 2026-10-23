@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { findModel, modelDisplayName } from './model-display.js'
+import { findModel, modelDisplayName, prettyModelName } from './model-display.js'
 
 // The claude catalog shape the daemon serves (observed wire, folded):
 // pick words, resolved ids, and display names that carry the version.
@@ -31,10 +31,24 @@ test('the default alias shows the harness recommended marker', () => {
   assert.equal(modelDisplayName(CLAUDE, 'default'), 'Default (recommended)')
 })
 
-test('an unknown id shows verbatim, never hidden or re-cased', () => {
-  assert.equal(modelDisplayName(CLAUDE, 'grok-4-fast'), 'grok-4-fast')
+test('an unknown non-grok id shows verbatim', () => {
   assert.equal(modelDisplayName([], 'opus'), 'opus')
   assert.equal(modelDisplayName(null, 'opus'), 'opus')
+})
+
+test('a raw grok slug shows as a readable name', () => {
+  assert.equal(prettyModelName('grok-4.7'), 'Grok 4.7')
+  assert.equal(prettyModelName('grok-4.20-0309-non-reasoning'), 'Grok 4.20 0309 Non Reasoning')
+  assert.equal(prettyModelName('grok-4.20-multi-agent-0309'), 'Grok 4.20 Multi Agent 0309')
+  assert.equal(prettyModelName('grok-build-0.1'), 'Grok Build 0.1')
+  assert.equal(prettyModelName('grok-imagine-image-2.0'), 'Grok Imagine Image 2.0')
+  assert.equal(prettyModelName('grok-imagine-image-quality'), 'Grok Imagine Image Quality')
+  assert.equal(prettyModelName('grok-imagine-video-1.5-lite'), 'Grok Imagine Video 1.5 Lite')
+  assert.equal(
+    modelDisplayName([{ model: 'grok-4.7', display_name: 'grok-4.7' }], 'grok-4.7'),
+    'Grok 4.7',
+  )
+  assert.equal(prettyModelName('Grok 4.7'), 'Grok 4.7')
 })
 
 test('a catalog without resolved ids still matches by pick word', () => {
@@ -44,7 +58,7 @@ test('a catalog without resolved ids still matches by pick word', () => {
   assert.equal(findModel(codex, 'g-6-codex')?.display_name, 'GPT-6-Codex')
 })
 
-test('a row without a display name falls back to its id verbatim', () => {
+test('a grok row without a display name still shows a readable name', () => {
   const bare = [{ model: 'grok-4-fast' }]
-  assert.equal(modelDisplayName(bare, 'grok-4-fast'), 'grok-4-fast')
+  assert.equal(modelDisplayName(bare, 'grok-4-fast'), 'Grok 4 Fast')
 })

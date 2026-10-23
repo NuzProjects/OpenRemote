@@ -182,8 +182,116 @@
   font-size: 12.5px;
 }
 
-/* ---- the sign-in prompt: the picked harness's own fact, right where
-       the task is about to start ---- */
+/* ---- the auth strip: an extension of the chatbox, not a card. It hangs
+       directly under the composer with the same width, its top corners
+       square into the box and only the bottom two round - one continuous
+       surface. A faint red edge and glow says it needs attention. ---- */
+
+.nc-box--auth {
+  border-bottom: 0;
+  border-radius: 14px 14px 0 0;
+}
+
+.nc-box--auth:focus-within {
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.nc-auth {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 10px 16px;
+  border: 1px solid rgba(248, 113, 113, 0.28);
+  border-top: 0;
+  border-radius: 0 0 14px 14px;
+  background: rgba(248, 113, 113, 0.05);
+  box-shadow:
+    0 0 0 1px rgba(248, 113, 113, 0.06),
+    0 10px 32px rgba(248, 113, 113, 0.1);
+}
+
+.nc-auth-note {
+  min-width: 0;
+  overflow: hidden;
+  margin: 0;
+  color: var(--text-3);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nc-auth-name {
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+.nc-auth-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--red, #f87171);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.nc-auth-btn:hover {
+  background: rgba(248, 113, 113, 0.1);
+}
+
+.nc-auth--key {
+  gap: 8px;
+  padding: 3px 14px;
+  border-color: var(--line);
+  background: transparent;
+  box-shadow: none;
+}
+
+.nc-auth--key .nc-auth-note {
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.nc-auth-btn--quiet {
+  color: var(--text-2);
+  font-weight: 500;
+}
+
+.nc-auth-btn--quiet:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+/* The same strip standing alone (no chatbox above it): all four corners
+   round and a neutral edge. */
+
+.nc-auth--solo {
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  box-shadow: none;
+}
+
+.nc-auth--solo .nc-auth-btn {
+  color: var(--accent);
+}
+
+.nc-auth--solo .nc-auth-btn:hover {
+  background: var(--bg-hover);
+}
+
+/* ---- the clash warning: two plugins share a name ---- */
 
 .nc-signin {
   display: flex;

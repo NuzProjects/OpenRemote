@@ -12,6 +12,34 @@ use std::path::PathBuf;
 use openremote_harness::ModelDescriptor;
 use serde_json::Value;
 
+/// Grok's cache often stores the raw id in `name`. A readable name keeps
+/// version numbers as written and title-cases the words. A name that
+/// already has spaces or capitals is grok's own wording.
+fn pretty_name(id: &str, name: &str) -> String {
+    if name != id && name.chars().any(|c| c.is_whitespace() || c.is_uppercase()) {
+        return name.to_string();
+    }
+    if !id.starts_with("grok-") {
+        return name.to_string();
+    }
+    id.split('-')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) if first.is_ascii_digit() => part.to_string(),
+                Some(first) => {
+                    let mut titled = first.to_uppercase().to_string();
+                    titled.push_str(chars.as_str());
+                    titled
+                }
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn grok_home() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
@@ -59,6 +87,7 @@ pub fn catalog_in(home: &std::path::Path) -> Vec<ModelDescriptor> {
                 .get("name")
                 .and_then(Value::as_str)
                 .unwrap_or(id.as_str());
+            let name = pretty_name(id, name);
             let efforts = info
                 .get("reasoning_efforts")
                 .and_then(Value::as_array)
@@ -161,6 +190,15 @@ mod tests {
         let grok47 = &models[0];
         assert_eq!(grok47.model, "grok-4.7");
         assert_eq!(grok47.display_name.as_deref(), Some("Grok 4.7"));
+        assert_eq!(
+            pretty_name("grok-imagine-video-1.5-lite", "grok-imagine-video-1.5-lite"),
+            "Grok Imagine Video 1.5 Lite"
+        );
+        assert_eq!(
+            pretty_name("grok-4.20-0309-non-reasoning", "grok-4.20-0309-non-reasoning"),
+            "Grok 4.20 0309 Non Reasoning"
+        );
+        assert_eq!(pretty_name("grok-4.7", "Grok 4.7"), "Grok 4.7");
         assert!(grok47.reasoning_efforts.contains(&"xhigh".to_string()));
     }
 

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Archive,
+  CaretLeft,
+  CaretRight,
   Cloud,
   Info,
   Keyboard as KeyboardIcon,
@@ -9,17 +11,21 @@ import {
   Plugs,
   Power,
   Robot,
+  Shapes,
   Sparkle,
   TerminalWindow,
   X,
 } from '@phosphor-icons/react'
 import AboutModal from './AboutModal.jsx'
 import McpServersSection from './McpServersSection.jsx'
+import EndpointManager from './EndpointManager.jsx'
+import { EndpointManagerModal } from './EndpointManager.jsx'
 import DeleteChatModal from './DeleteChatModal.jsx'
 import SignInModal from './SignInModal.jsx'
 import PickerMenu from './PickerMenu.jsx'
 import Toggle from './Toggle.jsx'
 import { SECTIONS, SETTING_GROUPS, SETTINGS_ENTRIES, searchSettings, visibleSections } from './settings-search.js'
+import { useBack } from './use-back.js'
 import { useConsole } from './state/console.jsx'
 import { signedIn } from './cloud.js'
 import { isMobile } from './platform.js'
@@ -27,7 +33,7 @@ import { archivedSessions } from './archive.js'
 import { harnessName } from './harness-names.js'
 import { SIGNIN_HARNESSES, pickable } from './harness-manager.js'
 import { loadDefaults, saveDefaults } from './defaults.js'
-import { findModel, modelDisplayName } from './model-display.js'
+import { findModel, modelDisplayName, prettyModelName } from './model-display.js'
 import { modelMaker } from './model-maker.js'
 import { ModelMark } from './model-marks.jsx'
 import {
@@ -61,13 +67,14 @@ const SECTION_ICONS = {
   daemon: TerminalWindow,
   harnesses: Robot,
   'mcp-servers': Plugs,
+  models: Shapes,
   archived: Archive,
   'this-install': Info,
 }
 
 const MAX_RESULTS = 24
 
-export default function SettingsView({ onReplay, onOpenChat }) {
+export default function SettingsView({ onReplay, onOpenChat, onClose }) {
   const privacy = usePrivacyMode()
   const {
     connection,
@@ -95,6 +102,7 @@ export default function SettingsView({ onReplay, onOpenChat }) {
   const [defaults, setDefaults] = useState(() => loadDefaults())
   const [models, setModels] = useState([])
   const [picker, setPicker] = useState(null)
+  const [managingEndpoints, setManagingEndpoints] = useState(false)
   const [about, setAbout] = useState(false)
   const [signInFor, setSignInFor] = useState(null)
   const [prefs, setPrefs] = useState(() => loadPrefs())
@@ -183,7 +191,7 @@ export default function SettingsView({ onReplay, onOpenChat }) {
   // the same rule the composer holds. No words, no row.
   const permissionWords = defaultHarness?.permission_modes ?? []
   const savedPermission = defaults.permissions?.[defaultHarness?.id] ?? null
-  const chosenPermission = permissionWords.includes(savedPermission)
+  const chosenPermission = permissionWords.some((w) => w.w === savedPermission) ? savedPermission : null
     ? savedPermission
     : null
 
@@ -307,6 +315,10 @@ export default function SettingsView({ onReplay, onOpenChat }) {
   // Tabs and search: the panel shows one section at a time, and a query
   // replaces it with results gathered from every section this device has.
   const [tab, setTab] = useState(isMobile ? 'appearance' : 'new-tasks')
+  // On a phone the list is the screen. A category opens over it; back
+  // returns to the list before it leaves Settings.
+  const [category, setCategory] = useState(null)
+  useBack(isMobile && category != null, () => setCategory(null))
   const [query, setQuery] = useState('')
   const [shortcutQuery, setShortcutQuery] = useState('')
   const [flash, setFlash] = useState(null)
@@ -409,6 +421,7 @@ export default function SettingsView({ onReplay, onOpenChat }) {
 
   const selectTab = (id) => {
     setTab(id)
+    if (isMobile) setCategory(id)
     setQuery('')
     setShortcutQuery('')
     setPicker(null)
@@ -419,6 +432,7 @@ export default function SettingsView({ onReplay, onOpenChat }) {
     setQuery('')
     setShortcutQuery('')
     setTab(entry.section)
+    if (isMobile) setCategory(entry.section)
     setFlash(entry.key)
     setPicker(null)
   }
@@ -480,8 +494,27 @@ export default function SettingsView({ onReplay, onOpenChat }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [capturing, picker, deleting, about, signInFor, active])
 
+  const phoneHome = isMobile && category == null
+  const phoneCategory = isMobile && category != null
+
   return (
-    <div className="settings">
+    <div className={`settings${isMobile ? ' settings--phone' : ''}${phoneCategory ? ' is-category' : ''}`}>
+      {isMobile && (
+        <header className="stg-phone-bar">
+          {(phoneCategory || onClose) && (
+            <button
+              type="button"
+              className="stg-phone-back"
+              onClick={() => (phoneCategory ? setCategory(null) : onClose())}
+              aria-label="Back"
+            >
+              <CaretLeft size={22} />
+            </button>
+          )}
+          <h1 className="stg-phone-title">{phoneCategory ? sectionLabel(category) : 'Settings'}</h1>
+        </header>
+      )}
+      {!phoneCategory && (
       <aside className="stg-side">
         <label className="stg-search">
           <MagnifyingGlass size={14} className="stg-search-icon" />
@@ -536,12 +569,13 @@ export default function SettingsView({ onReplay, onOpenChat }) {
           className="stg-nav"
           role="tablist"
           aria-label="Settings sections"
-          aria-orientation={isMobile ? 'horizontal' : 'vertical'}
+          aria-orientation="vertical"
+          hidden={isMobile && !!query}
           onKeyDown={onTabKey}
         >
           {navGroups.map((group) => (
             <div key={group.id} className="stg-nav-group">
-              {!isMobile && <div className="stg-nav-group-label">{group.label}</div>}
+              <div className="stg-nav-group-label">{group.label}</div>
               {group.sections.map((s) => {
                 const Icon = SECTION_ICONS[s.id] ?? Info
                 const count = counts[s.id] ?? 0
@@ -557,8 +591,9 @@ export default function SettingsView({ onReplay, onOpenChat }) {
                     className={active === s.id ? 'stg-nav-btn on' : 'stg-nav-btn'}
                     onClick={() => selectTab(s.id)}
                   >
-                    <Icon size={15} className="stg-nav-icon" />
+                    <Icon size={isMobile ? 22 : 15} className="stg-nav-icon" />
                     <span className="stg-nav-label">{s.label}</span>
+                    {isMobile && <CaretRight size={16} className="stg-nav-chevron" />}
                     {query && count > 0 && (
                       <span className="stg-nav-count" aria-hidden="true">
                         {count}
@@ -571,6 +606,8 @@ export default function SettingsView({ onReplay, onOpenChat }) {
           ))}
         </nav>
       </aside>
+      )}
+      {(!phoneHome || query) && (
       <div className="panel stg-panel" ref={panelRef} tabIndex={-1}>
         <div
           className="stg-results-view"
@@ -707,7 +744,7 @@ export default function SettingsView({ onReplay, onOpenChat }) {
                       wide
                       items={models.map((m) => ({
                         id: m.model,
-                        name: m.display_name ?? m.model,
+                        name: prettyModelName(m.display_name ?? m.model),
                         resolved_model: m.resolved_model,
                       }))}
                       groups={null}
@@ -718,6 +755,19 @@ export default function SettingsView({ onReplay, onOpenChat }) {
                       renderIcon={(m) => (
                         <ModelMark maker={modelMaker(defaultHarness?.id, m.id, m.resolved_model)} size={14} />
                       )}
+                      footer={
+                        defaultHarness?.custom_endpoint_supported ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPicker(null)
+                              setManagingEndpoints(true)
+                            }}
+                          >
+                            Manage models…
+                          </button>
+                        ) : null
+                      }
                     />
                   )}
                 </div>
@@ -726,7 +776,7 @@ export default function SettingsView({ onReplay, onOpenChat }) {
                 <div className="pn-row" data-stg="new-tasks-effort">
                   <div>
                     <div className="pn-name">Effort</div>
-                    <div className="pn-detail">{defaultHarness?.name}'s own tier words for {defaultModel?.display_name ?? defaultModel?.model}.</div>
+                    <div className="pn-detail">{defaultHarness?.name}'s own tier words for {prettyModelName(defaultModel?.display_name ?? defaultModel?.model)}.</div>
                   </div>
                   <button
                     type="button"
@@ -774,7 +824,7 @@ export default function SettingsView({ onReplay, onOpenChat }) {
                     <PickerMenu
                       label="Permission"
                       searchPlaceholder="Search permission words"
-                      items={permissionWords.map((word) => ({ id: word, name: word }))}
+                      items={permissionWords.map((word) => ({ id: word.w, name: word.l }))}
                       groups={null}
                       selectedId={chosenPermission ?? ''}
                       onChoose={(id) =>
@@ -1215,7 +1265,9 @@ export default function SettingsView({ onReplay, onOpenChat }) {
                     <div className="pn-name">{harnessName(h.id)}</div>
                     <div className="pn-detail">{h.available ? <span className="pv">{h.path}</span> : 'Not found on this machine.'}</div>
                   </div>
-                  {h.available && h.signed_in === false && SIGNIN_HARNESSES.has(h.id) ? (
+                  {h.available && h.using_api_key && h.signed_in !== true ? (
+                    <span className="pn-btn">Using API key</span>
+                  ) : h.available && h.signed_in === false && SIGNIN_HARNESSES.has(h.id) ? (
                     <button type="button" className="pn-btn" onClick={() => setSignInFor(h.id)}>
                       Sign in
                     </button>
@@ -1244,6 +1296,45 @@ export default function SettingsView({ onReplay, onOpenChat }) {
               <h2 className="stg-title">MCP servers</h2>
             </header>
             <McpServersSection />
+          </section>
+        )}
+
+        {!isMobile && (
+          <section
+            className="stg-section"
+            id="stg-models"
+            role="tabpanel"
+            aria-labelledby="stg-tab-models"
+            data-stg="models"
+            hidden={!!query || active !== 'models'}
+          >
+            <header className="stg-head">
+              <h2 className="stg-title">Models</h2>
+              <p className="stg-lead">
+                Custom model endpoints on this computer - a self-hosted gateway or a relay
+                on this network that speaks an OpenAI-compatible models API. Keys never
+                leave the daemon.
+              </p>
+            </header>
+            {(harnessList ?? []).filter((h) => h.custom_endpoint_supported).length === 0 ? (
+              <div className="pn-list pn-list--tight">
+                <div className="pn-row">
+                  <div>
+                    <div className="pn-name">No supported harness</div>
+                    <div className="pn-detail">Custom endpoints arrive with claude - install it to add one.</div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              (harnessList ?? [])
+                .filter((h) => h.custom_endpoint_supported)
+                .map((h) => (
+                  <div key={h.id} data-stg={`models-${h.id}`}>
+                    <h3 className="stg-subhead">{harnessName(h.id)}</h3>
+                    <EndpointManager harness={h.id} />
+                  </div>
+                ))
+            )}
           </section>
         )}
 
@@ -1331,6 +1422,7 @@ export default function SettingsView({ onReplay, onOpenChat }) {
         </section>
 
       </div>
+      )}
       {deleting && (
         <DeleteChatModal
           title={chats[deleting.id]?.title ?? deleting.title ?? 'This chat'}
@@ -1346,6 +1438,14 @@ export default function SettingsView({ onReplay, onOpenChat }) {
         />
       )}
       {signInFor && <SignInModal harnessId={signInFor} onDone={() => setSignInFor(null)} />}
+      {managingEndpoints && defaultHarness && (
+        <EndpointManagerModal
+          harness={defaultHarness.id}
+          deviceId={null}
+          where="this computer"
+          onClose={() => setManagingEndpoints(false)}
+        />
+      )}
     </div>
   )
 }

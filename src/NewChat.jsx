@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowUp, House, FolderOpen, Lightning, Plus } from '@phosphor-icons/react'
+import { ArrowRight, ArrowUp, House, FolderOpen, Lightning, Plus } from '@phosphor-icons/react'
 import PickerMenu from './PickerMenu.jsx'
 import { usePrivacyMode } from './privacy.js'
 import { useHint, useModelSwitches, usePaletteSource, useShortcut } from './keyboard.jsx'
@@ -8,9 +8,10 @@ import { machinePickerItems, platformLabel, signedIn } from './cloud.js'
 import { HarnessMark } from './brand-marks.jsx'
 import SignInModal from './SignInModal.jsx'
 import HarnessManagerModal from './HarnessManagerModal.jsx'
+import { EndpointManagerModal } from './EndpointManager.jsx'
 import { useConsole } from './state/console.jsx'
 import { harnessName } from './harness-names.js'
-import { findModel, modelDisplayName } from './model-display.js'
+import { findModel, modelDisplayName, prettyModelName } from './model-display.js'
 import { modelMaker } from './model-maker.js'
 import { ModelMark } from './model-marks.jsx'
 import { SIGNIN_HARNESSES, pickable } from './harness-manager.js'
@@ -19,6 +20,7 @@ import { projectName } from './projects.js'
 import { clashes } from './plugins.js'
 import { useComposerMenus } from './useComposerMenus.jsx'
 import { mentionedChats, ownCommands, takeCommands } from './composer-menus.js'
+import { claimInserter } from './composer-insert.js'
 import { isMobile } from './platform.js'
 import './newchat.css'
 import './composer.css'
@@ -36,10 +38,12 @@ export default function NewChat({
   presetProject = null,
   focused = true,
   onOpenPlugins = null,
+  topRight = null,
 }) {
   const privacy = usePrivacyMode()
   const {
-    connection, capabilities, sessions, chats, createChat, modelsFor, devices, thisDevice,
+    connection, capabilities, sessions, chats, createChat, modelsFor, endpointsFor, refreshEndpoints,
+    endpointModelsFor, devices, thisDevice,
     capabilitiesFor, apiFor, projects, addProject, plugins, cloud, renameChat,
   } = useConsole()
   // Plugins of one name both on: said here too, where chats start.
@@ -67,6 +71,14 @@ export default function NewChat({
   const [model, setModel] = useState(null)
   const [models, setModels] = useState([])
   const [modelsPending, setModelsPending] = useState(true)
+  // Custom endpoints on the machine the chat will run on: the records,
+  // the models each enabled one lists today, and this chat's own pick
+  // (null = the harness's machine default, if any, else its provider).
+  const [endpoints, setEndpoints] = useState([])
+  const [endpointModels, setEndpointModels] = useState([])
+  const [endpointId, setEndpointId] = useState(null)
+  const [manageModels, setManageModels] = useState(false)
+  const [customDraft, setCustomDraft] = useState('')
   const [fast, setFast] = useState(false)
   const [signInFor, setSignInFor] = useState(null)
   const [managingHarnesses, setManagingHarnesses] = useState(false)
@@ -170,7 +182,8 @@ export default function NewChat({
   const currentHarness = available.find((h) => h.id === harness) ?? available[0] ?? null
   // The picked harness's own sign-in fact: a harness that isn't signed in
   // says so right here - the task is about to run on it.
-  const needsSignIn = currentHarness && currentHarness.signed_in === false
+  const usingApiKey = currentHarness?.using_api_key === true && currentHarness.signed_in !== true
+  const needsSignIn = currentHarness && currentHarness.signed_in === false && !usingApiKey
 
   // The model slot: filled where the harness advertises, reserved
   // (not rendered) where it doesn't. Fast mode follows the same rule -
@@ -180,6 +193,7 @@ export default function NewChat({
     let cancelled = false
     const defaults = loadDefaults()
     setModel(currentHarness?.id === defaults.harness ? defaults.model : null)
+    setEndpointId(null)
     setFast(false)
     // Permission words belong to the harness (claude and grok share
     // spelling, codex has its own) - a switch resets the choice, the
@@ -197,6 +211,32 @@ export default function NewChat({
         setModelsPending(false)
       }
     })
+    // The custom rows ride beside the catalog: the records, then what
+    // each enabled one lists today. A listing that fails stays out -
+    // the catalog row is still the honest pick.
+    if (currentHarness?.custom_endpoint_supported) {
+      endpointsFor(currentHarness.id, target).then((rows) => {
+        if (cancelled) return
+        setEndpoints(rows ?? [])
+        const live = (rows ?? []).filter((e) => e.enabled)
+        if (!live.length) {
+          setEndpointModels([])
+          return
+        }
+        Promise.all(live.map((e) => endpointModelsFor(e.id, target).catch(() => []))).then((lists) => {
+          if (cancelled) return
+          setEndpointModels(lists.flat())
+        })
+      }).catch(() => {
+        if (!cancelled) {
+          setEndpoints([])
+          setEndpointModels([])
+        }
+      })
+    } else {
+      setEndpoints([])
+      setEndpointModels([])
+    }
     return () => {
       cancelled = true
     }
@@ -244,7 +284,7 @@ export default function NewChat({
   const [permission, setPermission] = useState(null)
   const savedPermission =
     permission ?? defaults.permissions?.[currentHarness?.id] ?? null
-  const chosenPermission = permissionWords.includes(savedPermission)
+  const chosenPermission = permissionWords.some((w) => w.w === savedPermission) ? savedPermission : null
     ? savedPermission
     : null
   // The model the chat runs from its first breath: the user's pick, else
@@ -254,6 +294,58 @@ export default function NewChat({
   // alias - would otherwise stay unnamed until the first turn's init
   // frame reports it.
   const startModel = model ?? (configDefault ? null : catalogDefault)
+
+  // The model picker's custom rows: what each enabled endpoint lists
+  // today, grouped under its name. A composite id carries the endpoint
+  // back out (model ids never hold a newline - the daemon rejects
+  // control characters).
+  const customItems = endpointModels.map((m) => ({
+    id: `${m.endpoint_id}\n${m.model}`,
+    name: prettyModelName(m.display_name ?? m.model),
+    group: m.endpoint_name,
+    endpointId: m.endpoint_id,
+    endpointName: m.endpoint_name,
+    model: m.model,
+  }))
+  const modelItems = [
+    ...models.map((m) => ({
+      id: m.model,
+      name: prettyModelName(m.display_name ?? m.model),
+      resolved_model: m.resolved_model,
+    })),
+    ...customItems,
+  ]
+  const defaultEndpoint = endpoints.find((e) => e.is_default) ?? null
+  const chosenEndpoint = endpointId ? endpoints.find((e) => e.id === endpointId) ?? null : null
+  const endpointWord = chosenEndpoint?.name ?? (defaultEndpoint ? `Default (${defaultEndpoint.name})` : "Harness provider")
+  const shownModelName = model
+    ? (modelDisplayName(models, model) !== model
+      ? modelDisplayName(models, model)
+      : (customItems.find((m) => m.model === model)?.name ?? model))
+    : defaultLabel
+  const reloadEndpoints = async () => {
+    if (!currentHarness?.custom_endpoint_supported) return
+    const rows = (await refreshEndpoints(currentHarness.id, target).catch(() => [])) ?? []
+    const live = rows.filter((e) => e.enabled)
+    if (!live.length) {
+      setEndpointModels([])
+      return
+    }
+    const lists = await Promise.all(live.map((e) => endpointModelsFor(e.id, target).catch(() => [])))
+    setEndpointModels(lists.flat())
+  }
+  const chooseModelId = (id) => {
+    const custom = customItems.find((m) => m.id === id)
+    if (custom) {
+      setModel(custom.model)
+      setEndpointId(custom.endpointId)
+    } else {
+      setModel(id)
+      setEndpointId(null)
+    }
+    setEffort(null)
+    setPicker(null)
+  }
 
   const openPicker = (kind) => (e) => setPicker({ kind, x: e.clientX, y: e.clientY })
 
@@ -275,13 +367,23 @@ export default function NewChat({
     inChat: false,
     cloudReady,
     choicesFor: (arg) => {
-      if (arg === 'model') return models.map((m) => ({ id: m.model, name: m.display_name ?? m.model }))
+      if (arg === 'model') return modelItems.map((m) => ({ id: m.id, name: m.name }))
       if (arg === 'effort') return effortTiers.map((e) => ({ id: e }))
       if (arg === 'fast') return [{ id: 'on' }, { id: 'off' }]
-      if (arg === 'permission') return permissionWords.map((w) => ({ id: w }))
+      if (arg === 'permission') return permissionWords.map((w) => ({ id: w.w, name: w.l }))
       return []
     },
   })
+  // The browser pane's "attach to the chat" lands here: appended to the
+  // draft, then the focus comes back so the user keeps writing. Claimed
+  // again on focus, so the focused composer wins when panes split.
+  const attach = (snippet) => {
+    setText((t) => (t ? `${t}\n\n${snippet}` : snippet))
+    requestAnimationFrame(() => inputRef.current?.focus())
+  }
+  useEffect(() => {
+    claimInserter(attach)
+  }, [])
   const openPickerAt = (kind) => {
     const el = boxRef.current?.querySelector(`[data-picker="${kind}"]`)
     if (!el) return false
@@ -333,7 +435,7 @@ export default function NewChat({
             title: 'Switch model',
             items: models.map((m) => ({
               id: m.model,
-              name: m.display_name ?? m.model,
+              name: prettyModelName(m.display_name ?? m.model),
               icon: <ModelMark maker={modelMaker(currentHarness?.id, m.model, m.resolved_model)} size={14} />,
             })),
             selectedId: model,
@@ -406,6 +508,7 @@ export default function NewChat({
           deviceId: target,
           synced: cloudMode || 'sync' in picked || 'cloud' in picked,
           mentionedChats: mentionedChats(message, chats),
+          endpointId: endpointId ?? undefined,
         },
       )
       if (picked.rename) await renameChat(id, picked.rename)
@@ -444,6 +547,7 @@ export default function NewChat({
 
   return (
     <div className="newchat">
+      {topRight}
       <h1 className="nc-greeting">What are we working on?</h1>
       {clashing.map((c) => (
         <div className="nc-signin" key={c.name}>
@@ -458,32 +562,11 @@ export default function NewChat({
           )}
         </div>
       ))}
-      {needsSignIn && (
-        <div className="nc-signin">
-          <div className="nc-signin-note">
-            {SIGNIN_HARNESSES.has(currentHarness.id) ? (
-              <>
-                {harnessName(currentHarness.id)} isn’t signed in on {targetItem?.name ?? 'this computer'}.
-                Sign in to start tasks with it.
-              </>
-            ) : (
-              <>
-                {harnessName(currentHarness.id)} isn’t signed in - it signs in through its own
-                setup.
-              </>
-            )}
-          </div>
-          {SIGNIN_HARNESSES.has(currentHarness.id) && (
-            <button className="nc-signin-btn" onClick={() => setSignInFor(currentHarness.id)}>
-              Sign in
-            </button>
-          )}
-        </div>
-      )}
-      <div className="nc-box" ref={boxRef}>
+      <div className={`nc-box${needsSignIn || usingApiKey ? ' nc-box--auth' : ''}`} ref={boxRef}>
         {menus.element}
         <textarea
           value={text}
+          onFocus={() => claimInserter(attach)}
           onChange={(e) => {
             setText(e.target.value)
             menus.track(e)
@@ -508,26 +591,28 @@ export default function NewChat({
           <div className="nc-pickers">
             {modelsPending ? (
               <span className="nc-skeleton" aria-hidden="true" />
-            ) : (models.length > 0 || resolvedDefault) && (
+            ) : (modelItems.length > 0 || resolvedDefault) && (
               <>
-                {models.length > 0 ? (
+                {modelItems.length > 0 ? (
                   <button
                     className="nc-meta"
                     onClick={openPicker('model')}
                     aria-haspopup="listbox"
                     aria-expanded={picker?.kind === 'model'}
                     data-picker="model"
+                    data-unset={!model || undefined}
                     title={hintModel('Model')}
                   >
                     {(() => {
-                      // The shown model's own maker mark - the chosen
-                      // one, else the harness's default row.
-                      const row =
-                        (model && findModel(models, model)) ?? models.find((m) => m.is_default) ?? null
+                      // Nothing chosen, nothing shown as chosen: the slot
+                      // reads "Model" until the user picks one. The
+                      // harness's default still applies at send.
+                      if (!model) return null
+                      const row = findModel(models, model)
                       const maker = modelMaker(currentHarness?.id, row?.model, row?.resolved_model)
                       return maker ? <ModelMark maker={maker} size={14} /> : null
                     })()}
-                    {model ? modelDisplayName(models, model) : defaultLabel}
+                    {model ? shownModelName : 'Model'}
                   </button>
                 ) : (
                   // No catalog to pick from, but the harness's own config
@@ -542,23 +627,104 @@ export default function NewChat({
                     label="Model"
                     searchPlaceholder="Search models"
                     wide
-                    items={models.map((m) => ({
-                      id: m.model,
-                      name: m.display_name ?? m.model,
-                      resolved_model: m.resolved_model,
-                    }))}
-                    groups={null}
+                    items={modelItems}
+                    groups={customItems.length > 0}
                     selectedId={model ?? ''}
-                    onChoose={(id) => {
-                      setModel(id)
-                      setEffort(null)
-                      setPicker(null)
-                    }}
+                    onChoose={chooseModelId}
                     onClose={() => setPicker(null)}
                     anchor={{ left: picker.x, top: picker.y }}
                     renderIcon={(m) => (
                       <ModelMark maker={modelMaker(currentHarness?.id, m.id, m.resolved_model)} size={14} />
                     )}
+                    renderSubline={(m) =>
+                      m.group ? <span className="nc-item-sub">via {m.group}</span> : null
+                    }
+                    footer={
+                      <div className="nc-model-custom">
+                        <input
+                          value={customDraft}
+                          onChange={(e) => setCustomDraft(e.target.value)}
+                          placeholder="Custom model id…"
+                          spellCheck={false}
+                          aria-label="Custom model id"
+                        />
+                        <button
+                          type="button"
+                          disabled={!customDraft.trim()}
+                          onClick={() => {
+                            setModel(customDraft.trim())
+                            setCustomDraft('')
+                            setEffort(null)
+                            setPicker(null)
+                          }}
+                        >
+                          Use custom
+                        </button>
+                        {currentHarness?.custom_endpoint_supported && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPicker(null)
+                              setManageModels(true)
+                            }}
+                          >
+                            Manage models…
+                          </button>
+                        )}
+                      </div>
+                    }
+                  />
+                )}
+                {currentHarness?.custom_endpoint_supported && endpoints.length > 0 && (
+                  <button
+                    type="button"
+                    className="nc-meta"
+                    onClick={openPicker('endpoint')}
+                    aria-haspopup="listbox"
+                    aria-expanded={picker?.kind === 'endpoint'}
+                    data-picker="endpoint"
+                    title="Which model server this chat runs through"
+                  >
+                    via {endpointWord}
+                  </button>
+                )}
+                {picker?.kind === 'endpoint' && (
+                  <PickerMenu
+                    label="Endpoint"
+                    searchPlaceholder="Search endpoints"
+                    items={[
+                      {
+                        id: '',
+                        name: defaultEndpoint ? `Harness default (${defaultEndpoint.name})` : 'Harness provider',
+                      },
+                      ...endpoints.filter((e) => e.enabled).map((e) => ({ id: e.id, name: e.name })),
+                    ]}
+                    groups={null}
+                    selectedId={endpointId ?? ''}
+                    onChoose={(id) => {
+                      setEndpointId(id || null)
+                      setPicker(null)
+                    }}
+                    onClose={() => setPicker(null)}
+                    anchor={{ left: picker.x, top: picker.y }}
+                    renderSubline={(item) =>
+                      item.id === '' ? (
+                        <span className="nc-item-sub">
+                          {defaultEndpoint ? 'The harness machine default' : "The harness's own provider"}
+                        </span>
+                      ) : null
+                    }
+                    footer={
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPicker(null)
+                          setManageModels(true)
+                        }}
+                      >
+                        Manage models…
+                      </button>
+                    }
                   />
                 )}
                 {effortTiers.length > 0 && (
@@ -698,6 +864,36 @@ export default function NewChat({
         </div>
       </div>
       <div className="nc-under">
+        {/* The picked harness isn't signed in: one quiet row under the
+            chatbox - its mark, the fact, and the way in. Not a card. */}
+        {usingApiKey && (
+          <div className="nc-auth nc-auth--key">
+            <p className="nc-auth-note">Using API Key</p>
+            {SIGNIN_HARNESSES.has(currentHarness.id) && (
+              <button type="button" className="nc-auth-btn nc-auth-btn--quiet" onClick={() => setSignInFor(currentHarness.id)}>
+                Sign in
+              </button>
+            )}
+          </div>
+        )}
+        {needsSignIn && (
+          <div className="nc-auth">
+            <HarnessMark harness={currentHarness.id} size={16} />
+            <p className="nc-auth-note">
+              <span className="nc-auth-name">{harnessName(currentHarness.id)}</span>
+              {SIGNIN_HARNESSES.has(currentHarness.id) ? (
+                <> isn’t signed in on {targetItem?.name ?? 'this computer'}.</>
+              ) : (
+                <> isn’t signed in - it signs in through its own setup.</>
+              )}
+            </p>
+            {SIGNIN_HARNESSES.has(currentHarness.id) && (
+              <button type="button" className="nc-auth-btn" onClick={() => setSignInFor(currentHarness.id)}>
+                Sign in <ArrowRight size={13} />
+              </button>
+            )}
+          </div>
+        )}
         <div className="nc-below">
           {/* The project is picked, never typed: the registered projects
               on the machine the chat runs on, "No project" for a chat
@@ -800,13 +996,12 @@ export default function NewChat({
         {addProjectError && <p className="nc-error">{addProjectError}</p>}
         {targetOffline && <p className="nc-error"><span className="pv">{targetItem.name}</span> is offline.</p>}
         {isMobile && cloudMode && machines.length === 0 && (
-          <div className="nc-signin">
-            <div className="nc-signin-note">
-              Chats run on your machines. Add one - a server, a home computer, or a desktop made a
-              machine - and start chats on it from here.
-            </div>
-            <button className="nc-signin-btn" onClick={() => onOpen('machines')}>
-              Machines
+          <div className="nc-auth nc-auth--solo">
+            <p className="nc-auth-note">
+              Chats run on your machines - add one and start chats on it from here.
+            </p>
+            <button type="button" className="nc-auth-btn" onClick={() => onOpen('machines')}>
+              Machines <ArrowRight size={13} />
             </button>
           </div>
         )}
@@ -837,6 +1032,15 @@ export default function NewChat({
               setManagingHarnesses(false)
               setSignInFor(id)
             }}
+          />
+        )}
+        {manageModels && currentHarness && (
+          <EndpointManagerModal
+            harness={currentHarness.id}
+            deviceId={target}
+            where={targetItem?.name ?? 'this computer'}
+            onClose={() => setManageModels(false)}
+            onChanged={reloadEndpoints}
           />
         )}
         {inProgress.length > 0 && (

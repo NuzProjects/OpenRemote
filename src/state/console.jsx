@@ -372,10 +372,10 @@ export function ConsoleProvider({ children }) {
   const createChat = useCallback(
     async (
       text, workspace, harness, model, fast, effort, permissionMode,
-      { deviceId = null, synced = false, mentionedChats = [] } = {},
+      { deviceId = null, synced = false, mentionedChats = [], endpointId = null } = {},
     ) => {
       const session = await api.createSession({
-        harness, workspace, model, effort, fast, permissionMode, deviceId, synced,
+        harness, workspace, model, effort, fast, permissionMode, endpointId, deviceId, synced,
       })
       ensureChat(session)
       if (text.trim()) await api.prompt(session.id, text.trim(), mentionedChats)
@@ -437,6 +437,63 @@ export function ConsoleProvider({ children }) {
       }
     },
     [api, modelsByHarness],
+  )
+
+  // The custom model endpoints on a machine, metadata only (the keys
+  // never leave the daemon). Cached per device and harness; saving or
+  // removing refreshes the row.
+  const [endpointsByHarness, setEndpointsByHarness] = useState({})
+  const endpointsFor = useCallback(
+    async (harnessId, deviceId = null) => {
+      const key = `${deviceId ?? ''}:${harnessId}`
+      if (!api.ready) return endpointsByHarness[key] ?? []
+      try {
+        const list = (await api.device(deviceId).modelEndpoints({ harness: harnessId })) ?? []
+        setEndpointsByHarness((current) => ({ ...current, [key]: list }))
+        return list
+      } catch {
+        return endpointsByHarness[key] ?? []
+      }
+    },
+    [api, endpointsByHarness],
+  )
+
+  const refreshEndpoints = useCallback(
+    async (harnessId, deviceId = null) => {
+      const key = `${deviceId ?? ''}:${harnessId}`
+      try {
+        const list = (await api.device(deviceId).modelEndpoints({ harness: harnessId })) ?? []
+        setEndpointsByHarness((current) => ({ ...current, [key]: list }))
+        return list
+      } catch {
+        return endpointsByHarness[key] ?? []
+      }
+    },
+    [api, endpointsByHarness],
+  )
+
+  // The models one custom endpoint lists today, fetched live through
+  // its own key. Failures are not cached - a gateway that is still
+  // starting answers again next time.
+  const endpointModelsFor = useCallback(
+    async (endpointId, deviceId = null) => {
+      if (!api.ready || !endpointId) return []
+      try {
+        return (await api.device(deviceId).endpointModels(endpointId)) ?? []
+      } catch {
+        return []
+      }
+    },
+    [api],
+  )
+
+  const setChatEndpoint = useCallback(
+    async (chatId, endpointId = null, deviceId = null) => {
+      const session = await api.device(deviceId).setSessionEndpoint(chatId, endpointId)
+      ensureChat(session)
+      return session
+    },
+    [api, ensureChat],
   )
 
   // What another device can run, fetched when a new chat aims at it.
@@ -1010,6 +1067,10 @@ export function ConsoleProvider({ children }) {
       ensureChat,
       createChat,
       modelsFor,
+      endpointsFor,
+      refreshEndpoints,
+      endpointModelsFor,
+      setChatEndpoint,
       cloud,
       devices,
       thisDevice: cloud?.device?.id ?? null,
@@ -1085,6 +1146,10 @@ export function ConsoleProvider({ children }) {
       ensureChat,
       createChat,
       modelsFor,
+      endpointsFor,
+      refreshEndpoints,
+      endpointModelsFor,
+      setChatEndpoint,
       cloud,
       devices,
       apiFor,

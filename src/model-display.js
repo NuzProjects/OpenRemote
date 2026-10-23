@@ -26,9 +26,22 @@ export function findModel(models, id) {
   return rows.find((m) => m.resolved_model === id && !m.is_default) ?? null
 }
 
+/// Grok's catalog often stores the raw id in `name` (`grok-4.7`,
+/// `grok-imagine-video-1.5-lite`). A readable name is title case with
+/// the version numbers left as written. A name that already has spaces
+/// or capitals is the harness's own words and is left alone.
+export function prettyModelName(name) {
+  if (!name || /[\sA-Z]/.test(name) || !name.startsWith('grok-')) return name
+  return name
+    .split('-')
+    .filter(Boolean)
+    .map((part) => (/^\d/.test(part) ? part : part.charAt(0).toUpperCase() + part.slice(1)))
+    .join(' ')
+}
+
 /// The name a surface shows for a model id: the matched row's display
 /// name (the harness's own words, version included where its catalog
-/// carries it), else the id verbatim.
+/// carries it), else the id. A raw grok slug is shown as a readable name.
 export function modelDisplayName(models, id) {
-  return findModel(models, id)?.display_name ?? id
+  return prettyModelName(findModel(models, id)?.display_name ?? id)
 }

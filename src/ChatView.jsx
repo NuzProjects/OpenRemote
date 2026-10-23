@@ -17,7 +17,7 @@ import { useConsole } from './state/console.jsx'
 import { chatAccess, deviceName, signedIn } from './cloud.js'
 import { railItems } from './state/reducer.js'
 import { harnessName } from './harness-names.js'
-import { findModel, modelDisplayName } from './model-display.js'
+import { findModel, modelDisplayName, prettyModelName } from './model-display.js'
 import { modelMaker } from './model-maker.js'
 import { ModelMark } from './model-marks.jsx'
 import { HarnessMark } from './brand-marks.jsx'
@@ -27,11 +27,13 @@ import { renderMarkdown } from './markdown.js'
 import { capLines, capRows, MAX_RENDER_LINES, MAX_RENDER_ROWS, shouldRenderLive } from './render-budget.js'
 import ContextRing from './ContextRing.jsx'
 import PickerMenu from './PickerMenu.jsx'
+import { EndpointManagerModal } from './EndpointManager.jsx'
 import { isMobile } from './platform.js'
 import { usePrivacyMode } from './privacy.js'
 import { useHint, useModelSwitches, usePaletteSource, useShortcut } from './keyboard.jsx'
 import { useComposerMenus } from './useComposerMenus.jsx'
 import { mentionedChats, ownCommands, takeCommands } from './composer-menus.js'
+import { claimInserter } from './composer-insert.js'
 import './chatview.css'
 import './composer.css'
 
@@ -187,6 +189,9 @@ export default function ChatView({ chat, onBack, focused = true }) {
     interruptChat,
     resumeChat,
     modelsFor,
+    endpointsFor,
+    endpointModelsFor,
+    setChatEndpoint,
     devices,
     thisDevice,
     cloud,
@@ -220,6 +225,13 @@ export default function ChatView({ chat, onBack, focused = true }) {
   const [picker, setPicker] = useState(null)
   const [models, setModels] = useState([])
   const [modelsPending, setModelsPending] = useState(true)
+  // Custom endpoints on the machine running this chat: the records and
+  // what each enabled one lists today. A stopped chat can switch between
+  // them - resume lands the change; a live chat keeps its binding.
+  const [endpoints, setEndpoints] = useState([])
+  const [endpointModels, setEndpointModels] = useState([])
+  const [manageModels, setManageModels] = useState(false)
+  const [customDraft, setCustomDraft] = useState('')
   const scrollRef = useRef(null)
   const composerRef = useRef(null)
   const inputRef = useRef(null)
@@ -255,6 +267,42 @@ export default function ChatView({ chat, onBack, focused = true }) {
   // the chip's name never changes when the first turn resolves the id.
   const currentModel = findModel(models, chat.model)
   const efforts = currentModel?.reasoning_efforts ?? []
+  // The picker's custom rows, grouped under each endpoint's name. A
+  // composite id carries the endpoint back out (model ids never hold a
+  // newline - the daemon rejects control characters).
+  const customItems = endpointModels.map((m) => ({
+    id: `${m.endpoint_id}\n${m.model}`,
+    name: prettyModelName(m.display_name ?? m.model),
+    group: m.endpoint_name,
+    endpointId: m.endpoint_id,
+    model: m.model,
+  }))
+  const modelItems = [
+    ...models.map((m) => ({
+      id: m.model,
+      name: prettyModelName(m.display_name ?? m.model),
+      resolved_model: m.resolved_model,
+    })),
+    ...customItems,
+  ]
+  const endpointById = new Map(endpoints.map((e) => [e.id, e]))
+  const chatEndpointName = chat.endpoint_id ? (endpointById.get(chat.endpoint_id)?.name ?? 'a custom endpoint') : null
+  const defaultEndpoint = endpoints.find((e) => e.is_default) ?? null
+  const canSwitchEndpoint = !chat.running && reachable && (harness?.custom_endpoint_supported ?? false)
+  const reloadEndpoints = async () => {
+    if (!harness?.custom_endpoint_supported) return
+    const rows = (await endpointsFor(chat.harness, elsewhere ? chat.executor : null).catch(() => [])) ?? []
+    setEndpoints(rows)
+    const live = rows.filter((e) => e.enabled)
+    if (!live.length) {
+      setEndpointModels([])
+      return
+    }
+    const lists = await Promise.all(
+      live.map((e) => endpointModelsFor(e.id, elsewhere ? chat.executor : null).catch(() => [])),
+    )
+    setEndpointModels(lists.flat())
+  }
   // The / and @ menus, asking the machine that runs this chat.
   const cloudReady = signedIn(cloud)
   const menus = useComposerMenus({
@@ -268,13 +316,24 @@ export default function ChatView({ chat, onBack, focused = true }) {
     cloudReady,
     enabled: alive && reachable,
     choicesFor: (arg) => {
-      if (arg === 'model') return models.map((m) => ({ id: m.model, name: m.display_name ?? m.model }))
+      if (arg === 'model') return modelItems.map((m) => ({ id: m.id, name: m.name }))
       if (arg === 'effort') return efforts.map((e) => ({ id: e }))
       if (arg === 'fast') return [{ id: 'on' }, { id: 'off' }]
-      if (arg === 'permission') return (harness?.permission_modes ?? []).map((w) => ({ id: w }))
+      if (arg === 'permission') return (harness?.permission_modes ?? []).map((w) => ({ id: w.w, name: w.l }))
       return []
     },
   })
+
+  // The browser pane's "attach to the chat" lands here: appended to the
+  // draft, then the focus comes back so the user keeps writing. Claimed
+  // again on focus, so the focused composer wins when panes split.
+  const attach = (snippet) => {
+    setText((t) => (t ? `${t}\n\n${snippet}` : snippet))
+    requestAnimationFrame(() => inputRef.current?.focus())
+  }
+  useEffect(() => {
+    claimInserter(attach)
+  }, [])
 
   // An OpenRemote command from the composer, run here before the rest of
   // the message goes: the same paths the pickers and buttons take.
@@ -318,6 +377,31 @@ export default function ChatView({ chat, onBack, focused = true }) {
         setModelsPending(false)
       }
     })
+    if (harness?.custom_endpoint_supported) {
+      endpointsFor(chat.harness, elsewhere ? chat.executor : null).then((rows) => {
+        if (cancelled) return
+        setEndpoints(rows ?? [])
+        const live = (rows ?? []).filter((e) => e.enabled)
+        if (!live.length) {
+          setEndpointModels([])
+          return
+        }
+        Promise.all(
+          live.map((e) => endpointModelsFor(e.id, elsewhere ? chat.executor : null).catch(() => [])),
+        ).then((lists) => {
+          if (cancelled) return
+          setEndpointModels(lists.flat())
+        })
+      }).catch(() => {
+        if (!cancelled) {
+          setEndpoints([])
+          setEndpointModels([])
+        }
+      })
+    } else {
+      setEndpoints([])
+      setEndpointModels([])
+    }
     return () => {
       cancelled = true
     }
@@ -341,6 +425,37 @@ export default function ChatView({ chat, onBack, focused = true }) {
       setError(err.message ?? String(err))
     } finally {
       setBusy(false)
+    }
+  }
+
+  // A stopped chat's endpoint switch lands on resume; a live chat
+  // refuses with 409 - the chip only opens where a switch can land.
+  const changeEndpoint = async (endpointId) => {
+    setPicker(null)
+    setBusy(true)
+    setError(null)
+    try {
+      await setChatEndpoint(chat.id, endpointId || null, elsewhere ? chat.executor : null)
+    } catch (err) {
+      setError(err.message ?? String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const chooseModelId = (id) => {
+    const custom = customItems.find((m) => m.id === id)
+    if (custom) {
+      // A custom row implies its endpoint - but only where a switch
+      // can land. On a live chat the model still changes; the endpoint
+      // stays the binding it started with and resume picks it up.
+      if (canSwitchEndpoint && custom.endpointId !== (chat.endpoint_id ?? null)) {
+        changeEndpoint(custom.endpointId).then(() => changeSettings({ model: custom.model }))
+      } else {
+        changeSettings({ model: custom.model })
+      }
+    } else {
+      changeSettings({ model: id })
     }
   }
 
@@ -466,7 +581,7 @@ export default function ChatView({ chat, onBack, focused = true }) {
             title: 'Switch model',
             items: models.map((m) => ({
               id: m.model,
-              name: m.display_name ?? m.model,
+              name: prettyModelName(m.display_name ?? m.model),
               icon: <ModelMark maker={modelMaker(chat.harness, m.model, m.resolved_model)} size={14} />,
             })),
             selectedId: currentModel?.model ?? chat.model,
@@ -494,7 +609,7 @@ export default function ChatView({ chat, onBack, focused = true }) {
       canPickPermission
         ? {
             title: 'Set permission',
-            items: permissionWords.map((w) => ({ id: w, name: w })),
+            items: permissionWords.map((w) => ({ id: w.w, name: w.l })),
             selectedId: chat.permissionMode,
             choose: (id) => changeSettings({ permissionMode: id }),
           }
@@ -855,7 +970,7 @@ export default function ChatView({ chat, onBack, focused = true }) {
           })}
           {chat.running && !pendingDecision && (
             <p className="cv-node cv-node--run cv-running">
-              With {harnessName(chat.harness)} · <span className="pv">{where}</span>
+              Working...
             </p>
           )}
         </div>
@@ -921,6 +1036,7 @@ export default function ChatView({ chat, onBack, focused = true }) {
           <textarea
             ref={inputRef}
             value={text}
+            onFocus={() => claimInserter(attach)}
             onChange={(e) => {
               setText(e.target.value)
               menus.track(e)
@@ -961,7 +1077,7 @@ export default function ChatView({ chat, onBack, focused = true }) {
             <div className="nc-pickers">
               {modelsPending && !chat.model ? (
                 <span className="nc-skeleton" aria-hidden="true" />
-              ) : canChange.model && models.length > 0 ? (
+              ) : canChange.model && modelItems.length > 0 ? (
                 <button
                   type="button"
                   className="nc-meta"
@@ -969,12 +1085,14 @@ export default function ChatView({ chat, onBack, focused = true }) {
                   aria-haspopup="listbox"
                   aria-expanded={picker?.kind === 'model'}
                   data-picker="model"
+                  data-unset={!chat.model || undefined}
                   title={hintModel('Model - applies to the next turn')}
                 >
                   {(() => {
-                    // The shown model's own maker mark - the chosen
-                    // one, else the harness's default row.
-                    const row = (chat.model && findModel(models, chat.model)) ?? models.find((m) => m.is_default) ?? null
+                    // Nothing chosen, nothing shown as chosen: the slot
+                    // reads "Model" until the user picks one.
+                    if (!chat.model) return null
+                    const row = findModel(models, chat.model)
                     const maker = modelMaker(chat.harness, row?.model, row?.resolved_model)
                     return maker ? <ModelMark maker={maker} size={14} /> : null
                   })()}
@@ -992,19 +1110,50 @@ export default function ChatView({ chat, onBack, focused = true }) {
                   label="Model"
                   searchPlaceholder="Search models"
                   wide
-                  items={models.map((m) => ({
-                    id: m.model,
-                    name: m.display_name ?? m.model,
-                    resolved_model: m.resolved_model,
-                  }))}
-                  groups={null}
+                  items={modelItems}
+                  groups={customItems.length > 0}
                   selectedId={chat.model ?? ''}
-                  onChoose={(id) => changeSettings({ model: id })}
+                  onChoose={chooseModelId}
                   onClose={() => setPicker(null)}
                   anchor={{ left: picker.x, top: picker.y }}
                   renderIcon={(m) => (
                     <ModelMark maker={modelMaker(chat.harness, m.id, m.resolved_model)} size={14} />
                   )}
+                  renderSubline={(m) =>
+                    m.group ? <span className="nc-item-sub">via {m.group}</span> : null
+                  }
+                  footer={
+                    <div className="nc-model-custom">
+                      <input
+                        value={customDraft}
+                        onChange={(e) => setCustomDraft(e.target.value)}
+                        placeholder="Custom model id…"
+                        spellCheck={false}
+                        aria-label="Custom model id"
+                      />
+                      <button
+                        type="button"
+                        disabled={!customDraft.trim()}
+                        onClick={() => {
+                          changeSettings({ model: customDraft.trim() })
+                          setCustomDraft('')
+                        }}
+                      >
+                        Use custom
+                      </button>
+                      {harness?.custom_endpoint_supported && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPicker(null)
+                            setManageModels(true)
+                          }}
+                        >
+                          Manage models…
+                        </button>
+                      )}
+                    </div>
+                  }
                 />
               )}
               {canChange.effort && efforts.length > 0 && (
@@ -1032,8 +1181,58 @@ export default function ChatView({ chat, onBack, focused = true }) {
                   anchor={{ left: picker.x, top: picker.y }}
                 />
               )}
-              {(canChange.model ? models.length > 0 : Boolean(chat.model)) && (
+              {(canChange.model ? modelItems.length > 0 : Boolean(chat.model)) && (
                 <span className="nc-via">via</span>
+              )}
+              {harness?.custom_endpoint_supported && (chat.endpoint_id || endpoints.length > 0) && (
+                canSwitchEndpoint ? (
+                  <button
+                    type="button"
+                    className="nc-meta"
+                    onClick={openPicker('endpoint')}
+                    aria-haspopup="listbox"
+                    aria-expanded={picker?.kind === 'endpoint'}
+                    data-picker="endpoint"
+                    title="Which model server this chat runs through - lands when the chat next starts"
+                  >
+                    {chatEndpointName ?? (defaultEndpoint ? `Default (${defaultEndpoint.name})` : 'Harness provider')}
+                  </button>
+                ) : (
+                  chatEndpointName && (
+                    <span className="nc-meta nc-static" title="The model server this chat runs through">
+                      via {chatEndpointName}
+                    </span>
+                  )
+                )
+              )}
+              {picker?.kind === 'endpoint' && canSwitchEndpoint && (
+                <PickerMenu
+                  label="Endpoint"
+                  searchPlaceholder="Search endpoints"
+                  items={[
+                    {
+                      id: '',
+                      name: defaultEndpoint ? `Harness default (${defaultEndpoint.name})` : 'Harness provider',
+                    },
+                    ...endpoints.filter((e) => e.enabled).map((e) => ({ id: e.id, name: e.name })),
+                  ]}
+                  groups={null}
+                  selectedId={chat.endpoint_id ?? ''}
+                  onChoose={(id) => changeEndpoint(id)}
+                  onClose={() => setPicker(null)}
+                  anchor={{ left: picker.x, top: picker.y }}
+                  footer={
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPicker(null)
+                        setManageModels(true)
+                      }}
+                    >
+                      Manage models…
+                    </button>
+                  }
+                />
               )}
               <span className="nc-meta nc-static">
                 <HarnessMark harness={chat.harness} size={16} />
@@ -1088,8 +1287,8 @@ export default function ChatView({ chat, onBack, focused = true }) {
                   label="Permission"
                   searchPlaceholder="Search permission words"
                   items={(harness?.permission_modes ?? []).map((word) => ({
-                    id: word,
-                    name: word,
+                    id: word.w,
+                    name: word.l,
                   }))}
                   groups={null}
                   selectedId={chat.permissionMode ?? ''}
@@ -1130,6 +1329,15 @@ export default function ChatView({ chat, onBack, focused = true }) {
         </div>
         {(error || connection.state === 'error') && (
           <p className="cv-error-line">{error ?? connection.error}</p>
+        )}
+        {manageModels && (
+          <EndpointManagerModal
+            harness={chat.harness}
+            deviceId={elsewhere ? chat.executor : null}
+            where={elsewhere ? where : 'this computer'}
+            onClose={() => setManageModels(false)}
+            onChanged={reloadEndpoints}
+          />
         )}
       </div>
     </div>

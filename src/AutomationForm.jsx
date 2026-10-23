@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react'
 import { X } from '@phosphor-icons/react'
 import PickerMenu from './PickerMenu.jsx'
 import { useConsole } from './state/console.jsx'
-import { findModel, modelDisplayName } from './model-display.js'
+import { findModel, modelDisplayName, prettyModelName } from './model-display.js'
 import { modelMaker } from './model-maker.js'
 import { ModelMark } from './model-marks.jsx'
 import { projectName } from './projects.js'
@@ -15,6 +15,7 @@ import './devices.css'
 import './automations.css'
 import { useBack } from './use-back.js'
 import { pickable } from './harness-manager.js'
+import { EndpointManagerModal } from './EndpointManager.jsx'
 
 const TRIGGERS = [
   { id: 'schedule', name: 'On a schedule' },
@@ -71,6 +72,7 @@ export default function AutomationForm({ rule, onClose }) {
   const [picker, setPicker] = useState(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
+  const [managingEndpoints, setManagingEndpoints] = useState(false)
 
   const [models, setModels] = useState([])
   useEffect(() => {
@@ -322,7 +324,7 @@ export default function AutomationForm({ rule, onClose }) {
                     searchPlaceholder="Search models"
                     items={models.map((m) => ({
                       id: m.model,
-                      name: m.display_name ?? m.model,
+                      name: prettyModelName(m.display_name ?? m.model),
                       resolved_model: m.resolved_model,
                     }))}
                     groups={null}
@@ -336,6 +338,21 @@ export default function AutomationForm({ rule, onClose }) {
                     renderIcon={(m) => (
                       <ModelMark maker={modelMaker(harness, m.id, m.resolved_model)} size={14} />
                     )}
+                    footer={
+                      currentHarness?.custom_endpoint_supported ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPicker(null)
+                            // open the endpoint manager for this harness on the
+                            // same machine the rule will run on
+                            setManagingEndpoints(true)
+                          }}
+                        >
+                          Manage models…
+                        </button>
+                      ) : null
+                    }
                   />
                 )}
               </div>
@@ -420,6 +437,14 @@ export default function AutomationForm({ rule, onClose }) {
         </div>
 
         {error && <p className="af-error">{error}</p>}
+        {managingEndpoints && (
+          <EndpointManagerModal
+            harness={currentHarness.id}
+            deviceId={currentMachine?.machine.id ?? null}
+            where={currentMachine?.machine.name ?? 'this computer'}
+            onClose={() => setManagingEndpoints(false)}
+          />
+        )}
         <div className="af-foot">
           <button type="button" className="dv-act" onClick={onClose}>
             Cancel

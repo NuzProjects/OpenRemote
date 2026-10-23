@@ -26,6 +26,7 @@ export const SECTIONS = [
   { id: 'daemon', label: 'Daemon', icon: 'terminal', group: 'system', phone: false },
   { id: 'harnesses', label: 'Harnesses', icon: 'robot', group: 'system', phone: false },
   { id: 'mcp-servers', label: 'MCP servers', icon: 'plugs', group: 'system', phone: false },
+  { id: 'models', label: 'Models', icon: 'shapes', group: 'system', phone: false },
   { id: 'archived', label: 'Archived chats', icon: 'archive', group: 'chats', phone: true },
   { id: 'this-install', label: 'This install', icon: 'info', group: 'about', phone: true },
 ]
@@ -41,6 +42,7 @@ const BLURBS = {
   daemon: 'The local process chats run through.',
   harnesses: 'What the daemon can drive on this machine.',
   'mcp-servers': 'Tools a session can call.',
+  models: 'Custom model endpoints on this computer.',
   archived: 'Chats hidden on this computer.',
   'this-install': 'The build you are running and the first-run steps.',
 }
@@ -73,6 +75,7 @@ const ROWS = [
   row('daemon-restart', 'daemon', 'Restart', 'Stops running chats and starts a fresh daemon.', ['stop', 'start', 'daemon']),
 
   row('mcp-add', 'mcp-servers', 'Add an MCP server', 'Its launch command, as the machine would start it.', ['tool', 'add', 'command', 'server']),
+  row('models-endpoint-add', 'models', 'Add a model endpoint', 'A base URL on this machine or network that lists models.', ['endpoint', 'gateway', 'custom', 'model', 'base url', 'relay', 'self-hosted']),
 
   row('install-version', 'this-install', 'OpenRemote version', 'The build and the daemon it talks to.', ['about', 'build', 'release', 'update', 'daemon']),
   row('install-first-run', 'this-install', 'First-run steps', 'Shows them again. The chats stay.', ['onboarding', 'setup', 'replay', 'welcome']),
