@@ -472,3 +472,24 @@ html[data-reduce-motion] .bw-tab,
 html[data-reduce-motion] .bw-btn {
   transition: none;
 }
+
+/* ---- side pane ---- */
+
+/* The browser docked right: a fixed width beside the chat, with the same
+   browser chrome and a pane-closing button in the tab strip. */
+.bw-pane {
+  flex: 0 0 460px;
+  max-width: 60%;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--line);
+  background: var(--bg-app);
+}
+
+.bw-pane > .bw {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+}

@@ -1,3 +1,14 @@
+/* The row the chat area and the browser pane share: the chat keeps the
+   rest and the pane keeps its width. This lives here, not in the
+   browser's own CSS, because the browser loads lazily - the row has to
+   lay out right before the pane is ever opened. */
+.main-row {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
 .split-area {
   flex: 1;
   display: flex;

@@ -15,6 +15,7 @@ import {
   CaretDown,
   CaretUp,
   Code,
+  Crosshair,
   DeviceMobile,
   DotsThreeVertical,
   DownloadSimple,
@@ -30,6 +31,8 @@ import {
   X,
 } from '@phosphor-icons/react'
 import { hasTauri, isMobile } from './platform.js'
+import { PICKER_CANCEL, PICKER_SOURCE, formatPicked } from './browser-pick.js'
+import { insertToComposer } from './composer-insert.js'
 import { omnibox, security, shownAddress } from './browser-omnibox.js'
 import { closeTab, cycle, newTab, tabTitle } from './browser-tabs.js'
 import { adopt, call, getState, onKey, patchTab, setState, subscribe } from './browser-store.js'
@@ -93,7 +96,7 @@ function anchorOf(el) {
 
 // ---- the view ----
 
-export default function BrowserView() {
+export default function BrowserView({ onClosePane = null }) {
   const { tabs, active, downloads, finds, closed } = useSyncExternalStore(subscribe, getState)
   const current = tabs.find((t) => t.key === active) ?? tabs[0]
   const pageRef = useRef(null)
@@ -105,6 +108,12 @@ export default function BrowserView() {
   // stays in the page, so a picture is decoded in it before it shows.
   const pictureRef = useRef(null)
   const [menu, setMenu] = useState(null)
+  // Element picking: the page waits for a click, and the pick lands in
+  // the chat. `notice` is the pane's own confirm - it sits in the chrome,
+  // never over the page.
+  const [picking, setPicking] = useState(false)
+  const [notice, setNotice] = useState(null)
+  const noticeTimer = useRef(0)
   const shownNative = useRef(null)
   const device = current?.device ?? null
   const find = current?.find ?? null
@@ -402,6 +411,45 @@ export default function BrowserView() {
     if (tab.native) call('browser_find', { tab: tab.native, term: '', step: 0 })
   }
 
+  const notify = (text) => {
+    setNotice(text)
+    clearTimeout(noticeTimer.current)
+    noticeTimer.current = setTimeout(() => setNotice(null), 4000)
+  }
+
+  // Point at an element on the page and attach it to the chat: its
+  // address, its kind and its words land in the composer's draft, where
+  // the agent reads them. The picker runs in the page; Esc backs out.
+  const startPick = async () => {
+    const tab = activeTab()
+    if (!tab?.native || picking) return
+    setPicking(true)
+    try {
+      const res = await call('browser_cdp', {
+        tab: tab.native,
+        method: 'Runtime.evaluate',
+        params: { expression: PICKER_SOURCE, awaitPromise: true, returnByValue: true },
+      })
+      const pick = res?.result?.subtype === 'error' ? null : (res?.result?.value ?? null)
+      if (!pick) return
+      const line = formatPicked({ ...pick, url: tab.url, title: tab.title })
+      if (insertToComposer(line)) notify('Attached to the chat')
+      else notify('No chat open - open one first, then pick again')
+    } catch {
+      // The tab closed mid-pick, or the page never answered: back out.
+    } finally {
+      setPicking(false)
+    }
+  }
+
+  const cancelPick = () => {
+    const tab = activeTab()
+    setPicking(false)
+    // The page's own Esc already stood down if it heard it; this is for
+    // the bar's Cancel, which the page cannot hear.
+    if (tab?.native) call('browser_cdp', { tab: tab.native, method: 'Runtime.evaluate', params: { expression: PICKER_CANCEL } })
+  }
+
   const toggleDevice = () => {
     const tab = activeTab()
     if (!tab?.native) return
@@ -590,6 +638,11 @@ export default function BrowserView() {
         >
           <CaretDown size={14} />
         </button>
+        {onClosePane && (
+          <button type="button" className="bw-btn bw-tabsearch" title="Close the browser pane" onClick={onClosePane}>
+            <X size={14} />
+          </button>
+        )}
       </div>
 
       <div className="bw-bar" onPointerEnter={precapture}>
@@ -664,6 +717,15 @@ export default function BrowserView() {
         </button>
         <button
           type="button"
+          className={`bw-btn${picking ? ' on' : ''}`}
+          title="Select an element to attach to the chat"
+          disabled={!live}
+          onClick={picking ? cancelPick : startPick}
+        >
+          <Crosshair size={17} />
+        </button>
+        <button
+          type="button"
           className={`bw-btn${busy ? ' busy' : ''}`}
           data-bw-anchor="downloads"
           title="Downloads (Ctrl+J)"
@@ -680,6 +742,27 @@ export default function BrowserView() {
           <DotsThreeVertical size={18} weight="bold" />
         </button>
       </div>
+
+      {picking && live && (
+        <div className="bw-strip">
+          <Crosshair size={14} className="bw-strip-icon" />
+          <span>Click an element on the page - Esc backs out</span>
+          <span className="bw-strip-fill" />
+          <button type="button" className="bw-btn" title="Stop picking" onClick={cancelPick}>
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
+      {notice && (
+        <div className="bw-strip">
+          <span>{notice}</span>
+          <span className="bw-strip-fill" />
+          <button type="button" className="bw-btn" title="Dismiss" onClick={() => setNotice(null)}>
+            <X size={14} />
+          </button>
+        </div>
+      )}
 
       {find && live && (
         <div className="bw-strip">

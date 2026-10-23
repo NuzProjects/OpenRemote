@@ -1,0 +1,54 @@
+/* The homepage's floating shortcut bar: a round pill floating over the
+   top right corner of the new-chat view, one round button per shortcut. */
+
+.fb-bar {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg-side);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.fb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.fb-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.fb-btn.on {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  color: var(--text-1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fb-btn {
+    transition: none;
+  }
+}
+
+html[data-reduce-motion] .fb-btn {
+  transition: none;
+}
