@@ -1,7 +1,7 @@
 //! Antigravity CLI (`agy`) harness driver.
 //!
-//! Verified live against agy 1.2.9: print mode (`--print <prompt>
-//! --output-format stream-json`) emits one NDJSON frame family -
+//! Verified live against agy 1.4.5: print mode (`--output-format
+//! stream-json --print <prompt>`) emits one NDJSON frame family -
 //! `{event: "init", conversation_id, init}`, `{event: "step_update",
 //! step_update: {state, step_type, text_delta}}`, and `{event: "result",
 //! result: {status, response, usage}}` where `status` is Antigravity's

@@ -97,8 +97,10 @@ impl Driver {
         let cwd = self.opts.cwd.clone();
         let mut command = Command::new(program);
         command.args(&prefix);
+        // grok 1.0.67 requires `--single <PROMPT>`. The next word is the
+        // prompt, so other flags must come first. A dash-leading prompt
+        // is still text: it is the flag's value, not a bare positional.
         command
-            .arg("--single")
             .arg("--output-format")
             .arg("streaming-messages-json")
             .arg("--cwd")
@@ -118,12 +120,7 @@ impl Driver {
             // grok's own UUID session id - value form, no flag surface.
             command.arg("--resume").arg(resume);
         }
-        // End-of-options, then the prompt as the one positional (harness
-        // audit F6): grok's parser is yargs-class, and a prompt that starts
-        // with "-" is text after `--`, never a flag guess. The separator
-        // must trail every real flag because it ends option parsing for
-        // the whole rest of the line, so the text rides last.
-        command.arg("--").arg(text);
+        command.arg("--single").arg(text);
         // A key set in the user environment is a sign-in. This process may
         // have been started before that variable existed, so hand it to
         // the child when it is missing here.

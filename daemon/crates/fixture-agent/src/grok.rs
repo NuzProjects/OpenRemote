@@ -1,7 +1,7 @@
 //! The fixture's Grok Build print mode: one run per prompt, emitting the
 //! Anthropic-Messages streaming wire (`system/init`, `assistant`,
 //! `result`) exactly as the openremote-grok driver expects. The argv the
-//! real driver builds is the truth: `--single --output-format
+//! real driver builds is the truth: `--output-format
 //! streaming-messages-json --cwd <dir> [--model <m>] [--resume <id>] --
 //! <text>` - every flag first, then end-of-options, then the prompt as
 //! the one positional.
@@ -42,30 +42,24 @@ pub fn main_grok(argv: &[String]) {
         std::thread::sleep(std::time::Duration::from_millis(1500));
     }
 
-    // argv: [.., --single, --output-format, streaming-messages-json,
-    //        --cwd, <dir>, (--model, <m>)?, (--permission-mode, <mode>)?,
-    //        (--resume, <id>)?, --, <text>]
-    // `--` is end-of-options (harness audit F6), yargs-class in spirit:
-    // the prompt is the one positional after it, whatever it starts with.
-    // A dash-leading prompt that arrived as a bare argv word would fall
-    // through the arms below as an unknown flag and the echo would name
-    // the bug - that is the regression the e2e watches for.
+    // argv: [--output-format, streaming-messages-json, --cwd, <dir>,
+    //        (--model, <m>)?, (--permission-mode, <mode>)?,
+    //        (--resume, <id>)?, --single, <text>]
+    // The prompt is `--single`'s value, including a dash-leading one.
+    // The e2e watches that "-v ..." comes back as text, not a flag guess.
     let mut prompt = String::new();
     let mut resume: Option<String> = None;
     let mut model = String::from("grok-4.7-fixture");
     let mut permission_mode = String::from("default");
-    let mut positional = false;
     let mut i = 0;
     while i < argv.len() {
-        if positional {
-            prompt = argv[i].clone();
-            break;
-        }
         match argv[i].as_str() {
-            "--" => positional = true,
-            // Mode flag - the prompt is the positional after `--`, not
-            // this flag's value.
-            "--single" => {}
+            "--single" => {
+                if let Some(text) = argv.get(i + 1) {
+                    prompt = text.clone();
+                    i += 1;
+                }
+            }
             "--resume" => {
                 if let Some(id) = argv.get(i + 1) {
                     resume = Some(id.clone());

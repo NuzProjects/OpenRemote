@@ -2,11 +2,12 @@
 //! agy's own frame family - `{event: "init", conversation_id}`,
 //! `{event: "step_update", …}`, `{event: "result", result: {status,
 //! response}}` where status is Antigravity's own word (`SUCCESS`).
-//! The argv the real driver builds is the truth: `--print --output-format
-//! stream-json [--model <m>] [--mode <mode>] [--conversation <id>] --
-//! <text>` - every flag first, then end-of-options, then the prompt as
-//! the one positional. `--conversation <id>` resumes; `models` (the
-//! subcommand) prints the TSV catalog.
+//! The argv the real driver builds is the truth: `--output-format
+//! stream-json [--model <m>] [--mode <mode>] [--conversation <id>]
+//! --print <text>`. agy 1.4+ takes the word after `--print` as the
+//! prompt, so the prompt rides there, not as a positional after `--`.
+//! `--conversation <id>` resumes; `models` (the subcommand) prints the
+//! TSV catalog.
 
 use std::io::{BufRead, Write};
 
@@ -52,28 +53,22 @@ pub fn main_agy(argv: &[String]) {
         std::thread::sleep(std::time::Duration::from_millis(1500));
     }
 
-    // argv: [.., --print, --output-format, stream-json, (--model, <m>)?,
-    //        (--mode, <mode>)?, (--conversation, <id>)?, --, <text>]
-    // `--` is end-of-options (harness audit F6), yargs-class in spirit:
-    // the prompt is the one positional after it, whatever it starts with.
-    // A dash-leading prompt that arrived as a bare argv word would fall
-    // through the arms below as an unknown flag and the echo would name
-    // the bug - that is the regression the e2e watches for.
+    // argv: [--output-format, stream-json, (--model, <m>)?, (--mode, <mode>)?,
+    //        (--conversation, <id>)?, --print, <text>]
+    // The prompt is `--print`'s value, including a dash-leading one. The
+    // e2e watches that "-v ..." comes back as text, not a flag guess.
     let mut prompt = String::new();
     let mut conversation: Option<String> = None;
     let mut model = String::from("gemini-3.8-flash-medium");
-    let mut positional = false;
     let mut i = 0;
     while i < argv.len() {
-        if positional {
-            prompt = argv[i].clone();
-            break;
-        }
         match argv[i].as_str() {
-            "--" => positional = true,
-            // Mode flag - the prompt is the positional after `--`, not
-            // this flag's value.
-            "--print" | "--prompt" | "-p" => {}
+            "--print" | "--prompt" | "-p" => {
+                if let Some(text) = argv.get(i + 1) {
+                    prompt = text.clone();
+                    i += 1;
+                }
+            }
             "--conversation" => {
                 if let Some(id) = argv.get(i + 1) {
                     conversation = Some(id.clone());
@@ -86,7 +81,11 @@ pub fn main_agy(argv: &[String]) {
                     i += 1;
                 }
             }
-            _ => {}
+            other => {
+                if let Some(text) = other.strip_prefix("--print=") {
+                    prompt = text.to_string();
+                }
+            }
         }
         i += 1;
     }

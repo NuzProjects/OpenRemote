@@ -246,7 +246,7 @@ async fn a_grok_process_dying_mid_turn_fails_the_turn_with_a_note() {
 }
 
 /// A dash-leading prompt is text, never flags (harness audit F6): the
-/// driver sends it after `--` (end-of-options), the fixture keeps it
+/// driver sends it as `--single`'s value, the fixture reads that value,
 /// positional, and the round-trip is the echo. The old bare-argv shape
 /// would have fed "--help" to the CLI's own parser and died with the
 /// generic exited-before-the-turn note instead of an answer.
