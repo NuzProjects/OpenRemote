@@ -5,6 +5,27 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::{DecisionId, MachineId, ProjectId, RuleId, SessionId};
 
+/// A permission word the harness's CLI takes, with a human label.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug)]
+pub struct PermissionWord {
+    /// The CLI flag the harness takes (e.g. `acceptEdits`, `dontAsk`).
+    #[serde(rename = "w")]
+    pub word: String,
+    /// A human label shown in pickers instead of the raw flag.
+    #[serde(rename = "l")]
+    pub label: String,
+}
+
+impl PermissionWord {
+    #[must_use]
+    pub fn new(word: &str, label: &str) -> Self {
+        Self {
+            word: word.into(),
+            label: label.into(),
+        }
+    }
+}
+
 /// An installed agent CLI the daemon can drive (`claude`, `codex`, …).
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Harness {
@@ -30,6 +51,10 @@ pub struct Harness {
     /// Missing, never a guessed sign-in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signed_in: Option<bool>,
+    /// Running on an API key, with no browser login. The chat can start;
+    /// sign-in stays optional.
+    #[serde(default)]
+    pub using_api_key: bool,
     /// The model a fresh chat on this harness will run, from the harness's
     /// own config - its words. The wire's first-turn truth replaces it.
     /// `None` when the harness says nothing pre-send (slot reserved).
@@ -39,14 +64,19 @@ pub struct Harness {
     /// (grok's `default_reasoning_effort`), when one was read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_effort: Option<String>,
+    /// Whether this harness can run a chat through a user-configured
+    /// custom endpoint. False hides custom-model controls for it.
+    #[serde(default)]
+    pub custom_endpoint_supported: bool,
     /// The permission words the harness's own CLI takes (claude
     /// `--permission-mode`, codex `approvalPolicy`, grok
     /// `--permission-mode`) - its vocabulary, so the console's picker
     /// offers only what the harness understands. Empty where the
     /// harness has no enumerable words (agy, pi, opencode): no picker,
-    /// no dead UI.
+    /// no dead UI. Each word carries a human label the console shows
+    /// instead of the raw CLI flag.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub permission_modes: Vec<String>,
+    pub permission_modes: Vec<PermissionWord>,
     /// The word the harness runs when none is picked - its own default
     /// (claude `default`, codex `on-request`), `None` where the harness
     /// has no words at all.
@@ -80,6 +110,236 @@ impl SessionStatus {
     }
 }
 
+/// A write-only endpoint credential. The value persists in the owner's
+/// private store and is resolved into a harness child process only; it is
+/// never part of an API view, event, receipt, or error. Debug is redacted
+/// so a stray log cannot carry the secret.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct EndpointSecret(String);
+
+impl EndpointSecret {
+    pub fn new(value: String) -> Self {
+        Self(value)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// The secret, for endpoint probing and harness-child injection only.
+    pub fn expose_secret(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for EndpointSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("EndpointSecret([redacted])")
+    }
+}
+
+/// How an endpoint expects its credential: bearer token, API key, or an
+/// explicitly keyless local endpoint.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum EndpointAuthKind {
+    Bearer,
+    ApiKey,
+    None,
+}
+
+/// One user-configured custom model endpoint on this machine. The record
+/// is machine-local: a chat created here resolves it here, and the
+/// secret never leaves this machine through OpenRemote views or events.
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct ModelEndpoint {
+    pub id: String,
+    pub harness: String,
+    pub name: String,
+    pub base_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub models_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<String>,
+    pub auth_kind: EndpointAuthKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<EndpointSecret>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub is_default: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// A model endpoint as the console may see it: metadata only. The secret
+/// is replaced by `has_key`; no API response carries key material.
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct ModelEndpointView {
+    pub id: String,
+    pub harness: String,
+    pub name: String,
+    pub base_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub models_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<String>,
+    pub auth_kind: EndpointAuthKind,
+    pub has_key: bool,
+    pub enabled: bool,
+    pub is_default: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// One model reported by a custom endpoint, with its endpoint attached so
+/// the console can group custom rows without guessing their identity.
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct EndpointModel {
+    pub endpoint_id: String,
+    pub endpoint_name: String,
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+}
+
+/// The harnesses that may use a custom endpoint record. Codex and Grok
+/// records can be stored, but execution stays gated until a verified
+/// per-chat override path exists for that harness.
+pub fn validate_endpoint_harness(harness: &str) -> Result<(), String> {
+    match harness {
+        "claude" | "codex" | "grok" => Ok(()),
+        _ => Err(format!("custom endpoints support claude, codex, and grok - not '{harness}'")),
+    }
+}
+
+pub fn validate_endpoint_name(name: &str) -> Result<(), String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("name a custom endpoint".to_string());
+    }
+    if trimmed.chars().count() > 120 {
+        return Err("keep the endpoint name to 120 characters".to_string());
+    }
+    Ok(())
+}
+
+pub fn validate_model_id(model: &str) -> Result<(), String> {
+    let trimmed = model.trim();
+    if trimmed.is_empty() {
+        return Err("name a custom model id".to_string());
+    }
+    if trimmed.chars().count() > 256 {
+        return Err("keep the custom model id to 256 characters".to_string());
+    }
+    if trimmed.chars().any(char::is_control) {
+        return Err("the custom model id must not contain control characters".to_string());
+    }
+    Ok(())
+}
+
+/// Normalize a user-entered endpoint base URL: absolute HTTP(S), no
+/// credentials, query, or fragment, with one canonical trailing-slash
+/// rule. Local loopback and LAN hosts are allowed: custom endpoints are
+/// often a model server on this machine or network.
+pub fn normalize_endpoint_base_url(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("name a custom base URL".to_string());
+    }
+    if trimmed.chars().count() > 2083 {
+        return Err("keep the base URL to 2083 characters".to_string());
+    }
+    if trimmed.chars().any(char::is_control) {
+        return Err("the base URL must not contain control characters".to_string());
+    }
+    let (scheme, rest) = trimmed.split_once("://").ok_or_else(|| {
+        "use an absolute http:// or https:// base URL".to_string()
+    })?;
+    let scheme = scheme.to_ascii_lowercase();
+    if scheme != "http" && scheme != "https" {
+        return Err("use an absolute http:// or https:// base URL".to_string());
+    }
+    let (authority, path) = rest.split_once('/').map_or((rest, ""), |(a, p)| (a, p));
+    if authority.is_empty() || authority.chars().any(|c| c.is_whitespace()) {
+        return Err("the base URL needs a host".to_string());
+    }
+    if authority.contains('@') {
+        return Err("put no credentials in the base URL - save the key separately".to_string());
+    }
+    if path.contains('?') || path.contains('#') {
+        return Err("put no query or fragment in the base URL".to_string());
+    }
+    let path = path.trim_matches('/');
+    let host = authority.to_ascii_lowercase();
+    if path.is_empty() {
+        Ok(format!("{scheme}://{host}"))
+    } else {
+        Ok(format!("{scheme}://{host}/{path}"))
+    }
+}
+
+/// Normalize an optional model-list path override: an absolute HTTP(S)
+/// URL, or a relative path without whitespace, control characters, or
+/// parent-directory escapes.
+pub fn normalize_endpoint_models_path(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("name a model-list path override or leave it empty".to_string());
+    }
+    if trimmed.chars().count() > 512 {
+        return Err("keep the model-list override to 512 characters".to_string());
+    }
+    if trimmed.chars().any(char::is_control) || trimmed.chars().any(char::is_whitespace) {
+        return Err("the model-list override must not contain whitespace".to_string());
+    }
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        return normalize_endpoint_base_url(trimmed);
+    }
+    if trimmed.split('/').any(|segment| segment == "..") {
+        return Err("the model-list override must not escape its base URL".to_string());
+    }
+    Ok(trimmed.trim_matches('/').to_string())
+}
+
+/// The model-list URL for an endpoint: an explicit override when the
+/// gateway uses one, else `{base}/v1/models`, or `{base}/models` when the
+/// base already ends in `/v1`.
+pub fn endpoint_models_url(base_url: &str, models_path: Option<&str>) -> Result<String, String> {
+    let base = normalize_endpoint_base_url(base_url)?;
+    if let Some(path) = models_path.map(str::trim).filter(|p| !p.is_empty()) {
+        if path.starts_with("http://") || path.starts_with("https://") {
+            return normalize_endpoint_base_url(path);
+        }
+        let path = path.trim_matches('/');
+        return Ok(format!("{base}/{path}"));
+    }
+    if base.ends_with("/v1") {
+        Ok(format!("{base}/models"))
+    } else {
+        Ok(format!("{base}/v1/models"))
+    }
+}
+
+impl ModelEndpoint {
+    pub fn view(&self) -> ModelEndpointView {
+        ModelEndpointView {
+            id: self.id.clone(),
+            harness: self.harness.clone(),
+            name: self.name.clone(),
+            base_url: self.base_url.clone(),
+            models_path: self.models_path.clone(),
+            default_model: self.default_model.clone(),
+            auth_kind: self.auth_kind,
+            has_key: self.key.as_ref().is_some_and(|key| !key.is_empty()),
+            enabled: self.enabled,
+            is_default: self.is_default,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        }
+    }
+}
+
 /// One conversation with one harness in one workspace.
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Session {
@@ -93,6 +353,10 @@ pub struct Session {
     pub status: SessionStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// A custom model endpoint this chat runs through. None means the
+    /// harness's own provider; Some names a machine-local endpoint record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint_id: Option<String>,
     /// The harness's own effort word for this chat, when one was chosen.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,

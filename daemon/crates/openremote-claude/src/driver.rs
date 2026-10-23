@@ -50,7 +50,40 @@ impl Driver {
             .current_dir(&opts.cwd)
             .env("CLAUDE_CODE_ENTRYPOINT", "openremote-rs")
             .env_remove("CLAUDECODE")
-            .env("PWD", &opts.cwd)
+            .env("PWD", &opts.cwd);
+        if let Some(endpoint) = opts.endpoint.as_ref() {
+            if endpoint.harness != "claude" {
+                return Err(DriverError::Harness(
+                    "this custom endpoint belongs to another harness".to_string(),
+                ));
+            }
+            command.env("ANTHROPIC_BASE_URL", &endpoint.base_url);
+            match endpoint.auth_kind {
+                openremote_core::EndpointAuthKind::Bearer => {
+                    let Some(secret) = endpoint.secret.as_ref() else {
+                        return Err(DriverError::Harness(
+                            "this custom endpoint needs a key".to_string(),
+                        ));
+                    };
+                    command.env("ANTHROPIC_AUTH_TOKEN", secret.expose_secret());
+                    command.env_remove("ANTHROPIC_API_KEY");
+                }
+                openremote_core::EndpointAuthKind::ApiKey => {
+                    let Some(secret) = endpoint.secret.as_ref() else {
+                        return Err(DriverError::Harness(
+                            "this custom endpoint needs a key".to_string(),
+                        ));
+                    };
+                    command.env("ANTHROPIC_API_KEY", secret.expose_secret());
+                    command.env_remove("ANTHROPIC_AUTH_TOKEN");
+                }
+                openremote_core::EndpointAuthKind::None => {
+                    command.env_remove("ANTHROPIC_AUTH_TOKEN");
+                    command.env_remove("ANTHROPIC_API_KEY");
+                }
+            }
+        }
+        command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -910,6 +943,7 @@ mod tests {
             fast: false,
             mcp_servers: Vec::new(),
             plugin_dirs: Vec::new(),
+            endpoint: None,
         };
         let argv = build_argv(&opts);
         let joined = argv

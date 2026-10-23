@@ -691,6 +691,7 @@ mod tests {
             workspace: None,
             status: openremote_core::SessionStatus::Starting,
             model: None,
+            endpoint_id: None,
             effort: None,
             permission_mode: None,
             harness_session_ref: None,

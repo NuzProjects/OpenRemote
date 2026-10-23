@@ -9,6 +9,7 @@ use openremote_core::Harness;
 use openremote_harness::{
     DriverError, DriverEvent, ModelDescriptor, Resolution, SessionSettings, SpawnOptions,
 };
+use openremote_core::model::PermissionWord;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
@@ -176,6 +177,14 @@ impl Backend {
         &self,
         opts: SpawnOptions,
     ) -> Result<(SessionDriver, mpsc::Receiver<DriverEvent>), DriverError> {
+        if let Some(endpoint) = opts.endpoint.as_ref() {
+            let supported = matches!(self, Backend::Claude(_)) && endpoint.harness == "claude";
+            if !supported {
+                return Err(DriverError::Harness(
+                    "custom endpoints are not available for this harness yet".to_string(),
+                ));
+            }
+        }
         match self {
             Backend::Claude(resolution) => {
                 let (driver, rx) = openremote_claude::Driver::spawn(resolution, opts)?;
@@ -323,9 +332,7 @@ pub struct HarnessRegistry {
     /// The Node.js pi would run on, by its own `--version` - whether pi's
     /// install needs a runtime set up first.
     node_version: Option<String>,
-}
-
-fn harness_from(id: &str, name: &str, resolution: &Resolution, version: Option<&str>) -> Harness {
+}fn harness_from(id: &str, name: &str, resolution: &Resolution, version: Option<&str>) -> Harness {
     Harness {
         id: id.to_string(),
         name: name.to_string(),
@@ -341,9 +348,11 @@ fn harness_from(id: &str, name: &str, resolution: &Resolution, version: Option<&
         enabled: true,
         fast_supported: fast_supported(id, version),
         signed_in: None,
+        using_api_key: false,
         default_model: None,
         default_effort: None,
-        permission_modes: permission_modes(id).iter().map(|s| s.to_string()).collect(),
+        custom_endpoint_supported: custom_endpoint_supported(id),
+        permission_modes: permission_modes(id).to_vec(),
         default_permission: default_permission(id).map(String::from),
     }
 }
@@ -431,6 +440,9 @@ impl HarnessRegistry {
                 // command. Unknown, not a guessed sign-in.
                 _ => None,
             };
+            if entry.harness.id == "grok" {
+                entry.harness.using_api_key = openremote_grok::auth::using_api_key();
+            }
             // The pre-send model fact rides with the harness - the
             // harness's own config, its words (a fixture is not the
             // harness; its slots stay silent).
@@ -537,27 +549,45 @@ fn fast_supported(id: &str, version: Option<&str>) -> bool {
     }
 }
 
+/// Custom endpoints ship behind verified per-chat bindings. Claude's child
+/// environment carries the endpoint directly; Codex and Grok stay hidden
+/// until their harness-native override paths pass the fixture spike.
+fn custom_endpoint_supported(id: &str) -> bool {
+    matches!(id, "claude")
+}
+
 /// The permission words each harness's own CLI takes, in its spelling -
 /// terminology parity: claude `--permission-mode default …`, codex
 /// `approvalPolicy untrusted …` (the app-server's thread words), grok
 /// `--permission-mode` (the six its own docs name). Agy, pi, and opencode
 /// have no enumerable words their drivers pass - empty, so the console
-/// renders no picker for them.
-fn permission_modes(id: &str) -> &'static [&'static str] {
-    match id {
-        "claude" => &["default", "acceptEdits", "bypassPermissions", "plan"],
-        "codex" => &["untrusted", "on-failure", "on-request", "never"],
-        "grok" => &[
-            "default",
-            "acceptEdits",
-            "auto",
-            "dontAsk",
-            "bypassPermissions",
-            "plan",
-        ],
-        _ => &[],
-    }
-}
+/// renders no picker for them. Each word carries a human label the console
+/// shows instead of the raw CLI flag.
+static CLAUDE_PERMISSION_MODES: std::sync::LazyLock<[PermissionWord; 4]> =
+    std::sync::LazyLock::new(|| [
+        PermissionWord::new("default", "Ask for approval"),
+        PermissionWord::new("acceptEdits", "Apply edits"),
+        PermissionWord::new("bypassPermissions", "Skip approvals"),
+        PermissionWord::new("plan", "Plan only"),
+    ]);
+
+static CODEX_PERMISSION_MODES: std::sync::LazyLock<[PermissionWord; 4]> =
+    std::sync::LazyLock::new(|| [
+        PermissionWord::new("untrusted", "Ask first"),
+        PermissionWord::new("on-failure", "Ask when it fails"),
+        PermissionWord::new("on-request", "Ask as needed"),
+        PermissionWord::new("never", "Never ask"),
+    ]);
+
+static GROK_PERMISSION_MODES: std::sync::LazyLock<[PermissionWord; 6]> =
+    std::sync::LazyLock::new(|| [
+        PermissionWord::new("default", "Ask for approval"),
+        PermissionWord::new("acceptEdits", "Apply edits"),
+        PermissionWord::new("auto", "Auto-approve"),
+        PermissionWord::new("dontAsk", "Never ask"),
+        PermissionWord::new("bypassPermissions", "Skip approvals"),
+        PermissionWord::new("plan", "Plan only"),
+    ]);
 
 /// The word the harness runs when nothing is picked - its own default,
 /// not ours: claude and grok run `default`, codex's app-server thread
@@ -627,15 +657,16 @@ async fn probe_version(resolution: &Resolution) -> Option<String> {
     parse_version(&String::from_utf8_lossy(&output.stdout))
 }
 
-/// Grok has no status command. Its own sign-in fact is `~/.grok/auth.json`,
-/// written by `grok login` and nowhere else. A fixture binary is not Grok,
-/// so it stays unknown.
+/// Grok has no status command. A browser login writes `~/.grok/auth.json`.
+/// An xAI API key (`XAI_API_KEY`, or a model's `env_key`) is the other way
+/// in, and it is enough on its own. A fixture binary is not Grok, so it
+/// stays unknown.
 async fn probe_grok_signed_in(resolution: &Resolution) -> Option<bool> {
     let version = probe_version(resolution).await?;
     if !version.starts_with("1.") {
         return None;
     }
-    grok_auth_file_present()
+    openremote_grok::auth::signed_in()
 }
 
 /// Whether the CLI reports itself signed in, in its own words.
@@ -678,20 +709,17 @@ async fn probe_signed_in(resolution: &Resolution, args: &[&str]) -> Option<bool>
     parse_signed_in(&text)
 }
 
-/// Grok writes `auth.json` when `grok login` succeeds and nowhere else.
-/// An empty or missing file is signed out; a file we cannot read is unknown.
-fn grok_auth_file_present() -> Option<bool> {
-    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))?;
-    let path = PathBuf::from(home).join(".grok").join("auth.json");
-    match std::fs::read_to_string(&path) {
-        Ok(text) => Some(!text.trim().is_empty() && text.trim() != "{}"),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Some(false),
-        Err(_) => None,
+/// The harness's own status words. Anything else - a fixture's usage
+/// text, a command the binary does not have - is unknown, not signed out.
+fn permission_modes(id: &str) -> &'static [PermissionWord] {
+    match id {
+        "claude" => &*CLAUDE_PERMISSION_MODES,
+        "codex" => &*CODEX_PERMISSION_MODES,
+        "grok" => &*GROK_PERMISSION_MODES,
+        _ => &[],
     }
 }
 
-/// The harness's own status words. Anything else - a fixture's usage
-/// text, a command the binary does not have - is unknown, not signed out.
 fn parse_signed_in(text: &str) -> Option<bool> {
     let lower = text.to_ascii_lowercase();
     if let Some(value) = serde_json::from_str::<serde_json::Value>(text.trim())
@@ -778,36 +806,46 @@ mod tests {
 
     #[test]
     fn permission_words_come_from_each_harnesss_own_vocab() {
-        // claude's own --permission-mode words
+        // claude's own --permission-mode words, with human labels
         assert_eq!(
             permission_modes("claude"),
-            &["default", "acceptEdits", "bypassPermissions", "plan"]
+            &[
+                PermissionWord::new("default", "Ask for approval"),
+                PermissionWord::new("acceptEdits", "Apply edits"),
+                PermissionWord::new("bypassPermissions", "Skip approvals"),
+                PermissionWord::new("plan", "Plan only"),
+            ]
         );
         assert_eq!(default_permission("claude"), Some("default"));
         // codex's own approvalPolicy words - the app-server's thread
         // vocabulary, `on-request` its default
         assert_eq!(
             permission_modes("codex"),
-            &["untrusted", "on-failure", "on-request", "never"]
+            &[
+                PermissionWord::new("untrusted", "Ask first"),
+                PermissionWord::new("on-failure", "Ask when it fails"),
+                PermissionWord::new("on-request", "Ask as needed"),
+                PermissionWord::new("never", "Never ask"),
+            ]
         );
         assert_eq!(default_permission("codex"), Some("on-request"));
         // grok's own --permission-mode words, as its docs spell them
         assert_eq!(
             permission_modes("grok"),
             &[
-                "default",
-                "acceptEdits",
-                "auto",
-                "dontAsk",
-                "bypassPermissions",
-                "plan"
+                PermissionWord::new("default", "Ask for approval"),
+                PermissionWord::new("acceptEdits", "Apply edits"),
+                PermissionWord::new("auto", "Auto-approve"),
+                PermissionWord::new("dontAsk", "Never ask"),
+                PermissionWord::new("bypassPermissions", "Skip approvals"),
+                PermissionWord::new("plan", "Plan only"),
             ]
         );
         assert_eq!(default_permission("grok"), Some("default"));
         // the drivers pass no flag the others would read: no words, no
         // default, no picker in the console
         for id in ["pi", "opencode", "agy"] {
-            assert!(permission_modes(id).is_empty(), "{id} has no words");
+            assert_eq!(permission_modes(id).len(), 0, "{id} has no words");
             assert_eq!(default_permission(id), None);
         }
         // every default must be one of its own words - a default outside
@@ -815,7 +853,7 @@ mod tests {
         for id in ["claude", "codex", "grok"] {
             let default = default_permission(id).expect("words but no default");
             assert!(
-                permission_modes(id).contains(&default),
+                permission_modes(id).iter().any(|w| w.word == default),
                 "{id}'s default {default} is not one of its words"
             );
         }

@@ -149,6 +149,11 @@ impl Driver {
                 return Err(DriverError::Spawn("codex CLI not found".to_string()));
             }
         };
+        if opts.endpoint.is_some() {
+            return Err(DriverError::Harness(
+                "custom endpoints are not available for this harness yet".to_string(),
+            ));
+        }
         argv.extend(["app-server".into(), "--listen".into(), "stdio://".into()]);
 
         let mut command = Command::new(&program);

@@ -61,12 +61,28 @@ pub fn creation_flags() -> u32 {
     CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
 }
 
+/// A resolved custom endpoint for one spawn: metadata plus the secret.
+/// The secret's own Debug stays redacted, so spawn options never log it.
+#[derive(Clone, Debug)]
+pub struct EndpointBinding {
+    pub endpoint_id: String,
+    pub harness: String,
+    pub endpoint_name: String,
+    pub base_url: String,
+    pub auth_kind: openremote_core::EndpointAuthKind,
+    pub secret: Option<openremote_core::EndpointSecret>,
+}
+
 /// Spawn options for one session's harness, harness-agnostic. Each driver
 /// maps these onto its own flags.
 #[derive(Clone, Debug, Default)]
 pub struct SpawnOptions {
     pub cwd: PathBuf,
     pub model: Option<String>,
+    /// A custom endpoint binding when the chat runs through one. None
+    /// means the harness's own provider. Drivers that cannot honor a
+    /// binding must refuse before spawning.
+    pub endpoint: Option<EndpointBinding>,
     /// The harness's own permission/approval policy word, passed verbatim
     /// (terminology parity: claude `--permission-mode`, codex
     /// `approvalPolicy`, grok `--permission-mode`, …).

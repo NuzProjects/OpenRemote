@@ -122,6 +122,9 @@ const PEER_ROUTES: &[(&str, &str, Tier)] = &[
     ("POST", "/sessions/{id}/queue/{item}/steer", Tier::Chat),
     ("POST", "/sessions/{id}/steer", Tier::Chat),
     ("POST", "/sessions/{id}/settings", Tier::Chat),
+    ("POST", "/sessions/{id}/endpoint", Tier::Chat),
+    ("GET", "/model-endpoints", Tier::Machine),
+    ("GET", "/model-endpoints/{id}/models", Tier::Machine),
     ("POST", "/sessions/{id}/interrupt", Tier::Chat),
     ("POST", "/sessions/{id}/stop", Tier::Chat),
     ("POST", "/sessions/{id}/resume", Tier::Chat),
@@ -227,6 +230,20 @@ fn api_routes() -> Router<Arc<App>> {
         .route("/automations/{id}", axum::routing::delete(remove_rule))
         .route("/automations/{id}/enabled", post(set_rule_enabled))
         .route("/automations/{id}/run", post(run_rule))
+        .route("/model-endpoints", get(list_model_endpoints).post(save_model_endpoint))
+        .route(
+            "/model-endpoints/default",
+            post(set_default_model_endpoint),
+        )
+        .route(
+            "/model-endpoints/{id}",
+            axum::routing::delete(remove_model_endpoint),
+        )
+        .route(
+            "/model-endpoints/{id}/enabled",
+            post(set_model_endpoint_enabled),
+        )
+        .route("/model-endpoints/{id}/models", get(model_endpoint_models))
         .route("/projects", get(list_projects).post(save_project))
         .route("/projects/{id}", axum::routing::delete(remove_project))
         .route("/sessions", get(list_sessions).post(create_session))
@@ -243,6 +260,7 @@ fn api_routes() -> Router<Arc<App>> {
         .route("/sessions/{id}/queue/{item}/steer", post(post_queue_steer))
         .route("/sessions/{id}/steer", post(post_steer))
         .route("/sessions/{id}/settings", post(post_settings))
+        .route("/sessions/{id}/endpoint", post(post_session_endpoint))
         .route("/sessions/{id}/interrupt", post(post_interrupt))
         .route("/sessions/{id}/stop", post(post_stop))
         .route("/sessions/{id}/resume", post(post_resume))
@@ -332,6 +350,413 @@ async fn harness_models(State(app): State<Arc<App>>, AxumPath(id): AxumPath<Stri
             &format!("could not ask '{id}' for its models: {err}"),
         ),
         Err(err) => supervisor_error(err),
+    }
+}
+
+// ---- custom model endpoints (machine-local) ----
+
+/// The endpoint records on this machine, metadata only - the secret never
+/// leaves the store except into a harness child. `?harness=` narrows to
+/// one harness; the console passes it for the Manage-models rows.
+async fn list_model_endpoints(
+    State(app): State<Arc<App>>,
+    axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let harness = query.get("harness").map(|s| s.as_str());
+    if let Some(harness) = harness {
+        if openremote_core::model::validate_endpoint_harness(harness).is_err() {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "custom endpoints support claude, codex, and grok",
+            );
+        }
+    }
+    let views: Vec<openremote_core::ModelEndpointView> = {
+        let store = crate::supervisor::lock_recovering(&app.store);
+        store
+            .model_endpoints(harness)
+            .into_iter()
+            .cloned()
+            .map(|e| e.view())
+            .collect()
+    };
+    Json(views).into_response()
+}
+
+#[derive(Deserialize)]
+struct SaveEndpointBody {
+    request_id: String,
+    #[serde(default)]
+    id: Option<String>,
+    harness: String,
+    name: String,
+    base_url: String,
+    #[serde(default)]
+    models_path: Option<String>,
+    #[serde(default)]
+    default_model: Option<String>,
+    auth_kind: openremote_core::EndpointAuthKind,
+    /// The credential. On an edit without a key the stored one is kept,
+    /// so the console never has to read one back to change a name.
+    #[serde(default)]
+    key: Option<String>,
+    #[serde(default = "default_true")]
+    enabled: bool,
+    #[serde(default)]
+    is_default: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Create or replace one endpoint record. The stored secret is never in
+/// the answer - only the metadata view.
+async fn save_model_endpoint(
+    State(app): State<Arc<App>>,
+    Json(body): Json<SaveEndpointBody>,
+) -> Response {
+    if let Some(receipt) = app.supervisor.receipt(&body.request_id) {
+        return receipt_response(&receipt);
+    }
+    let outcome = {
+        let mut store = crate::supervisor::lock_recovering(&app.store);
+        let id = body
+            .id
+            .clone()
+            .filter(|id| !id.trim().is_empty())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let key = match body.key.clone().map(|k| k.trim().to_string()).filter(|k| !k.is_empty()) {
+            Some(secret) => Some(openremote_core::EndpointSecret::new(secret)),
+            None => store
+                .model_endpoint(&id)
+                .ok()
+                .and_then(|existing| existing.key.clone()),
+        };
+        let created_at = store
+            .model_endpoint(&id)
+            .map(|e| e.created_at)
+            .unwrap_or_else(|_| openremote_core::now_ms());
+        let entry = openremote_core::ModelEndpoint {
+            id,
+            harness: body.harness.trim().to_string(),
+            name: body.name.clone(),
+            base_url: body.base_url.clone(),
+            models_path: body.models_path.clone(),
+            default_model: body.default_model.clone(),
+            auth_kind: body.auth_kind,
+            key,
+            enabled: body.enabled,
+            is_default: body.is_default,
+            created_at,
+            updated_at: openremote_core::now_ms(),
+        };
+        store.put_model_endpoint(entry).map(|saved| saved.view())
+    };
+    match outcome {
+        Ok(view) => {
+            let receipt = Receipt {
+                request_id: body.request_id.clone(),
+                session_id: None,
+                status: ReceiptStatus::Completed,
+                result: Some(serde_json::to_value(&view).unwrap_or(Value::Null)),
+                error: None,
+                updated_at: openremote_core::now_ms(),
+            };
+            app.supervisor.record_receipt(receipt.clone());
+            (StatusCode::CREATED, Json(view)).into_response()
+        }
+        Err(err) => {
+            let receipt = Receipt {
+                request_id: body.request_id.clone(),
+                session_id: None,
+                status: ReceiptStatus::Failed,
+                result: None,
+                error: Some(store_error_message(&err)),
+                updated_at: openremote_core::now_ms(),
+            };
+            app.supervisor.record_receipt(receipt.clone());
+            store_http_error(err)
+        }
+    }
+}
+
+async fn remove_model_endpoint(
+    State(app): State<Arc<App>>,
+    AxumPath(id): AxumPath<String>,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
+) -> Response {
+    let request_id = query
+        .as_deref()
+        .and_then(|q| {
+            q.split('&').find_map(|pair| {
+                let (k, v) = pair.split_once('=')?;
+                (k == "request_id").then(|| v.to_string())
+            })
+        })
+        .unwrap_or_default();
+    if !request_id.is_empty() {
+        if let Some(receipt) = app.supervisor.receipt(&request_id) {
+            return receipt_response(&receipt);
+        }
+    }
+    match crate::supervisor::lock_recovering(&app.store).remove_model_endpoint(&id) {
+        Ok(()) => {
+            if !request_id.is_empty() {
+                app.supervisor.record_receipt(Receipt {
+                    request_id: request_id.clone(),
+                    session_id: None,
+                    status: ReceiptStatus::Completed,
+                    result: Some(Value::Null),
+                    error: None,
+                    updated_at: openremote_core::now_ms(),
+                });
+            }
+            (StatusCode::OK, Json(json!({"removed": id}))).into_response()
+        }
+        Err(err) => store_http_error(err),
+    }
+}
+
+#[derive(Deserialize)]
+struct EndpointEnabledBody {
+    request_id: String,
+    enabled: bool,
+}
+
+async fn set_model_endpoint_enabled(
+    State(app): State<Arc<App>>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<EndpointEnabledBody>,
+) -> Response {
+    if let Some(receipt) = app.supervisor.receipt(&body.request_id) {
+        return receipt_response(&receipt);
+    }
+    match crate::supervisor::lock_recovering(&app.store).set_model_endpoint_enabled(&id, body.enabled)
+    {
+        Ok(view) => {
+            let view = view.view();
+            app.supervisor.record_receipt(Receipt {
+                request_id: body.request_id.clone(),
+                session_id: None,
+                status: ReceiptStatus::Completed,
+                result: Some(serde_json::to_value(&view).unwrap_or(Value::Null)),
+                error: None,
+                updated_at: openremote_core::now_ms(),
+            });
+            Json(view).into_response()
+        }
+        Err(err) => store_http_error(err),
+    }
+}
+
+#[derive(Deserialize)]
+struct EndpointDefaultBody {
+    request_id: String,
+    harness: String,
+    #[serde(default)]
+    id: Option<String>,
+}
+
+/// Name a harness's machine default endpoint, or clear it with no id.
+async fn set_default_model_endpoint(
+    State(app): State<Arc<App>>,
+    Json(body): Json<EndpointDefaultBody>,
+) -> Response {
+    if let Some(receipt) = app.supervisor.receipt(&body.request_id) {
+        return receipt_response(&receipt);
+    }
+    let cleaned = body.id.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    match crate::supervisor::lock_recovering(&app.store).set_model_endpoint_default(&body.harness, cleaned)
+        .map(|saved| saved.map(|e| e.view()))
+    {
+        Ok(view) => {
+            app.supervisor.record_receipt(Receipt {
+                request_id: body.request_id.clone(),
+                session_id: None,
+                status: ReceiptStatus::Completed,
+                result: Some(serde_json::to_value(&view).unwrap_or(Value::Null)),
+                error: None,
+                updated_at: openremote_core::now_ms(),
+            });
+            Json(view).into_response()
+        }
+        Err(err) => store_http_error(err),
+    }
+}
+
+/// The models a custom endpoint lists today: fetched live from its
+/// `/v1/models`-compatible listing with its own key, attached to the
+/// endpoint so the console can group custom rows. A gateway that is
+/// down, slow, or answers another shape is a 502 with its own words -
+/// never an empty advertisement the picker could mistake for "none".
+async fn model_endpoint_models(
+    State(app): State<Arc<App>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    let entry = match crate::supervisor::lock_recovering(&app.store).model_endpoint(&id).cloned()
+    {
+        Ok(entry) => entry,
+        Err(_) => return error(StatusCode::NOT_FOUND, "no such model endpoint"),
+    };
+    match fetch_endpoint_models(&entry).await {
+        Ok(models) => Json(models).into_response(),
+        Err(message) => error(StatusCode::BAD_GATEWAY, &message),
+    }
+}
+
+async fn fetch_endpoint_models(
+    entry: &openremote_core::ModelEndpoint,
+) -> Result<Vec<openremote_core::EndpointModel>, String> {
+    let url = openremote_core::model::endpoint_models_url(&entry.base_url, entry.models_path.as_deref())
+        .map_err(|e| format!("endpoint '{}' has a bad listing address: {e}", entry.name))?;
+    let mut headers: Vec<(&str, &str)> = Vec::new();
+    let secret: Option<String>;
+    match entry.auth_kind {
+        openremote_core::EndpointAuthKind::None => secret = None,
+        _ => {
+            let Some(key) = entry.key.as_ref().filter(|k| !k.is_empty()) else {
+                return Err(format!("endpoint '{}' needs a key", entry.name));
+            };
+            secret = Some(key.expose_secret().to_string());
+        }
+    }
+    let owned;
+    match (&entry.auth_kind, secret.as_deref()) {
+        (openremote_core::EndpointAuthKind::Bearer, Some(key)) => {
+            owned = format!("Bearer {key}");
+            headers.push(("authorization", owned.as_str()));
+        }
+        (openremote_core::EndpointAuthKind::ApiKey, Some(key)) => {
+            owned = key.to_string();
+            headers.push(("x-api-key", owned.as_str()));
+        }
+        _ => {}
+    }
+    let response = openremote_cloud::https::Http::new()
+        .request("GET", &url, &headers, None)
+        .await
+        .map_err(|e| format!("could not reach endpoint '{}': {e}", entry.name))?;
+    if !(200..300).contains(&response.status) {
+        return Err(format!(
+            "endpoint '{}' answered {} - check its base URL and key",
+            entry.name, response.status
+        ));
+    }
+    parse_models_listing(&response.body, entry)
+}
+
+/// An OpenAI `/v1/models`-compatible listing: `{data: [{id}]}`. Also
+/// tolerated: a bare array, `{models: [...]}`, and entries naming the id
+/// `model` or `name` instead of `id`.
+fn parse_models_listing(
+    body: &[u8],
+    entry: &openremote_core::ModelEndpoint,
+) -> Result<Vec<openremote_core::EndpointModel>, String> {
+    let value: Value =
+        serde_json::from_slice(body).map_err(|_| format!("endpoint '{}' answered no JSON listing", entry.name))?;
+    let items: &Vec<Value> = if let Some(data) = value.get("data").and_then(Value::as_array) {
+        data
+    } else if let Some(models) = value.get("models").and_then(Value::as_array) {
+        models
+    } else if let Some(array) = value.as_array() {
+        array
+    } else {
+        return Err(format!(
+            "endpoint '{}' answered another shape - expected an OpenAI /v1/models-compatible listing",
+            entry.name
+        ));
+    };
+    let mut out = Vec::new();
+    for item in items {
+        let id = item
+            .get("id")
+            .or_else(|| item.get("model"))
+            .or_else(|| item.get("name"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let Some(id) = id else { continue };
+        if openremote_core::model::validate_model_id(id).is_err() {
+            continue;
+        }
+        out.push(openremote_core::EndpointModel {
+            endpoint_id: entry.id.clone(),
+            endpoint_name: entry.name.clone(),
+            model: id.to_string(),
+            display_name: item
+                .get("display_name")
+                .or_else(|| item.get("displayName"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+        });
+    }
+    Ok(out)
+}
+
+fn store_error_message(err: &openremote_core::store::StoreError) -> String {
+    err.to_string()
+}
+
+fn store_http_error(err: openremote_core::store::StoreError) -> Response {
+    match &err {
+        openremote_core::store::StoreError::NotFound(_) => error(StatusCode::NOT_FOUND, &err.to_string()),
+        openremote_core::store::StoreError::Conflict(_) => error(StatusCode::CONFLICT, &err.to_string()),
+        _ => error(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+struct SessionEndpointBody {
+    request_id: String,
+    #[serde(default)]
+    endpoint_id: Option<String>,
+}
+
+/// Point a stopped chat at another custom endpoint (or back at the
+/// harness's own provider with none). Live chats refuse with 409.
+async fn post_session_endpoint(
+    State(app): State<Arc<App>>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<SessionEndpointBody>,
+) -> Response {
+    if let Some(receipt) = app.supervisor.receipt(&body.request_id) {
+        return receipt_response(&receipt);
+    }
+    let Some(session_id) = SessionId::parse(&id) else {
+        return error(StatusCode::BAD_REQUEST, "bad session id");
+    };
+    match app
+        .supervisor
+        .set_session_endpoint(&session_id, body.endpoint_id.as_deref())
+        .await
+    {
+        Ok(session) => {
+            let receipt = Receipt {
+                request_id: body.request_id,
+                session_id: Some(session_id),
+                status: ReceiptStatus::Completed,
+                result: Some(serde_json::to_value(&session).unwrap_or(Value::Null)),
+                error: None,
+                updated_at: openremote_core::now_ms(),
+            };
+            app.supervisor.record_receipt(receipt.clone());
+            (StatusCode::OK, Json(session)).into_response()
+        }
+        Err(err) => {
+            let receipt = Receipt {
+                request_id: body.request_id,
+                session_id: Some(session_id),
+                status: ReceiptStatus::Failed,
+                result: None,
+                error: Some(err.to_string()),
+                updated_at: openremote_core::now_ms(),
+            };
+            app.supervisor.record_receipt(receipt.clone());
+            supervisor_error(err)
+        }
     }
 }
 
@@ -1931,6 +2356,11 @@ struct CreateSessionBody {
     /// tier `fast`).
     #[serde(default)]
     fast: bool,
+    /// A machine-local custom model endpoint this chat runs through.
+    /// Absent (or blank) means the harness's own provider or its
+    /// machine default.
+    #[serde(default)]
+    endpoint_id: Option<String>,
     /// Cloud: run the chat on another of the user's devices.
     #[serde(default)]
     pub(crate) device_id: Option<String>,
@@ -2014,6 +2444,7 @@ async fn create_session(
             body.permission_mode.clone(),
             body.fast,
             executor,
+            body.endpoint_id.clone(),
         )
         .await
     {
@@ -2054,6 +2485,7 @@ impl CreateSessionBody {
             "effort": self.effort,
             "permission_mode": self.permission_mode,
             "fast": self.fast,
+            "endpoint_id": self.endpoint_id,
         });
         // An absent workspace is omitted, never named null - the peer's
         // own deserializer treats missing and null alike, and a named null

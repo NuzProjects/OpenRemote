@@ -57,6 +57,11 @@ impl Driver {
         if !resolution.is_available() {
             return Err(DriverError::Spawn("grok CLI not found".to_string()));
         }
+        if opts.endpoint.is_some() {
+            return Err(DriverError::Harness(
+                "custom endpoints are not available for this harness yet".to_string(),
+            ));
+        }
         let (tx, rx) = mpsc::channel(256);
         Ok((
             Self {
@@ -119,6 +124,12 @@ impl Driver {
         // must trail every real flag because it ends option parsing for
         // the whole rest of the line, so the text rides last.
         command.arg("--").arg(text);
+        // A key set in the user environment is a sign-in. This process may
+        // have been started before that variable existed, so hand it to
+        // the child when it is missing here.
+        for (name, value) in crate::auth::missing_api_keys() {
+            command.env(name, value);
+        }
         // Windows: no console flash, no Ctrl-C from a shared console; the
         // why lives on openremote_harness::creation_flags.
         #[cfg(windows)]

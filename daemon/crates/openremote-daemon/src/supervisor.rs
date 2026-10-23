@@ -1113,6 +1113,7 @@ impl Supervisor {
                 rule.permission_mode.clone(),
                 false,
                 None,
+                None,
             )
             .await?;
         let chat = session.id;
@@ -1191,6 +1192,26 @@ impl Supervisor {
     /// even when the spawn fails - the failure is the session's first fact.
     /// A chat without a workspace (no project) runs in the home folder.
     #[allow(clippy::too_many_arguments)]
+    /// The resolved custom endpoint for one spawn: metadata plus the secret
+    /// for the harness child only. None means the harness's own provider.
+    fn endpoint_binding(
+        &self,
+        harness: &str,
+        endpoint_id: Option<&str>,
+    ) -> Result<Option<openremote_harness::EndpointBinding>, SupervisorError> {
+        let resolved = self
+            .with_store(|s| s.resolve_model_endpoint(harness, endpoint_id))
+            .map_err(store_error)?;
+        Ok(resolved.map(|entry| openremote_harness::EndpointBinding {
+            endpoint_id: entry.id.clone(),
+            harness: entry.harness.clone(),
+            endpoint_name: entry.name.clone(),
+            base_url: entry.base_url.clone(),
+            auth_kind: entry.auth_kind,
+            secret: entry.key.clone(),
+        }))
+    }
+
     pub async fn create_session(
         self: &Arc<Self>,
         harness: &str,
@@ -1200,7 +1221,19 @@ impl Supervisor {
         permission_mode: Option<String>,
         fast: bool,
         executor: Option<openremote_core::DeviceId>,
+        endpoint_id: Option<String>,
     ) -> Result<Session, SupervisorError> {
+        // A custom model id is free text in the harness's own spelling -
+        // the only bar is shape, never the catalog. An empty pick means
+        // unpicked, never a model named "".
+        let model = match model.map(|m| m.trim().to_string()) {
+            Some(m) if m.is_empty() => None,
+            Some(m) => {
+                openremote_core::model::validate_model_id(&m).map_err(SupervisorError::Conflict)?;
+                Some(m)
+            }
+            None => None,
+        };
         let Some(backend) = self.backend(harness) else {
             return Err(SupervisorError::Harness(format!(
                 "harness '{harness}' is not available"
@@ -1226,12 +1259,14 @@ impl Supervisor {
             }
             (None, user_effort) => (None, user_effort),
         };
+        let binding = self.endpoint_binding(harness, endpoint_id.as_deref())?;
         let session = Session {
             id: SessionId::new(),
             harness: harness.to_string(),
             workspace,
             status: SessionStatus::Starting,
             model,
+            endpoint_id: binding.as_ref().map(|b| b.endpoint_id.clone()),
             effort,
             permission_mode,
             harness_session_ref: None,
@@ -1264,6 +1299,7 @@ impl Supervisor {
         let opts = openremote_harness::SpawnOptions {
             cwd: current.workspace.clone().unwrap_or_else(Self::home_dir),
             model: current.model.clone(),
+            endpoint: binding,
             effort: current.effort.clone(),
             permission_mode: current.permission_mode.clone(),
             resume: None,
@@ -1486,6 +1522,16 @@ impl Supervisor {
         }
         let updated = self
             .with_store(|s| {
+                // A custom model id is free text in the harness's own
+                // spelling - shape-checked here so a stopped chat's stored
+                // change is already valid when resume passes it.
+                if let Some(model) = settings.model.as_deref() {
+                    let trimmed = model.trim();
+                    if !trimmed.is_empty() {
+                        openremote_core::model::validate_model_id(trimmed)
+                            .map_err(openremote_core::store::StoreError::Conflict)?;
+                    }
+                }
                 s.update_session_settings(
                     id,
                     settings.model.clone(),
@@ -1494,6 +1540,38 @@ impl Supervisor {
                     settings.permission_mode.clone(),
                 )
             })
+            .map_err(store_error)?;
+        self.emit_all(
+            id,
+            vec![EventPayload::SessionUpdated {
+                session: updated.clone(),
+            }],
+        )?;
+        Ok(updated)
+    }
+
+    /// Point a stopped chat at another custom endpoint. A live chat keeps
+    /// the binding it started with - the switch lands on resume.
+    pub async fn set_session_endpoint(
+        &self,
+        id: &SessionId,
+        endpoint_id: Option<&str>,
+    ) -> Result<Session, SupervisorError> {
+        let cleaned = endpoint_id.map(str::trim).filter(|s| !s.is_empty());
+        if self.entry(id).await.is_ok()
+            || self
+                .session(id)
+                .map(|s| s.status.is_alive())
+                .unwrap_or(false)
+        {
+            return Err(SupervisorError::Conflict(
+                "stop the chat to change its endpoint - a live chat keeps the binding it started with"
+                    .into(),
+            ));
+        }
+        self.ensure_here(id)?;
+        let updated = self
+            .with_store(|s| s.set_session_endpoint(id, cleaned))
             .map_err(store_error)?;
         self.emit_all(
             id,
@@ -1783,9 +1861,11 @@ impl Supervisor {
             )));
         };
         let notes = self.rerun_plugin_commands(&session.harness).await;
+        let binding = self.endpoint_binding(&session.harness, session.endpoint_id.as_deref())?;
         let opts = openremote_harness::SpawnOptions {
             cwd: session.workspace.clone().unwrap_or_else(Self::home_dir),
             model: session.model.clone(),
+            endpoint: binding,
             effort: session.effort.clone(),
             permission_mode: session.permission_mode.clone(),
             resume: Some(harness_ref),
@@ -2611,6 +2691,7 @@ mod tests {
             workspace: None,
             status: SessionStatus::Starting,
             model: None,
+            endpoint_id: None,
             effort: None,
             permission_mode: None,
             harness_session_ref: None,
