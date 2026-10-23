@@ -123,14 +123,31 @@
   shape-rendering: crispEdges;
 }
 
+.tb-menu {
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.25;
+  stroke-linecap: round;
+}
+
 /* The Android app: a touch-height bar, the name beside the drawer's toggle. */
 .titlebar.is-mobile {
-  height: 48px;
+  height: 56px;
   justify-content: flex-start;
 }
 
 .titlebar.is-mobile .tb-toggle {
   width: 48px;
+  padding: 0;
+}
+
+/* The mark sits at the label's side of the hit target, on the same line
+   as the capitals, not floating in the middle of the button. */
+.titlebar.is-mobile .tb-toggle:first-child {
+  place-items: center end;
+  width: 48px;
+  padding-right: 8px;
 }
 
 .titlebar.is-mobile .tb-toggle:hover {
@@ -139,8 +156,11 @@
 
 .titlebar.is-mobile .tb-title {
   flex: 1;
-  padding-left: 4px;
-  font-size: 15px;
+  padding-left: 0;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.02em;
   color: var(--text-1);
 }
 

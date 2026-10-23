@@ -134,7 +134,7 @@ export default function CloudStateRow({ one = 'computer' }) {
             onClick={start}
             disabled={busy || connection.state !== 'connected'}
           >
-            {cloud?.state === 'revoked' || cloud?.state === 'relink' ? 'Sign in again' : 'Sign in with moreweb'}
+            {cloud?.state === 'revoked' || cloud?.state === 'relink' ? 'Sign in again' : 'Sign in'}
           </button>
         )}
       </div>

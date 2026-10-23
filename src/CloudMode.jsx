@@ -5,7 +5,7 @@
 // system browser; the daemon opens it and the poll notices when it's done.
 
 import { useState } from 'react'
-import { ArrowSquareOut, Copy, House } from '@phosphor-icons/react'
+import { Copy, House, QrCode } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
 import { isMobile } from './platform.js'
 import './cloudmode.css'
@@ -70,7 +70,7 @@ function phoneWords(cloud) {
     default:
       return {
         title: 'Your coding agents, in your pocket',
-        body: 'OpenRemote drives the agents on your own computers - servers, home machines, laptops. Chats sync between them end to end encrypted; moreweb never sees or keeps them.',
+        body: 'Agents run on your computers. Chats sync encrypted. moreweb never sees or keeps them.',
       }
   }
 }
@@ -162,7 +162,6 @@ export default function CloudMode({ onBackToLocal }) {
           {signingIn ? (
             <>
               <button type="button" className="cm-back primary" onClick={start} disabled={busy}>
-                <ArrowSquareOut size={13} />
                 Open the page again
               </button>
               <button type="button" className="cm-back" onClick={cancel}>
@@ -171,15 +170,20 @@ export default function CloudMode({ onBackToLocal }) {
             </>
           ) : (
             <>
-              <button
-                type="button"
-                className="cm-back primary"
-                onClick={start}
-                disabled={busy || connection.state !== 'connected'}
-              >
-                <ArrowSquareOut size={13} />
-                {cloud?.state === 'revoked' || cloud?.state === 'relink' ? 'Sign in again' : 'Sign in with moreweb'}
-              </button>
+              <div className="cm-door">
+                <button
+                  type="button"
+                  className="cm-back primary"
+                  onClick={start}
+                  disabled={busy || connection.state !== 'connected'}
+                >
+                  {cloud?.state === 'revoked' || cloud?.state === 'relink' ? 'Sign in again' : 'Sign in'}
+                </button>
+                <button type="button" className="cm-scan">
+                  <QrCode size={18} />
+                  Scan QR code
+                </button>
+              </div>
               {onBackToLocal && (
                 <button type="button" className="cm-back" onClick={onBackToLocal}>
                   <House size={13} />

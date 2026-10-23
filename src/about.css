@@ -191,9 +191,167 @@
   color: var(--text-3);
 }
 
+/* Phone: a full settings page, not a dialog. Same facts as the popup. */
+.ab-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-app);
+  color: var(--text-1);
+  animation: ab-screen-in 0.28s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+@keyframes ab-screen-in {
+  from {
+    transform: translate3d(28px, 0, 0);
+    opacity: 0;
+  }
+}
+
+.ab-toolbar {
+  display: flex;
+  align-items: center;
+  flex: none;
+  height: 56px;
+  padding-right: 16px;
+}
+
+.ab-back {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  margin-left: 4px;
+  border: 0;
+  border-radius: 24px;
+  background: transparent;
+  color: var(--text-1);
+  cursor: default;
+}
+
+.ab-back:active {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.ab-toolbar-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.ab-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.ab-identity {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 24px 28px;
+}
+
+.ab-mark {
+  display: block;
+  width: 96px;
+  height: 96px;
+}
+
+.ab-name {
+  margin: 16px 0 0;
+  font-size: 22px;
+  font-weight: 500;
+}
+
+.ab-maker {
+  margin: 4px 0 0;
+  font-size: 14px;
+  color: var(--text-2);
+}
+
+.ab-list {
+  padding: 0 4px;
+}
+
+.ab-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  min-height: 64px;
+  padding: 12px 20px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.ab-row--link {
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+}
+
+.ab-row--link svg {
+  flex: none;
+  color: var(--text-3);
+}
+
+.ab-row-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.ab-row-label {
+  font-size: 16px;
+  color: var(--text-1);
+}
+
+.ab-row-value {
+  font-size: 14px;
+  color: var(--text-2);
+}
+
+.ab-row--link:active {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.ab-legal {
+  margin: 8px 0 0;
+  padding: 28px 20px 32px;
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.ab-body--licenses {
+  display: flex;
+  flex-direction: column;
+  padding: 0 20px 24px;
+}
+
+.ab-notices--screen {
+  flex: 1;
+  max-height: none;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  font-size: 13px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .ab-backdrop,
-  .ab-modal {
+  .ab-modal,
+  .ab-screen {
     animation: none;
   }
 

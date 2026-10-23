@@ -1,5 +1,5 @@
-/* The startup splash. Sits over the app until the mark has played, then
-   fades out. The dots grow into place clockwise; the arcs never move. */
+/* The startup splash: 239ms total (see Splash.jsx), then gone. The dots
+   pop into place clockwise inside the hold; the arcs never move. */
 .splash {
   position: fixed;
   inset: 0;
@@ -8,7 +8,7 @@
   align-items: center;
   justify-content: center;
   background: var(--bg-app, #0a0c0f);
-  transition: opacity 0.4s ease;
+  transition: opacity 80ms ease;
 }
 
 .splash-leaving {
@@ -24,7 +24,7 @@
 .splash-dot {
   transform-box: fill-box;
   transform-origin: center;
-  animation: splash-dot-in 0.52s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: splash-dot-in 0.12s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 @keyframes splash-dot-in {

@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Sidebar from './Sidebar.jsx'
 import TitleBar from './TitleBar.jsx'
 import NewChat from './NewChat.jsx'
@@ -12,8 +12,8 @@ import MachinesView from './MachinesView.jsx'
 import AccountView from './AccountView.jsx'
 import MobileView from './MobileView.jsx'
 import MetricsView from './MetricsView.jsx'
-// Loaded on first use: the browser costs nothing until it is opened.
-const BrowserView = lazy(() => import('./BrowserView.jsx'))
+import BrowserPane from './BrowserPane.jsx'
+import FloatingBar from './FloatingBar.jsx'
 import { ConsoleProvider, useConsole } from './state/console.jsx'
 import { needsSignIn } from './cloud.js'
 import CloudNotices from './CloudNotices.jsx'
@@ -48,7 +48,7 @@ const OB_KEY = 'openremote-onboarded'
 const STORE_KEY = 'openremote-view-state'
 const MODE_KEY = 'openremote-mode'
 const SPLIT_KEY = 'openremote-split-layout'
-const STATIC_VIEWS = ['new', 'plugins', 'automations', 'machines', 'settings', 'account', 'mobile', 'metrics', 'browser']
+const STATIC_VIEWS = ['new', 'plugins', 'automations', 'machines', 'settings', 'account', 'mobile', 'metrics']
 
 // The mode the user left the app in. Local unless they chose Cloud, so a
 // first launch never asks anyone to sign in. A phone runs no chats of its
@@ -158,6 +158,11 @@ function Shell() {
   // The sidebar's + : opens New chat with the Add project flow engaged -
   // the same picker the home screen's own button opens.
   const [addProjectOpen, setAddProjectOpen] = useState(false)
+  // The browser as a right side-pane: beside the chat instead of a whole
+  // window. The tabs live in the browser store, so the pane opens and
+  // closes without losing them.
+  const [browserOpen, setBrowserOpen] = useState(false)
+  const toggleBrowser = () => setBrowserOpen((v) => !v)
 
   // Each mode has its own views; one restored from history that belongs to
   // the other mode opens New chat instead. Plugins and automations act on
@@ -166,8 +171,13 @@ function Shell() {
   const OTHER_MODE = { local: ['machines'], cloud: isMobile ? ['plugins', 'automations'] : [] }
   const stored = history[hIndex]
   // Settings, Metrics and Mobile open over the app (popups.js), never in
-  // a pane; one left in the history from before opens New chat.
-  const view = OTHER_MODE[mode].includes(stored) || POPUP_VIEWS.includes(stored) ? 'new' : stored
+  // a pane; one left in the history from before opens New chat. The
+  // browser used to be a whole-window view; one left in the history opens
+  // New chat, and its tabs are still there when the side pane opens.
+  const view =
+    OTHER_MODE[mode].includes(stored) || POPUP_VIEWS.includes(stored) || stored === 'browser'
+      ? 'new'
+      : stored
   const chat = STATIC_VIEWS.includes(view) ? null : chats[view] ?? null
 
   // Every chat on screen streams live - the primary's and each pane's -
@@ -513,9 +523,9 @@ function Shell() {
   const primaryFocused = focused?.view === null
 
   // What the primary pane shows: the view the app's navigation points at.
-  // The footer's views - settings, account, mobile, metrics - render
-  // before Cloud's sign-in door: each carries its own signed-out state,
-  // so its icon never lands somewhere else.
+  // Until this device is in an account, home is the sign-in door. Every
+  // other view still opens — a QR connection does not sign in, and
+  // Machines, chats, and the rest carry their own empty state.
   const primaryContent = (
     view === 'settings' ? (
     <SettingsView onReplay={replayOnboarding} onOpenChat={openSession} />
@@ -525,17 +535,12 @@ function Shell() {
     <MobileView onOpenChat={openSession} />
   ) : view === 'metrics' ? (
     <MetricsView />
-  ) : view === 'browser' ? (
-    // The browser is this device's, in Local and Cloud alike.
-    <Suspense fallback={null}>
-      <BrowserView />
-    </Suspense>
   ) : view === 'plugins' ? (
     // Plugins and automations are this computer's: no Cloud sign-in needed.
     <PluginsView />
   ) : view === 'automations' ? (
     <AutomationsView onOpenChat={openSession} />
-  ) : mode === 'cloud' && needsSignIn(cloud) ? (
+  ) : mode === 'cloud' && needsSignIn(cloud) && view === 'new' ? (
     <CloudMode onBackToLocal={isMobile ? null : () => switchMode('local')} />
   ) : (
     <>
@@ -548,6 +553,7 @@ function Shell() {
           presetProject={presetProject}
           focused={primaryFocused}
           onOpenPlugins={() => goView('plugins')}
+          topRight={<FloatingBar browserOn={browserOpen} onBrowser={toggleBrowser} />}
         />
       )}
       {view === 'machines' && <MachinesView onOpenChat={openSession} openDevice={openDevice} />}
@@ -589,8 +595,121 @@ function Shell() {
     )
   }
 
+  const sheetRef = useRef(null)
+  const frameRef = useRef(null)
+  const ignoreBackdropClick = useRef(false)
+
+  // A left-to-right drag on the page opens the drawer. It does not have
+  // to start on the screen edge — that strip is where the system back
+  // gesture lives, and a finger is rarely perfectly horizontal.
+  function beginDrawerDrag(event) {
+    if (event.button != null && event.button !== 0) return
+    const sheet = sheetRef.current
+    const frame = frameRef.current
+    if (!sheet || !frame) return
+    const startX = event.clientX
+    const startY = event.clientY
+    const origin = sidebarOpen ? 264 : 0
+    let dragging = false
+    const move = (ev) => {
+      const dx = ev.clientX - startX
+      const dy = ev.clientY - startY
+      if (!dragging) {
+        if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return
+        const opening = !sidebarOpen && dx > 10 && Math.abs(dx) > Math.abs(dy)
+        const closing = sidebarOpen && dx < -10 && Math.abs(dx) > Math.abs(dy)
+        if (Math.abs(dy) > 24 && Math.abs(dy) > Math.abs(dx)) {
+          stop()
+          return
+        }
+        if (!opening && !closing) return
+        dragging = true
+        sheet.classList.add('dragging')
+      }
+      if (ev.cancelable) ev.preventDefault()
+      const x = Math.max(0, Math.min(264, origin + (ev.clientX - startX)))
+      sheet.style.transform = `translate3d(${x}px,0,0)`
+    }
+    const up = (ev) => {
+      const dx = ev.clientX - startX
+      const x = Math.max(0, Math.min(264, origin + dx))
+      stop()
+      if (!dragging) return
+      ignoreBackdropClick.current = true
+      const open = sidebarOpen ? dx > -48 : dx > 48
+      const target = open ? 264 : 0
+      const reduce = document.documentElement.hasAttribute('data-reduce-motion')
+      sheet.classList.remove('dragging')
+      frame.classList.toggle('drawer-open', open)
+      // Hold the finger's position for one frame, then ease to the rest
+      // point. Clearing the inline transform in the same frame skips that.
+      sheet.style.transition = 'none'
+      sheet.style.transform = `translate3d(${x}px,0,0)`
+      requestAnimationFrame(() => {
+        sheet.style.transition = reduce
+          ? 'none'
+          : 'transform 0.32s cubic-bezier(0.32, 0.72, 0, 1)'
+        sheet.style.transform = `translate3d(${target}px,0,0)`
+        const finish = (ev) => {
+          if (ev && ev.propertyName !== 'transform') return
+          sheet.removeEventListener('transitionend', finish)
+          sheet.style.transition = ''
+          sheet.style.transform = ''
+        }
+        if (reduce || Math.abs(target - x) < 1) finish()
+        else sheet.addEventListener('transitionend', finish)
+      })
+      setSidebarOpen(open)
+    }
+    const stop = () => {
+      window.removeEventListener('pointermove', move, true)
+      window.removeEventListener('pointerup', up, true)
+      window.removeEventListener('pointercancel', up, true)
+    }
+    window.addEventListener('pointermove', move, true)
+    window.addEventListener('pointerup', up, true)
+    window.addEventListener('pointercancel', up, true)
+  }
+
+  const sidebar = onboarded ? (
+    <Sidebar
+      open={sidebarOpen}
+      active={popup ?? ((focused?.view ?? view) === 'new' ? null : (focused?.view ?? view))}
+      mode={mode}
+      onMode={switchMode}
+      onSelect={(id) => (POPUP_VIEWS.includes(id) ? setPopup(id) : openInFocus(id))}
+      onSplit={openBeside}
+      onAddProject={addProject}
+      onNewChatIn={newChatIn}
+      onReveal={() => setSidebarOpen(true)}
+    />
+  ) : null
+
   const body = () => (
-    <>
+    <div
+      ref={frameRef}
+      className={`app-frame${isMobile ? ' is-mobile' : ''}${isMobile && sidebarOpen ? ' drawer-open' : ''}`}
+    >
+      {/* On a phone the sidebar stays put. The sheet — bar and page
+          together — slides right to reveal it. */}
+      {isMobile && sidebar}
+      <div
+        className="app-sheet"
+        ref={sheetRef}
+        onPointerDown={isMobile && onboarded ? beginDrawerDrag : undefined}
+      >
+      {isMobile && sidebarOpen && (
+        <div
+          className="sb-backdrop"
+          onClick={() => {
+            if (ignoreBackdropClick.current) {
+              ignoreBackdropClick.current = false
+              return
+            }
+            setSidebarOpen(false)
+          }}
+        />
+      )}
       {/* The frameless window has no OS chrome - the titlebar (drag,
           minimize, maximize, close) renders on every screen, onboarding
           included. */}
@@ -609,30 +728,26 @@ function Shell() {
         </div>
       ) : (
         <div className="app-body">
-          {sidebarOpen && <div className="sb-backdrop" onClick={() => setSidebarOpen(false)} />}
-          <Sidebar
-            open={sidebarOpen}
-            active={popup ?? ((focused?.view ?? view) === 'new' ? null : (focused?.view ?? view))}
-            mode={mode}
-            onMode={switchMode}
-            onSelect={(id) => (POPUP_VIEWS.includes(id) ? setPopup(id) : openInFocus(id))}
-            onSplit={openBeside}
-            onAddProject={addProject}
-            onNewChatIn={newChatIn}
-            onReveal={() => setSidebarOpen(true)}
-          />
+          {!isMobile && sidebarOpen && <div className="sb-backdrop" onClick={() => setSidebarOpen(false)} />}
+          {!isMobile && sidebar}
           <main className="main" onContextMenu={onMainContextMenu}>
             <CloudNotices />
-            {/* One frame for the main area, split or not: with a single
-                pane it is just the app's view (no header), and either way
-                it is where a dragged chat can land and split. */}
-            <SplitArea
-              layout={layout}
-              setLayout={setLayout}
-              labelFor={paneLabel}
-              renderPane={renderPane}
-              onDropInPane={dropInPane}
-            />
+            <div className="main-row">
+              {/* One frame for the main area, split or not: with a single
+                  pane it is just the app's view (no header), and either way
+                  it is where a dragged chat can land and split. */}
+              <SplitArea
+                layout={layout}
+                setLayout={setLayout}
+                labelFor={paneLabel}
+                renderPane={renderPane}
+                onDropInPane={dropInPane}
+              />
+              {/* The browser docked right: beside the chat, never instead
+                  of it. The floating bar (on the homepage) and the sidebar
+                  open and close it. */}
+              {browserOpen && <BrowserPane onClose={() => setBrowserOpen(false)} />}
+            </div>
           </main>
           {paneMenu && (
             <ContextMenu
@@ -659,9 +774,11 @@ function Shell() {
             <ViewPopup
               label={{ settings: 'Settings', metrics: 'Metrics', mobile: 'Mobile' }[popup]}
               onClose={() => setPopup(null)}
+              bare={isMobile && popup === 'settings'}
             >
               {popup === 'settings' ? (
                 <SettingsView
+                  onClose={() => setPopup(null)}
                   onReplay={() => {
                     setPopup(null)
                     replayOnboarding()
@@ -685,7 +802,8 @@ function Shell() {
           )}
         </div>
       )}
-    </>
+      </div>
+    </div>
   )
 
   return body()

@@ -16,6 +16,9 @@
 
 * {
   box-sizing: border-box;
+  /* The WebView paints a translucent square on every tap. A native
+     control does not. */
+  -webkit-tap-highlight-color: transparent;
 }
 
 html,
@@ -42,10 +45,25 @@ button {
   font: inherit;
 }
 
+/* A click focuses the control, and the WebView then draws its own blue
+   box. Keyboard focus still gets the ring below. */
+button:focus,
+a:focus,
+[role='button']:focus {
+  outline: none;
+}
+
 .app {
   display: flex;
   flex-direction: column;
   height: 100dvh;
+}
+
+/* Desktop: these wrappers generate no box, so the bar and the body stay
+   the flex children they were. On a phone they become the sliding sheet. */
+.app-frame,
+.app-sheet {
+  display: contents;
 }
 
 .app-body {
@@ -372,27 +390,6 @@ button.side-tile:active {
   color: var(--text-1);
 }
 
-.sb-projects-empty {
-  display: flex;
-  gap: 4px;
-  align-items: baseline;
-  flex-wrap: wrap;
-}
-
-.sb-empty-add {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--accent);
-  font-size: inherit;
-  font-weight: 500;
-  cursor: pointer;
-}
-
-.sb-empty-add:hover {
-  text-decoration: underline;
-}
-
 .sb-chats-title {
   margin-top: 14px;
 }
@@ -579,15 +576,17 @@ button.side-tile:active {
 }
 
 .sb-foot {
-  padding: 10px 14px 14px;
+  padding: 8px 14px 10px;
   border-top: 1px solid var(--line);
 }
 
-/* The footer's icon row: account, mobile, metrics, browser, settings - square
-   ghost buttons, spaced evenly across the footer. */
+/* The footer's icon row: account, mobile, metrics, settings - square ghost
+   buttons packed left with a tight gap, so the row stays compact no
+   matter how many icons it holds. */
 .sb-foot-row {
   display: flex;
-  justify-content: space-evenly;
+  justify-content: flex-start;
+  gap: 2px;
 }
 
 .sb-icon-btn {
@@ -639,6 +638,7 @@ html[data-reduce-motion] .dot--running {
   animation: none;
 }
 
+html[data-reduce-motion] .app-frame.is-mobile .app-sheet,
 html[data-reduce-motion] .sidebar,
 html[data-reduce-motion] .sidebar.collapsed,
 html[data-reduce-motion] .machines-reveal,
@@ -711,6 +711,71 @@ button:focus-visible {
 /* ---- phone width: the sidebar overlays instead of pushing ---- */
 .sb-backdrop {
   display: none;
+}
+
+/* Phone shell: the sidebar is already there, full height. Opening the
+   menu slides the bar and the page right together, which is what uncovers
+   it. A tap on the shifted page closes it. */
+.app-frame.is-mobile {
+  display: block;
+  position: relative;
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-side);
+}
+
+.app-frame.is-mobile .app-sheet {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  z-index: 2;
+  height: 100%;
+  background: var(--bg-app);
+  /* Vertical scroll stays native. A sideways drag is ours, so the
+     browser does not cancel it. */
+  touch-action: pan-y;
+  transition: transform 0.32s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.app-frame.is-mobile .app-sheet * {
+  touch-action: pan-y;
+}
+
+.app-frame.is-mobile .app-sheet.dragging {
+  transition: none;
+}
+
+.app-frame.is-mobile.drawer-open .app-sheet {
+  transform: translate3d(264px, 0, 0);
+  box-shadow: -16px 0 32px rgba(0, 0, 0, 0.4);
+}
+
+.app-frame.is-mobile .sidebar,
+.app-frame.is-mobile .sidebar.collapsed,
+.app-frame.is-mobile .sidebar.collapsed:has(.search:focus-within),
+.app-frame.is-mobile .sidebar:has(.search:focus-within) {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 1;
+  width: 264px;
+  margin: 0;
+  border-right: 0;
+  box-shadow: none;
+  transform: none;
+  visibility: visible;
+  animation: none;
+  transition: none;
+}
+
+.app-frame.is-mobile .sb-backdrop {
+  display: block;
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  background: rgba(0, 0, 0, 0.22);
 }
 
 @media (max-width: 639px) {
@@ -846,4 +911,57 @@ html[data-reduce-motion] .chat-archive {
 
 .nc-meta[aria-haspopup='listbox']::after {
   right: 7px;
+}
+
+/* Phone touch sizes. Desktop keeps the compact rows above. */
+.app-frame.is-mobile .mode-switch button {
+  height: 40px;
+  font-size: 15px;
+}
+
+.app-frame.is-mobile .mode-switch button svg {
+  width: 18px;
+  height: 18px;
+}
+
+.app-frame.is-mobile .side-tile {
+  height: 48px;
+  font-size: 16px;
+}
+
+.app-frame.is-mobile .side-tile svg,
+.app-frame.is-mobile .search-icon {
+  width: 24px;
+  height: 24px;
+}
+
+.app-frame.is-mobile .search input {
+  font-size: 16px;
+}
+
+.app-frame.is-mobile .section-title {
+  font-size: 15px;
+}
+
+.app-frame.is-mobile .project-head {
+  height: 48px;
+  font-size: 16px;
+}
+
+.app-frame.is-mobile .chat-row {
+  padding: 14px 12px;
+}
+
+.app-frame.is-mobile .chat-title {
+  font-size: 16px;
+}
+
+.app-frame.is-mobile .sb-icon-btn {
+  width: 48px;
+  height: 48px;
+}
+
+.app-frame.is-mobile .sb-icon-btn svg {
+  width: 24px;
+  height: 24px;
 }

@@ -13,7 +13,6 @@ import {
   Desktop,
   DeviceMobile,
   GearSix,
-  Globe,
   House,
   Lightning,
   MagnifyingGlass,
@@ -315,9 +314,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
           </button>
         </div>
         {grouped.projects.length === 0 && (
-          <p className="sb-empty sb-projects-empty">
-            No projects yet. <button className="sb-empty-add" onClick={onAddProject}>Add a project</button> to group its chats here.
-          </p>
+          <p className="sb-empty">No projects yet.</p>
         )}
         {grouped.projects.map(({ project, items }) => {
           const isCollapsed = !!collapsed[project.id]
@@ -371,8 +368,8 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
             {query.trim()
               ? `No chats match “${query.trim()}”.`
               : mode === 'cloud'
-                ? 'No synced chats yet. Start one - it shows up on all your devices.'
-                : 'No chats yet. Start one - it will appear here.'}
+                ? 'No synced chats yet.'
+                : 'No chats yet.'}
           </p>
         )}
         {rows.length > 0 && query.trim() && visible.length === 0 && (
@@ -381,9 +378,10 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
       </nav>
 
       <footer className="sb-foot">
-        {/* The footer's views, as icons: account, mobile, metrics, the
-            browser, then settings. Each opens its view in the primary pane. */}
-        <div className="sb-foot-row" role="group" aria-label="Account, mobile, metrics, browser, settings">
+        {/* The footer's views, as icons: account, mobile, metrics, then
+            settings. Each opens its view in the primary pane. The browser
+            lives in the homepage's floating bar instead. */}
+        <div className="sb-foot-row" role="group" aria-label="Account, mobile, metrics, settings">
           <button
             type="button"
             className={`sb-icon-btn${active === 'account' ? ' on' : ''}`}
@@ -427,17 +425,6 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
             onClick={() => onSelect('metrics')}
           >
             <ChartBar size={20} />
-          </button>
-          {/* The browser is this device's own, in Local and Cloud alike. */}
-          <button
-            type="button"
-            className={`sb-icon-btn${active === 'browser' ? ' on' : ''}`}
-            aria-pressed={active === 'browser'}
-            title="Browser"
-            aria-label="Browser"
-            onClick={() => onSelect('browser')}
-          >
-            <Globe size={20} />
           </button>
           <button
             type="button"

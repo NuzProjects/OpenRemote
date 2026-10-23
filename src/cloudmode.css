@@ -212,33 +212,134 @@
 
 .cm-actions {
   display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 10px;
-  margin-top: 24px;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 28px;
 }
 
 .cm-actions .cm-back {
   margin-top: 0;
+  justify-content: center;
 }
 
-/* amber marks the primary interaction (DESIGN.md) - no fill, no shadow */
+/* Sign in on the left, the scan action on the right. The scan label is
+   the usual one; the extra padding keeps that button longer. */
+.cm-door {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.cm-scan {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 44px;
+  min-width: 168px;
+  padding: 0 18px 0 14px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--text-1);
+  color: #10131a;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  cursor: default;
+  transition:
+    transform 0.12s cubic-bezier(0.2, 0, 0, 1),
+    background 0.12s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.cm-scan svg {
+  flex: none;
+  color: #10131a;
+}
+
+.cm-scan:hover {
+  background: #fff;
+}
+
+.cm-scan:focus-visible {
+  outline: 2px solid #8cb4eb;
+  outline-offset: 3px;
+}
+
+@media (pointer: coarse) {
+  .cm-scan:focus-visible {
+    outline: none;
+  }
+}
+
+.cm-scan:active {
+  transform: scale(0.985);
+  background: #fff;
+}
+
+/* The door is the cloud stroke, filled. Amber is a small mark elsewhere;
+   at this size it reads as a caution bar on the night field. */
 .cm-back.primary {
-  border-color: rgba(220, 162, 75, 0.45);
-  color: var(--accent);
-}
-
-.cm-back.primary svg {
-  color: var(--accent);
+  height: 44px;
+  padding: 0 22px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--text-1);
+  color: #10131a;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  transition:
+    transform 0.12s cubic-bezier(0.2, 0, 0, 1),
+    background 0.12s cubic-bezier(0.2, 0, 0, 1);
 }
 
 .cm-back.primary:hover {
-  background: rgba(220, 162, 75, 0.08);
-  color: var(--accent);
+  background: #fff;
+  color: #10131a;
+}
+
+.cm-back.primary:focus-visible {
+  outline: 2px solid #8cb4eb;
+  outline-offset: 3px;
+}
+
+@media (pointer: coarse) {
+  .cm-back.primary:focus-visible {
+    outline: none;
+  }
+}
+
+.cm-back.primary:active {
+  transform: scale(0.985);
+  background: #fff;
+}
+
+.cm-actions .cm-back:not(.primary) {
+  height: 36px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.cm-actions .cm-back:not(.primary):hover {
+  background: transparent;
+  color: var(--text-1);
 }
 
 .cm-back:disabled {
   opacity: 0.5;
+}
+
+/* A half-faded fill turns this door khaki or gray. Waiting keeps the
+   cloud color, only thinner, so the shape stays a button. */
+.cm-back.primary:disabled {
+  opacity: 1;
+  background: rgba(232, 235, 239, 0.14);
+  color: var(--text-2);
 }
 
 .cm-error {
@@ -304,18 +405,19 @@ html[data-reduce-motion] .cm-cloud {
   stroke-dashoffset: 0;
 }
 
+html[data-reduce-motion] .cm-back.primary,
+html[data-reduce-motion] .cm-scan {
+  transition: none;
+}
+
 html[data-reduce-motion] .cm-node,
 html[data-reduce-motion] .cm-link {
   opacity: 1;
 }
 
-/* phone width: the hero shrinks, the panel keeps breathing room */
+/* phone width: the panel keeps side room, and stays centered so a tall
+   screen doesn't leave the door sitting under the bar */
 @media (max-width: 639px) {
-  .cloudmode {
-    align-items: flex-start;
-    padding-top: 10vh;
-  }
-
   .cm-panel {
     padding: 0 16px 32px;
   }

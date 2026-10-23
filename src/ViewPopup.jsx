@@ -7,7 +7,7 @@ import './view-popup.css'
 // own over the app, so opening it never loses the chat underneath. The
 // view keeps its own title; this adds the frame and a way out: the close
 // button, Esc, a click outside, or the phone's back gesture.
-export default function ViewPopup({ label, onClose, children }) {
+export default function ViewPopup({ label, onClose, children, bare = false }) {
   useBack(true, onClose)
   useEffect(() => {
     const onKey = (e) => {
@@ -26,9 +26,11 @@ export default function ViewPopup({ label, onClose, children }) {
       }}
     >
       <div className="vp-window" role="dialog" aria-modal="true" aria-label={label}>
-        <button type="button" className="vp-close" onClick={onClose} title="Close" aria-label="Close">
-          <X size={14} weight="bold" />
-        </button>
+        {!bare && (
+          <button type="button" className="vp-close" onClick={onClose} title="Close" aria-label="Close">
+            <X size={14} weight="bold" />
+          </button>
+        )}
         <div className="vp-body">{children}</div>
       </div>
     </div>

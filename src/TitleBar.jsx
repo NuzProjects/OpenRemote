@@ -21,6 +21,16 @@ const hasTauri = typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__
 // no caption buttons of its own there.
 const MAC = isMac && !isMobile
 
+// Two bars, not three: the shorter menu mark, drawn a little heavier than
+// a hairline hamburger so it reads as a control at the phone's bar size.
+function MenuGlyph() {
+  return (
+    <svg className="tb-menu" width="20" height="14" viewBox="0 0 18 14" aria-hidden="true">
+      <path d="M1.2 4.2h15.6M1.2 9.8h15.6" />
+    </svg>
+  )
+}
+
 function CaptionGlyph({ kind }) {
   return (
     <svg className="tb-glyph" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
@@ -89,7 +99,7 @@ export default function TitleBar({
             title={hintSidebar(sidebarOpen ? 'Close the sidebar' : 'Open the sidebar')}
             aria-label={sidebarOpen ? 'Close the sidebar' : 'Open the sidebar'}
           >
-            <SidebarSimple size={20} />
+            <MenuGlyph />
           </button>
         )}
         <div className="tb-title">OpenRemote</div>

@@ -1,16 +1,20 @@
 import { useEffect, useState } from 'react'
-import { X } from '@phosphor-icons/react'
+import { CaretLeft, CaretRight, X } from '@phosphor-icons/react'
 // The one copy of the version the UI renders - package.json is the
 // source; tauri.conf.json and src-tauri/Cargo.toml carry it for the
 // installer side.
 import { version } from '../package.json'
 import './about.css'
+import { isMobile } from './platform.js'
+import { SplashMark } from './Splash.jsx'
 import { useBack } from './use-back.js'
 
 export default function AboutModal({ onClose, daemonVersion, api }) {
-  useBack(true, onClose)
-  // 'about' is the glance; 'licenses' swaps the body to the notices.
   const [view, setView] = useState('about')
+  useBack(true, () => {
+    if (view === 'licenses') setView('about')
+    else onClose()
+  })
   const [notices, setNotices] = useState(null)
   const [noticesError, setNoticesError] = useState(null)
   useEffect(() => {
@@ -41,6 +45,21 @@ export default function AboutModal({ onClose, daemonVersion, api }) {
     }
   }, [view, notices, noticesError, api])
 
+  if (isMobile) {
+    return (
+      <AboutScreen
+        view={view}
+        version={version}
+        daemonVersion={daemonVersion}
+        notices={notices}
+        noticesError={noticesError}
+        onClose={onClose}
+        onLicenses={() => setView('licenses')}
+        onBack={() => setView('about')}
+      />
+    )
+  }
+
   return (
     <div
       className="ab-backdrop"
@@ -68,7 +87,6 @@ export default function AboutModal({ onClose, daemonVersion, api }) {
             <button type="button" className="ab-btn ab-btn--block" onClick={() => setView('licenses')}>
               Third-party licenses
             </button>
-            <div className="ab-foot">Moreweb · 2026</div>
           </>
         ) : noticesError !== null ? (
           <>
@@ -93,6 +111,67 @@ export default function AboutModal({ onClose, daemonVersion, api }) {
           </>
         )}
       </div>
+    </div>
+  )
+}
+
+function AboutScreen({
+  view,
+  version,
+  daemonVersion,
+  notices,
+  noticesError,
+  onClose,
+  onLicenses,
+  onBack,
+}) {
+  const title = view === 'licenses' ? 'Third-party licenses' : 'About'
+  const back = view === 'licenses' ? onBack : onClose
+  return (
+    <div className="ab-screen" role="dialog" aria-modal="true" aria-label={title}>
+      <header className="ab-toolbar">
+        <button type="button" className="ab-back" onClick={back} aria-label="Back">
+          <CaretLeft size={22} />
+        </button>
+        <h1 className="ab-toolbar-title">{title}</h1>
+      </header>
+      {view === 'about' ? (
+        <div className="ab-body">
+          <div className="ab-identity">
+            <SplashMark className="ab-mark" />
+            <p className="ab-name">OpenRemote</p>
+          </div>
+          <div className="ab-list">
+            <div className="ab-row">
+              <span className="ab-row-label">Version</span>
+              <span className="ab-row-value">{version}</span>
+            </div>
+            {daemonVersion && (
+              <div className="ab-row">
+                <span className="ab-row-label">Daemon</span>
+                <span className="ab-row-value">{daemonVersion}</span>
+              </div>
+            )}
+            <button type="button" className="ab-row ab-row--link" onClick={onLicenses}>
+              <span className="ab-row-copy">
+                <span className="ab-row-label">Third-party licenses</span>
+                <span className="ab-row-value">Notices bundled with this build</span>
+              </span>
+              <CaretRight size={18} />
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="ab-body ab-body--licenses">
+          {noticesError !== null ? (
+            <p className="ab-notices-error">{noticesError}</p>
+          ) : notices !== null ? (
+            <pre className="ab-notices ab-notices--screen" aria-label="Third-party notices">{notices}</pre>
+          ) : (
+            <p className="ab-notices-loading">Loading the licenses…</p>
+          )}
+        </div>
+      )}
     </div>
   )
 }

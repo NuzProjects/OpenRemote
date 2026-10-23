@@ -18,17 +18,40 @@ const DOTS = [
   ['#42C6FF', 79.37, 26.85],
 ]
 
-const HOLD_MS = 1500
+// The whole splash is 239ms: held fully opaque, then a quick fade. The
+// dots pop in inside the hold so the mark reads before it leaves.
+const TOTAL_MS = 239
+const LEAVE_MS = 80
+const HOLD_MS = TOTAL_MS - LEAVE_MS
+
+export function SplashMark({ className = 'splash-mark', animate = false }) {
+  return (
+    <svg viewBox="0 0 200 200" className={className} aria-hidden="true">
+      {ARCS.map(([color, d]) => (
+        <path key={color} d={d} stroke={color} strokeWidth="24" strokeLinecap="round" fill="none" />
+      ))}
+      {DOTS.map(([fill, cx, cy], i) => (
+        <circle
+          key={fill}
+          className={animate ? 'splash-dot' : undefined}
+          style={animate ? { animationDelay: `${20 + i * 30}ms` } : undefined}
+          cx={cx}
+          cy={cy}
+          r="12"
+          fill={fill}
+        />
+      ))}
+    </svg>
+  )
+}
 
 export default function Splash() {
   const [leaving, setLeaving] = useState(false)
   const [gone, setGone] = useState(false)
 
   useEffect(() => {
-    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    const hold = reduce ? 400 : HOLD_MS
-    const start = setTimeout(() => setLeaving(true), hold)
-    const end = setTimeout(() => setGone(true), hold + 450)
+    const start = setTimeout(() => setLeaving(true), HOLD_MS)
+    const end = setTimeout(() => setGone(true), TOTAL_MS)
     return () => {
       clearTimeout(start)
       clearTimeout(end)
@@ -39,22 +62,7 @@ export default function Splash() {
 
   return (
     <div className={`splash${leaving ? ' splash-leaving' : ''}`} aria-hidden="true">
-      <svg viewBox="0 0 200 200" className="splash-mark">
-        {ARCS.map(([color, d]) => (
-          <path key={color} d={d} stroke={color} strokeWidth="24" strokeLinecap="round" fill="none" />
-        ))}
-        {DOTS.map(([fill, cx, cy], i) => (
-          <circle
-            key={fill}
-            className="splash-dot"
-            style={{ animationDelay: `${80 + i * 140}ms` }}
-            cx={cx}
-            cy={cy}
-            r="12"
-            fill={fill}
-          />
-        ))}
-      </svg>
+      <SplashMark animate />
     </div>
   )
 }
