@@ -9,8 +9,10 @@
 //! (`question.v2.asked`) arrive as events answered over HTTP with
 //! OpenCode's own words.
 
+use std::collections::HashMap;
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use openremote_core::{DecisionKind, DecisionOption, TurnOutcome};
@@ -21,6 +23,8 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex as AsyncMutex, mpsc};
 use uuid::Uuid;
+
+use crate::listen::{Wire, parse_listen_line};
 
 const START_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -40,6 +44,10 @@ pub struct Driver {
     /// OpenCode's own command names, asked once, the first time a prompt
     /// starts with `/`.
     commands: Option<Vec<String>>,
+    wire: Wire,
+    /// v2 publishes a step end and an execution end for one turn. The
+    /// first boundary closes the turn; a prompt reopens it.
+    turn_open: Arc<AtomicBool>,
 }
 
 impl Driver {
@@ -65,22 +73,19 @@ impl Driver {
     }
 
     pub async fn send_prompt(&mut self, text: &str) -> Result<(), DriverError> {
+        self.turn_open.store(true, Ordering::SeqCst);
         // A prompt that starts with one of OpenCode's own commands runs it
         // through OpenCode's command endpoint (its template, its
         // `$ARGUMENTS`); anything else is a plain prompt.
         if let Some((name, arguments)) = self.leading_command(text).await {
-            self.client
-                .post(
-                    &format!("/session/{}/command", self.session_id),
-                    json!({"command": name, "arguments": arguments}),
-                )
-                .await?;
+            let (path, body) = command_call(self.wire, &self.session_id, &name, &arguments);
+            self.client.post(&path, body).await?;
             return Ok(());
         }
         self.client
             .post(
                 &format!("/api/session/{}/prompt", self.session_id),
-                json!({"prompt": {"text": text}}),
+                prompt_body(self.wire, text),
             )
             .await?;
         Ok(())
@@ -94,10 +99,14 @@ impl Driver {
             .map(|(n, a)| (n, a.trim()))
             .unwrap_or((rest.trim(), ""));
         if self.commands.is_none() {
-            let listed = self.client.get("/command").await.ok()?;
+            let path = if self.wire == Wire::V2 {
+                "/api/command"
+            } else {
+                "/command"
+            };
+            let listed = self.client.get(path).await.ok()?;
             self.commands = Some(
-                listed
-                    .as_array()
+                command_list(&listed)
                     .into_iter()
                     .flatten()
                     .filter_map(|c| c.get("name").and_then(Value::as_str).map(String::from))
@@ -145,14 +154,40 @@ impl Driver {
                     )
                     .await?;
             }
+            "form" => {
+                let field = request
+                    .get("field")
+                    .and_then(Value::as_str)
+                    .unwrap_or("answer");
+                let value = if request.get("multiple").and_then(Value::as_bool) == Some(true) {
+                    json!([choice])
+                } else {
+                    json!(choice)
+                };
+                self.client
+                    .post(
+                        &format!(
+                            "/api/session/{}/form/{}/reply",
+                            self.session_id, harness_ref
+                        ),
+                        json!({"answer": {field: value}}),
+                    )
+                    .await?;
+            }
             _ => {
+                // v1 reads `reply`. v2's schema is strict and reads `decision`.
+                let body = if self.wire == Wire::V2 {
+                    json!({"decision": choice})
+                } else {
+                    json!({"reply": choice})
+                };
                 self.client
                     .post(
                         &format!(
                             "/api/session/{}/permission/{}/reply",
                             self.session_id, harness_ref
                         ),
-                        json!({"reply": choice}),
+                        body,
                     )
                     .await?;
             }
@@ -202,29 +237,19 @@ async fn spawn_serve(
         .take()
         .ok_or_else(|| DriverError::Spawn("stderr not piped".into()))?;
 
-    // The listening line names the port: "opencode server listening on
-    // http://127.0.0.1:<port>".
+    // v1: "opencode server listening on http://127.0.0.1:<port>".
+    // v2: "server listening on http://127.0.0.1:<port>".
     let mut lines = BufReader::new(stdout);
     let mut buffer = String::new();
-    let port = loop {
+    let (wire, port) = loop {
         buffer.clear();
         match tokio::time::timeout(START_TIMEOUT, lines.read_line(&mut buffer)).await {
             Ok(Ok(0)) => {
-                return Err(DriverError::Protocol(
-                    "opencode exited before listening".into(),
-                ));
+                return Err(exited_before_listening(stderr).await);
             }
             Ok(Ok(_)) => {
-                let line = buffer.trim_end_matches(['\r', '\n']);
-                if let Some(url) = line.strip_prefix("opencode server listening on ") {
-                    let port: u16 = url
-                        .rsplit(':')
-                        .next()
-                        .and_then(|p| p.parse().ok())
-                        .ok_or_else(|| {
-                            DriverError::Protocol(format!("bad listening line: {line}"))
-                        })?;
-                    break port;
+                if let Some(heard) = parse_listen_line(&buffer) {
+                    break heard;
                 }
             }
             Ok(Err(e)) => return Err(e.into()),
@@ -287,11 +312,14 @@ async fn spawn_serve(
         })
         .await;
 
+    let turn_open = Arc::new(AtomicBool::new(true));
     let driver = Driver {
         child: Arc::clone(&child),
         client,
         session_id: session_id.clone(),
         commands: None,
+        wire,
+        turn_open: Arc::clone(&turn_open),
     };
     // The bus watcher: every event for our session rides the driver
     // channel. A clean server-side close of the event connection is a
@@ -306,16 +334,26 @@ async fn spawn_serve(
     let event_tx = tx.clone();
     let end_tx = tx.clone();
     let watch_session = session_id.clone();
+    let tool_names = Arc::new(Mutex::new(HashMap::<String, String>::new()));
     tokio::spawn(async move {
         let mut backoff = SSE_RETRY_PAUSE;
         for attempt in 0..SSE_RETRY_LIMIT {
             let attempt_tx = event_tx.clone();
             let attempt_session = watch_session.clone();
+            let attempt_tools = Arc::clone(&tool_names);
+            let attempt_open = Arc::clone(&turn_open);
             let result = watch_client
                 .sse("/api/event", move |event| {
+                    remember_tool(&attempt_tools, &event);
+                    let event = with_remembered_tool(&attempt_tools, event);
                     let Some(event) = map_event(&event, &attempt_session) else {
                         return;
                     };
+                    if matches!(event, DriverEvent::TurnCompleted { .. })
+                        && !attempt_open.swap(false, Ordering::SeqCst)
+                    {
+                        return;
+                    }
                     let tx = attempt_tx.clone();
                     tokio::spawn(async move {
                         let _ = tx.send(event).await;
@@ -359,10 +397,9 @@ async fn watch_child_alive(child: &Arc<AsyncMutex<Child>>) -> bool {
 
 /// Map one bus event for our session onto a driver event.
 fn map_event(event: &Value, session_id: &str) -> Option<DriverEvent> {
-    // The real serve speaks `data`; the fixture (and older serves) spoke
-    // `properties` - accept either (observed live against both).
+    // v2 frames the payload as `data`; v1 and the fixture used `properties`.
     let properties = event.get("data").or_else(|| event.get("properties"))?;
-    if properties.get("sessionID").and_then(Value::as_str) != Some(session_id) {
+    if event_session(properties) != Some(session_id) {
         return None;
     }
     let kind = event.get("type").and_then(Value::as_str)?;
@@ -370,7 +407,7 @@ fn map_event(event: &Value, session_id: &str) -> Option<DriverEvent> {
         // OpenCode only names its model when a turn runs - the step-start
         // carries it (`model: {id, providerID}`, observed live). The
         // first one lights the chat's model chip before the reply lands.
-        "session.next.step.started" => {
+        "session.next.step.started" | "session.step.started" => {
             properties
                 .pointer("/model/id")
                 .and_then(Value::as_str)
@@ -378,7 +415,7 @@ fn map_event(event: &Value, session_id: &str) -> Option<DriverEvent> {
                     model: model.to_string(),
                 })
         }
-        "session.next.text.delta" => {
+        "session.next.text.delta" | "session.text.delta" => {
             properties
                 .get("delta")
                 .and_then(Value::as_str)
@@ -386,7 +423,7 @@ fn map_event(event: &Value, session_id: &str) -> Option<DriverEvent> {
                     text: text.to_string(),
                 })
         }
-        "session.next.text.ended" => {
+        "session.next.text.ended" | "session.text.ended" => {
             properties
                 .get("text")
                 .and_then(Value::as_str)
@@ -394,42 +431,33 @@ fn map_event(event: &Value, session_id: &str) -> Option<DriverEvent> {
                     text: text.to_string(),
                 })
         }
-        "session.next.tool.called" => Some(DriverEvent::ToolStarted {
-            tool_use_id: properties
-                .get("callID")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            name: properties
-                .get("tool")
-                .and_then(Value::as_str)
-                .unwrap_or("tool")
-                .to_string(),
-            input: properties.get("input").cloned().unwrap_or(Value::Null),
-        }),
-        "session.next.tool.success" | "session.next.tool.failed" => {
-            let failed = kind == "session.next.tool.failed";
+        "session.next.tool.called" | "session.tool.called" => {
+            Some(DriverEvent::ToolStarted {
+                tool_use_id: tool_id(properties),
+                name: tool_name(properties),
+                input: properties.get("input").cloned().unwrap_or(Value::Null),
+            })
+        }
+        "session.next.tool.success"
+        | "session.next.tool.failed"
+        | "session.tool.success"
+        | "session.tool.failed" => {
+            let failed = kind.ends_with("failed");
             Some(DriverEvent::ToolResult {
-                tool_use_id: properties
-                    .get("callID")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                name: properties
-                    .get("tool")
-                    .and_then(Value::as_str)
-                    .unwrap_or("tool")
-                    .to_string(),
-                text: properties
-                    .get("result")
-                    .map(|r| r.to_string())
-                    .unwrap_or_default(),
+                tool_use_id: tool_id(properties),
+                name: tool_name(properties),
+                text: tool_text(properties),
                 is_error: failed,
             })
         }
+        "session.reasoning.delta" => properties.get("delta").and_then(Value::as_str).map(|text| {
+            DriverEvent::ReasoningDelta {
+                text: text.to_string(),
+            }
+        }),
         // A failed step ends the turn on its own - no `step.ended`
         // follows (observed live) - with OpenCode's own error words.
-        "session.next.step.failed" => {
+        "session.next.step.failed" | "session.step.failed" | "session.execution.failed" => {
             let error = properties
                 .pointer("/error/message")
                 .and_then(Value::as_str)
@@ -441,6 +469,43 @@ fn map_event(event: &Value, session_id: &str) -> Option<DriverEvent> {
                 error_message: Some(error.to_string()),
             })
         }
+        // v2's step end is not the turn end when the model called tools.
+        // `tool-calls` means another step follows. `stop` is the model's
+        // own finish word for the turn.
+        "session.step.ended" => {
+            let finish = properties
+                .get("finish")
+                .and_then(Value::as_str)
+                .unwrap_or("error");
+            if finish == "tool-calls" {
+                return None;
+            }
+            let coarse = match finish {
+                "stop" => TurnOutcome::Completed,
+                _ => TurnOutcome::Failed,
+            };
+            Some(DriverEvent::TurnCompleted {
+                subtype: finish.to_string(),
+                coarse,
+                is_error: coarse == TurnOutcome::Failed,
+                error_message: properties
+                    .pointer("/error/message")
+                    .and_then(Value::as_str)
+                    .map(String::from),
+            })
+        }
+        "session.execution.succeeded" => Some(DriverEvent::TurnCompleted {
+            subtype: "stop".to_string(),
+            coarse: TurnOutcome::Completed,
+            is_error: false,
+            error_message: None,
+        }),
+        "session.execution.interrupted" => Some(DriverEvent::TurnCompleted {
+            subtype: "aborted".to_string(),
+            coarse: TurnOutcome::Interrupted,
+            is_error: false,
+            error_message: None,
+        }),
         "session.next.step.ended" => {
             let finish = properties
                 .get("finish")
@@ -461,7 +526,7 @@ fn map_event(event: &Value, session_id: &str) -> Option<DriverEvent> {
                     .map(String::from),
             })
         }
-        "permission.v2.asked" => {
+        "permission.v2.asked" | "permission.asked" => {
             let id = properties.get("id").and_then(Value::as_str)?.to_string();
             let action = properties
                 .get("action")
@@ -506,6 +571,7 @@ fn map_event(event: &Value, session_id: &str) -> Option<DriverEvent> {
                 },
             })
         }
+        "form.created" => map_form(properties),
         "question.v2.asked" => {
             let id = properties.get("id").and_then(Value::as_str)?.to_string();
             let question = properties
@@ -553,6 +619,216 @@ fn map_event(event: &Value, session_id: &str) -> Option<DriverEvent> {
     }
 }
 
+fn event_session(properties: &Value) -> Option<&str> {
+    properties
+        .get("sessionID")
+        .and_then(Value::as_str)
+        .or_else(|| properties.pointer("/form/sessionID").and_then(Value::as_str))
+}
+
+fn tool_id(properties: &Value) -> String {
+    properties
+        .get("callID")
+        .or_else(|| properties.get("id"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn tool_name(properties: &Value) -> String {
+    properties
+        .get("tool")
+        .or_else(|| properties.get("name"))
+        .and_then(Value::as_str)
+        .filter(|name| !name.is_empty())
+        .unwrap_or("tool")
+        .to_string()
+}
+
+fn tool_text(properties: &Value) -> String {
+    if let Some(result) = properties.get("result") {
+        return match result {
+            Value::String(text) => text.clone(),
+            other => other.to_string(),
+        };
+    }
+    if let Some(message) = properties.pointer("/error/message").and_then(Value::as_str) {
+        return message.to_string();
+    }
+    properties
+        .get("content")
+        .map(|content| content.to_string())
+        .unwrap_or_default()
+}
+
+fn remember_tool(tools: &Mutex<HashMap<String, String>>, event: &Value) {
+    let Some(kind) = event.get("type").and_then(Value::as_str) else {
+        return;
+    };
+    if kind != "session.tool.input.started" && kind != "session.tool.called" {
+        return;
+    }
+    let Some(properties) = event.get("data").or_else(|| event.get("properties")) else {
+        return;
+    };
+    let id = tool_id(properties);
+    let name = properties
+        .get("name")
+        .or_else(|| properties.get("tool"))
+        .and_then(Value::as_str)
+        .filter(|name| !name.is_empty());
+    if id.is_empty() {
+        return;
+    }
+    if let Some(name) = name {
+        tools.lock().expect("tool names").insert(id, name.to_string());
+    }
+}
+
+fn with_remembered_tool(tools: &Mutex<HashMap<String, String>>, mut event: Value) -> Value {
+    let Some(kind) = event.get("type").and_then(Value::as_str) else {
+        return event;
+    };
+    if !kind.starts_with("session.tool.") {
+        return event;
+    }
+    let key = if event.get("data").is_some() {
+        "data"
+    } else if event.get("properties").is_some() {
+        "properties"
+    } else {
+        return event;
+    };
+    let Some(properties) = event.get_mut(key) else {
+        return event;
+    };
+    if tool_name(properties) != "tool" {
+        return event;
+    }
+    let id = tool_id(properties);
+    if let Some(name) = tools.lock().expect("tool names").get(&id) {
+        properties["tool"] = json!(name);
+    }
+    event
+}
+
+fn map_form(properties: &Value) -> Option<DriverEvent> {
+    let form = properties.get("form")?;
+    let id = form.get("id").and_then(Value::as_str)?.to_string();
+    let field = form
+        .get("fields")
+        .and_then(Value::as_array)
+        .and_then(|fields| fields.iter().find(|field| field.get("options").is_some()))?;
+    let key = field.get("key").and_then(Value::as_str)?.to_string();
+    let multiple = field.get("type").and_then(Value::as_str) == Some("multiselect");
+    let options: Vec<DecisionOption> = field
+        .get("options")
+        .and_then(Value::as_array)
+        .map(|opts| {
+            opts.iter()
+                .filter_map(|option| {
+                    let id = option
+                        .get("value")
+                        .or_else(|| option.get("label"))
+                        .and_then(Value::as_str)?;
+                    let label = option
+                        .get("label")
+                        .and_then(Value::as_str)
+                        .unwrap_or(id);
+                    Some(DecisionOption {
+                        id: id.to_string(),
+                        label: label.to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if options.is_empty() {
+        return None;
+    }
+    let request = json!({"kind": "form", "field": key, "multiple": multiple});
+    Some(DriverEvent::ApprovalRequested {
+        approval: ApprovalRequest {
+            harness_ref: id,
+            spec: DecisionSpec {
+                kind: DecisionKind::Question,
+                options,
+                tool_name: form
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .map(String::from),
+                summary: field
+                    .get("title")
+                    .or_else(|| field.get("description"))
+                    .and_then(Value::as_str)
+                    .map(String::from),
+                interrupts_turn: Vec::new(),
+            },
+            request,
+        },
+    })
+}
+
+fn prompt_body(wire: Wire, text: &str) -> Value {
+    match wire {
+        // v1's prompt route reads `prompt.text` (the fixture still does).
+        Wire::V1 => json!({"prompt": {"text": text}}),
+        // v2's schema is the prompt fields themselves, and it rejects extras.
+        Wire::V2 => json!({"text": text}),
+    }
+}
+
+fn command_call(wire: Wire, session_id: &str, name: &str, arguments: &str) -> (String, Value) {
+    match wire {
+        Wire::V1 => (
+            format!("/session/{session_id}/command"),
+            json!({"command": name, "arguments": arguments}),
+        ),
+        Wire::V2 => (
+            format!("/api/session/{session_id}/command"),
+            json!({"name": name, "text": arguments}),
+        ),
+    }
+}
+
+fn command_list(value: &Value) -> Option<&Vec<Value>> {
+    value
+        .as_array()
+        .or_else(|| value.get("data").and_then(Value::as_array))
+}
+
+async fn exited_before_listening(stderr: tokio::process::ChildStderr) -> DriverError {
+    let detail = stderr_excerpt(stderr).await;
+    let message = if detail.is_empty() {
+        "opencode exited before listening".to_string()
+    } else {
+        format!("opencode exited before listening: {detail}")
+    };
+    DriverError::Protocol(message)
+}
+
+pub(crate) async fn stderr_excerpt(stderr: tokio::process::ChildStderr) -> String {
+    let mut lines = BufReader::new(stderr).lines();
+    let mut out = String::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(800);
+    while tokio::time::Instant::now() < deadline && out.len() < 240 {
+        match tokio::time::timeout(Duration::from_millis(200), lines.next_line()).await {
+            Ok(Ok(Some(line))) => {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                if !out.is_empty() {
+                    out.push_str("; ");
+                }
+                out.push_str(line);
+            }
+            _ => break,
+        }
+    }
+    out
+}
+
 async fn drain_stderr(
     mut reader: BufReader<tokio::process::ChildStderr>,
     tx: mpsc::Sender<DriverEvent>,
@@ -570,6 +846,100 @@ async fn drain_stderr(
         }
         if tx.send(DriverEvent::Stderr { line }).await.is_err() {
             return;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event(kind: &str, data: Value) -> Value {
+        json!({"id": "evt_1", "type": kind, "data": data})
+    }
+
+    #[test]
+    fn v2_text_and_stop_end_the_turn() {
+        let delta = map_event(
+            &event(
+                "session.text.delta",
+                json!({"sessionID": "ses_1", "delta": "hi"}),
+            ),
+            "ses_1",
+        );
+        assert!(matches!(delta, Some(DriverEvent::TextDelta { text }) if text == "hi"));
+
+        let done = map_event(
+            &event(
+                "session.step.ended",
+                json!({"sessionID": "ses_1", "finish": "stop"}),
+            ),
+            "ses_1",
+        );
+        assert!(matches!(
+            done,
+            Some(DriverEvent::TurnCompleted { coarse: TurnOutcome::Completed, .. })
+        ));
+    }
+
+    #[test]
+    fn v2_tool_calls_do_not_end_the_turn() {
+        let mid = map_event(
+            &event(
+                "session.step.ended",
+                json!({"sessionID": "ses_1", "finish": "tool-calls"}),
+            ),
+            "ses_1",
+        );
+        assert!(mid.is_none());
+    }
+
+    #[test]
+    fn v1_fixture_events_still_map() {
+        let asked = map_event(
+            &json!({
+                "type": "permission.v2.asked",
+                "properties": {
+                    "id": "per_1",
+                    "sessionID": "ses_1",
+                    "action": "bash",
+                    "resources": ["echo"]
+                }
+            }),
+            "ses_1",
+        );
+        assert!(matches!(asked, Some(DriverEvent::ApprovalRequested { .. })));
+    }
+
+    #[test]
+    fn v2_prompt_body_is_flat() {
+        assert_eq!(prompt_body(Wire::V1, "hi"), json!({"prompt": {"text": "hi"}}));
+        assert_eq!(prompt_body(Wire::V2, "hi"), json!({"text": "hi"}));
+    }
+
+    #[test]
+    fn remembered_tool_name_fills_a_v2_result() {
+        let tools = Mutex::new(HashMap::new());
+        let started = event(
+            "session.tool.input.started",
+            json!({"sessionID": "ses_1", "id": "call_1", "name": "bash"}),
+        );
+        remember_tool(&tools, &started);
+        let result = with_remembered_tool(
+            &tools,
+            event(
+                "session.tool.success",
+                json!({"sessionID": "ses_1", "id": "call_1", "content": ["ok"]}),
+            ),
+        );
+        let mapped = map_event(&result, "ses_1").expect("mapped");
+        match mapped {
+            DriverEvent::ToolResult { name, text, is_error, .. } => {
+                assert_eq!(name, "bash");
+                assert!(!is_error);
+                assert!(text.contains("ok"));
+            }
+            other => panic!("unexpected {other:?}"),
         }
     }
 }

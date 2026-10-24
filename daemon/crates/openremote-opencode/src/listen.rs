@@ -1,0 +1,45 @@
+//! The one line `opencode serve` prints when it is ready.
+//!
+//! v1 prints `opencode server listening on http://127.0.0.1:<port>`.
+//! v2 dropped the product name: `server listening on http://127.0.0.1:<port>`.
+//! The longer prefix has to be tried first, or the v1 line would also
+//! match the v2 prefix.
+
+/// Which serve generation produced the listening line. The HTTP bodies
+/// diverged with it (v2 prompts are `{text}`, not `{prompt:{text}}`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Wire {
+    V1,
+    V2,
+}
+
+pub(crate) fn parse_listen_line(line: &str) -> Option<(Wire, u16)> {
+    let line = line.trim();
+    let (wire, rest) = if let Some(rest) = line.strip_prefix("opencode server listening on ") {
+        (Wire::V1, rest)
+    } else if let Some(rest) = line.strip_prefix("server listening on ") {
+        (Wire::V2, rest)
+    } else {
+        return None;
+    };
+    let port = rest.rsplit(':').next()?.trim().parse().ok()?;
+    Some((wire, port))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn v1_and_v2_listen_lines() {
+        assert_eq!(
+            parse_listen_line("opencode server listening on http://127.0.0.1:4096\r"),
+            Some((Wire::V1, 4096))
+        );
+        assert_eq!(
+            parse_listen_line("server listening on http://127.0.0.1:58914"),
+            Some((Wire::V2, 58914))
+        );
+        assert!(parse_listen_line("Database is not empty and has no session table").is_none());
+    }
+}

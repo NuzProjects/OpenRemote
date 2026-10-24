@@ -15,6 +15,8 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use uuid::Uuid;
 
+use crate::listen::{Wire, parse_listen_line};
+
 pub async fn commands(resolution: &Resolution, cwd: &Path) -> Result<CommandCatalog, DriverError> {
     let mut command = match resolution {
         Resolution::Executable(path) => Command::new(path),
@@ -34,7 +36,7 @@ pub async fn commands(resolution: &Resolution, cwd: &Path) -> Result<CommandCata
         .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .kill_on_drop(true);
     #[cfg(windows)]
     command.creation_flags(openremote_harness::creation_flags());
@@ -45,25 +47,33 @@ pub async fn commands(resolution: &Resolution, cwd: &Path) -> Result<CommandCata
         .stdout
         .take()
         .ok_or_else(|| DriverError::Spawn("stdout not piped".into()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| DriverError::Spawn("stderr not piped".into()))?;
     let ask = async {
         let mut lines = BufReader::new(stdout).lines();
-        let port = loop {
+        let (wire, port) = loop {
             let Some(line) = lines.next_line().await? else {
-                return Err(DriverError::Protocol(
-                    "opencode exited before listening".into(),
-                ));
+                let detail = crate::driver::stderr_excerpt(stderr).await;
+                return Err(if detail.is_empty() {
+                    DriverError::Protocol("opencode exited before listening".into())
+                } else {
+                    DriverError::Protocol(format!("opencode exited before listening: {detail}"))
+                });
             };
-            if let Some(url) = line.strip_prefix("opencode server listening on ") {
-                break url
-                    .rsplit(':')
-                    .next()
-                    .and_then(|p| p.trim().parse::<u16>().ok())
-                    .ok_or_else(|| DriverError::Protocol(format!("bad listening line: {line}")))?;
+            if let Some(heard) = parse_listen_line(&line) {
+                break heard;
             }
         };
         let client = crate::http::HttpClient::new(port, &password);
-        let commands = client.get("/command").await?;
-        let agents = client.get("/agent").await?;
+        let (commands_path, agents_path) = if wire == Wire::V2 {
+            ("/api/command", "/api/agent")
+        } else {
+            ("/command", "/agent")
+        };
+        let commands = client.get(commands_path).await?;
+        let agents = client.get(agents_path).await?;
         Ok::<_, DriverError>(catalog(&commands, &agents))
     };
     let answer = tokio::time::timeout(Duration::from_secs(30), ask).await;
@@ -87,8 +97,7 @@ fn catalog(commands: &Value, agents: &Value) -> CommandCatalog {
             .map(String::from)
     };
     CommandCatalog {
-        commands: commands
-            .as_array()
+        commands: list_of(commands)
             .into_iter()
             .flatten()
             .filter_map(|c| {
@@ -100,8 +109,7 @@ fn catalog(commands: &Value, agents: &Value) -> CommandCatalog {
                 })
             })
             .collect(),
-        agents: agents
-            .as_array()
+        agents: list_of(agents)
             .into_iter()
             .flatten()
             .filter(|a| {
@@ -116,6 +124,13 @@ fn catalog(commands: &Value, agents: &Value) -> CommandCatalog {
             })
             .collect(),
     }
+}
+
+/// v1 returns the list itself. v2 wraps it: `{location, data: [...]}`.
+fn list_of(value: &Value) -> Option<&Vec<Value>> {
+    value
+        .as_array()
+        .or_else(|| value.get("data").and_then(Value::as_array))
 }
 
 #[cfg(test)]
@@ -136,5 +151,16 @@ mod tests {
         assert_eq!(c.commands[0].name, "init");
         let agents: Vec<&str> = c.agents.iter().map(|a| a.name.as_str()).collect();
         assert_eq!(agents, vec!["general"]);
+    }
+
+    #[test]
+    fn reads_v2_wrapped_lists() {
+        let commands = json!({"data": [{"name": "init", "description": "setup"}]});
+        let agents = json!({"location": {"directory": "/tmp"}, "data": [
+            {"name": "general", "description": "General-purpose", "mode": "subagent"}
+        ]});
+        let c = catalog(&commands, &agents);
+        assert_eq!(c.commands[0].name, "init");
+        assert_eq!(c.agents[0].name, "general");
     }
 }
