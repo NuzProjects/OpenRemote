@@ -91,9 +91,12 @@ export function useComposerMenus({
     }
   }, [enabled, harness, workspace, sessionId, deviceId, commandsFor, connection?.state])
 
-  // Said in place of a list the machine did not answer.
+  // Said in place of a list the machine did not answer. What it names is the
+  // whole of the retry: the ask runs again when the chat or harness changes,
+  // or when the daemon reconnects. Reopening the menu on the same word does
+  // not ask again, so it is not offered here.
   const unavailableLine = unavailable
-    ? 'Commands and agents did not load. They retry when the daemon is back.'
+    ? 'Commands and agents did not load. They load again when the chat changes or the daemon reconnects.'
     : null
 
   // Files for the @ word, a beat after typing stops.
