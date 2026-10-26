@@ -129,9 +129,19 @@ async fn serve(agent: bool) -> ExitCode {
         });
     }
 
-    app::serve(Arc::clone(&app) as Arc<App>, listener)
-        .await
-        .expect("serve");
+    // Phone pairing. Its control routes ride on this same loopback listener:
+    // the console already knows this address and this token, and a socket
+    // bound to 127.0.0.1 is what keeps a phone out of them. The page a phone
+    // scans is served by a second, narrow listener that the host opens only
+    // while a code is live or a phone is paired.
+    let pairing = openremote_daemon::pairing::PairingHost::open(Arc::clone(&app));
+    {
+        let pairing = Arc::clone(&pairing);
+        tokio::spawn(async move { pairing.restore().await });
+    }
+    let _ = app.port.set(addr.port());
+    let router = openremote_daemon::http::router(app).merge(pairing.control_router());
+    axum::serve(listener, router).await.expect("serve");
     ExitCode::SUCCESS
 }
 
