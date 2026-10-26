@@ -56,6 +56,20 @@ export function menuAt(text, caret) {
   return null
 }
 
+// The key of the menu the caret is in: the kind and where its word starts.
+// Two menus of the same kind at the same offset are the same word.
+export function menuKeyOf(menu) {
+  return menu ? `${menu.kind}:${menu.start}` : null
+}
+
+// The dismissal an Esc leaves behind, carried into the next render: it only
+// covers the word it was pressed in. Once the caret has left that word the
+// dismissal is spent, so Esc closes a menu for now and never for the rest of
+// the composer - the next "/" or "@" opens again.
+export function holdDismissal(menu, dismissed) {
+  return menuKeyOf(menu) === dismissed ? dismissed : null
+}
+
 // Put a pick in place of the menu's word. A trailing space follows,
 // unless the insertion wants the caret right after it (an MCP server's
 // `@server:` waits for its resource).

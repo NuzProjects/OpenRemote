@@ -7,9 +7,11 @@ import {
   chatInsertion,
   commandItems,
   fileInsertion,
+  holdDismissal,
   mentionItems,
   mentionedChats,
   menuAt,
+  menuKeyOf,
   ownCommands,
   takeCommands,
 } from './composer-menus.js'
@@ -131,6 +133,41 @@ test('the / menu leaves out what the harness keeps for itself and keeps rows sho
   assert.equal(advisor.hint, '[fable|opus|sonnet|off]', 'a short hint stays')
   assert.equal(commandItems('auto', { harnessCommands })[0].hint, '', 'a usage line goes')
   assert.equal(commandItems('deep', { harnessCommands })[0].group, 'Skills')
+})
+
+test('an Esc closes the word it was pressed in, never the composer', () => {
+  // The composer's menu as the hook runs it: the word under the caret, the
+  // dismissal an Esc left behind, and what the helpers say to do with it on
+  // every render.
+  const step = (held, text, caret, esc = false) => {
+    const menu = menuAt(text, caret)
+    const key = menuKeyOf(menu)
+    const dismissed = holdDismissal(menu, esc && menu ? key : held)
+    return { dismissed, open: Boolean(menu) && dismissed !== key }
+  }
+
+  // "/" opens the menu.
+  let state = step(null, '/', 1)
+  assert.equal(state.open, true)
+  // Esc closes it: the dismissal is that word, at that offset.
+  state = step(state.dismissed, '/', 1, true)
+  assert.equal(state.dismissed, '/:0')
+  assert.equal(state.open, false)
+  // The box is cleared: the caret has left the word, so nothing is dismissed.
+  state = step(state.dismissed, '', 0)
+  assert.equal(state.dismissed, null)
+  // A fresh "/" at the same offset opens again, for this composer's life.
+  state = step(state.dismissed, '/', 1)
+  assert.equal(state.open, true)
+  // A word in the middle of the message closes and reopens the same way.
+  state = step(null, 'fix the /tests', 14)
+  assert.equal(state.open, true)
+  state = step(state.dismissed, 'fix the /tests', 14, true)
+  assert.equal(state.open, false)
+  state = step(state.dismissed, 'fix the', 7)
+  assert.equal(state.dismissed, null)
+  state = step(state.dismissed, 'fix the /tests', 14)
+  assert.equal(state.open, true)
 })
 
 test('the @ menu groups files, agents, servers and chats', () => {

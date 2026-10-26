@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useConsole } from './state/console.jsx'
 import ComposerMenu from './ComposerMenu.jsx'
-import { applyPick, argItems, chatList, commandItems, mentionItems, menuAt, ownCommands } from './composer-menus.js'
+import { applyPick, argItems, chatList, commandItems, holdDismissal, mentionItems, menuAt, menuKeyOf, ownCommands } from './composer-menus.js'
 
 // The / commands this device picked lately, newest first: the menu's
 // "Recent" before anything is typed.
@@ -54,8 +54,15 @@ export function useComposerMenus({
   const [files, setFiles] = useState([])
 
   const menu = enabled ? menuAt(text, caret) : null
-  const menuKey = menu ? `${menu.kind}:${menu.start}` : null
+  const menuKey = menuKeyOf(menu)
   const open = Boolean(menu) && dismissed !== menuKey
+
+  // An Esc shuts the word it was pressed in, not the composer: once the caret
+  // has left that word (the box was cleared, the caret moved on) the
+  // dismissal is spent, so the next "/" or "@" opens the menu again.
+  useEffect(() => {
+    setDismissed((held) => holdDismissal(menu, held))
+  }, [menuKey])
 
   // What the harness offers here: asked when the chat (or the harness and
   // folder a new chat will use) changes - cached by the console.
