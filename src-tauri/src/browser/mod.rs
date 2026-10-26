@@ -69,6 +69,74 @@ pub struct Download {
     pub state: &'static str,
 }
 
+/// One tab's download attempts, as the shell reports them.
+///
+/// One attempt is one row in the console's downloads list, and the event
+/// that ends an attempt carries nothing but its address. So an attempt the
+/// handler allows keeps its id here, under its address, and the finish event
+/// lands on the row that attempt already has. Nothing is kept for a refused
+/// attempt: it was reported as blocked when it arrived, nothing was started,
+/// and a completion for it (WebView2 reports the cancellation of an operation
+/// it started and then cancelled) is the engine's own bookkeeping rather than
+/// news about a second download. Dropping it is what keeps one attempt to one
+/// row whether or not that completion ever fires - and the id fallback that
+/// used to make every later attempt rewrite a single row is gone with it.
+#[derive(Default)]
+struct Downloads {
+    started: Vec<(String, u64)>,
+}
+
+impl Downloads {
+    /// The row to report for this event, or none when the event is not news
+    /// about a row the console holds. `id` hands out the next download id,
+    /// and only a request takes one; `answer` is what the handler will tell
+    /// the engine for this event's attempt.
+    fn reported(
+        &mut self,
+        event: &DownloadEvent<'_>,
+        id: impl FnOnce() -> u64,
+        tab: &str,
+        answer: bool,
+    ) -> Option<Download> {
+        match event {
+            DownloadEvent::Requested { url, destination } => {
+                let id = id();
+                if answer {
+                    self.started.push((url.to_string(), id));
+                }
+                Some(Download {
+                    id,
+                    tab: tab.to_string(),
+                    url: url.to_string(),
+                    path: Some(destination.display().to_string()),
+                    state: if answer { "started" } else { "blocked" },
+                })
+            }
+            DownloadEvent::Finished { url, path, success } => {
+                if !answer {
+                    return None;
+                }
+                let url = url.to_string();
+                let at = self.started.iter().rposition(|(u, _)| *u == url);
+                // No started attempt with this address: the console has no
+                // row for it, and inventing one would list a download
+                // nobody asked for.
+                let id = at.map(|at| self.started.remove(at).1)?;
+                Some(Download {
+                    id,
+                    tab: tab.to_string(),
+                    url,
+                    path: path.as_ref().map(|p| p.display().to_string()),
+                    state: if *success { "done" } else { "failed" },
+                })
+            }
+            // The enum is non-exhaustive: an event this shell has never
+            // been told about is not a row, and the answer above stands.
+            _ => None,
+        }
+    }
+}
+
 /// Where the console's placeholder sits, in CSS pixels. The console's
 /// webview fills the window from its top-left corner, so CSS pixels are
 /// the window's logical pixels and Tauri scales them for the display.
@@ -177,10 +245,10 @@ pub fn open_tab(
     let (on_load, on_title, on_popup, on_download) =
         (app.clone(), app.clone(), app.clone(), app.clone());
     // Downloads are told apart by their address, which is all the finish
-    // event carries; the newest started one with that address finishes.
-    // Nothing starts today (see on_download), so this pairs nothing until a
-    // build allows a download the user asked for.
-    let started: std::sync::Arc<Mutex<Vec<(String, u64)>>> = Default::default();
+    // event carries: the newest started one with that address finishes. A
+    // download the handler allows is remembered; a refused one is not, and
+    // its completion is not reported (see `Downloads`).
+    let downloads = Mutex::new(Downloads::default());
     let popup_from = id.clone();
     let builder = WebviewBuilder::new(&id, WebviewUrl::External(url.clone()))
         .data_directory(profile_dir(&app)?)
@@ -224,33 +292,17 @@ pub fn open_tab(
         // so there is no way to hold it and ask the user first. It is
         // refused, and the console is told what the page tried to save.
         .on_download(move |webview, event| {
-            let download = match event {
-                DownloadEvent::Requested { url, destination } => Download {
-                    id: DOWNLOADS.fetch_add(1, Ordering::Relaxed) + 1,
-                    tab: webview.label().to_string(),
-                    url: url.to_string(),
-                    path: Some(destination.display().to_string()),
-                    state: "blocked",
-                },
-                DownloadEvent::Finished { url, path, success } => {
-                    let url = url.to_string();
-                    let id = {
-                        let mut started = started.lock().expect("downloads lock");
-                        let at = started.iter().rposition(|(u, _)| *u == url);
-                        at.map(|at| started.remove(at).1).unwrap_or_default()
-                    };
-                    Download {
-                        id,
-                        tab: webview.label().to_string(),
-                        url,
-                        path: path.map(|p| p.display().to_string()),
-                        state: if success { "done" } else { "failed" },
-                    }
-                }
-                _ => return true,
-            };
-            let _ = on_download.emit_to(console(), "browser:download", download);
-            page_may_download()
+            let answer = page_may_download();
+            let row = downloads.lock().expect("downloads lock").reported(
+                &event,
+                || DOWNLOADS.fetch_add(1, Ordering::Relaxed) + 1,
+                webview.label(),
+                answer,
+            );
+            if let Some(row) = row {
+                let _ = on_download.emit_to(console(), "browser:download", row);
+            }
+            answer
         });
     #[cfg(windows)]
     let builder = builder.additional_browser_args(win::BROWSER_ARGS);
@@ -296,10 +348,12 @@ pub async fn browser_open(
 }
 
 /// What this build's shell can actually do with a tab. Find, the DevTools
-/// bridge (element picking and screenshots), device view and forgetting a
-/// site are written against WebView2, so every other build answers false
-/// and the console keeps those controls off its chrome instead of drawing
-/// buttons that fail silently.
+/// bridge (element picking and screenshots), device view, printing and
+/// forgetting a site are written against WebView2, so every other build
+/// answers false and the console keeps those controls off its chrome instead
+/// of drawing buttons that fail silently. DevTools ride with the build type
+/// rather than the platform: the command exists in a development build and
+/// nowhere else.
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Features {
@@ -309,6 +363,8 @@ pub struct Features {
     /// Device view, which drives the page's emulation over the bridge.
     pub viewport: bool,
     pub clear_site: bool,
+    pub print: bool,
+    pub devtools: bool,
 }
 
 #[tauri::command]
@@ -319,6 +375,8 @@ pub fn browser_features() -> Features {
         cdp: true,
         viewport: true,
         clear_site: true,
+        print: true,
+        devtools: cfg!(debug_assertions),
     };
     #[cfg(not(windows))]
     Features {
@@ -326,6 +384,8 @@ pub fn browser_features() -> Features {
         cdp: false,
         viewport: false,
         clear_site: false,
+        print: false,
+        devtools: cfg!(debug_assertions),
     }
 }
 
@@ -437,6 +497,7 @@ pub async fn browser_capture(app: AppHandle, tab: String) -> Result<String, Stri
             &webview,
             "Page.captureScreenshot",
             serde_json::json!({ "format": "jpeg", "quality": 80 }),
+            Wait::Deadline,
         )
         .await?;
         let data = shot["data"].as_str().ok_or("no picture came back")?;
@@ -449,21 +510,44 @@ pub async fn browser_capture(app: AppHandle, tab: String) -> Result<String, Stri
     }
 }
 
+/// What a DevTools call is waiting for, which is what decides whether it may
+/// ever be given up on. The console sends it with every call. These are two
+/// different questions and not two lengths of one: a page that owes the
+/// console an answer can be declared stuck, but a person aiming at an
+/// element is not stuck, and a pick that ends before they click is a bug.
+#[derive(Clone, Copy, Debug, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Wait {
+    /// The console asked the page a question (a screenshot, a viewport
+    /// change, forgetting a site) and is given up on after a deadline, so a
+    /// stalled page costs one failure instead of the pane.
+    Deadline,
+    /// The console is waiting for the person: an element pick, which ends
+    /// when they click, press Esc or cancel. No deadline applies, because
+    /// how long someone takes to choose is theirs.
+    User,
+}
+
 /// One DevTools protocol call on a tab, in-process: no debugging port is
 /// ever opened, so nothing else on the machine can attach to the browser.
+/// `wait` is how long the console is willing to wait for the answer, and it
+/// is not optional: the shell has two kinds of waiting (a page that owes an
+/// answer, a person who is answering) and every call has to say which one
+/// it is, so neither can quietly become the other.
 #[tauri::command]
 pub async fn browser_cdp(
     app: AppHandle,
     tab: String,
     method: String,
     params: serde_json::Value,
+    wait: Wait,
 ) -> Result<serde_json::Value, String> {
     let webview = self::tab(&app, &tab)?;
     #[cfg(windows)]
-    return win::cdp(&webview, &method, params).await;
+    return win::cdp(&webview, &method, params, wait).await;
     #[cfg(not(windows))]
     {
-        let _ = (webview, method, params);
+        let _ = (webview, method, params, wait);
         Err("not on this platform yet".into())
     }
 }
@@ -548,18 +632,21 @@ pub async fn browser_viewport(
                 &webview,
                 "Emulation.clearDeviceMetricsOverride",
                 serde_json::json!({}),
+                Wait::Deadline,
             )
             .await?;
             win::cdp(
                 &webview,
                 "Emulation.setTouchEmulationEnabled",
                 serde_json::json!({ "enabled": false }),
+                Wait::Deadline,
             )
             .await?;
             win::cdp(
                 &webview,
                 "Emulation.setUserAgentOverride",
                 serde_json::json!({ "userAgent": "" }),
+                Wait::Deadline,
             )
             .await?;
             return Ok(());
@@ -574,17 +661,25 @@ pub async fn browser_viewport(
                 "mobile": mobile,
                 "scale": scale.unwrap_or(1.0).clamp(0.1, 1.0),
             }),
+            Wait::Deadline,
         )
         .await?;
         win::cdp(
             &webview,
             "Emulation.setTouchEmulationEnabled",
             serde_json::json!({ "enabled": mobile, "maxTouchPoints": 5 }),
+            Wait::Deadline,
         )
         .await?;
         let agent = if mobile {
             // The engine's own user agent, as its Android build words it.
-            let found = win::cdp(&webview, "Browser.getVersion", serde_json::json!({})).await?;
+            let found = win::cdp(
+                &webview,
+                "Browser.getVersion",
+                serde_json::json!({}),
+                Wait::Deadline,
+            )
+            .await?;
             phone_agent(found["userAgent"].as_str().unwrap_or_default())
         } else {
             String::new()
@@ -593,6 +688,7 @@ pub async fn browser_viewport(
             &webview,
             "Emulation.setUserAgentOverride",
             serde_json::json!({ "userAgent": agent }),
+            Wait::Deadline,
         )
         .await
         .map(|_| ())
@@ -635,6 +731,7 @@ pub async fn browser_clear_site(app: AppHandle, tab: String) -> Result<(), Strin
             &webview,
             "Storage.clearDataForOrigin",
             serde_json::json!({ "origin": origin, "storageTypes": "all" }),
+            Wait::Deadline,
         )
         .await?;
         webview.reload().map_err(|e| e.to_string())
@@ -727,12 +824,101 @@ mod tests {
         assert!(allowed(&url("http://127.0.0.1:5175/"), None));
     }
 
-    /// A page load must never be enough to write a file into the user's
-    /// Downloads folder. This pins the answer the download handler gives:
-    /// a page's download is refused, and the console reports it.
+    /// A request for `url`, as the engine reports it. The destination is
+    /// where the file would have gone, which the console shows as the name.
+    fn requested<'a>(url: &str, destination: &'a mut PathBuf) -> DownloadEvent<'a> {
+        DownloadEvent::Requested {
+            url: Url::parse(url).unwrap(),
+            destination,
+        }
+    }
+
+    fn finished(url: &str, success: bool) -> DownloadEvent<'static> {
+        DownloadEvent::Finished {
+            url: Url::parse(url).unwrap(),
+            path: None,
+            success,
+        }
+    }
+
+    /// A page must never be able to write a file into the user's Downloads
+    /// folder by asking. One attempt is one row in the console's list: the
+    /// attempt is reported as blocked, and the completion the engine may
+    /// report for the operation it cancelled is not a second download. This
+    /// pins the policy and the reporting together, so neither can drift.
     #[test]
-    fn a_page_never_starts_a_download_on_its_own() {
-        assert!(!page_may_download());
+    fn a_refused_download_is_one_row_whether_or_not_it_reports_a_finish() {
+        let answer = page_may_download();
+        let mut where_to = PathBuf::from("C:\\Users\\me\\Downloads\\a.zip");
+        let mut downloads = Downloads::default();
+        let attempt = downloads
+            .reported(
+                &requested("https://x.test/a.zip", &mut where_to),
+                || 1,
+                "tab-1",
+                answer,
+            )
+            .expect("a request is reported");
+        assert_eq!(
+            (attempt.id, attempt.state, attempt.path.as_deref()),
+            (1, "blocked", Some("C:\\Users\\me\\Downloads\\a.zip"))
+        );
+        assert!(
+            downloads
+                .reported(
+                    &finished("https://x.test/a.zip", false),
+                    || 2,
+                    "tab-1",
+                    answer
+                )
+                .is_none(),
+            "a refused attempt's completion is not a second row"
+        );
+        // A second attempt is its own row, with its own id, rather than a
+        // rewrite of the first one.
+        let mut again_to = PathBuf::from("C:\\Users\\me\\Downloads\\b.zip");
+        let again = downloads
+            .reported(
+                &requested("https://x.test/b.zip", &mut again_to),
+                || 3,
+                "tab-1",
+                answer,
+            )
+            .expect("a request is reported");
+        assert_eq!((again.id, again.state), (3, "blocked"));
+    }
+
+    /// A download the handler allows finishes the row its own request
+    /// opened: the finish event carries the address and nothing else, and an
+    /// id of its own would be a second row for one download. This is the
+    /// path a build that lets the user ask for a file will take.
+    #[test]
+    fn an_allowed_download_finishes_the_row_its_request_opened() {
+        let mut where_to = PathBuf::from("C:\\Users\\me\\Downloads\\a.zip");
+        let mut downloads = Downloads::default();
+        let started = downloads
+            .reported(
+                &requested("https://x.test/a.zip", &mut where_to),
+                || 7,
+                "tab-1",
+                true,
+            )
+            .expect("a request is reported");
+        assert_eq!((started.id, started.state), (7, "started"));
+        let done = downloads
+            .reported(&finished("https://x.test/a.zip", true), || 8, "tab-1", true)
+            .expect("the finish of a started attempt is reported");
+        assert_eq!((done.id, done.state), (7, "done"));
+        // Nothing was started at this address, so there is no row to finish
+        // and no row is invented for it.
+        assert!(downloads
+            .reported(
+                &finished("https://x.test/other.zip", true),
+                || 9,
+                "tab-1",
+                true
+            )
+            .is_none());
     }
 
     #[test]
@@ -745,21 +931,28 @@ mod tests {
         assert_eq!(phone_agent("odd"), "");
     }
 
-    /// The console decides what to draw from this, so it has to name every
-    /// feature the four platform-gated commands need, and it has to be
-    /// right about this build.
+    /// The console decides what to draw from this, so the keys are the
+    /// contract: one per control it can offer. A build that cannot do a
+    /// feature must not claim it, or the console draws a control that fails
+    /// silently - which is the whole point of asking the shell.
     #[test]
     fn this_build_says_which_browser_features_it_has() {
-        let features = browser_features();
-        let windows = cfg!(windows);
-        assert_eq!(features.find, windows);
-        assert_eq!(features.cdp, windows);
-        assert_eq!(features.viewport, windows);
-        assert_eq!(features.clear_site, windows);
-        // The console reads camelCase keys off the JSON.
-        let json = serde_json::to_value(features).unwrap();
-        for key in ["find", "cdp", "viewport", "clearSite"] {
-            assert!(json.get(key).is_some(), "{key} should be in {json}");
+        let json = serde_json::to_value(browser_features()).unwrap();
+        let mut keys: Vec<String> = json
+            .as_object()
+            .expect("an object of features")
+            .keys()
+            .cloned()
+            .collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            ["cdp", "clearSite", "devtools", "find", "print", "viewport"]
+        );
+        if !cfg!(windows) {
+            for key in ["find", "cdp", "viewport", "clearSite", "print"] {
+                assert_eq!(json[key], serde_json::Value::Bool(false), "{key}");
+            }
         }
     }
 }

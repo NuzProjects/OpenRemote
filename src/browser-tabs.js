@@ -55,3 +55,12 @@ export function tabTitle(tab) {
 export function openBelongs(tabs, key, mounted) {
   return Boolean(mounted) && tabs.some((t) => t.key === key)
 }
+
+// Whether a page a tab opened (a popup, from a link with target=_blank or
+// window.open) belongs to a tab this console has. The tab that opened it is
+// what places the new one, so a popup whose opener is not in the list has
+// nowhere to land: it would stay in the shell's tab list with no console tab,
+// and come back as a stray tab on the next console load.
+export function popupBelongs(tabs, opener) {
+  return tabs.some((t) => t.native && t.native === opener)
+}

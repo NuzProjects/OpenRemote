@@ -25,7 +25,7 @@ use windows::core::{Interface, BOOL, HSTRING, PWSTR};
 use windows::Win32::System::Com::{IStream, STREAM_SEEK_SET};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_MENU, VK_SHIFT};
 
-use super::KeyPress;
+use super::{KeyPress, Wait};
 
 /// The tabs' browser arguments. Every tab shares one WebView2 profile, and
 /// WebView2 refuses a second set of arguments for a profile already open,
@@ -391,36 +391,58 @@ pub fn print(webview: &Webview) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// How long a DevTools call waits for the page to answer. The expression
-/// the console evaluates runs in the page's own realm, and a page can hold
-/// one forever: a dialog open, its own Promise or timers replaced, a long
-/// synchronous task. Without a deadline the caller waits for the life of
-/// the tab - element picking stays armed and the pane never answers again -
-/// so this call gets one. It is the only timer in the module.
+/// How long a DevTools call the console asks a question with waits for the
+/// page to answer. The expression such a call evaluates runs in the page's
+/// own realm, and a page can hold one forever: a dialog open, its own
+/// Promise or timers replaced, a long synchronous task. Without a deadline
+/// the console waits for the life of the tab - the screenshot a menu needs
+/// never arrives and the pane answers nothing again - so these calls get
+/// one. It is the only timer in the module.
+///
+/// It is deliberately not a timer on every call: some calls are not the
+/// console asking the page anything, they are the console waiting for the
+/// person. An element pick is one of those, so it takes no deadline at all
+/// (`Wait::User`): a pick is supposed to last as long as its human, and a
+/// timer that ends it is a bug, not a bound. Both kinds are named by the
+/// caller, so no call can inherit the wrong one by accident.
 const ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// A DevTools call's answer, or why there is none.
+/// A DevTools call's answer, or why there is none. `wait` is how long the
+/// console is willing to wait, or none when the answer is the person's to
+/// give: then only the page answering or its tab closing ends the wait.
 fn wait_for_answer(
     answers: std::sync::mpsc::Receiver<Result<String, String>>,
-    wait: std::time::Duration,
+    wait: Option<std::time::Duration>,
 ) -> Result<String, String> {
-    match answers.recv_timeout(wait) {
-        Ok(answer) => answer,
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-            Err("the page did not answer in time".into())
-        }
-        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-            Err("the tab did not answer".into())
-        }
+    match wait {
+        Some(wait) => match answers.recv_timeout(wait) {
+            Ok(answer) => answer,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                Err("the page did not answer in time".into())
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                Err("the tab did not answer".into())
+            }
+        },
+        None => answers
+            .recv()
+            .map_err(|_| "the tab did not answer".to_string())?,
     }
 }
 
-/// One DevTools protocol call, answered as JSON.
+/// One DevTools protocol call, answered as JSON. `wait` says which of the
+/// two waits this call gets: a question the console needs an answer to, or
+/// one the person answers in their own time.
 pub async fn cdp(
     webview: &Webview,
     method: &str,
     params: serde_json::Value,
+    wait: Wait,
 ) -> Result<serde_json::Value, String> {
+    let deadline = match wait {
+        Wait::Deadline => Some(ANSWER_WAIT),
+        Wait::User => None,
+    };
     let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
     let (method, params) = (method.to_string(), params.to_string());
     webview
@@ -446,8 +468,9 @@ pub async fn cdp(
         })
         .map_err(|e| e.to_string())?;
     // Waiting out the deadline parks a thread, so it happens off the async
-    // workers rather than stalling one of them for as long as the page likes.
-    let waited = tauri::async_runtime::spawn_blocking(move || wait_for_answer(rx, ANSWER_WAIT))
+    // workers rather than stalling one of them for as long as the page (or
+    // the person) likes.
+    let waited = tauri::async_runtime::spawn_blocking(move || wait_for_answer(rx, deadline))
         .await
         .map_err(|e| e.to_string())?;
     let json = waited?;
@@ -480,14 +503,14 @@ mod tests {
 
     /// A page that never settles the promise it is waiting on leaves the
     /// call unanswered: the wait has to end by itself, with an error the
-    /// console can show, instead of holding the pick until the tab closes.
+    /// console can show, instead of holding the call until the tab closes.
     /// The sender stays open here, so this is a deadline and not a closed
     /// channel.
     #[test]
     fn a_page_that_never_answers_is_given_up_on() {
         let (_tx, rx): (_, Receiver<Result<String, String>>) = channel();
         assert_eq!(
-            wait_for_answer(rx, Duration::from_millis(20)),
+            wait_for_answer(rx, Some(Duration::from_millis(20))),
             Err("the page did not answer in time".to_string())
         );
     }
@@ -497,14 +520,53 @@ mod tests {
         let (tx, rx) = channel();
         tx.send(Ok("{\"id\":1}".to_string())).unwrap();
         assert_eq!(
-            wait_for_answer(rx, Duration::from_millis(20)),
+            wait_for_answer(rx, Some(Duration::from_millis(20))),
             Ok("{\"id\":1}".to_string())
         );
         let (tx, rx) = channel();
         tx.send(Err("the method is gone".to_string())).unwrap();
         assert_eq!(
-            wait_for_answer(rx, Duration::from_millis(20)),
+            wait_for_answer(rx, Some(Duration::from_millis(20))),
             Err("the method is gone".to_string())
+        );
+    }
+
+    /// A pick is a person aiming, not a page that has stopped answering. The
+    /// same late answer that a timed call gives up on is the answer for a
+    /// pick, because a pick's wait has no deadline to reach - the whole
+    /// point of telling the two waits apart.
+    #[test]
+    fn a_pick_is_waited_out_while_a_question_is_given_up_on() {
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(60));
+            let _ = tx.send(Ok("{\"result\":{\"value\":null}}".to_string()));
+        });
+        assert_eq!(
+            wait_for_answer(rx, Some(Duration::from_millis(20))),
+            Err("the page did not answer in time".to_string())
+        );
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(60));
+            let _ = tx.send(Ok("{\"result\":{\"value\":null}}".to_string()));
+        });
+        assert_eq!(
+            wait_for_answer(rx, None),
+            Ok("{\"result\":{\"value\":null}}".to_string())
+        );
+    }
+
+    /// A tab that goes away while a pick is waiting still ends the wait: the
+    /// page's answer can never arrive, and the console hears why instead of
+    /// waiting for the rest of the session.
+    #[test]
+    fn a_picks_wait_ends_when_its_tab_goes() {
+        let (tx, rx): (_, Receiver<Result<String, String>>) = channel();
+        drop(tx);
+        assert_eq!(
+            wait_for_answer(rx, None),
+            Err("the tab did not answer".to_string())
         );
     }
 }
