@@ -5,7 +5,7 @@
 // system browser; the daemon opens it and the poll notices when it's done.
 
 import { useState } from 'react'
-import { Copy, House, QrCode } from '@phosphor-icons/react'
+import { Copy, House } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
 import { isMobile } from './platform.js'
 import './cloudmode.css'
@@ -22,6 +22,14 @@ function MachineNode({ x, y, online, delay }) {
   )
 }
 
+// Why a sign-in ended, in the daemon's own words, capitalised for the body
+// slot. The daemon knows the reason (a relay that answered 401, or a file it
+// could not read); the door must not state a different one above it.
+function daemonReason(cloud) {
+  const text = cloud?.error
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : null
+}
+
 // What the screen says for each sign-in state. A phone is Cloud only, so
 // its door speaks for the whole app and never offers Local.
 function words(cloud) {
@@ -32,11 +40,14 @@ function words(cloud) {
         title: 'Finish in your browser',
         body: "moreweb's sign-in page is open in your browser. Come back here once it says you're signed in.",
       }
-    case 'relink':
+    case 'relink': {
+      const reason = daemonReason(cloud)
+      if (reason) return { title: 'Sign in again', body: reason }
       return {
         title: 'Sign in again',
         body: 'Your sign-in on this computer ended. Sign in to reach your other devices again.',
       }
+    }
     case 'revoked':
       return {
         title: 'This computer was removed',
@@ -57,11 +68,14 @@ function phoneWords(cloud) {
         title: 'Finish signing in',
         body: "moreweb's sign-in page is open. Authorize OpenRemote there and you'll come straight back here.",
       }
-    case 'relink':
+    case 'relink': {
+      const reason = daemonReason(cloud)
+      if (reason) return { title: 'Sign in again', body: reason }
       return {
         title: 'Sign in again',
         body: 'Your sign-in on this phone ended. Sign in to reach your computers again.',
       }
+    }
     case 'revoked':
       return {
         title: 'This phone was removed',
@@ -137,7 +151,7 @@ export default function CloudMode({ onBackToLocal }) {
 
         <h1 className="cm-title">{title}</h1>
         <p className="cm-body">{body}</p>
-        {(error || cloud?.error) && !signingIn && (
+        {(error || (cloud?.error && cloud?.state !== 'relink')) && !signingIn && (
           <p className="cm-error" role="alert">
             {error ?? cloud.error}
           </p>
@@ -178,10 +192,6 @@ export default function CloudMode({ onBackToLocal }) {
                   disabled={busy || connection.state !== 'connected'}
                 >
                   {cloud?.state === 'revoked' || cloud?.state === 'relink' ? 'Sign in again' : 'Sign in'}
-                </button>
-                <button type="button" className="cm-scan">
-                  <QrCode size={18} />
-                  Scan QR code
                 </button>
               </div>
               {onBackToLocal && (

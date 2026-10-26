@@ -223,62 +223,13 @@
   justify-content: center;
 }
 
-/* Sign in on the left, the scan action on the right. The scan label is
-   the usual one; the extra padding keeps that button longer. */
+/* The door: one action, centered, sized by the primary button below. */
 .cm-door {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   max-width: 100%;
-}
-
-.cm-scan {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  height: 44px;
-  min-width: 168px;
-  padding: 0 18px 0 14px;
-  border: 0;
-  border-radius: 10px;
-  background: var(--text-1);
-  color: #10131a;
-  font: inherit;
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  white-space: nowrap;
-  cursor: default;
-  transition:
-    transform 0.12s cubic-bezier(0.2, 0, 0, 1),
-    background 0.12s cubic-bezier(0.2, 0, 0, 1);
-}
-
-.cm-scan svg {
-  flex: none;
-  color: #10131a;
-}
-
-.cm-scan:hover {
-  background: #fff;
-}
-
-.cm-scan:focus-visible {
-  outline: 2px solid #8cb4eb;
-  outline-offset: 3px;
-}
-
-@media (pointer: coarse) {
-  .cm-scan:focus-visible {
-    outline: none;
-  }
-}
-
-.cm-scan:active {
-  transform: scale(0.985);
-  background: #fff;
 }
 
 /* The door is the cloud stroke, filled. Amber is a small mark elsewhere;
@@ -405,8 +356,7 @@ html[data-reduce-motion] .cm-cloud {
   stroke-dashoffset: 0;
 }
 
-html[data-reduce-motion] .cm-back.primary,
-html[data-reduce-motion] .cm-scan {
+html[data-reduce-motion] .cm-back.primary {
   transition: none;
 }
 
