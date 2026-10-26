@@ -46,3 +46,21 @@ export function tabTitle(tab) {
   if (tab.url && tab.url !== 'about:blank') return tab.url.replace(/^https?:\/\//, '')
   return 'New tab'
 }
+
+// Whether a page that has just finished opening still has somewhere to be:
+// a tab in the list that points at it and a browser pane still on screen.
+// Both can go while the shell builds the page (a close, Ctrl+W, the pane's
+// X). A page that lands anyway has no tab strip to close it with and floats
+// over the console, so it is closed instead of shown.
+export function openBelongs(tabs, key, mounted) {
+  return Boolean(mounted) && tabs.some((t) => t.key === key)
+}
+
+// Whether a page a tab opened (a popup, from a link with target=_blank or
+// window.open) belongs to a tab this console has. The tab that opened it is
+// what places the new one, so a popup whose opener is not in the list has
+// nowhere to land: it would stay in the shell's tab list with no console tab,
+// and come back as a stray tab on the next console load.
+export function popupBelongs(tabs, opener) {
+  return tabs.some((t) => t.native && t.native === opener)
+}

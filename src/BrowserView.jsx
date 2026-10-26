@@ -34,7 +34,7 @@ import { hasTauri, isMobile } from './platform.js'
 import { PICKER_CANCEL, PICKER_SOURCE, formatPicked } from './browser-pick.js'
 import { insertToComposer } from './composer-insert.js'
 import { omnibox, security, shownAddress } from './browser-omnibox.js'
-import { closeTab, cycle, newTab, tabTitle } from './browser-tabs.js'
+import { closeTab, cycle, newTab, openBelongs, tabTitle } from './browser-tabs.js'
 import { adopt, call, getState, onKey, patchTab, setState, subscribe } from './browser-store.js'
 import { FLOATING, covered } from './browser-occlusion.js'
 import { DEVICES, fitDevice, fileName, nextZoom, zoomLabel } from './browser-chrome.js'
@@ -97,7 +97,7 @@ function anchorOf(el) {
 // ---- the view ----
 
 export default function BrowserView({ onClosePane = null }) {
-  const { tabs, active, downloads, finds, closed } = useSyncExternalStore(subscribe, getState)
+  const { tabs, active, downloads, finds, closed, features } = useSyncExternalStore(subscribe, getState)
   const current = tabs.find((t) => t.key === active) ?? tabs[0]
   const pageRef = useRef(null)
   const addressRef = useRef(null)
@@ -115,10 +115,25 @@ export default function BrowserView({ onClosePane = null }) {
   const [notice, setNotice] = useState(null)
   const noticeTimer = useRef(0)
   const shownNative = useRef(null)
+  const mounted = useRef(true)
+  // The page a pick is waiting on: leaving the view has to stand that page's
+  // picker down, or the next pick on that page answers nothing at once.
+  const pickingTab = useRef(null)
   const device = current?.device ?? null
   const find = current?.find ?? null
   const findState = (current?.native && finds[current.native]) || null
+  // A row is "started" only for a download the shell let through, and no
+  // build lets one through today. It stays because the shell still reports
+  // the state for the build that will: the button's activity is the console
+  // half of that pairing, not a guess at whether anything is downloading.
   const busy = downloads.some((d) => d.state === 'started')
+  // Whether this build's shell implements a browser feature: find, element
+  // picking, device view and forgetting a site are Windows-only in the
+  // shell, which reports what it has. A shell that has not answered yet is
+  // assumed to have everything: the answer lands a moment after the pane
+  // first draws, and controls flashing off and on is worse than one frame
+  // of optimism.
+  const can = (name) => (features ? Boolean(features[name]) : true)
 
   // The address bar follows the tab unless the user is typing in it.
   useEffect(() => {
@@ -153,18 +168,26 @@ export default function BrowserView({ onClosePane = null }) {
   }
 
   // The latest picture of the page, kept for a moment so a menu opened
-  // from the toolbar can cover the page at once.
-  const shotRef = useRef({ tab: null, url: null, at: 0 })
+  // from the toolbar can cover the page at once. One request per page at a
+  // time: a pointer entering the chrome asks on every pass, and a page that
+  // does not answer would otherwise start a DevTools call (and a parked
+  // thread in the shell) on every pass.
+  const shotRef = useRef({ tab: null, url: null, at: 0, asking: null })
   const picture$ = async (tab, maxAge) => {
     const kept = shotRef.current
     if (kept.tab === tab && Date.now() - kept.at < maxAge) return kept.url
-    const url = await call('browser_capture', { tab })
-    if (url) shotRef.current = { tab, url, at: Date.now() }
-    return url
+    if (kept.asking) return kept.asking.tab === tab ? kept.asking.picture : null
+    const asking = { tab, picture: null }
+    asking.picture = call('browser_capture', { tab }).then((url) => {
+      shotRef.current = { tab, url, at: Date.now(), asking: null }
+      return url
+    })
+    shotRef.current = { ...kept, asking }
+    return asking.picture
   }
   const precapture = () => {
     const tab = shownNative.current
-    if (tab && !parked.current) picture$(tab, 400)
+    if (tab && !parked.current && can('cdp')) picture$(tab, 400)
   }
 
   // Show the active tab's page over the placeholder, hide the one before.
@@ -183,14 +206,28 @@ export default function BrowserView({ onClosePane = null }) {
     })()
   }, [current?.native])
 
-  // Leaving the view hides the page; the tab stays.
-  useEffect(
-    () => () => {
-      const shown = shownNative.current
-      if (shown) call('browser_hide', { tab: shown })
-    },
-    [],
-  )
+  // Leaving the view hides the pages; the tabs stay. Every page is hidden,
+  // not just the one showing: a page can be built for a tab that closed
+  // while it opened, and a page left drawn over the console has no tab
+  // strip to close it with.
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      // A pick the user was aiming at ends with the pane: the page is told to
+      // stand down, so its listeners, its timer and its highlight go with it
+      // instead of leaving a picker armed that answers the next pick at once.
+      if (pickingTab.current) {
+        call('browser_cdp', {
+          tab: pickingTab.current,
+          method: 'Runtime.evaluate',
+          params: { expression: PICKER_CANCEL },
+          wait: 'deadline',
+        })
+      }
+      for (const t of getState().tabs) if (t.native) call('browser_hide', { tab: t.native })
+    }
+  }, [])
 
   // The page follows the placeholder: window resizes, split drags, the
   // sidebar opening, the find and device bars.
@@ -332,9 +369,23 @@ export default function BrowserView({ onClosePane = null }) {
     const bounds = rect()
     if (!bounds) return
     patchTab(tab.key, { url, loading: true })
-    const native = await call('browser_open', { url, bounds, show: true })
-    if (!native) return
-    shownNative.current = native
+    // The page is built hidden: the layout effect places and shows it once
+    // the tab has it, so the console is the only thing that decides a page
+    // is visible.
+    const native = await call('browser_open', { url, bounds, show: false })
+    // No page, or a page nothing owns any more: the tab may have been closed,
+    // or the whole pane, while the shell was building it, and a page that
+    // lands anyway has no tab strip to close it with and floats over the
+    // console. Either way the tab is no longer loading anything, or it would
+    // spin for the rest of the session.
+    if (!native || !openBelongs(getState().tabs, tab.key, mounted.current)) {
+      patchTab(tab.key, { loading: false })
+      if (native) call('browser_close', { tab: native })
+      return
+    }
+    // The layout effect owns shownNative and shows the page as the tab gains
+    // it; an open landing in a background tab must not claim the ref, or the
+    // page the pane is showing stops being placed and pictured.
     adopt(tab.key, native)
   }
 
@@ -349,7 +400,6 @@ export default function BrowserView({ onClosePane = null }) {
   const close = (key) => {
     const tab = getState().tabs.find((t) => t.key === key)
     if (tab?.native) call('browser_close', { tab: tab.native })
-    if (tab?.native === shownNative.current) shownNative.current = null
     setState((s) => {
       const next = closeTab(s.tabs, key, s.active)
       const url = next.closed?.url
@@ -390,6 +440,10 @@ export default function BrowserView({ onClosePane = null }) {
   const openFind = () => {
     const tab = activeTab()
     if (!tab?.native) return
+    if (!can('find')) {
+      notify('Find in page is not in this build yet')
+      return
+    }
     patchTab(tab.key, { find: { term: tab.find?.term ?? '' } })
     requestAnimationFrame(() => {
       findRef.current?.focus()
@@ -417,42 +471,101 @@ export default function BrowserView({ onClosePane = null }) {
     noticeTimer.current = setTimeout(() => setNotice(null), 4000)
   }
 
+  // The shell refuses every download a page starts: a page must never write
+  // a file the user did not ask for. The downloads menu is not where anyone
+  // looks, so the pane says it too. The ref starts at whatever was already
+  // listed, so reopening the pane does not replay old ones.
+  const blocked = downloads.find((d) => d.state === 'blocked') ?? null
+  const saidBlocked = useRef(blocked?.id ?? 0)
+  useEffect(() => {
+    if (!blocked || blocked.id === saidBlocked.current) return
+    saidBlocked.current = blocked.id
+    notify(`Blocked a download: ${fileName(blocked.path ?? blocked.url)}. Open the link in your default browser to save it.`)
+  }, [blocked?.id])
+
+  // Stand a page's picker down: the page clears its flag, its highlight, its
+  // timer and its listeners. A page with no picker running ignores the flag
+  // until the next pick clears it again.
+  const standDownPick = (native) => {
+    if (!native) return
+    call('browser_cdp', {
+      tab: native,
+      method: 'Runtime.evaluate',
+      params: { expression: PICKER_CANCEL },
+      wait: 'deadline',
+    })
+  }
+
   // Point at an element on the page and attach it to the chat: its
   // address, its kind and its words land in the composer's draft, where
   // the agent reads them. The picker runs in the page; Esc backs out.
   const startPick = async () => {
     const tab = activeTab()
     if (!tab?.native || picking) return
+    if (!can('cdp')) {
+      notify('Selecting an element is not in this build yet')
+      return
+    }
     setPicking(true)
+    pickingTab.current = tab.native
     try {
       const res = await call('browser_cdp', {
         tab: tab.native,
         method: 'Runtime.evaluate',
         params: { expression: PICKER_SOURCE, awaitPromise: true, returnByValue: true },
+        // This call is not the console asking the page a question, it is the
+        // console waiting for the person to choose, so the shell applies no
+        // deadline to it: no timer may end a pick. The calls that do carry a
+        // deadline are the ones where the page owes an answer (screenshots,
+        // viewport changes), which must not hold the pane.
+        wait: 'user',
       })
-      const pick = res?.result?.subtype === 'error' ? null : (res?.result?.value ?? null)
-      if (!pick) return
+      // No answer at all: the tab closed under the pick. Say so, so the strip
+      // is not left armed with nothing coming.
+      if (!res) {
+        notify('The page went away - the pick was cancelled')
+        return
+      }
+      const pick = res.result?.subtype === 'error' ? null : (res.result?.value ?? null)
+      // No element: the user pressed Esc, or the page still had a picker
+      // armed from an earlier pick. Standing down either way leaves the page
+      // ready for the next one instead of answering it with nothing.
+      if (!pick) {
+        standDownPick(tab.native)
+        return
+      }
       const line = formatPicked({ ...pick, url: tab.url, title: tab.title })
       if (insertToComposer(line)) notify('Attached to the chat')
       else notify('No chat open - open one first, then pick again')
     } catch {
-      // The tab closed mid-pick, or the page never answered: back out.
+      // The console could not reach the shell at all: back out, and say it.
+      notify('The page could not be reached - the pick was cancelled')
     } finally {
+      pickingTab.current = null
       setPicking(false)
     }
   }
 
   const cancelPick = () => {
-    const tab = activeTab()
+    // The page that is picking, which is not necessarily the active tab any
+    // more: the pick is told to stand down where the picker is, not where the
+    // user happens to be looking.
+    const native = pickingTab.current ?? activeTab()?.native
+    pickingTab.current = null
     setPicking(false)
-    // The page's own Esc already stood down if it heard it; this is for
-    // the bar's Cancel, which the page cannot hear.
-    if (tab?.native) call('browser_cdp', { tab: tab.native, method: 'Runtime.evaluate', params: { expression: PICKER_CANCEL } })
+    // The page's own Esc already stood down if it heard it; this is for the
+    // bar's Cancel, and for a pick the console gave up on, which the page
+    // cannot hear.
+    standDownPick(native)
   }
 
   const toggleDevice = () => {
     const tab = activeTab()
     if (!tab?.native) return
+    if (!can('viewport')) {
+      notify('Device view is not in this build yet')
+      return
+    }
     patchTab(tab.key, { device: tab.device ? null : { ...DEVICES[0] } })
   }
 
@@ -472,7 +585,7 @@ export default function BrowserView({ onClosePane = null }) {
     F5: () => onNative('browser_reload'),
     'Mod+F': openFind,
     'Mod+J': (e) => setMenu({ kind: 'downloads', ...anchorFor('downloads', e) }),
-    F12: () => onNative('browser_devtools'),
+    F12: () => (can('devtools') ? onNative('browser_devtools') : notify('Developer tools are not in this build')),
     'Mod+=': () => zoom(1),
     'Mod+-': () => zoom(-1),
     'Mod+0': () => zoom(0),
@@ -530,14 +643,38 @@ export default function BrowserView({ onClosePane = null }) {
         { label: 'Zoom out', icon: <MagnifyingGlassMinus size={14} />, hint: 'Ctrl+-', disabled: !live, onSelect: () => zoom(-1) },
         { label: `Actual size (${zoomLabel(current?.zoom ?? 1)})`, icon: <ArrowsClockwise size={14} />, hint: 'Ctrl+0', disabled: !live || !zoomed, onSelect: () => zoom(0) },
         { divider: true },
-        { label: 'Find in page', icon: <MagnifyingGlass size={14} />, hint: 'Ctrl+F', disabled: !live, onSelect: openFind },
-        { label: device ? 'Leave device view' : 'Device view', icon: <DeviceMobile size={14} />, disabled: !live, onSelect: toggleDevice },
-        { label: 'Print', icon: <Printer size={14} />, disabled: !live, onSelect: () => onNative('browser_print') },
+        {
+          label: 'Find in page',
+          icon: <MagnifyingGlass size={14} />,
+          hint: can('find') ? 'Ctrl+F' : 'Not in this build',
+          disabled: !live || !can('find'),
+          onSelect: openFind,
+        },
+        {
+          label: device ? 'Leave device view' : 'Device view',
+          icon: <DeviceMobile size={14} />,
+          hint: can('viewport') ? '' : 'Not in this build',
+          disabled: !live || !can('viewport'),
+          onSelect: toggleDevice,
+        },
+        {
+          label: 'Print',
+          icon: <Printer size={14} />,
+          hint: can('print') ? '' : 'Not in this build',
+          disabled: !live || !can('print'),
+          onSelect: () => onNative('browser_print'),
+        },
         { divider: true },
         { label: 'Downloads', icon: <DownloadSimple size={14} />, hint: 'Ctrl+J', onSelect: () => setTimeout(() => setMenu({ kind: 'downloads', ...anchorFor('downloads') }), 0) },
         { label: 'Open in your default browser', icon: <ArrowSquareOut size={14} />, disabled: !live || !/^https?:/.test(current?.url ?? ''), onSelect: () => call('browser_open_external', { url: current.url }) },
         ...(import.meta.env.DEV
-          ? [{ label: 'Developer tools', icon: <Code size={14} />, hint: 'F12', disabled: !live, onSelect: () => onNative('browser_devtools') }]
+          ? [{
+              label: 'Developer tools',
+              icon: <Code size={14} />,
+              hint: can('devtools') ? 'F12' : 'Not in this build',
+              disabled: !live || !can('devtools'),
+              onSelect: () => onNative('browser_devtools'),
+            }]
           : []),
       ]
     }
@@ -559,20 +696,26 @@ export default function BrowserView({ onClosePane = null }) {
         { label: said, icon: lock === 'insecure' ? <Warning size={14} /> : <Lock size={14} />, disabled: true },
         { divider: true },
         ...(zoomed ? [{ label: `Zoom ${zoomLabel(current.zoom)}: reset`, icon: <ArrowsClockwise size={14} />, onSelect: () => zoom(0) }] : []),
-        { label: 'Clear cookies and site data', icon: <Trash size={14} />, danger: true, onSelect: () => onNative('browser_clear_site') },
+        { label: 'Clear cookies and site data', icon: <Trash size={14} />, hint: can('clearSite') ? '' : 'Not in this build', danger: true, disabled: !can('clearSite'), onSelect: () => onNative('browser_clear_site') },
       ]
     }
     if (menu.kind === 'downloads') {
       if (!downloads.length) return [{ header: 'Downloads' }, { label: 'Nothing downloaded yet', disabled: true }]
       return [
         { header: 'Downloads' },
-        ...downloads.slice(0, 12).map((d) => ({
-          label: fileName(d.path ?? d.url),
-          icon: d.state === 'failed' ? <Warning size={14} /> : <DownloadSimple size={14} />,
-          hint: d.state === 'started' ? 'Downloading' : d.state === 'failed' ? 'Failed' : 'Show in folder',
-          disabled: d.state !== 'done' || !d.path,
-          onSelect: () => call('browser_reveal', { path: d.path }),
-        })),
+        ...downloads.slice(0, 12).map((d) => {
+          // A blocked attempt has nothing on disk to show, and the notice
+          // tells the user to open the link in their own browser: this row
+          // is the way to do it from here.
+          const refused = d.state === 'blocked'
+          return {
+            label: fileName(d.path ?? d.url),
+            icon: d.state === 'failed' ? <Warning size={14} /> : <DownloadSimple size={14} />,
+            hint: d.state === 'started' ? 'Downloading' : refused ? 'Blocked: open in your default browser' : d.state === 'failed' ? 'Failed' : 'Show in folder',
+            disabled: refused ? false : d.state !== 'done' || !d.path,
+            onSelect: () => (refused ? call('browser_open_external', { url: d.url }) : call('browser_reveal', { path: d.path })),
+          }
+        }),
       ]
     }
     if (menu.kind === 'tabs') {
@@ -709,8 +852,8 @@ export default function BrowserView({ onClosePane = null }) {
         <button
           type="button"
           className={`bw-btn${device ? ' on' : ''}`}
-          title="Device view"
-          disabled={!live}
+          title={can('viewport') ? 'Device view' : 'Device view is not in this build yet'}
+          disabled={!live || !can('viewport')}
           onClick={toggleDevice}
         >
           <DeviceMobile size={17} />
@@ -718,8 +861,8 @@ export default function BrowserView({ onClosePane = null }) {
         <button
           type="button"
           className={`bw-btn${picking ? ' on' : ''}`}
-          title="Select an element to attach to the chat"
-          disabled={!live}
+          title={can('cdp') ? 'Select an element to attach to the chat' : 'Selecting an element is not in this build yet'}
+          disabled={!live || !can('cdp')}
           onClick={picking ? cancelPick : startPick}
         >
           <Crosshair size={17} />

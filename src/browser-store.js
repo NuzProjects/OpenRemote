@@ -5,11 +5,11 @@
 // the shell's `browser:*` events.
 
 import { hasTauri, isMobile } from './platform.js'
-import { insertAfter, newTab } from './browser-tabs.js'
+import { insertAfter, newTab, popupBelongs } from './browser-tabs.js'
 
 let state = (() => {
   const first = newTab()
-  return { tabs: [first], active: first.key, closed: [], downloads: [], finds: {} }
+  return { tabs: [first], active: first.key, closed: [], downloads: [], finds: {}, features: null }
 })()
 const listeners = new Set()
 const keyHandlers = new Set()
@@ -66,6 +66,16 @@ function fieldsOf(p) {
 async function wire() {
   const { listen } = await import('@tauri-apps/api/event')
   listen('browser:tab', ({ payload: p }) => {
+    // A popup whose opener's tab this console does not have: no tab will
+    // ever place it, so it is closed instead of staying in the shell's tab
+    // list with no console tab, to come back as a stray tab on the next
+    // console load. The console's own opens have no opener and are adopted
+    // by the tab that asked for them.
+    const tabs = getState().tabs
+    if (p.opener && !popupBelongs(tabs, p.opener) && !tabs.some((t) => t.native === p.id)) {
+      call('browser_close', { tab: p.id })
+      return
+    }
     setState((s) => {
       const fields = fieldsOf(p)
       if (s.tabs.some((t) => t.native === p.id)) {
@@ -96,6 +106,12 @@ async function wire() {
   listen('browser:key', ({ payload }) => {
     for (const fn of keyHandlers) fn(payload.chord)
   })
+  // What this build's shell can do with a tab: find in page, the DevTools
+  // bridge (element picking), device view and forgetting a site are written
+  // against Windows' engine, and a control the shell would refuse must not
+  // be drawn as if it worked. Asked once, before the first page.
+  const features = await call('browser_features')
+  if (features) setState(() => ({ features }))
   // The console reloaded while the shell kept its pages (a development
   // reload, a crash of the console's page): take them back, hidden until
   // the view shows one, rather than leave them on screen, orphaned.

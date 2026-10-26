@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { omnibox, security } from './browser-omnibox.js'
-import { closeTab, cycle, insertAfter, newTab, tabTitle } from './browser-tabs.js'
+import { closeTab, cycle, insertAfter, newTab, openBelongs, popupBelongs, tabTitle } from './browser-tabs.js'
 import { covered } from './browser-occlusion.js'
 import { DEVICES, fileName, fitDevice, nextZoom, zoomLabel } from './browser-chrome.js'
 
@@ -87,4 +88,38 @@ test('a menu overlapping the page swaps in its picture; one beside it does not',
   assert.equal(covered(page, [{ left: 1100, top: 50, right: 1400, bottom: 300, width: 300, height: 250 }]), true)
   assert.equal(covered(page, [{ left: 0, top: 0, right: 280, bottom: 900, width: 280, height: 900 }]), false)
   assert.equal(covered(page, []), false)
+})
+
+test('a page that opens after its tab or its pane is gone is closed, not shown', () => {
+  const [a, b] = [newTab(), newTab()]
+  assert.equal(openBelongs([a, b], a.key, true), true)
+  // The tab was closed while the shell was building the page.
+  assert.equal(openBelongs([b], a.key, true), false)
+  // The pane was closed while the shell was building the page.
+  assert.equal(openBelongs([a, b], a.key, false), false)
+})
+
+test('the pane is what closes a page it cannot place, and drops the spinner with it', () => {
+  // The rule above is only worth having where it is applied: a page that
+  // lands after its tab or its pane is gone has to be closed by the pane's
+  // own open path, and the tab that was waiting for it has to stop loading
+  // instead of spinning for the session. Neither can be reached from here
+  // (the pane needs a real window and the shell), so this reads the call
+  // site: delete the check, or leave `loading` on, and this fails.
+  const source = readFileSync(new URL('./BrowserView.jsx', import.meta.url), 'utf8')
+  assert.match(
+    source,
+    /if \(!native \|\| !openBelongs\(getState\(\)\.tabs, tab\.key, mounted\.current\)\) \{/,
+  )
+  assert.match(source, /patchTab\(tab\.key, \{ loading: false \}\)/)
+})
+
+test('a popup lands beside a tab this console has, and nowhere otherwise', () => {
+  const [a, b] = [newTab({ native: 'tab-1' }), newTab({ native: 'tab-2' })]
+  assert.equal(popupBelongs([a, b], 'tab-1'), true)
+  // The opener closed, or this console never had it: no tab will place the
+  // page, so the console closes it rather than leaving it in the shell's
+  // list to reappear as a stray tab on the next load.
+  assert.equal(popupBelongs([a], 'tab-2'), false)
+  assert.equal(popupBelongs([a, b], null), false)
 })
