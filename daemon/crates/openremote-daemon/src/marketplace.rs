@@ -729,14 +729,14 @@ fn entry_parts(entry: &Value) -> (Vec<String>, bool) {
     (parts, hooks || mcp || entry.get("lspServers").is_some())
 }
 
-/// A link Discover offers to open, or none.
+/// The catalog's homepage when it carries an http(s) prefix, or none.
 ///
 /// `homepage` is catalog text and the console hands it to `window.open` or
 /// to the platform's `open_url`, which is to say to the operating system's
-/// handler for whatever scheme it names. Anything that is not an http(s)
-/// link - a `file:` link, a custom protocol some installed program claims -
-/// is not something a review dialog should hand over with one click, so it
-/// never leaves the daemon.
+/// handler for whatever scheme it names. Anything without that prefix - a
+/// `file:` link, a custom protocol some installed program claims - is not
+/// something a review dialog should hand over with one click, so it never
+/// leaves the daemon.
 fn web_link(value: Option<String>) -> Option<String> {
     value.filter(|url| url.starts_with("https://") || url.starts_with("http://"))
 }

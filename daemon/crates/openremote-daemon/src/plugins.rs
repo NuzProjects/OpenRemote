@@ -727,20 +727,51 @@ impl PluginHost {
         result
     }
 
+    /// Remove an installed plugin's folder, whatever its record says.
+    ///
+    /// The record names the folder, and a record written before the name
+    /// gate existed may carry anything, so removal is held to its own rule
+    /// rather than to the plugin-name gate: that keeps such a folder
+    /// removable while nothing reaches outside the plugins folder.
     pub fn uninstall(&self, marketplace: &str, name: &str) -> Result<(), PluginError> {
-        // The record names the folder, and a record written before the
-        // name gate existed may carry anything: it is removed as long as
-        // it is one segment inside the plugins folder.
-        if !one_segment(marketplace) || !one_segment(name) {
+        if one_segment(marketplace) {
+            if one_segment(name) {
+                return remove_plugin_folder(&self.data_dir, marketplace, name);
+            }
+            // Windows drops a trailing dot and a trailing space when it
+            // makes a folder, so a record carrying either was installed
+            // under the trimmed name: `tidy.` is `tidy` on disk, and
+            // refusing it would strand a plugin the user can no longer
+            // remove anywhere. Removing the trimmed folder is removing
+            // what those records mean.
+            let trimmed = name.trim_end_matches(['.', ' ']);
+            if !trimmed.is_empty() && trimmed != name && one_segment(trimmed) {
+                return remove_plugin_folder(&self.data_dir, marketplace, trimmed);
+            }
+        }
+        // The name is not one folder inside the plugins folder: it carries
+        // a separator, a `..`, a drive letter, leading whitespace, or
+        // nothing but dots. When no folder answers to it either, nothing
+        // is at stake and the record may go, which is how the plugin list
+        // gets rid of one of these. When something does answer to that
+        // name, deleting it is not this daemon's call: a path built from
+        // such a record is exactly what the name gate exists to stop.
+        if plugin_dir(&self.data_dir, marketplace, name).exists() {
             return Err(PluginError::Invalid(format!(
-                "'{marketplace}/{name}' is not a plugin folder"
+                "'{marketplace}/{name}' is not one folder inside the plugins folder - no separator, no '..', no leading space, no trailing dot - and something already answers to that name, so OpenRemote will not delete it. Delete that folder yourself, then remove the plugin again to drop its record"
             )));
         }
-        match std::fs::remove_dir_all(plugin_dir(&self.data_dir, marketplace, name)) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e.into()),
-        }
+        Ok(())
+    }
+}
+
+/// One plugin's folder, removed. A folder that is not there was already
+/// removed.
+fn remove_plugin_folder(data_dir: &Path, marketplace: &str, name: &str) -> Result<(), PluginError> {
+    match std::fs::remove_dir_all(plugin_dir(data_dir, marketplace, name)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -1586,13 +1617,37 @@ fn entry_paths_inside(entry: &Value) -> Result<(), PluginError> {
         let Some(value) = fields.get(*component) else {
             continue;
         };
-        for path in as_list(Some(value)) {
+        let paths = match value {
+            Value::String(_) | Value::Array(_) => as_list(Some(value)),
+            // Neither a path nor a list of them is not a shape Claude
+            // reads, and skipping it would let an entry carry a value
+            // nothing looked at.
+            _ => {
+                return Err(PluginError::Invalid(format!(
+                    "{who}'s {component} is neither a path nor a list of paths - refusing it"
+                )))
+            }
+        };
+        for path in paths {
             let Some(path) = path.as_str() else {
                 continue;
             };
             if !relative_inside(path) {
+                // Say which rule the path breaks: a backslash path is
+                // inside the plugin folder and still not the shape a
+                // plugin folder uses, so calling it "outside" would be
+                // false.
+                let why = if path.split(['/', '\\']).any(|part| part == "..") {
+                    "which is outside the plugin folder"
+                } else if path.starts_with('/') || path.contains(':') {
+                    "which is an absolute path, outside the plugin folder"
+                } else if path.contains('\\') {
+                    "which is a backslash path, and a plugin folder names its parts with forward slashes"
+                } else {
+                    "which is not a path inside the plugin folder"
+                };
                 return Err(PluginError::Invalid(format!(
-                    "{who}'s {component} names '{path}', which is outside the plugin folder - refusing it"
+                    "{who}'s {component} names '{path}', {why} - refusing it"
                 )));
             }
         }
@@ -1969,6 +2024,77 @@ mod tests {
     }
 
     #[test]
+    fn an_entry_appended_to_an_existing_manifest_is_checked_too() {
+        // The other way an entry's components reach a Claude manifest: the
+        // plugin ships `.claude-plugin/plugin.json` and a strict entry
+        // appends its own components to it. The check is the first
+        // statement of `apply_entry`, so this branch inherits it: this
+        // test is what fails if a later change moves the check inside one
+        // branch, since the write branch would then be the only one
+        // covered.
+        let dir = folder(&[("local-ai/SKILL.md", "# local ai")]);
+        let manifest = dir.path().join(".claude-plugin");
+        std::fs::create_dir_all(&manifest).unwrap();
+        std::fs::write(
+            manifest.join("plugin.json"),
+            json!({"name": "shipped", "strict": true, "skills": ["./local-ai"]}).to_string(),
+        )
+        .unwrap();
+        let before = std::fs::read_to_string(manifest.join("plugin.json")).unwrap();
+        let err = apply_entry(
+            dir.path(),
+            &json!({"name": "appended", "strict": true, "skills": ["../../.."]}),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("outside the plugin folder"), "{err}");
+        assert!(err.contains("appended"), "{err}");
+        // The shipped manifest is what it was: nothing was appended.
+        assert_eq!(
+            std::fs::read_to_string(manifest.join("plugin.json")).unwrap(),
+            before
+        );
+        // A path inside the plugin still appends, so the branch works when
+        // the entry is honest.
+        apply_entry(
+            dir.path(),
+            &json!({"name": "appended", "strict": true, "skills": ["more"]}),
+        )
+        .unwrap();
+        assert_eq!(
+            plugin_json(dir.path())["skills"],
+            json!(["./local-ai", "more"])
+        );
+    }
+
+    #[test]
+    fn a_component_that_is_neither_a_path_nor_a_list_is_refused() {
+        let dir = folder(&[("local-ai/SKILL.md", "# local ai")]);
+        let err = apply_entry(dir.path(), &json!({"name": "odd", "skills": 7}))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("neither a path nor a list"), "{err}");
+        // Nothing was written.
+        assert!(!dir.path().join(".claude-plugin").join("plugin.json").exists());
+    }
+
+    #[test]
+    fn a_backslash_path_is_refused_as_the_shape_it_is() {
+        let dir = folder(&[("local-ai/SKILL.md", "# local ai")]);
+        // A Windows-style path is inside the plugin folder on Windows, and
+        // still not the shape a plugin manifest uses: the refusal says
+        // that rather than claiming the path is outside.
+        let err = apply_entry(
+            dir.path(),
+            &json!({"name": "backslashed", "skills": ["local-ai\\nested"]}),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("backslash path"), "{err}");
+        assert!(!err.contains("outside the plugin folder"), "{err}");
+    }
+
+    #[test]
     fn with_no_plugin_json_the_marketplace_entry_is_the_manifest() {
         let dir = folder(&[("local-ai/SKILL.md", "# local ai")]);
         let entry = json!({
@@ -2161,28 +2287,46 @@ mod tests {
         std::fs::create_dir_all(&odd).unwrap();
         host.uninstall("Old.Market", "My Plugin").unwrap();
         assert!(!odd.exists());
-        // Anything that would reach outside the plugins folder is refused,
-        // and the folder it named is untouched.
+        // A record carrying what Windows drops when it creates the folder
+        // names the folder it was installed as, and removes that: the
+        // user's only way to be rid of the plugin.
+        for record in ["tidy.", "tidy "] {
+            let folder = data.path().join("plugins/official/tidy");
+            std::fs::create_dir_all(folder.join("skills")).unwrap();
+            host.uninstall("official", record).unwrap();
+            assert!(!folder.exists(), "{record:?} left its folder behind");
+        }
+        // A record naming a folder that is not there removes nothing, and
+        // reports nothing to remove, so the list can drop the record.
+        let nested = data.path().join("plugins/official/x/keep.txt");
+        std::fs::create_dir_all(nested.parent().unwrap()).unwrap();
+        std::fs::write(&nested, "keep").unwrap();
+        for (marketplace, name) in [("official", "x/y"), ("official", "x\\y"), ("..", "tidy")] {
+            host.uninstall(marketplace, name).unwrap();
+        }
+        assert_eq!(std::fs::read_to_string(&nested).unwrap(), "keep");
+        // A name that does resolve to something, and is not one folder
+        // inside the plugins folder, is refused: nothing of it is deleted,
+        // and the refusal says why in the user's terms.
         std::fs::create_dir_all(data.path().join("keep")).unwrap();
         std::fs::write(data.path().join("keep/me.txt"), "keep").unwrap();
+        // `...` is a folder of its own on Linux and the marketplace folder
+        // itself on Windows; either way it resolves to something.
+        std::fs::create_dir_all(data.path().join("plugins/official").join("...")).unwrap();
         for (marketplace, name) in [
             ("official", "../../keep"),
             ("official", ".."),
-            ("official", "x/y"),
-            ("official", "x\\y"),
-            ("..", "tidy"),
-            // Shapes Windows resolves to a different folder than the
-            // record names: `...` is `.`, a trailing dot and a trailing
-            // space are dropped, so the joined path would land on
-            // something the record never meant.
             ("official", "..."),
             ("official", "."),
-            ("official", "tidy."),
-            ("official", "tidy "),
-            ("official", " tidy"),
         ] {
             let err = host.uninstall(marketplace, name).unwrap_err().to_string();
-            assert!(err.contains("is not a plugin folder"), "{name:?}: {err}");
+            assert!(
+                err.contains("is not one folder inside the plugins folder"),
+                "{name:?}: {err}"
+            );
+            assert!(err.contains("Delete that folder yourself"), "{name:?}: {err}");
+            // It no longer claims the name is not a plugin folder.
+            assert!(!err.contains("is not a plugin folder"), "{name:?}: {err}");
         }
         assert_eq!(
             std::fs::read_to_string(data.path().join("keep/me.txt")).unwrap(),
