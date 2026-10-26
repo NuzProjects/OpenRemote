@@ -31,6 +31,10 @@ export function webLink(url) {
  * refused here rather than at each caller, so no surface can hand a
  * `file:` link to the system; the refusal throws, so a caller that meant
  * to open a page reports it instead of pretending it did.
+ *
+ * Resolves true when the page was handed over, false when the browser
+ * refused it (a blocked popup), which is the one case a caller can still
+ * do something about - offering the link instead.
  */
 export async function openExternal(url, { signIn = false } = {}) {
   const page = webLink(url)
@@ -38,9 +42,9 @@ export async function openExternal(url, { signIn = false } = {}) {
   if (isMobile && hasTauri) {
     const { invoke } = await import('@tauri-apps/api/core')
     await invoke('open_url', { url: page, signIn })
-    return
+    return true
   }
-  window.open(page, '_blank', 'noopener,noreferrer')
+  return window.open(page, '_blank', 'noopener,noreferrer') !== null
 }
 
 /**

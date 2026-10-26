@@ -254,11 +254,30 @@ export function commandItems(query, { harnessCommands = [], own = [], recent = [
   return items
 }
 
-// The files the menu may show for the word being typed. An answer asked for
-// another word is not this word's list, and a word whose ask failed has
-// none: showing the previous word's files under it reads as a match.
+// Whether `query` is in `path` the way the daemon looks for it: every
+// character, in order, anywhere (files.rs ranks by subsequence, so a row
+// that passes here is one the daemon could have returned).
+function inOrder(path, query) {
+  const text = path.toLowerCase()
+  let at = 0
+  for (const ch of query.toLowerCase()) {
+    at = text.indexOf(ch, at) + 1
+    if (at === 0) return false
+  }
+  return true
+}
+
+// The files the menu may show for the word being typed. The answer for this
+// exact word is the list. A word that is still being typed keeps the rows of
+// the answer before it, narrowed to what still matches: clearing them on
+// every keystroke emptied the menu and it came back a beat later, which
+// reads as a flicker. A different word has nothing, and a word whose ask
+// failed has none: the previous word's files under it would read as a match.
 export function filesForQuery(held, query) {
-  return held && held.q === query ? held.entries : []
+  if (!held) return []
+  if (held.q === query) return held.entries
+  if (!String(query).startsWith(held.q)) return []
+  return held.entries.filter((f) => inOrder(f.path, query))
 }
 
 // The @ menu: files and folders, agents, MCP servers, other chats -

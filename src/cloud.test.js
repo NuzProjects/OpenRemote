@@ -77,3 +77,31 @@ test('a sign-in reason is the daemon sentence, capitalised, or nothing at all', 
   assert.equal(daemonReason({ state: 'relink' }), null, 'no sentence at all is no reason')
   assert.equal(daemonReason(undefined), null, 'no Cloud state is no reason')
 })
+
+test('the alert under the door never repeats the body', async () => {
+  const { cloudAlert, daemonReason } = await import('./cloud.js')
+  const sent = 'this computer is no longer in your account'
+  const relink = { state: 'relink', error: sent }
+  const body = daemonReason(relink)
+
+  // The shape the bug was: a failed sign-in click answers with the daemon's
+  // own sentence, which the body is already showing, in sentence case.
+  assert.equal(cloudAlert({ clickError: sent, cloud: relink, body }), null)
+  assert.equal(cloudAlert({ clickError: body, cloud: relink, body }), null)
+
+  // A click that failed for its own reason is news, and stays.
+  const refused = 'the sign-in page did not answer'
+  assert.equal(cloudAlert({ clickError: refused, cloud: relink, body }), refused)
+
+  // Outside relink the daemon's sentence has no body of its own, so it is
+  // the alert.
+  const revoked = { state: 'revoked', error: 'it was removed from your account' }
+  assert.equal(cloudAlert({ cloud: revoked, body: 'This computer was removed' }), daemonReason(revoked))
+
+  // While the browser is open the door is not asking for anything: no alert.
+  assert.equal(cloudAlert({ clickError: refused, cloud: { state: 'signing_in' }, signingIn: true }), null)
+
+  // Nothing to say at all.
+  assert.equal(cloudAlert({ cloud: { state: 'online' }, body: 'Your devices are reachable.' }), null)
+  assert.equal(cloudAlert({}), null)
+})

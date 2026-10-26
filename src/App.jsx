@@ -727,16 +727,28 @@ function Shell() {
         canForward={onboarded && hIndex < history.length - 1}
         onSplit={onboarded ? () => setLayout((l) => splitLeaf(l, l.focus, 'row')) : undefined}
       />
-      {!onboarded && manualConnect ? (
+      {manualConnect ? (
         <div className="app-body">
-          <Onboarding onDone={finishOnboarding} startManual />
+          <Onboarding
+            onDone={() => {
+              // Also on the way back from a daemon that stopped: a user who
+              // is set up reaches the same form, and it is only a door, not
+              // the first run again.
+              setManualConnect(false)
+              finishOnboarding()
+            }}
+            startManual
+          />
         </div>
       ) : connection.state === 'waiting-daemon' ? (
         // No daemon at all: say so, with the shell's reason when it has
         // one, instead of leaving a setup spinner and no explanation. The
         // console keeps polling, so this leaves by itself when one starts.
         <div className="app-body">
-          <DaemonStatus onManualConnect={onboarded ? null : () => setManualConnect(true)} />
+          {/* The form is reachable whether or not this app has been set up
+              before: someone whose saved address stopped answering is the
+              one who needs to type a new one. */}
+          <DaemonStatus onManualConnect={() => setManualConnect(true)} />
         </div>
       ) : !onboarded ? (
         <div className="app-body">

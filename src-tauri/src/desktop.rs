@@ -10,7 +10,7 @@ use tauri::{Emitter, Manager, State, WindowEvent};
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 
-use crate::{browser, tray, DaemonInfo, DaemonState};
+use crate::{browser, tray, DaemonFailure, DaemonFailureKind, DaemonInfo, DaemonState};
 
 const DAEMON_NAME: &str = "openremote-daemon";
 
@@ -22,6 +22,13 @@ const DAEMON_NAME: &str = "openremote-daemon";
 /// loop.
 const RESPAWN_WAIT_MIN: Duration = Duration::from_secs(2);
 const RESPAWN_WAIT_MAX: Duration = Duration::from_secs(30);
+
+/// How long a daemon the shell started has to say READY before the shell
+/// stops calling it slow. A process that is alive and silent is a
+/// different failure from one that never ran, and the panel has no other
+/// way to tell them apart: without this it waits, without a reason,
+/// forever.
+const READY_DEADLINE: Duration = Duration::from_secs(45);
 
 /// The sidecar child the shell owns: the running daemon's handle, or
 /// None while none runs (dead, and not yet respawned). daemon_restart
@@ -159,7 +166,7 @@ fn spawn_daemon(app: tauri::AppHandle) {
                     // the growing wait, and give the console the reason so
                     // it says something instead of waiting in silence.
                     eprintln!("openremote: the daemon could not be started: {err}");
-                    report_failure(&app, err.to_string());
+                    report_failure(&app, DaemonFailureKind::Start, err.to_string());
                     respawn_delay(wait).await;
                     if daemon_slot_claimed(&app) {
                         return;
@@ -174,6 +181,16 @@ fn spawn_daemon(app: tauri::AppHandle) {
                 .lock()
                 .expect("daemon state lock")
                 .replace(child);
+            // A daemon that is alive and quiet is named at the deadline. A
+            // daemon that dies first aborts the timer: its death is the
+            // truer reason, and the death path below writes that one.
+            let deadline = tauri::async_runtime::spawn({
+                let app = app.clone();
+                async move {
+                    respawn_delay(READY_DEADLINE).await;
+                    report_silent(&app);
+                }
+            });
 
             let mut info = DaemonInfo::default();
             let mut published = false;
@@ -195,6 +212,7 @@ fn spawn_daemon(app: tauri::AppHandle) {
                     }
                 }
             }
+            deadline.abort();
             // The stream ends only when the process is gone. If the
             // child in the slot is still this one's, the daemon died on
             // its own: take the dead handle out so the slot says what is
@@ -221,6 +239,7 @@ fn spawn_daemon(app: tauri::AppHandle) {
                 .expect("daemon state lock") = DaemonInfo::default();
             report_failure(
                 &app,
+                DaemonFailureKind::Stopped,
                 match exit {
                     Some(code) => format!("the daemon stopped (exit code {code})"),
                     None => "the daemon stopped".to_string(),
@@ -271,18 +290,50 @@ fn tell_console(app: &tauri::AppHandle) {
 /// Record why the daemon is not running, and tell the console. A daemon
 /// that is up is never described as failed: the address it published
 /// stays, so a stale reason from another spawn cannot sit over a live one.
-fn report_failure(app: &tauri::AppHandle, error: String) {
+fn report_failure(app: &tauri::AppHandle, kind: DaemonFailureKind, text: String) {
     {
         let state = app.state::<DaemonState>();
         let mut info = state.info.lock().expect("daemon state lock");
         if info.url.is_none() {
             *info = DaemonInfo {
-                error: Some(error),
+                error: Some(DaemonFailure { kind, text }),
                 ..DaemonInfo::default()
             };
         }
     }
     tell_console(app);
+}
+
+/// The daemon is running and has not said READY. Its stdout says nothing
+/// either way, so this is the one failure the shell has to notice on a
+/// clock. Only fills an empty slot: a real reason from the same attempt is
+/// fresher, and this one has to be harmless if it races a death.
+fn report_silent(app: &tauri::AppHandle) {
+    let wrote = {
+        let state = app.state::<DaemonState>();
+        let mut info = state.info.lock().expect("daemon state lock");
+        if info.url.is_none() && info.error.is_none() {
+            *info = DaemonInfo {
+                error: Some(DaemonFailure {
+                    kind: DaemonFailureKind::Silent,
+                    // The number comes from the timer itself, so the
+                    // sentence cannot promise a deadline the shell does not
+                    // keep.
+                    text: format!(
+                        "it started and has not answered in {} seconds",
+                        READY_DEADLINE.as_secs()
+                    ),
+                }),
+                ..DaemonInfo::default()
+            };
+            true
+        } else {
+            false
+        }
+    };
+    if wrote {
+        tell_console(app);
+    }
 }
 
 /// Sleep out a respawn wait on the runtime's blocking pool. The shell

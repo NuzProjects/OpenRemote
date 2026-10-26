@@ -103,17 +103,24 @@ export function useComposerMenus({
   const fileQuery = open && menu.kind === '@' ? menu.query : null
   useEffect(() => {
     if (fileQuery == null) return undefined
-    // Nothing is offered until this word's own answer lands: the previous
-    // word's files are not this word's list, and an ask that fails leaves
-    // the menu empty rather than showing them under it.
-    setFiles(null)
+    // The answer before this one is kept on screen while this word's own ask
+    // is in flight, narrowed by filesForQuery to what still matches. An ask
+    // that fails leaves this word with nothing rather than the rows of the
+    // word before it, and one that was dropped for a newer word writes
+    // nothing at all.
+    let live = true
     const controller = new AbortController()
     const timer = setTimeout(() => {
       filesFor({ workspace, session: sessionId, deviceId, q: fileQuery, signal: controller.signal })
-        .then((found) => setFiles({ q: fileQuery, entries: found?.entries ?? [] }))
-        .catch(() => {})
+        .then((found) => {
+          if (live) setFiles({ q: fileQuery, entries: found?.entries ?? [] })
+        })
+        .catch(() => {
+          if (live) setFiles({ q: fileQuery, entries: [] })
+        })
     }, 120)
     return () => {
+      live = false
       clearTimeout(timer)
       controller.abort()
     }

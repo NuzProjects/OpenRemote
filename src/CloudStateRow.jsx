@@ -5,7 +5,7 @@
 
 import { useState } from 'react'
 import { useConsole } from './state/console.jsx'
-import { signedIn, daemonReason } from './cloud.js'
+import { cloudAlert, signedIn, daemonReason } from './cloud.js'
 import './panels.css'
 
 const signedName = (email) =>
@@ -66,6 +66,9 @@ export default function CloudStateRow({ one = 'computer' }) {
   const inCloud = signedIn(cloud)
   const signingIn = cloud?.state === 'signing_in'
   const { name, detail } = words(cloud, one)
+  // A failed click answers with the daemon's own sentence, which is often
+  // the row's detail already: the alert drops it rather than saying it twice.
+  const alert = cloudAlert({ clickError: error, cloud, body: detail, signingIn })
 
   const start = async () => {
     setBusy(true)
@@ -153,9 +156,9 @@ export default function CloudStateRow({ one = 'computer' }) {
           </div>
         </div>
       )}
-      {(error || (cloud?.error && cloud?.state !== 'relink')) && !signingIn && (
+      {alert && (
         <p className="pn-error" role="alert">
-          {error ?? cloud.error}
+          {alert}
         </p>
       )}
     </>

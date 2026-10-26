@@ -23,6 +23,14 @@ export function ConsoleProvider({ children }) {
     const saved = loadConnection()
     return new DaemonApi(saved.url, saved.token)
   })
+  // Which daemon an answer belongs to. A fetch that was in flight when the
+  // connection changed comes back for the daemon that is no longer there,
+  // and its answer must not land on the next one's lists.
+  const apiRef = useRef(api)
+  useEffect(() => {
+    apiRef.current = api
+  }, [api])
+  const stillCurrent = useCallback((asked) => apiRef.current === asked, [])
   const [connection, setConnection] = useState(() => {
     const saved = loadConnection()
     return { state: saved.url && saved.token ? 'connecting' : 'new', error: null }
@@ -66,6 +74,7 @@ export function ConsoleProvider({ children }) {
     commandCache.current.clear()
     setModelsByHarness({})
     setEndpointsByHarness({})
+    setCatalog(null)
     saveConnection(url, token)
     setApi(new DaemonApi(url, token))
     setConnection({ state: 'connecting', error: null })
@@ -77,6 +86,7 @@ export function ConsoleProvider({ children }) {
     commandCache.current.clear()
     setModelsByHarness({})
     setEndpointsByHarness({})
+    setCatalog(null)
     clearConnection()
     setApi(new DaemonApi(null, null))
     setConnection({ state: 'new', error: null })
@@ -607,8 +617,9 @@ export function ConsoleProvider({ children }) {
   const signInCloud = useCallback(async () => {
     const started = await api.cloudSignIn({ open: !isMobile })
     if (isMobile && started?.authorize_url) {
-      await openExternal(started.authorize_url, { signIn: true })
-      started.opened = true
+      // What the shell reports, not that the call was made: the browser can
+      // still refuse the page, and then the caller has a link to show.
+      started.opened = await openExternal(started.authorize_url, { signIn: true })
     }
     await refreshCloud()
     return started
@@ -910,26 +921,29 @@ export function ConsoleProvider({ children }) {
   // ---- plugins ----
 
   // The installed list and Discover's view of it (installed, update) move
-  // together.
+  // together. A catalog is per daemon: an answer that arrives after the
+  // connection moved on describes a daemon that is gone, so it is dropped.
   const refreshPlugins = useCallback(async () => {
     try {
       const [pluginList, catalogList] = await Promise.all([api.plugins(), api.marketplaceCatalog()])
+      if (!stillCurrent(api)) return
       setPlugins(pluginList)
       setCatalog(catalogList)
     } catch {
       /* the next action refreshes again */
     }
-  }, [api])
+  }, [api, stillCurrent])
 
   const refreshMarketplaces = useCallback(async () => {
     try {
       const [marketList, catalogList] = await Promise.all([api.marketplaces(), api.marketplaceCatalog()])
+      if (!stillCurrent(api)) return
       setMarketplaces(marketList ?? [])
       setCatalog(catalogList)
     } catch {
       /* the next action refreshes again */
     }
-  }, [api])
+  }, [api, stillCurrent])
 
   const addMarketplace = useCallback(
     async (source) => {

@@ -33,7 +33,30 @@ pub struct DaemonInfo {
     /// Why the last attempt to run the daemon failed, when one did. The
     /// console shows this instead of waiting in silence; it is cleared as
     /// soon as a daemon says READY, and never set while one runs.
-    pub error: Option<String>,
+    pub error: Option<DaemonFailure>,
+}
+
+/// Which failure a reason describes. The reason text is the shell's own
+/// words, and the title above it has to match them: "did not start" is a
+/// lie about a daemon that ran for an hour and then exited.
+#[derive(Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DaemonFailureKind {
+    /// The binary never ran: missing, quarantined, locked, truncated.
+    Start,
+    /// It ran, and then exited on its own.
+    Stopped,
+    /// It is running and has not said READY.
+    Silent,
+}
+
+/// A daemon that is not running: which failure it was, and the shell's own
+/// words for it. The console shows the words under the title the kind picks.
+#[derive(Clone, serde::Serialize)]
+pub struct DaemonFailure {
+    pub kind: DaemonFailureKind,
+    /// The reason, in the shell's words.
+    pub text: String,
 }
 
 #[derive(Default)]

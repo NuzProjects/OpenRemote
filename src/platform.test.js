@@ -30,7 +30,9 @@ test('opening a page passes the address on, and anything else is refused', async
   const opened = []
   globalThis.window = { open: (url) => opened.push(url) }
   try {
-    await openExternal('https://example.com/plugin')
+    // True is "a browser took it": the caller uses it to decide whether the
+    // link still has to be offered by hand.
+    assert.equal(await openExternal('https://example.com/plugin'), true)
     // A homepage a catalog could name: never handed to the OS handler,
     // and the caller is told rather than left believing it opened.
     for (const refused of ['file:///C:/Windows/System32/calc.exe', 'vscode://open?x']) {
@@ -40,4 +42,13 @@ test('opening a page passes the address on, and anything else is refused', async
     delete globalThis.window
   }
   assert.deepEqual(opened, ['https://example.com/plugin'])
+})
+
+test('a blocked popup is reported, not assumed', async () => {
+  globalThis.window = { open: () => null }
+  try {
+    assert.equal(await openExternal('https://example.com/plugin'), false)
+  } finally {
+    delete globalThis.window
+  }
 })

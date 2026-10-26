@@ -211,10 +211,21 @@ test('a menu trimmed to its last row still ends with the line that says it did n
 })
 
 test('the @ menu only shows the files asked for the word being typed', () => {
-  const held = { q: 'not', entries: [{ path: 'notes.md', kind: 'file' }] }
+  const held = {
+    q: 'not',
+    entries: [
+      { path: 'notes.md', kind: 'file' },
+      { path: 'readme.md', kind: 'file' },
+    ],
+  }
   assert.deepEqual(filesForQuery(held, 'not'), held.entries, 'the word that asked gets its list')
-  assert.deepEqual(filesForQuery(held, 'notes'), [], 'another word does not inherit it')
+  assert.deepEqual(filesForQuery(held, 'other'), [], 'another word does not inherit it')
   assert.deepEqual(filesForQuery(null, 'not'), [], 'nothing asked, nothing shown')
+  // Typing on inside the same word keeps the rows that still match while the
+  // next answer is on its way: emptying the menu on every keystroke made it
+  // flicker, since it came back a beat later.
+  assert.deepEqual(filesForQuery(held, 'noted').map((f) => f.path), ['notes.md'])
+  assert.deepEqual(filesForQuery(held, 'zzz'), [], 'a word nothing matches has no rows')
   // A word whose ask failed holds an empty answer, not the previous one.
   assert.deepEqual(filesForQuery({ q: 'not', entries: [] }, 'not'), [])
 })
