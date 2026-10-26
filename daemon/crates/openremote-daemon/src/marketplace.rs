@@ -393,6 +393,14 @@ pub fn entry_source(entry: &Value, plugin_root: Option<&str>) -> Result<EntrySou
                 }
                 other => Ok(other),
             };
+            // The url becomes a positional argument of `git fetch` and
+            // `git ls-remote`, both of which read a leading dash as an
+            // option: refused here so Discover does not offer an install
+            // that the fetch step could only refuse.
+            let address = |value: Option<String>| match value {
+                Some(url) if url.starts_with('-') => Err(format!("'{url}' is not a web address")),
+                other => Ok(other),
+            };
             match o.get("source").and_then(Value::as_str) {
                 Some("github") => Ok(EntrySource::Github {
                     repo: need("repo")?,
@@ -400,12 +408,14 @@ pub fn entry_source(entry: &Value, plugin_root: Option<&str>) -> Result<EntrySou
                     sha: commit(field("sha"))?,
                 }),
                 Some("url") => Ok(EntrySource::Url {
-                    url: need("url")?,
+                    url: address(field("url"))?
+                        .ok_or_else(|| "its source has no url".to_string())?,
                     reference: branch(field("ref"))?,
                     sha: commit(field("sha"))?,
                 }),
                 Some("git-subdir") => Ok(EntrySource::GitSubdir {
-                    url: need("url")?,
+                    url: address(field("url"))?
+                        .ok_or_else(|| "its source has no url".to_string())?,
                     path: need("path")?.trim_matches('/').to_string(),
                     reference: branch(field("ref"))?,
                     sha: commit(field("sha"))?,
@@ -1109,6 +1119,21 @@ mod tests {
             )
             .unwrap_err()
             .contains("not a branch or tag")
+        );
+        // A url becomes an argument of git fetch and ls-remote, which
+        // read a leading dash as an option; Discover refuses it up front
+        // rather than offering an install the fetch could only refuse.
+        assert!(
+            read(json!({"name": "tools", "source": {"source": "url",
+                  "url": "--upload-pack=C:/Windows/System32/calc.exe"}}))
+            .unwrap_err()
+            .contains("not a web address")
+        );
+        assert!(
+            read(json!({"name": "tools", "source": {"source": "git-subdir",
+                  "url": "-x", "path": "sub"}}))
+            .unwrap_err()
+            .contains("not a web address")
         );
         // A pinned commit of the usual short or full length still reads.
         for sha in ["a7ee8a3", "a7ee8a3ab1234567890123456789012345678901f"] {
