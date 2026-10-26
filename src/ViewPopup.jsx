@@ -1,6 +1,6 @@
-import { useEffect } from 'react'
 import { X } from '@phosphor-icons/react'
 import { useBack } from './use-back.js'
+import { useEscLayer } from './esc-layer.js'
 import './view-popup.css'
 
 // One of the app's views (Settings, Metrics, Mobile) in a window of its
@@ -9,15 +9,11 @@ import './view-popup.css'
 // button, Esc, a click outside, or the phone's back gesture.
 export default function ViewPopup({ label, onClose, children, bare = false }) {
   useBack(true, onClose)
-  useEffect(() => {
-    const onKey = (e) => {
-      // A view's own use of Esc (a shortcut being recorded, a menu
-      // closing) comes first.
-      if (e.key === 'Escape' && !e.defaultPrevented) onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  // Esc closes this window unless a layer on top of it takes the key: a
+  // dialog the view opened (a delete confirm, the endpoint manager) answers
+  // its own Esc and leaves the window behind it open. A view's own use of
+  // Esc, a shortcut being recorded, comes first.
+  useEscLayer(true, onClose)
   return (
     <div
       className="vp-backdrop"

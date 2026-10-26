@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { X } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
 import { useBack } from './use-back.js'
+import { useEscLayer } from './esc-layer.js'
 import { harnessName } from './harness-names.js'
 import './devices.css'
 import './panels.css'
@@ -353,9 +354,12 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
 }
 
 // The picker footer and Settings open the same manager in a modal: the
-// harness's rows, live from the machine that would run the chats.
+// harness's rows, live from the machine that would run the chats. Esc closes
+// this dialog and nothing under it - the rule form that opened it keeps what
+// was written in it.
 export function EndpointManagerModal({ harness, deviceId = null, where = null, onClose, onChanged = null }) {
   useBack(true, onClose)
+  useEscLayer(true, onClose)
   return (
     <div
       className="dv-modal-backdrop"
