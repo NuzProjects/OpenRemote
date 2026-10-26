@@ -93,10 +93,14 @@ marketplaces, automations, MCP servers, or Cloud.
 `POST /pairing/code` (loopback, owner token), body `{}`:
 
 ```json
-{ "code": "K7QM2XTB9R", "url": "http://192.168.1.42:51234/#K7QM2XTB9R",
+{ "code": "K7QM2XTB9R", "url": "http://192.168.1.42:47823/#K7QM2XTB9R",
   "expires_at": 1761516723000, "computer": { "name": "studio" },
   "phones": [ { "id": "…", "name": "iPhone", "paired_at": 1761516000000 } ] }
 ```
+
+The port is the first free one of a fixed list (47823 through 47828), not a random ephemeral one:
+the phone stores its token against this origin, and a port that changed on every restart would
+strand every paired phone.
 
 Only one code is live at a time: asking again replaces it, which is also the "cancel" (an old QR
 stops working the moment a new one is minted). `POST /pairing/cancel` stops the listener when no
@@ -132,14 +136,16 @@ response carries.
 | mint | a code is created, in memory only, 5 minute TTL |
 | exchange | the code dies, a phone token is minted, its SHA-256 digest is written |
 | restart | codes are gone (in memory); paired phones survive |
-| revoke | the phone record is deleted, so the next request is 401 |
+| revoke | the phone record is deleted. While another phone is still paired its next request is 401; removing the last one closes the socket, so its next poll simply fails and the page says the computer is not answering |
+| code expires unscanned | the code is dropped and, with no phone paired, the socket closes without anybody clicking anything |
 | idle | the listener stops when no code is live and no phone is paired |
 
 Paired phones survive a daemon restart on purpose. The founder's ask is "no friction"; making a
 phone re-pair after every daemon restart or reboot would be friction, and the credential it holds
 is read-only, owner-only on disk (a digest, not the token), and revoked in one click from the
 desktop. The listener does not idle on the LAN forever: with no live code and no paired phone,
-nothing is bound.
+nothing is bound - at first boot, after a cancel, after revoking the last phone, and after a code
+sits unscanned past its five minutes (a timer minted with the code closes it).
 
 ## Failure modes and their copy
 
@@ -170,11 +176,39 @@ nothing is bound.
    typing; "iPhone" or "Android phone" is honest enough to identify a row in a list, and renaming
    is a follow-up, not tonight.
 7. **The QR encoder is hand-written in the console.** Neither lockfile has a QR dependency, and
-   adding one is not allowed. `src/qr.js` is a small, tested, byte-mode encoder (versions 1 to 10,
-   error correction level M), enough for a LAN URL of about 60 characters.
+   adding one is not allowed. `src/qr.js` is a small, tested, byte-mode encoder (versions 1 to 7,
+   error correction level M), which covers payloads from 14 to 122 bytes; a pairing URL is at most
+   about 40. Its tests read every symbol back the way a scanner does and check the format strings
+   against the published table, because a transposed format block looks fine in a matrix and fails
+   on a real phone.
 8. **`cargo fmt` already fails at this branch's base** in `openremote-core/src/{model,store}.rs`
    (another session's in-flight work, blacklisted here). Those two files are untouched by this
    work, and the report names them as the only diffs the formatter finds.
+9. **The listener binds the machine's own LAN address, not `0.0.0.0`.** The address is resolved
+   before the socket is opened, and the QR carries that address, so binding it exactly means the
+   socket exists on the interface the QR points at and on no other: not loopback aliases, not a
+   VPN, not a second adapter the person did not mean to expose. The test asserts loopback does not
+   answer. Named limitation: if the machine's address changes while a code is on screen (a DHCP
+   lease, a switch between Wi-Fi and Ethernet, a VPN coming up), the live socket keeps the old
+   address, so that QR may stop working before it expires. The next code re-resolves the address,
+   and a code only lives five minutes; a phone on the wrong network needs a new code anyway.
+
+## How the security story is proved
+
+Every claim above is a test in `daemon/crates/openremote-daemon/tests/e2e_pairing.rs`. The phone
+half is a second HTTP client on loopback, so the flow under test is the shipped flow: the same
+payload the console draws, the same exchange, the same token.
+
+| Claim | Test |
+| --- | --- |
+| the owner token buys nothing on the LAN (401), and the phone token buys nothing on the loopback API (401, including the `/pairing/*` control routes) | `a_fake_phone_pairs_and_can_reach_only_its_own_route` |
+| the LAN listener has no route that reads the owner token at all: `/sessions`, `/capabilities`, `/healthz`, `/pairing/*` answer 404 with either credential, because those routes are not merged into that router | `a_fake_phone_pairs_and_can_reach_only_its_own_route` |
+| a used code is refused (404) and an expired one with 410, and neither mints a token or leaves a phone record behind | `a_code_is_single_use_and_expires` |
+| five wrong guesses burn the live code rather than feeding a brute force | `wrong_codes_burn_the_live_code_rather_than_feed_guesses` |
+| the socket is down at first boot (a refused connection, not a 401), comes up with a code, and closes by itself when that code expires unscanned | `nothing_listens_until_a_code_is_live` |
+| revoking ends one phone's access while the other keeps working, and the last revoke closes the socket | `revoking_a_phone_ends_its_access_and_nothing_idles_on_the_lan` |
+| the phones file holds a digest and never the token, and the phone survives a restart | `paired_phones_survive_a_restart_and_only_their_digest_is_written` |
+| the shipped bind resolves a real address the phone can dial, and does not answer on loopback | `the_production_bind_puts_a_real_network_address_in_the_payload` |
 
 ## Explicitly out of scope tonight
 
