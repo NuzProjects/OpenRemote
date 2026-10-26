@@ -15,12 +15,12 @@ pub(crate) enum Wire {
 
 pub(crate) fn parse_listen_line(line: &str) -> Option<(Wire, u16)> {
     let line = line.trim();
+    // The v1 prefix first: it ends with the v2 one, so a v2-first match
+    // would read the v1 line as v2 with a port that starts one word late.
     let (wire, rest) = if let Some(rest) = line.strip_prefix("opencode server listening on ") {
         (Wire::V1, rest)
-    } else if let Some(rest) = line.strip_prefix("server listening on ") {
-        (Wire::V2, rest)
     } else {
-        return None;
+        (Wire::V2, line.strip_prefix("server listening on ")?)
     };
     let port = rest.rsplit(':').next()?.trim().parse().ok()?;
     Some((wire, port))
