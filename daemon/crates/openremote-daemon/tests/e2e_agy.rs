@@ -191,9 +191,9 @@ async fn a_dead_agy_process_fails_the_turn_with_a_note() {
 }
 
 /// A dash-leading prompt is text, never flags (harness audit F6): the
-/// driver sends it as `--print`'s value, the fixture reads that value,
-/// and the round-trip is the echo. The old bare-argv shape would have
-/// fed "-v" to the CLI's own parser and died with the generic
+/// driver sends it as one stream-json message on stdin, the fixture reads
+/// that message, and the round-trip is the echo. An argv value slot would
+/// have fed "-v" to the CLI's own parser and died with the generic
 /// exited-before-the-turn note instead of an answer.
 #[tokio::test]
 async fn a_dash_leading_agy_prompt_roundtrips_as_text() {

@@ -3,11 +3,13 @@
 //! `{event: "step_update", …}`, `{event: "result", result: {status,
 //! response}}` where status is Antigravity's own word (`SUCCESS`).
 //! The argv the real driver builds is the truth: `--output-format
-//! stream-json [--model <m>] [--mode <mode>] [--conversation <id>]
-//! --print <text>`. agy 1.4+ takes the word after `--print` as the
-//! prompt, so the prompt rides there, not as a positional after `--`.
-//! `--conversation <id>` resumes; `models` (the subcommand) prints the
-//! TSV catalog.
+//! stream-json --input-format stream-json [--model <m>] [--mode <mode>]
+//! [--conversation <id>] --print=`. The prompt is one NDJSON message on
+//! stdin (`{"event":"user","message":{"role":"user","content":[{"type":
+//! "text","text":…}]}}`), never an argv word, so chat text stays clear of
+//! the CLI's own option parser. The inline `--print <text>` form is still
+//! read because the CLI still has it. `--conversation <id>` resumes;
+//! `models` (the subcommand) prints the TSV catalog.
 
 use std::io::{BufRead, Write};
 
@@ -53,16 +55,25 @@ pub fn main_agy(argv: &[String]) {
         std::thread::sleep(std::time::Duration::from_millis(1500));
     }
 
-    // argv: [--output-format, stream-json, (--model, <m>)?, (--mode, <mode>)?,
-    //        (--conversation, <id>)?, --print, <text>]
-    // The prompt is `--print`'s value, including a dash-leading one. The
-    // e2e watches that "-v ..." comes back as text, not a flag guess.
+    // argv: [--output-format, stream-json, --input-format, stream-json,
+    //        (--model, <m>)?, (--mode, <mode>)?, (--conversation, <id>)?,
+    //        --print=]
+    // The prompt arrives on stdin; the inline forms are read too because
+    // the CLI has them. The e2e watches that "-v ..." comes back as text,
+    // whichever form carried it.
     let mut prompt = String::new();
     let mut conversation: Option<String> = None;
     let mut model = String::from("gemini-3.8-flash-medium");
+    let mut prompt_on_stdin = false;
     let mut i = 0;
     while i < argv.len() {
         match argv[i].as_str() {
+            "--input-format" => {
+                if argv.get(i + 1).is_some_and(|form| form == "stream-json") {
+                    prompt_on_stdin = true;
+                    i += 1;
+                }
+            }
             "--print" | "--prompt" | "-p" => {
                 if let Some(text) = argv.get(i + 1) {
                     prompt = text.clone();
@@ -84,10 +95,17 @@ pub fn main_agy(argv: &[String]) {
             other => {
                 if let Some(text) = other.strip_prefix("--print=") {
                     prompt = text.to_string();
+                } else if let Some(text) = other.strip_prefix("--prompt=") {
+                    prompt = text.to_string();
+                } else if let Some(text) = other.strip_prefix("-p=") {
+                    prompt = text.to_string();
                 }
             }
         }
         i += 1;
+    }
+    if prompt_on_stdin && prompt.is_empty() {
+        prompt = read_stdin_prompt();
     }
 
     // A fresh conversation unless resumed (see grok.rs).
@@ -120,5 +138,30 @@ pub fn main_agy(argv: &[String]) {
                    "response": format!("done: {prompt}\n"), "num_turns": 1,
                    "usage": {"input_tokens": 10, "output_tokens": 5}}
     }));
-    let _ = std::io::stdin().lock().lines().next();
+}
+
+/// The one user message print mode reads from stdin.
+///
+/// agy names each stream-input line `event`, and a user turn carries an
+/// Anthropic-shaped message body; the prompt is the text blocks inside it.
+/// Anything else reads as an empty prompt, the way the CLI refuses a line
+/// before it ever starts a turn.
+fn read_stdin_prompt() -> String {
+    let mut line = String::new();
+    let _ = std::io::stdin().lock().read_line(&mut line);
+    let Ok(frame) = serde_json::from_str::<Value>(line.trim()) else {
+        return String::new();
+    };
+    frame
+        .pointer("/message/content")
+        .and_then(Value::as_array)
+        .map(|blocks| {
+            blocks
+                .iter()
+                .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+                .filter_map(|block| block.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default()
 }

@@ -58,7 +58,12 @@ fn main() {
         codex::main_codex();
         return;
     }
-    if argv.iter().any(|a| a == "--single") {
+    // grok's single-turn forms: inline `--single <text>` and the prompt
+    // file the driver uses (`--prompt-file <path>`).
+    if argv
+        .iter()
+        .any(|a| a == "--single" || a == "--prompt-file")
+    {
         grok::main_grok(&argv);
         return;
     }
@@ -70,8 +75,17 @@ fn main() {
         opencode::main_opencode();
         return;
     }
+    // agy's print mode, whichever form names it: `--print <text>`, the
+    // inline `--print=<text>`, and the stdin form the driver uses
+    // (`--print=` alone, with `--input-format stream-json`).
     if argv.first().is_some_and(|a| a == "models")
-        || argv.iter().any(|a| a == "--print" || a == "-p")
+        || argv.iter().any(|a| {
+            a == "--print"
+                || a == "-p"
+                || a.starts_with("--print=")
+                || a.starts_with("--prompt=")
+                || a.starts_with("-p=")
+        })
     {
         agy::main_agy(&argv);
         return;

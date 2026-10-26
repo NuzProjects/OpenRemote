@@ -1,13 +1,16 @@
 //! Antigravity CLI (`agy`) harness driver.
 //!
-//! Verified live against agy 1.4.5: print mode (`--output-format
-//! stream-json --print <prompt>`) emits one NDJSON frame family -
+//! Print mode (`--output-format stream-json`) emits one NDJSON frame family -
 //! `{event: "init", conversation_id, init}`, `{event: "step_update",
 //! step_update: {state, step_type, text_delta}}`, and `{event: "result",
-//! result: {status, response, usage}}` where `status` is Antigravity's
-//! own word (`SUCCESS`). One process per prompt; continuation respawns
-//! with `--conversation <id>`. The model catalog is `agy models` (TSV:
-//! id, display name - the harness's own words).
+//! result: {status, response, usage}}` where `status` is Antigravity's own
+//! word (`SUCCESS`) - verified live against agy 1.4.5. One process per
+//! prompt; continuation respawns with `--conversation <id>`. The prompt goes
+//! in on stdin as one `{"event":"user","message":…}` line
+//! (`--input-format stream-json`, with `--print=` carrying no prompt of its
+//! own; checked against agy 1.4.7), so chat text never stands in a place the
+//! CLI's option parser can read. The model catalog is `agy models` (TSV: id,
+//! display name - the harness's own words).
 //!
 //! The antigravity-cli repository carries no license file - its docs and
 //! wire shapes are used as facts only; no code is ported from it.
