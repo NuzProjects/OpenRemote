@@ -170,6 +170,24 @@ test('an Esc closes the word it was pressed in, never the composer', () => {
   assert.equal(state.open, true)
 })
 
+test('a list that did not load says so instead of showing another chat rows', () => {
+  const line = 'Commands and agents did not load. They retry when the daemon is back.'
+  const own = ownCommands({ inChat: true, cloud: false })
+  const empty = commandItems('', { harnessCommands: [], own, unavailable: line })
+  const last = empty[empty.length - 1]
+  assert.equal(last.note, true)
+  assert.equal(last.detail, line)
+  assert.equal(last.disabled, true, 'a note is read, never picked')
+  assert.equal(last.insertion, '')
+  // While typing, and in the @ menu, the same line closes the list.
+  assert.equal(commandItems('mod', { own, unavailable: line }).at(-1).detail, line)
+  const at = mentionItems('', { chats: [{ id: 'abc', title: 'Notes' }], unavailable: line })
+  assert.deepEqual(at.map((i) => i.group), ['Chats', undefined])
+  assert.equal(at.at(-1).detail, line)
+  // An ask that answered adds no line.
+  assert.ok(!commandItems('', { own }).some((i) => i.detail === line))
+})
+
 test('the @ menu groups files, agents, servers and chats', () => {
   const items = mentionItems('no', {
     files: [{ path: 'notes.md', kind: 'file' }, { path: 'src', kind: 'dir' }],

@@ -187,7 +187,9 @@ function note(text) {
 // The / menu. Before any typing: OpenRemote's own commands, the ones used
 // lately, a few everyday harness commands, and how much more a search
 // finds. While typing: the best matches, grouped, a dozen or so at most.
-export function commandItems(query, { harnessCommands = [], own = [], recent = [] } = {}) {
+// `unavailable` is the line the menu shows in place of a list that could not
+// be read: an empty menu that says so beats another chat's rows.
+export function commandItems(query, { harnessCommands = [], own = [], recent = [], unavailable = null } = {}) {
   const taken = new Set(own.map((c) => c.name))
   const known = harnessCommands.filter((c) => !taken.has(c.name) && commandKind(c) !== 'hidden')
   const commands = known.filter((c) => commandKind(c) === 'command')
@@ -223,6 +225,7 @@ export function commandItems(query, { harnessCommands = [], own = [], recent = [
       if (skills.length) parts.push(`${skills.length} skills`)
       items.push(note(`Type to search ${parts.join(' and ')}`))
     }
+    if (unavailable) items.push(note(unavailable))
     return items
   }
 
@@ -247,12 +250,13 @@ export function commandItems(query, { harnessCommands = [], own = [], recent = [
   ]
   const hidden = Math.max(0, commandHits.length - 6) + Math.max(0, skillHits.length - 6)
   if (hidden > 0) items.push(note(`${hidden} more - keep typing to narrow`))
+  if (unavailable) items.push(note(unavailable))
   return items
 }
 
 // The @ menu: files and folders, agents, MCP servers, other chats -
 // each group filtered by the query.
-export function mentionItems(query, { files = [], agents = [], servers = [], chats = [], harness = '' } = {}) {
+export function mentionItems(query, { files = [], agents = [], servers = [], chats = [], harness = '', unavailable = null } = {}) {
   const items = []
   for (const f of files) {
     items.push({
@@ -304,6 +308,7 @@ export function mentionItems(query, { files = [], agents = [], servers = [], cha
       disabled: false,
     })
   }
+  if (unavailable) items.push(note(unavailable))
   return items.slice(0, 80)
 }
 
