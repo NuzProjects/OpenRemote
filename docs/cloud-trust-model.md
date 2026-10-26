@@ -1,0 +1,173 @@
+# What another device of your account can do to this computer
+
+Cloud mode joins the user's own computers through moreweb's relay, end to end encrypted. Every device
+of that account can reach every other device's daemon API. This page lists, route by route, what that
+means in practice: what a peer can make this computer do, and what it cannot.
+
+The gate is code, not policy: `peer_gate` in `daemon/crates/openremote-daemon/src/http.rs` serves the
+same handlers the console uses, but only for the routes in `PEER_ROUTES`. If you change that list,
+change this page in the same commit. A route that forwards a body the peer chose is a row, because
+the peer picked every argument in it.
+
+## How a peer's request arrives
+
+1. The peer's daemon opens a sealed link to this one over the relay (`openremote-cloud/src/mesh.rs`).
+   The link's Noise handshake, against a key pinned from the registry, is what proves the caller is a
+   device of the account (`mesh.rs`, `update_devices`).
+2. The request is handed to `peer_router` (`host.rs`), which runs it through `peer_gate` and then
+   through the normal handler.
+3. The identity the handler sees is the link's device id, plus the name and kind the registry holds
+   (`PeerContext`, `mesh.rs:26-32`). The daemon token plays no part on this path.
+
+There is no per-request human confirmation and no flag saying "a person clicked this". The console's
+own "start this chat on my machine" flow sends exactly the same body over exactly the same channel
+(`cloud_http.rs`, `create_remote`), so the receiving daemon genuinely cannot tell the user's click
+from a peer's client. That is a property of the design, not an oversight to patch quietly.
+
+## The three tiers
+
+| tier | what the gate checks on top of the pinned link |
+|---|---|
+| Sync | nothing. Any device of the account may copy synced chat logs. |
+| Machine | this computer must be a machine. The check is on the receiver (`mesh().kind() == "machine"`), not on the caller: a phone may drive a machine. |
+| Chat | this computer must be a machine, and the chat must be synced and executing here. A private chat answers 404, the same answer as a chat that does not exist. |
+
+## The rows
+
+32 rows: 2 Sync, 17 Machine, 13 Chat. "Sessions" and "chats" are the same thing; the API calls them
+sessions.
+
+### Sync tier (2)
+
+| route | tier | what a peer can do | what it cannot |
+|---|---|---|---|
+| `GET /sync/summary` | Sync | list every synced chat on this computer: id, executor device, head, updated_at, plus deletion tombstones | see a private chat at all: the store filters to chats with an executor (`store.rs`, `summaries`) |
+| `GET /sync/sessions/{id}/events` | Sync | read a synced chat's event log verbatim, from a byte offset: the whole transcript, tool inputs and outputs included | read a private chat (404, `sync.rs`, `range`), read a tombstoned chat (410), or write anything into the log through this route |
+
+### Machine tier (17)
+
+| route | tier | what a peer can do | what it cannot |
+|---|---|---|---|
+| `GET /capabilities` | Machine | learn this machine's daemon version, harnesses, platforms, and what the daemon can do | change anything |
+| `GET /machines` | Machine | see the machines this daemon knows, with their synced chats | see a private chat: `for_peer` filters each machine's session list to chats that run here (`http.rs`) |
+| `GET /harnesses/{id}/models` | Machine | make this machine probe a harness for its model list (the probe starts the harness CLI briefly) | choose a model, or talk to a harness that is not installed |
+| `GET /fs/dirs` | Machine | list directories anywhere the daemon's user can read, for the folder picker | read a file's contents |
+| `GET /commands` | Machine | ask a harness for its slash commands and agents, read through the harness's own backend here (the same list the console's `/` menu shows) | run one |
+| `GET /files` | Machine | enumerate file and folder names under a folder it names, or under this computer's home folder by default: paths only, ranked for a query, truncated | read file contents; the walk lists names |
+| `POST /harnesses/{id}/signin` | Machine | start a harness's own interactive login on this machine | complete it alone (see the next row), or read the credential afterwards |
+| `GET /harnesses/{id}/signin` | Machine | poll that login's view, including the vendor's words and any URL or code it shows | - |
+| `POST /harnesses/{id}/signin/input` | Machine | type answers into that login prompt, so the harness on this computer ends up authenticated as whatever the peer chose | get at an existing credential: that is a fresh login |
+| `POST /harnesses/{id}/signin/stop` | Machine | abandon that login | - |
+| `POST /machines/{id}/harnesses` | Machine | install a harness CLI on this computer, running its owner's installer (and, with `with_runtime`, a Node runtime first) | install something that is not a known harness, or install one already present (409) |
+| `POST /sessions` | Machine | create a chat here: harness, folder, model, effort, model endpoint, and the harness's permission word. A chat a peer creates is synced | name another device (400, a chat runs where it is created), create on a phone (409), use a folder that is not an existing absolute path (422), or create a private chat |
+| `GET /projects` | Machine | list this machine's projects | - |
+| `POST /projects` | Machine | add or update a project entry (store metadata only) | point a project at a folder that is not an absolute existing directory |
+| `DELETE /projects/{id}` | Machine | delete a project entry | delete the folder on disk |
+| `GET /model-endpoints` | Machine | list custom model endpoints: names, harnesses, base URLs, model ids | see their API keys: the store hands metadata only (`http.rs`, `list_model_endpoints`) |
+| `GET /model-endpoints/{id}/models` | Machine | make this machine fetch the endpoint's live model list (a network call with the stored key, the result and the key are not returned) | read the key, or use it against another address |
+
+### Chat tier (13)
+
+All 13 require a machine, and a chat that is synced and executing here. What they share: none of them
+can touch a private chat, create or delete a chat, change its folder, or read a log through these
+paths (the Sync tier is what reads logs).
+
+| route | tier | what a peer can do | what it cannot |
+|---|---|---|---|
+| `POST /sessions/{id}/prompts` | Chat | send a message into the chat, which starts a turn on this machine | pick the model or the permission word for that turn; those are the chat's own settings |
+| `POST /sessions/{id}/queue` | Chat | queue a message behind the running turn | bypass the queue |
+| `POST /sessions/{id}/queue/resume` | Chat | release a queue the user held | - |
+| `POST /sessions/{id}/queue/{item}/remove` | Chat | drop one queued message | - |
+| `POST /sessions/{id}/queue/{item}/steer` | Chat | move a queued message into the running turn | - |
+| `POST /sessions/{id}/steer` | Chat | inject a message straight into the running turn | - |
+| `POST /sessions/{id}/settings` | Chat | change model, effort, fast, and the harness's permission word. Permission is start-time only: on a live chat it is refused (409), on a stopped chat it is stored and the next resume starts the harness with it | apply a permission word to a running harness; that is the point of the 409, and it is not a protection against a peer who is willing to stop the chat first |
+| `POST /sessions/{id}/endpoint` | Chat | point a stopped chat at one of the custom endpoints already stored on this machine, or back at the harness's own provider | invent an endpoint: `POST /model-endpoints` is not a peer route |
+| `POST /sessions/{id}/interrupt` | Chat | interrupt the running turn, keeping the chat alive | - |
+| `POST /sessions/{id}/stop` | Chat | stop the chat's process | - |
+| `POST /sessions/{id}/resume` | Chat | start the chat again, which re-passes its stored model and permission word | choose new settings as part of the resume |
+| `POST /sessions/{id}/title` | Chat | rename the chat, which every device shows | - |
+| `POST /decisions/{id}/answer` | Chat | answer any pending approval or question in the chat: allow, deny, or an "always allow" that stores a tool grant for the chat | answer a decision belonging to a private chat (404), or forge a decision id that is not pending here |
+
+## The uncomfortable part
+
+The approval gate guards against a harness, not against a device.
+
+Proven end to end against this code: a machine of the same account can
+
+- start a chat here with an approval-bypassing permission word (`POST /sessions` with
+  `permission_mode: "bypassPermissions"`, which the harness's own `--permission-mode` receives; the
+  word is the harness's, and the console offers exactly these words in its picker),
+- convert a stopped chat to that word and let the next resume use it (`POST /sessions/{id}/settings`,
+  which stores it because permission is start-time on every harness; `supervisor.rs`,
+  `update_settings`; the console path is pinned by `tests/e2e.rs`,
+  `a_picked_permission_word_survives_the_init_echo_and_resume`),
+- and answer the prompts the harness asks, including "always allow", through
+  `POST /decisions/{id}/answer`.
+
+So a prompt that appears to be the user's approval may be an approval by any device of the account,
+and a chat may run with approvals off before the user ever sees it. A future contributor deciding
+what is safe to forward should assume a peer can do all of the above; the allowlist keeps them from
+the rest of the daemon's API (59 route registrations in `api_routes`, of which these 32 pairs are
+peer rows), not from driving a chat.
+
+## What actually protects the user in Cloud mode
+
+- They chose the devices. Joining the account takes a sign-in in that device's system browser, or an
+  enrollment code minted by a device already on it. Nothing joins silently.
+- Removal is real. A revoked device's synced chats are purged here (`host.rs`, `revoked`), and its
+  key stops matching the pin.
+- Private chats stay private. They never leave the computer, are invisible to peers on every route
+  above, and the answer is 404 rather than 403 so a peer cannot even learn one exists.
+- A chat runs where it was created, and only on machines. A desktop that is not a machine refuses to
+  be driven at all (409 `not_a_machine`). A phone cannot run chats.
+- Every action lands in the chat's own event stream: prompts, queueing, interrupts, settings
+  changes, decision requests and answers are events the user's console renders.
+- The console talks only to its own daemon on 127.0.0.1, with an owner-only token. A peer is never
+  the console.
+
+## What does not protect the user
+
+- The approval gate, as above: it is a gate against a harness that asks, not against a device that
+  answers.
+- Attribution. Events record what happened, never who did it: no event carries a device id
+  (`openremote-core/src/events.rs`, `EventPayload`), so "a prompt arrived" cannot be traced to the
+  device that sent it. The event stream is an audit trail of actions, not of actors. Adding peers to
+  it would be a design change.
+- The permission word as a safety control. It is the harness's vocabulary, chosen by whoever creates
+  or stops the chat, and no layer checks that the word is a cautious one.
+- Anything on this page being "not available to your other devices". The gate is a list; a route
+  added to `PEER_ROUTES` is open to every device of the account from that commit onwards, with no
+  second check.
+- The pins file as a last line of defence: `pins()` treats an unreadable `peers.json` as no pins at
+  all, so a corrupted file re-pins whatever the registry serves (`mesh.rs:310-315`). It is a detection
+  mechanism, not an authority.
+
+## Rows that look dangerous and are not reachable by a peer
+
+Kept here so the next reader does not have to re-derive it. These are console routes: a peer asking
+gets 403 (`not available to your other devices`), and Cloud's own routes are not routed for a peer at
+all (404, pinned by `tests/e2e_cloud_mesh.rs`).
+
+- Deleting a chat (`DELETE /sessions/{id}`), reading a chat directly (`GET /sessions/{id}`,
+  `GET /sessions/{id}/events`), listing chats (`GET /sessions`), archiving, and `POST /sessions/{id}/sync`.
+- Plugins, marketplaces, MCP servers, automations, receipts, and browser routes.
+- Writing model endpoints (`POST /model-endpoints` and its siblings), deleting a machine
+  (`DELETE /machines/{id}`), and every Cloud route (`/cloud/...`).
+
+## Unverified on this page
+
+- The sign-in relay rows (`POST /harnesses/{id}/signin` and its input) are read from the code, not
+  exercised end to end: no test drives a peer through a vendor login. The capability follows from the
+  handler and the tier, but the exact vendor behaviour behind it was not reproduced.
+- The `with_runtime` half of harness install (pi's Node setup) is read from `install.rs` and
+  `supervisor.rs`, not run.
+- `GET /model-endpoints/{id}/models` making a network call with the stored key is read from the
+  handler and the endpoint store, not observed against a real gateway.
+
+## If you are changing this
+
+- Adding a route to `PEER_ROUTES` gives every device of the account that capability. Add the row here
+  in the same commit, name what it cannot do, and ask whether a phone should have it.
+- A route that forwards a body the console composed is still a peer row: the peer composes the body.
+- If you add an actor to the event stream, this page's "what does not protect the user" section
+  changes with it.
