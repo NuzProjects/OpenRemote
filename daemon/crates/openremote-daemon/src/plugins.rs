@@ -1625,7 +1625,7 @@ fn entry_paths_inside(entry: &Value) -> Result<(), PluginError> {
             _ => {
                 return Err(PluginError::Invalid(format!(
                     "{who}'s {component} is neither a path nor a list of paths - refusing it"
-                )))
+                )));
             }
         };
         for path in paths {
@@ -2075,7 +2075,12 @@ mod tests {
             .to_string();
         assert!(err.contains("neither a path nor a list"), "{err}");
         // Nothing was written.
-        assert!(!dir.path().join(".claude-plugin").join("plugin.json").exists());
+        assert!(
+            !dir.path()
+                .join(".claude-plugin")
+                .join("plugin.json")
+                .exists()
+        );
     }
 
     #[test]
@@ -2324,7 +2329,10 @@ mod tests {
                 err.contains("is not one folder inside the plugins folder"),
                 "{name:?}: {err}"
             );
-            assert!(err.contains("Delete that folder yourself"), "{name:?}: {err}");
+            assert!(
+                err.contains("Delete that folder yourself"),
+                "{name:?}: {err}"
+            );
             // It no longer claims the name is not a plugin folder.
             assert!(!err.contains("is not a plugin folder"), "{name:?}: {err}");
         }
