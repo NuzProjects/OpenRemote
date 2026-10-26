@@ -73,10 +73,15 @@ struct Pending {
     started: Instant,
 }
 
+/// Sign-ins the browser may still finish. Every click on "Sign in" opens its
+/// own tab with its own state, so a second click must not strand the first
+/// tab; a handful is plenty and the oldest goes first.
+const MAX_PENDING_SIGN_INS: usize = 4;
+
 struct Inner {
     identity: Option<Identity>,
     credentials: Credentials,
-    pending: Option<Pending>,
+    pending: Vec<Pending>,
     phase: Phase,
     error: Option<String>,
 }
@@ -146,7 +151,7 @@ impl Cloud {
             inner: Mutex::new(Inner {
                 identity: files.identity(),
                 credentials,
-                pending: None,
+                pending: Vec::new(),
                 phase,
                 error: None,
             }),
@@ -219,7 +224,13 @@ impl Cloud {
             &pkce.challenge,
         );
         let mut inner = self.inner();
-        inner.pending = Some(Pending {
+        inner
+            .pending
+            .retain(|p| p.started.elapsed() < SIGN_IN_WINDOW);
+        if inner.pending.len() >= MAX_PENDING_SIGN_INS {
+            inner.pending.remove(0);
+        }
+        inner.pending.push(Pending {
             state,
             verifier: pkce.verifier,
             redirect_uri,
@@ -237,7 +248,7 @@ impl Cloud {
 
     pub fn cancel_signin(&self) {
         let mut inner = self.inner();
-        inner.pending = None;
+        inner.pending.clear();
         if inner.phase == Phase::SigningIn {
             inner.phase = if inner.credentials.device_credential.is_some() {
                 Phase::Connecting
@@ -252,20 +263,22 @@ impl Cloud {
     pub async fn finish_signin(&self, code: &str, state: &str) -> Result<SignedIn, CloudError> {
         let pending = {
             let mut inner = self.inner();
-            match inner.pending.take() {
-                Some(p) if p.state == state && p.started.elapsed() < SIGN_IN_WINDOW => p,
-                other => {
-                    // A wrong state must not cancel the sign-in that is
-                    // really in progress.
-                    inner.pending = other.filter(|p| p.started.elapsed() < SIGN_IN_WINDOW);
-                    return Err(CloudError::StaleSignIn);
-                }
+            // A state that came back from an older tab is not a reason to
+            // cancel the newer sign-in, and neither is a stale one.
+            inner
+                .pending
+                .retain(|p| p.started.elapsed() < SIGN_IN_WINDOW);
+            match inner.pending.iter().position(|p| p.state == state) {
+                Some(i) => inner.pending.remove(i),
+                None => return Err(CloudError::StaleSignIn),
             }
         };
         let result = self.join_with_code(code, &pending).await;
         let mut inner = self.inner();
         match &result {
             Ok(_) => {
+                // The account is in; every other tab's flow is spent.
+                inner.pending.clear();
                 inner.phase = Phase::Connecting;
                 inner.error = None;
             }
@@ -870,6 +883,42 @@ mod tests {
             Files::new(&dir).identity().unwrap().device_id,
             other.device_id,
             "the identity on disk is left alone"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Every click on "Sign in" opens its own tab with its own state. If the
+    /// user finishes the tab they opened first, that flow must still be
+    /// accepted - it used to be answered with "expired or was already used"
+    /// while a perfectly good code sat unredeemed.
+    #[tokio::test]
+    async fn a_second_sign_in_leaves_the_first_tab_finishable() {
+        let dir = scratch_dir();
+        let cloud = Cloud::open(test_config("http://127.0.0.1:9"), &dir);
+        let state_of = |url: &str| {
+            url.split_once("state=")
+                .and_then(|(_, rest)| rest.split('&').next())
+                .expect("a state on the authorize url")
+                .to_string()
+        };
+        let first = state_of(&cloud.begin_signin(52882));
+        let second = state_of(&cloud.begin_signin(52882));
+        assert_ne!(first, second, "each tab carries its own state");
+        assert_eq!(cloud.inner().pending.len(), 2, "both flows are live");
+
+        // The exchange itself cannot land here - nothing answers on port 9 -
+        // so what is asserted is that the older tab was accepted at all.
+        let result = cloud
+            .finish_signin("a code from the older tab", &first)
+            .await;
+        assert!(
+            !matches!(result, Err(CloudError::StaleSignIn)),
+            "the older tab is not told its sign-in expired"
+        );
+        assert_eq!(
+            cloud.inner().pending.len(),
+            1,
+            "only the flow that came back is spent"
         );
         std::fs::remove_dir_all(&dir).unwrap();
     }

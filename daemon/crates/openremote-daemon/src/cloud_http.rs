@@ -100,7 +100,12 @@ fn page(status: StatusCode, title: &str, line: &str) -> Response {
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>{title} · OpenRemote</title>\
          <style>body{{margin:0;min-height:100vh;display:grid;place-content:center;background:#0a0a0c;color:#eeeef0;\
          font:15px/1.6 system-ui,sans-serif;text-align:center}}h1{{font-size:20px;font-weight:600;margin:0 0 6px}}\
-         p{{margin:0;color:#aaaab5}}</style></head><body><main><h1>{title}</h1><p>{line}</p></main></body></html>"
+         p{{margin:0;color:#aaaab5}}footer{{margin-top:26px;font-size:13px;color:#6f6f7a}}\
+         footer a{{color:#aaaab5;text-decoration:none}}footer a:hover{{color:#e3b7f4}}\
+         </style></head><body><main><h1>{title}</h1><p>{line}</p></main>\
+         <footer><a href=\"https://github.com/morewebs\" target=\"_blank\" rel=\"noopener noreferrer\">GitHub</a> · \
+         <a href=\"https://t.me/iWebbIO\" target=\"_blank\" rel=\"noopener noreferrer\">Telegram</a> · \
+         <a href=\"mailto:info@moreweb.space\">Contact us</a></footer></body></html>"
     );
     (
         status,
@@ -566,4 +571,29 @@ pub async fn create_enrollment(State(app): State<Arc<App>>) -> Response {
         }
     }
     (StatusCode::CREATED, Json(created)).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::page;
+    use axum::http::StatusCode;
+
+    /// The page that ends a sign-in is the studio's last word in the flow, so
+    /// it carries the same contact links as the sign-in screens themselves.
+    #[tokio::test]
+    async fn the_sign_in_page_carries_the_contact_links() {
+        let response = page(StatusCode::OK, "Sign-in cancelled", "Nothing changed.");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("the page body");
+        let html = String::from_utf8(body.to_vec()).expect("utf-8 html");
+        for link in [
+            "https://github.com/morewebs",
+            "https://t.me/iWebbIO",
+            "mailto:info@moreweb.space",
+        ] {
+            assert!(html.contains(link), "{link} is on the sign-in page");
+        }
+        assert!(html.contains("Contact us"), "the mail link has a label");
+    }
 }
