@@ -87,6 +87,29 @@ pub fn same_secret(presented: &str, expected: &str) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
+/// A word that is about to become one argv element as a flag's value.
+///
+/// Two shapes are never a legitimate value. An empty word makes the harness
+/// read the flag as value-less and take the following word instead, so the
+/// caller's next argument becomes the value. A dash-leading word hands its
+/// meaning to the harness's parser, and what such a parser picks up is another
+/// flag. Either way a user's chosen word becomes part of the command line's
+/// grammar instead of staying data. What the word may say is the harness's own
+/// business (its model names, its effort tiers, its approval words); this
+/// refuses only the shapes that can change what the command means.
+pub fn validate_argv_word(word: &str) -> Result<(), String> {
+    if word.trim().is_empty() {
+        return Err("it is empty".to_string());
+    }
+    if word.starts_with('-') {
+        return Err("it starts with a dash".to_string());
+    }
+    if word.contains('\0') {
+        return Err("it contains a NUL".to_string());
+    }
+    Ok(())
+}
+
 /// Millis since the Unix epoch - the crate's clock surface, so tests can pin time.
 pub fn now_ms() -> i64 {
     std::time::SystemTime::now()
@@ -98,6 +121,21 @@ pub fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_argv_word_may_not_be_a_flag_or_empty() {
+        // Real words from every harness's own vocabulary stay welcome.
+        assert!(validate_argv_word("sonnet").is_ok());
+        assert!(validate_argv_word("claude-opus-4-5-20260301").is_ok());
+        assert!(validate_argv_word("bypassPermissions").is_ok());
+        assert!(validate_argv_word("xhigh").is_ok());
+        // Shapes that make a parser read the word as the command's grammar.
+        assert!(validate_argv_word("--dangerously-skip-permissions").is_err());
+        assert!(validate_argv_word("-x").is_err());
+        assert!(validate_argv_word("").is_err());
+        assert!(validate_argv_word("   ").is_err());
+        assert!(validate_argv_word("a\0b").is_err());
+    }
 
     #[test]
     fn hostname_answers_quickly_and_never_empty() {
