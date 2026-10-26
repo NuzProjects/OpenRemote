@@ -297,3 +297,13 @@ export function sourceRequest(kind, value) {
   if (kind === 'archive') return { kind: 'archive', location: v }
   return null
 }
+
+// What the review says after an install attempt failed. The daemon takes
+// the staged copy the moment an install starts, so a failed attempt
+// leaves no stage id that could work again: the sentence sends the user
+// back to reading the source, not to pressing Install twice.
+export function installFailedNote(message) {
+  const said = String(message ?? '').trim()
+  const why = said || 'The install did not go through.'
+  return `${why} Nothing was installed. The staged copy is used up as soon as an install starts, so read the same source again to retry.`
+}
