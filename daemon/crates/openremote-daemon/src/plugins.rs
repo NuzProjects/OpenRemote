@@ -1943,13 +1943,21 @@ mod tests {
                 let err = apply_entry(dir.path(), &Value::Object(entry))
                     .unwrap_err()
                     .to_string();
-                assert!(err.contains("outside the plugin folder"), "{component}: {err}");
+                assert!(
+                    err.contains("outside the plugin folder"),
+                    "{component}: {err}"
+                );
                 // The refusal says which plugin asked.
                 assert!(err.contains("climber"), "{component}: {err}");
             }
         }
         // Nothing was written for any of them.
-        assert!(!dir.path().join(".claude-plugin").join("plugin.json").exists());
+        assert!(
+            !dir.path()
+                .join(".claude-plugin")
+                .join("plugin.json")
+                .exists()
+        );
         // A path inside the plugin still rides, on the branch where the
         // entry is the manifest itself.
         apply_entry(

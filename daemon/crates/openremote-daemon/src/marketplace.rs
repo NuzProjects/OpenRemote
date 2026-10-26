@@ -1181,7 +1181,10 @@ mod tests {
         // A homepage the console would hand to window.open or the OS
         // handler: http(s) only, so a `file:` link or a custom protocol
         // never reaches the review dialog.
-        assert_eq!(by("web").homepage.as_deref(), Some("https://example.com/web"));
+        assert_eq!(
+            by("web").homepage.as_deref(),
+            Some("https://example.com/web")
+        );
         assert_eq!(by("local").homepage, None);
         assert_eq!(by("custom").homepage, None);
     }
