@@ -242,6 +242,32 @@ jobs:
             }
             console.log(`preflight: ${tag} agrees with the manifests, release-notes/${tag}.md and THIRD-PARTY_NOTICES.md exist, Android versionCode ${code} is good`);
           '
+      # A tag can point at a commit no branch contains: a local commit, or
+      # work on a branch that was never merged. Publishing from one would
+      # ship installers built from code the project never accepted, move
+      # `releases/latest` and the in-app updater for every user, and do it
+      # through the pipeline that holds the release token and the Android
+      # signing key. The compare API answers whether this commit is on the
+      # default branch's history: identical or behind is fine (a
+      # maintenance tag on an older commit), ahead or diverged is not.
+      - name: preflight (the tag is on the default branch)
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          default="$(gh api "repos/${GITHUB_REPOSITORY}" --jq .default_branch)"
+          status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${default}...${sha}" --jq .status)"
+          case "$status" in
+            identical|behind)
+              echo "preflight: ${GITHUB_REF_NAME} is on ${default} (compare status: ${status})"
+              ;;
+            *)
+              echo "preflight: ${GITHUB_REF_NAME} points at ${sha}, which is not on ${default} (compare status: ${status}); merge it into ${default} and tag that commit instead" >&2
+              exit 1
+              ;;
+          esac
+        env:
+          GH_TOKEN: ${{ github.token }}
       # The nightly keeps the same applicationId and versionCode as the
       # stable APK, so the two install over each other in either
       # direction (same signature, same code). The versionCode floor
@@ -283,6 +309,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
       - run: npm ci
+        if: steps.build.outputs.skip != '1'
+      # The console's own tests, before half an hour of building. A tag can
+      # be pushed straight at the default branch without that commit ever
+      # going through a pull request, so this is the only place the suite
+      # runs on exactly what is being shipped.
+      - run: npm test
         if: steps.build.outputs.skip != '1'
       - run: OR_RELEASE=1 node scripts/sync-daemon.mjs
         if: steps.build.outputs.skip != '1'

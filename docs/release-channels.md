@@ -25,6 +25,16 @@ one above. A version bump never edits a download link anywhere.
 The version-free names start with the first tag after this landed - v0.3.2
 predates them, so its release page has only the versioned assets.
 
+## A tag must be on the default branch
+
+The release job's preflight refuses a `v*` tag whose commit is not on the
+default branch's history (GitHub's compare API must report `identical` or
+`behind`). A tag pushed at a local commit, or at work on a branch that was
+never merged, would otherwise publish installers built from code the
+project never accepted, and move `releases/latest`, the site's download
+buttons and the in-app updater for every user. Merge first, then tag the
+commit that is on the default branch.
+
 ## Nightly
 
 The scheduled run, 03:17 UTC daily:
