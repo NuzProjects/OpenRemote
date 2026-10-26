@@ -308,3 +308,36 @@ test('fsDirs rides the caller-supplied signal to the fetch, and an abort proves 
   assert.equal(seen[1].aborted, false, 'an ordinary listing is never aborted')
   assert.ok(seen[0] !== seen[1], 'each call builds its own signal')
 })
+
+test('a device-scoped client streams that device, not this daemon', async () => {
+  // events() builds its own URL and is the one request path that
+  // bypassed the device prefix, so a watched chat on another computer
+  // streamed this daemon's log instead.
+  const urls = []
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async (url) => {
+    urls.push(url)
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(''))
+        controller.close()
+      },
+    })
+    return new Response(body, { status: 200 })
+  }
+  try {
+    const api = new DaemonApi('http://daemon', 'token').device('machine-7')
+    const streamed = (after) =>
+      new Promise((resolve) => {
+        api.events('s1', { after, onEvent: () => {}, onClose: () => resolve() })
+      })
+    await streamed(null)
+    await streamed(4)
+  } finally {
+    globalThis.fetch = realFetch
+  }
+  assert.deepEqual(urls, [
+    'http://daemon/devices/machine-7/sessions/s1/events',
+    'http://daemon/devices/machine-7/sessions/s1/events?after=4',
+  ])
+})
