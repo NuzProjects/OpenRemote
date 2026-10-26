@@ -4,7 +4,7 @@
 // through their owner's own installer. Opened from the harness picker's
 // footer row.
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { X } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
 import { HarnessMark } from './brand-marks.jsx'
@@ -12,6 +12,7 @@ import { harnessRows } from './harness-manager.js'
 import { usePrivacyMode } from './privacy.js'
 import './devices.css'
 import { useBack } from './use-back.js'
+import { useEscLayer } from './esc-layer.js'
 
 export default function HarnessManagerModal({ onClose, onSignIn }) {
   const privacy = usePrivacyMode()
@@ -29,17 +30,12 @@ export default function HarnessManagerModal({ onClose, onSignIn }) {
   const rows = harnessRows(capabilities, thisMachine ? thisMachine.installable : null)
   const machineId = thisMachine?.machine?.id ?? null
 
-  // Esc closes the topmost layer only: the go-ahead first, then the
+  // Esc closes the topmost thing here: the go-ahead first, then the
   // manager.
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.key !== 'Escape') return
-      if (confirming) setConfirming(null)
-      else onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose, confirming])
+  useEscLayer(true, () => {
+    if (confirming) setConfirming(null)
+    else onClose()
+  })
 
   const install = async (harnessId, options) => {
     if (busy || !machineId) return

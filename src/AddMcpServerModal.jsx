@@ -2,16 +2,18 @@
 // command is what that machine would start; a key, if it needs one,
 // stays there.
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { X } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
 import './devices.css'
 import { useBack } from './use-back.js'
+import { useEscLayer } from './esc-layer.js'
 
 const STATUS = { online: 'Online', offline: 'Offline', waiting: 'Has not checked in' }
 
 export default function AddMcpServerModal({ onClose }) {
   useBack(true, onClose)
+  useEscLayer(true, onClose)
   const { machines, mcpServers, addMcpServer } = useConsole()
   const online = (machines ?? []).find((m) => m.machine.status === 'online')
   const [name, setName] = useState('')
@@ -34,14 +36,6 @@ export default function AddMcpServerModal({ onClose }) {
     (mcpServers ?? []).some(
       (p) => p.machine === effectiveMachineId && p.name.toLowerCase() === name.trim().toLowerCase(),
     )
-
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
 
   const oneMachine = (machines ?? []).filter((m) => m.machine.status === 'online').length <= 1
   const hint = duplicate

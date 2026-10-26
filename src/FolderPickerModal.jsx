@@ -7,11 +7,13 @@ import { ArrowUp, Folder, House, X } from '@phosphor-icons/react'
 import './devices.css'
 import './folders.css'
 import { useBack } from './use-back.js'
+import { useEscLayer } from './esc-layer.js'
 import { usePrivacyMode } from './privacy.js'
 
 export default function FolderPickerModal({ api, where, start, onChoose, onClose }) {
   const privacy = usePrivacyMode()
   useBack(true, onClose)
+  useEscLayer(true, onClose)
   const [listing, setListing] = useState(null)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -54,14 +56,6 @@ export default function FolderPickerModal({ api, where, start, onChoose, onClose
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
 
   return (
     <div
