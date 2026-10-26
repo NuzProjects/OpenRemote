@@ -26,6 +26,22 @@ export function daemonReason(cloud) {
 }
 
 /**
+ * The alert under the Cloud door, or nothing. Two sources feed it: the
+ * daemon's reason, and the error a failed sign-in click came back with.
+ * The click's error is usually the daemon's own sentence again, which the
+ * body already says, and the same words twice read as two problems. The
+ * comparison ignores case, since the body capitalises the daemon's words
+ * for its slot and the click's error keeps them as sent.
+ */
+export function cloudAlert({ clickError = null, cloud = null, body = '', signingIn = false } = {}) {
+  if (signingIn) return null
+  const text = clickError ?? (cloud?.state !== 'relink' ? daemonReason(cloud) : null)
+  if (!text) return null
+  const same = String(text).trim().toLowerCase() === String(body ?? '').trim().toLowerCase()
+  return same ? null : text
+}
+
+/**
  * Local lists everything that runs on this computer, private or synced;
  * Cloud lists every synced chat, wherever it runs.
  */

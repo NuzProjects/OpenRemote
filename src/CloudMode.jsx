@@ -7,7 +7,7 @@
 import { useState } from 'react'
 import { Copy, House } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
-import { daemonReason } from './cloud.js'
+import { cloudAlert, daemonReason } from './cloud.js'
 import { isMobile } from './platform.js'
 import './cloudmode.css'
 
@@ -89,6 +89,9 @@ export default function CloudMode({ onBackToLocal }) {
   const [error, setError] = useState(null)
   const { title, body } = words(cloud)
   const signingIn = cloud?.state === 'signing_in'
+  // A failed click answers with the daemon's own sentence, which is often
+  // the body already: the alert drops it rather than saying it twice.
+  const alert = cloudAlert({ clickError: error, cloud, body, signingIn })
 
   const start = async () => {
     setBusy(true)
@@ -144,9 +147,9 @@ export default function CloudMode({ onBackToLocal }) {
 
         <h1 className="cm-title">{title}</h1>
         <p className="cm-body">{body}</p>
-        {(error || (cloud?.error && cloud?.state !== 'relink')) && !signingIn && (
+        {alert && (
           <p className="cm-error" role="alert">
-            {error ?? cloud.error}
+            {alert}
           </p>
         )}
 
