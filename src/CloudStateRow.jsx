@@ -17,6 +17,14 @@ const signedName = (email) =>
     'Signed in'
   )
 
+// Why a sign-in ended, in the daemon's own words. The daemon knows the reason
+// (a relay that answered 401, or a file it could not read); the row must not
+// give a different one under it.
+function daemonReason(cloud) {
+  const text = cloud?.error
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : null
+}
+
 // What the row says for each state. CloudMode says the same things on
 // its door; this is the quiet, in-list version.
 function words(cloud, one) {
@@ -39,7 +47,8 @@ function words(cloud, one) {
     case 'relink':
       return {
         name: 'Sign in ended',
-        detail: `Your sign-in on this ${one} ended. Sign in to reach your devices again.`,
+        detail:
+          daemonReason(cloud) ?? `Your sign-in on this ${one} ended. Sign in to reach your devices again.`,
       }
     case 'revoked':
       return {
@@ -152,7 +161,7 @@ export default function CloudStateRow({ one = 'computer' }) {
           </div>
         </div>
       )}
-      {(error || cloud?.error) && !signingIn && (
+      {(error || (cloud?.error && cloud?.state !== 'relink')) && !signingIn && (
         <p className="pn-error" role="alert">
           {error ?? cloud.error}
         </p>
