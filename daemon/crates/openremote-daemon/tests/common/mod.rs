@@ -299,10 +299,61 @@ pub async fn start_embedded(cloud: openremote_cloud::CloudConfig) -> (TestDaemon
     (daemon, embedded.app)
 }
 
+/// The scenario names the fixture binary on disk implements. Asked once per
+/// test process: `cargo test` never rebuilds that binary, so the answer can be
+/// older than the test asking.
+fn fixture_scenarios(bin: &Path) -> Vec<String> {
+    static KNOWN: OnceLock<Vec<String>> = OnceLock::new();
+    KNOWN
+        .get_or_init(|| {
+            let out = std::process::Command::new(bin)
+                .arg("--scenarios")
+                .output()
+                .unwrap_or_else(|e| panic!("ask {} for its scenarios: {e}", bin.display()));
+            assert!(
+                out.status.success(),
+                "the fixture agent at {} could not list its scenarios ({}): {}",
+                bin.display(),
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .clone()
+}
+
+/// Refuse to drive a scenario the fixture binary on disk does not implement.
+/// Without this check a test written against a newer scenario drives a turn the
+/// old binary treats as plain, the event the test waits for never arrives, and
+/// its own timeout reports a daemon regression that is not there.
+fn require_scenario(bin: &Path, scenario: &str) {
+    let known = fixture_scenarios(bin);
+    assert!(
+        known.iter().any(|name| name == scenario),
+        "stale fixture-agent.exe at {}: it does not implement the '{scenario}' \
+         scenario these tests drive (it lists {}). Run `cargo build -p \
+         fixture-agent`; `cargo test` does not rebuild the fixture, and an old \
+         one turns a scenario it never heard of into a plain turn that makes \
+         this test wait out its timeout.",
+        bin.display(),
+        if known.is_empty() {
+            "nothing, so it predates the --scenarios answer".to_string()
+        } else {
+            format!("only {}", known.join(", "))
+        }
+    );
+}
+
 /// A workspace the fixture agent runs in, with an optional scenario file.
 pub fn workspace(scenario: Option<&str>) -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("temp workspace");
     if let Some(scenario) = scenario {
+        require_scenario(&fixture_agent(), scenario);
         std::fs::write(dir.path().join("fixture-scenario"), scenario).expect("scenario file");
     }
     dir

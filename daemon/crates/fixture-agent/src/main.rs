@@ -44,6 +44,35 @@ pub fn record(file: &str, line: &str) {
     }
 }
 
+/// Every scenario name the fixtures here implement, one per behaviour, all
+/// protocols included. The e2e harness asks for this list (`--scenarios`) and
+/// refuses to drive a scenario the binary on disk does not know, because
+/// `cargo test` never rebuilds this binary: an old one turns a scenario it has
+/// not heard of into a plain turn, the event the test waits for never arrives,
+/// and half a minute later the report blames the daemon. A scenario added to a
+/// match below or in `codex.rs`, `grok.rs`, `pi.rs`, `opencode.rs` or `agy.rs`
+/// belongs here too; forgetting refuses a valid run with this list in the
+/// message, which is the loud direction to be wrong in.
+pub const SCENARIOS: &[&str] = &[
+    "plain",
+    "approve",
+    "deny",
+    "question",
+    "steer",
+    "slow",
+    "hold",
+    "fail",
+    "stream",
+    "think",
+    "compact",
+    "giant-line",
+    "ask",
+    "drop",
+    "boot-crash",
+    "dialog",
+    "die",
+];
+
 /// Hold a scenario's turn open until the e2e creates `fixture-release` in
 /// the workspace it handed the harness. A test that needs the turn still
 /// running (to queue a message, to interrupt it) then decides the length
@@ -67,6 +96,15 @@ fn main() {
         let version =
             std::env::var("FIXTURE_AGENT_VERSION").unwrap_or_else(|_| "9.9.9".to_string());
         println!("fixture-agent {version}");
+        return;
+    }
+    // Which scenarios this binary implements, for the harness to check before
+    // it drives one. Answered before protocol dispatch, like `--version`, and
+    // never asked by the daemon: no real run changes.
+    if argv.iter().any(|a| a == "--scenarios") {
+        for name in SCENARIOS {
+            println!("{name}");
+        }
         return;
     }
     if argv.iter().any(|a| a == "app-server") {
@@ -552,7 +590,16 @@ impl FixtureAgent {
                 self.assistant_text(&format!("done: {prompt}"));
                 self.result("success", &format!("done: {prompt}"), "completed");
             }
-            _ => {
+            // A name no arm here knows: normally an old binary beside a new
+            // test, since `cargo test` does not rebuild this one. Finish the
+            // turn like `plain` so nothing waits forever, and put the cause on
+            // stderr, where the daemon quotes it into the session's reason -
+            // the harness checks this case up front (`--scenarios`), and this
+            // line is what a run that got past that check leaves behind.
+            other => {
+                eprintln!(
+                    "fixture-agent: unknown scenario '{other}'; this binary predates it, rebuild with cargo build -p fixture-agent"
+                );
                 self.assistant_text(&format!("done: {prompt}"));
                 self.result("success", &format!("done: {prompt}"), "completed");
             }
