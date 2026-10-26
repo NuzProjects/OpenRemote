@@ -9,7 +9,7 @@ import { useEffect, useRef, useState } from 'react'
 import { X } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
 import { canPickFolder, pickFile, pickFolder } from './pick-folder.js'
-import { CLAUDE_PART_LABEL, POWER_LABEL, RUNTIME_LABEL, entrySource, sourceRequest } from './plugins.js'
+import { CLAUDE_PART_LABEL, POWER_LABEL, RUNTIME_LABEL, entrySource, installFailedNote, sourceRequest } from './plugins.js'
 import { useEscLayer } from './esc-layer.js'
 import './devices.css'
 import './plugins.css'
@@ -74,8 +74,13 @@ export default function InstallPluginModal({ onClose, entry = null }) {
       setStaged(null)
       onClose()
     } catch (err) {
-      setError(err.message ?? String(err))
+      // The daemon takes the staged copy when the install starts, so a
+      // failed attempt leaves nothing that could install again: the
+      // review closes and the screen behind it reads the source once
+      // more. Its value is still in state, so that is one press.
+      setStaged(null)
       setBusy(false)
+      setError(installFailedNote(err.message ?? String(err)))
     }
   }
 

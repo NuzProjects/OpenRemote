@@ -11,6 +11,7 @@ import {
   fetchedLabel,
   filterEntries,
   groupEntriesByCategory,
+  installFailedNote,
   isStale,
   notSandboxed,
   pluginInitials,
@@ -428,6 +429,26 @@ test('category filter options and searchEntries handle General and case-insensit
     secResults.map((e) => e.name),
     ['beta'],
   )
+})
+
+test('a failed install sends the user back to reading the source', () => {
+  // The daemon's own words come through, and the sentence adds what the
+  // screen now does: the staged copy is spent, so there is no Install to
+  // press again.
+  const said = installFailedNote('the folder is in use by another program')
+  assert.match(said, /the folder is in use by another program/)
+  assert.match(said, /Nothing was installed/)
+  assert.match(said, /used up as soon as an install starts/)
+  assert.match(said, /read the same source again/)
+  // A failure the daemon described with nothing at all still says
+  // something a person can act on.
+  const bare = installFailedNote('')
+  assert.match(bare, /The install did not go through/)
+  assert.match(bare, /read the same source again/)
+  assert.doesNotMatch(bare, /^ .*Nothing was installed/)
+  // It never claims the install can be retried from the same review.
+  assert.doesNotMatch(said, /try again/i)
+  assert.doesNotMatch(said, /press install/i)
 })
 
 
