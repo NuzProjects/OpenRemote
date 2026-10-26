@@ -100,11 +100,17 @@ impl Driver {
 
         let cwd = self.opts.cwd.clone();
         let resume = self.shared.session_ref.lock().unwrap().clone();
-        // Validate first, write second: a refused word never leaves a file
-        // behind.
-        let prompt_file = prompt_path();
-        let args = build_args(&self.opts, resume.as_deref(), &prompt_file)?;
-        write_prompt(&prompt_file, text)?;
+        // The file is claimed first because the argv has to name it; a word
+        // the guard refuses removes it again, so a refusal still leaves
+        // nothing behind.
+        let prompt_file = write_prompt_fresh(text)?;
+        let args = match build_args(&self.opts, resume.as_deref(), &prompt_file) {
+            Ok(args) => args,
+            Err(e) => {
+                let _ = std::fs::remove_file(&prompt_file);
+                return Err(e);
+            }
+        };
         let mut command = Command::new(program);
         command
             .args(&prefix)
@@ -264,20 +270,54 @@ fn prompt_path() -> std::path::PathBuf {
 ///
 /// `create_new` refuses a path that already exists instead of following
 /// whatever sits there, so nothing planted by another process can redirect the
-/// write; a failed write leaves no half file behind.
-fn write_prompt(path: &std::path::Path, text: &str) -> Result<(), DriverError> {
+/// write; a failed write leaves no half file behind. On unix the file is
+/// owner-only: for the length of the turn the prompt sits in a temp directory
+/// other users can list, and the argv it replaces was never that exposed.
+fn write_prompt(path: &std::path::Path, text: &str) -> std::io::Result<()> {
     use std::io::Write;
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|e| DriverError::Spawn(format!("grok prompt file: {e}")))?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
     if let Err(e) = file.write_all(text.as_bytes()) {
         drop(file);
         let _ = std::fs::remove_file(path);
-        return Err(DriverError::Spawn(format!("grok prompt file: {e}")));
+        return Err(e);
     }
     Ok(())
+}
+
+/// Write the prompt to a fresh path, and say which one.
+fn write_prompt_fresh(text: &str) -> Result<std::path::PathBuf, DriverError> {
+    claim_prompt_file(text, prompt_path)
+}
+
+/// Claim a path nobody holds, and write the prompt into it.
+///
+/// A file left behind by a daemon that died with a turn open can own the name
+/// this process is about to use, once the pid comes back and the counter
+/// starts over, so a taken name earns one more try instead of a turn that
+/// fails with "file exists". One retry is enough: the counter and the pid
+/// together make a second collision a coincidence, not a pattern.
+fn claim_prompt_file(
+    text: &str,
+    mut next_path: impl FnMut() -> std::path::PathBuf,
+) -> Result<std::path::PathBuf, DriverError> {
+    let mut attempt = 0;
+    loop {
+        let path = next_path();
+        match write_prompt(&path, text) {
+            Ok(()) => return Ok(path),
+            Err(e) if attempt == 0 && e.kind() == std::io::ErrorKind::AlreadyExists => {
+                attempt += 1;
+            }
+            Err(e) => return Err(DriverError::Spawn(format!("grok prompt file: {e}"))),
+        }
+    }
 }
 
 /// Removes the prompt file when the turn's reader ends - early return, EOF or
@@ -531,5 +571,37 @@ mod tests {
         // whatever is there now.
         assert!(write_prompt(&path, "two").is_err());
         assert_eq!(std::fs::read_to_string(&path).expect("read back"), "one");
+    }
+
+    #[test]
+    fn the_prompt_file_goes_when_the_turn_ends() {
+        // The removal rides a drop guard, so this is the test that fails if
+        // someone moves the guard off the turn's reader: the prompt would
+        // outlive the turn in a temp directory.
+        let path = write_prompt_fresh("hello").expect("prompt file");
+        assert!(path.exists(), "the CLI has something to read");
+        drop(PromptFile(Some(path.clone())));
+        assert!(!path.exists(), "the turn's end takes the prompt with it");
+    }
+
+    #[test]
+    fn a_stale_prompt_file_costs_one_retry_and_no_turn() {
+        // A daemon that died with a turn open leaves its prompt behind; once
+        // the pid comes back and the counter restarts, the next turn's first
+        // name is taken. One more try, and the turn runs.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let stale = dir.path().join("openremote-grok-stale.prompt");
+        std::fs::write(&stale, "from a daemon that died").expect("stale file");
+        let fresh = dir.path().join("openremote-grok-fresh.prompt");
+        let mut names = vec![stale.clone(), fresh.clone()].into_iter();
+        let claimed = claim_prompt_file("hello", || names.next().expect("two names"))
+            .expect("the second name is free");
+        assert_eq!(claimed, fresh);
+        assert_eq!(std::fs::read_to_string(&fresh).expect("read back"), "hello");
+        // The stale file is left alone: it is evidence, not ours to overwrite.
+        assert_eq!(
+            std::fs::read_to_string(&stale).expect("stale kept"),
+            "from a daemon that died"
+        );
     }
 }

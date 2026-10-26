@@ -141,17 +141,29 @@ pub fn main_agy(argv: &[String]) {
 }
 
 /// The one user message print mode reads from stdin.
-///
-/// agy names each stream-input line `event`, and a user turn carries an
-/// Anthropic-shaped message body; the prompt is the text blocks inside it.
-/// Anything else reads as an empty prompt, the way the CLI refuses a line
-/// before it ever starts a turn.
 fn read_stdin_prompt() -> String {
     let mut line = String::new();
     let _ = std::io::stdin().lock().read_line(&mut line);
-    let Ok(frame) = serde_json::from_str::<Value>(line.trim()) else {
+    prompt_from_frame(line.trim())
+}
+
+/// The prompt inside one stream-input line, or nothing.
+///
+/// agy names each line `event` and a user turn carries an Anthropic-shaped
+/// message body; the prompt is the text blocks inside it. A line whose `event`
+/// or `message.role` says something else is refused, exactly as the CLI
+/// refuses it: a fixture that accepted those would hide a driver that framed
+/// the message wrong, because an empty answer here fails the round trip
+/// instead of echoing the text back on a shape agy would have ignored.
+fn prompt_from_frame(line: &str) -> String {
+    let Ok(frame) = serde_json::from_str::<Value>(line) else {
         return String::new();
     };
+    let is_user = frame.get("event").and_then(Value::as_str) == Some("user")
+        && frame.pointer("/message/role").and_then(Value::as_str) == Some("user");
+    if !is_user {
+        return String::new();
+    }
     frame
         .pointer("/message/content")
         .and_then(Value::as_array)
@@ -164,4 +176,29 @@ fn read_stdin_prompt() -> String {
                 .join("")
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_user_message_carries_the_prompt() {
+        let line = r#"{"event":"user","message":{"role":"user","content":[{"type":"text","text":"-v the notes"}]}}"#;
+        assert_eq!(prompt_from_frame(line), "-v the notes");
+    }
+
+    #[test]
+    fn a_line_that_is_not_a_user_turn_is_ignored() {
+        // agy refuses each of these; the fixture must too, or a driver that
+        // framed the message wrong would pass on a shape the CLI drops.
+        for line in [
+            r#"{"event":"assistant","message":{"role":"user","content":[{"type":"text","text":"x"}]}}"#,
+            r#"{"event":"user","message":{"role":"assistant","content":[{"type":"text","text":"x"}]}}"#,
+            r#"{"message":{"role":"user","content":[{"type":"text","text":"x"}]}}"#,
+            "not json",
+        ] {
+            assert_eq!(prompt_from_frame(line), "", "{line}");
+        }
+    }
 }
