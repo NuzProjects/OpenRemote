@@ -57,14 +57,15 @@ pub struct Tab {
     bounds: Option<Bounds>,
 }
 
-/// A download a tab started, as the console lists it.
+/// A download a tab asked for, as the console lists it.
 #[derive(Clone, Debug, Serialize)]
 pub struct Download {
     pub id: u64,
     pub tab: String,
     pub url: String,
     pub path: Option<String>,
-    /// "started", "done" or "failed".
+    /// "blocked" (a page asked and was refused), "started", "done" or
+    /// "failed".
     pub state: &'static str,
 }
 
@@ -104,6 +105,17 @@ pub fn allowed(url: &Url, dev: Option<&Url>) -> bool {
         "about" | "blob" | "data" | "file" => true,
         _ => false,
     }
+}
+
+/// Whether a page may start a download on its own. It may not. Tauri
+/// reports a download as it arrives and takes the handler's answer as
+/// allow-or-refuse, so there is no way to hold it and ask the user first:
+/// every allowed download is a file written where the user keeps their
+/// own, with nothing on screen to say a page put it there. The console
+/// lists the attempt instead, and the user who wants the file asks for it
+/// in a browser that prompts.
+fn page_may_download() -> bool {
+    false
 }
 
 /// The browser's profile: cookies, storage and cache live here, apart
@@ -166,6 +178,8 @@ pub fn open_tab(
         (app.clone(), app.clone(), app.clone(), app.clone());
     // Downloads are told apart by their address, which is all the finish
     // event carries; the newest started one with that address finishes.
+    // Nothing starts today (see on_download), so this pairs nothing until a
+    // build allows a download the user asked for.
     let started: std::sync::Arc<Mutex<Vec<(String, u64)>>> = Default::default();
     let popup_from = id.clone();
     let builder = WebviewBuilder::new(&id, WebviewUrl::External(url.clone()))
@@ -200,25 +214,21 @@ pub fn open_tab(
             });
             NewWindowResponse::Deny
         })
-        // Downloads land where WebView2 puts them (the user's Downloads
-        // folder, a free name); handling them here keeps Edge's own
-        // download bubble away, and the console lists them instead.
+        // A page never writes a file on its own. Above where WebView2 would
+        // put it (the user's Downloads folder, a free name) and behind Edge's
+        // own bubble, a download the page starts is a file the user never
+        // agreed to; the event can only be allowed or refused as it arrives,
+        // so there is no way to hold it and ask the user first. It is
+        // refused, and the console is told what the page tried to save.
         .on_download(move |webview, event| {
             let download = match event {
-                DownloadEvent::Requested { url, destination } => {
-                    let id = DOWNLOADS.fetch_add(1, Ordering::Relaxed) + 1;
-                    started
-                        .lock()
-                        .expect("downloads lock")
-                        .push((url.to_string(), id));
-                    Download {
-                        id,
-                        tab: webview.label().to_string(),
-                        url: url.to_string(),
-                        path: Some(destination.display().to_string()),
-                        state: "started",
-                    }
-                }
+                DownloadEvent::Requested { url, destination } => Download {
+                    id: DOWNLOADS.fetch_add(1, Ordering::Relaxed) + 1,
+                    tab: webview.label().to_string(),
+                    url: url.to_string(),
+                    path: Some(destination.display().to_string()),
+                    state: "blocked",
+                },
                 DownloadEvent::Finished { url, path, success } => {
                     let url = url.to_string();
                     let id = {
@@ -237,7 +247,7 @@ pub fn open_tab(
                 _ => return true,
             };
             let _ = on_download.emit_to(console(), "browser:download", download);
-            true
+            page_may_download()
         });
     #[cfg(windows)]
     let builder = builder.additional_browser_args(win::BROWSER_ARGS);
@@ -678,6 +688,14 @@ mod tests {
         }
         // Without a dev server, its address is just another local port.
         assert!(allowed(&url("http://127.0.0.1:5175/"), None));
+    }
+
+    /// A page load must never be enough to write a file into the user's
+    /// Downloads folder. This pins the answer the download handler gives:
+    /// a page's download is refused, and the console reports it.
+    #[test]
+    fn a_page_never_starts_a_download_on_its_own() {
+        assert!(!page_may_download());
     }
 
     #[test]

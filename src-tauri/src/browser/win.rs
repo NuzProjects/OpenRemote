@@ -30,10 +30,12 @@ use super::KeyPress;
 /// The tabs' browser arguments. Every tab shares one WebView2 profile, and
 /// WebView2 refuses a second set of arguments for a profile already open,
 /// so every tab passes exactly these. They keep wry's own defaults (no
-/// "mini menu", no PDF mini menu, no SmartScreen) and add one: a tab keeps
-/// running while the window is hidden in the tray, where agents still
-/// browse.
-pub const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection \
+/// "mini menu", no PDF mini menu) and add one: a tab keeps running while
+/// the window is hidden in the tray, where agents still browse. SmartScreen
+/// stays on: a page's downloads are refused by the shell, and a file that
+/// does reach the disk from this app is checked for reputation like any
+/// other this machine opens.
+pub const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI \
      --disable-backgrounding-occluded-windows";
 
 /// Keys the browser takes while a page has focus, in the console's own
