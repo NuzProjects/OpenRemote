@@ -819,8 +819,32 @@ pub fn start(
     tokio::task::JoinHandle<()>,
     tokio::task::JoinHandle<()>,
 )> {
-    let identity = cloud.identity()?;
-    let account = cloud.view()["account"]["id"].as_str()?.to_string();
+    // Nothing here may return `None` in silence. `Cloud::open` already refuses
+    // a state on disk that cannot work, and this is the same check for files
+    // that changed under a running daemon (a crash mid-write, a virus scanner
+    // quarantine): the phase moves to "sign in again" with the reason, instead
+    // of leaving the console at "connecting" for good with nothing to read.
+    let Some(identity) = cloud.identity() else {
+        // Whichever shape the file is in, the phase has a sentence for it: a
+        // missing identity lets a sign-in join the account as a new device,
+        // while a damaged one has to be reset first. Saying the wrong one would
+        // promise a remedy that does not exist.
+        let sentence = if matches!(cloud.identity_state(), crate::identity::Stored::Unreadable) {
+            crate::IDENTITY_BROKEN
+        } else {
+            crate::IDENTITY_MISSING
+        };
+        cloud.set_phase(Phase::Relink, Some(sentence.into()));
+        return None;
+    };
+    let Some(private) = identity.private_key() else {
+        cloud.set_phase(Phase::Relink, Some(crate::KEY_BROKEN.into()));
+        return None;
+    };
+    let Some(account) = cloud.view()["account"]["id"].as_str().map(str::to_string) else {
+        cloud.set_phase(Phase::Relink, Some(crate::SIGNIN_BROKEN.into()));
+        return None;
+    };
     let kind = cloud.view()["device"]["kind"]
         .as_str()
         .unwrap_or("desktop")
@@ -829,7 +853,7 @@ pub fn start(
     let mesh = Arc::new(Mesh {
         me: identity.device_id,
         account,
-        private: identity.private_key(),
+        private,
         kind: Mutex::new(kind),
         out,
         state: Mutex::new(State {
@@ -1000,10 +1024,7 @@ async fn relay_session(
         Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
             return match response.status().as_u16() {
                 401 => {
-                    cloud.set_phase(
-                        Phase::Relink,
-                        Some("sign in to OpenRemote Cloud again".into()),
-                    );
+                    cloud.set_phase(Phase::Relink, Some(crate::SIGN_IN_AGAIN.into()));
                     (false, Ended::Stop)
                 }
                 410 => {
@@ -1581,5 +1602,137 @@ mod tests {
             "the next sweep takes what has aged out since"
         );
         assert!(inbound.is_empty());
+    }
+
+    /// The window is measured after the sweep, so a peer whose slots are all
+    /// abandoned streams can talk again the moment it comes back, without
+    /// waiting for the periodic sweep or a reconnect. A live window still
+    /// refuses: the cap itself is untouched.
+    #[test]
+    fn a_stalled_peers_abandoned_slots_are_reclaimed_before_the_next_open() {
+        let (mesh, dir) = test_mesh();
+        let mesh = Arc::new(mesh);
+        let peer = DeviceId::new();
+        let header = br#"{"method":"GET","path":"/devices"}"#;
+        let entry = |deadline: Instant| Inbound {
+            request: Request {
+                method: "GET".into(),
+                path: "/devices".into(),
+                content_type: None,
+                body: Vec::new(),
+            },
+            deadline,
+        };
+        {
+            let mut st = mesh.state();
+            for stream in 0..MAX_INBOUND_PER_PEER as u32 {
+                st.inbound.insert(
+                    (peer, stream),
+                    entry(Instant::now() - Duration::from_secs(1)),
+                );
+            }
+        }
+        mesh.on_rpc(peer, &rpc::frame(rpc::OPEN, 99, header));
+        {
+            let st = mesh.state();
+            assert_eq!(
+                st.inbound.len(),
+                1,
+                "the abandoned slots went, and the new stream took one"
+            );
+            assert!(
+                st.inbound.contains_key(&(peer, 99)),
+                "the peer is not refused \"busy\" for streams it already gave up on"
+            );
+        }
+
+        {
+            let mut st = mesh.state();
+            st.inbound.clear();
+            for stream in 100..100 + MAX_INBOUND_PER_PEER as u32 {
+                st.inbound
+                    .insert((peer, stream), entry(Instant::now() + INBOUND_TTL));
+            }
+        }
+        mesh.on_rpc(peer, &rpc::frame(rpc::OPEN, 200, header));
+        let st = mesh.state();
+        assert_eq!(
+            st.inbound.len(),
+            MAX_INBOUND_PER_PEER,
+            "a window of live streams is still full"
+        );
+        assert!(
+            !st.inbound.contains_key(&(peer, 200)),
+            "and the stream over the cap is still refused"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A mesh that cannot be built says so. `mesh::start` used to answer
+    /// `None` in silence, which left the console at "connecting" for good
+    /// whenever a `cloud/` file was damaged while the daemon was running.
+    #[test]
+    fn a_mesh_that_cannot_be_built_moves_the_phase_and_says_why() {
+        let dir = std::env::temp_dir().join(format!("or-mesh-open-{}", uuid::Uuid::new_v4()));
+        openremote_core::fsx::create_private_dir(&dir).unwrap();
+        openremote_core::fsx::create_private_dir(&dir.join("cloud")).unwrap();
+        crate::identity::Files::new(&dir)
+            .save_credentials(&crate::identity::Credentials {
+                device_credential: Some("a device credential".into()),
+                account: Some(crate::identity::Account {
+                    id: "acc-1".into(),
+                    email: "owner@example.test".into(),
+                    name: "owner".into(),
+                }),
+                kind: "desktop".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        // Truncated the way a crash mid-write leaves it.
+        std::fs::write(dir.join("cloud").join("identity.json"), b"{\"device_id\": ").unwrap();
+        let config = crate::CloudConfig {
+            api_base: "http://127.0.0.1:9/v1/openremote".into(),
+            auth_issuer: "http://127.0.0.1:9/v1/auth".into(),
+            client_id: crate::config::CLIENT_ID.into(),
+            device_name: "this-box".into(),
+            platform: "windows".into(),
+            redirect_uri: None,
+        };
+        let cloud = Cloud::open(config, &dir);
+        assert_eq!(cloud.phase(), Phase::Relink, "open names the damage");
+
+        // The same belt for a file that is damaged under a running daemon:
+        // starting the mesh must not return in silence either.
+        cloud.set_phase(Phase::Connecting, None);
+        assert!(
+            start(&cloud, Arc::new(Nop)).is_none(),
+            "no mesh can be built from a damaged identity"
+        );
+        assert_eq!(
+            cloud.phase(),
+            Phase::Relink,
+            "the console is not left connecting with nothing to read"
+        );
+        assert_eq!(
+            cloud.view()["error"].as_str(),
+            Some(crate::IDENTITY_BROKEN),
+            "and it says which piece is broken"
+        );
+
+        // The file disappearing is the other shape, and it must not borrow the
+        // sentence that tells the user to reset their files: signing in again
+        // fixes this one.
+        crate::identity::Files::new(&dir).forget_identity().unwrap();
+        cloud.set_phase(Phase::Connecting, None);
+        assert!(
+            start(&cloud, Arc::new(Nop)).is_none(),
+            "no mesh can be built from a missing identity either"
+        );
+        assert_eq!(
+            cloud.view()["error"].as_str(),
+            Some(crate::IDENTITY_MISSING),
+            "a missing identity is offered the sign-in that joins again"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
