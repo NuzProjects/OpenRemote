@@ -60,10 +60,7 @@ fn main() {
     }
     // grok's single-turn forms: inline `--single <text>` and the prompt
     // file the driver uses (`--prompt-file <path>`).
-    if argv
-        .iter()
-        .any(|a| a == "--single" || a == "--prompt-file")
-    {
+    if argv.iter().any(|a| a == "--single" || a == "--prompt-file") {
         grok::main_grok(&argv);
         return;
     }
