@@ -336,6 +336,17 @@ pub enum EntrySource {
 /// Read an entry's `source`; the error says why it can't be installed.
 pub fn entry_source(entry: &Value, plugin_root: Option<&str>) -> Result<EntrySource, String> {
     let text = |v: &Value| v.as_str().map(String::from);
+    // The entry's name is what an install is filed under, so a catalog is
+    // held to the same gate a plugin's own name passes - read here, so
+    // Discover says why rather than offering an install that could only be
+    // refused, and checked again when the install is staged.
+    if let Some(name) = entry["name"].as_str() {
+        if !plugins::valid_name(name) {
+            return Err(format!(
+                "its name '{name}' is not a plugin name: lowercase letters, digits and dashes, up to 64"
+            ));
+        }
+    }
     match &entry["source"] {
         Value::String(s) => {
             let relative = if s == "." {
@@ -363,22 +374,41 @@ pub fn entry_source(entry: &Value, plugin_root: Option<&str>) -> Result<EntrySou
         Value::Object(o) => {
             let field = |key: &str| o.get(key).and_then(text);
             let need = |key: &str| field(key).ok_or_else(|| format!("its source has no {key}"));
+            // A commit and a branch reach git's command line, which git
+            // reads for options anywhere: a pinned `sha` of
+            // `--upload-pack=<program>` would start that program. Each is
+            // checked here so Discover can say why, and again in
+            // `plugins::git_fetch`, which passes what it was given after
+            // `--`.
+            let commit = |value: Option<String>| match value {
+                Some(sha) if plugins::is_commit_id(&sha) => Ok(Some(sha)),
+                Some(sha) => Err(format!(
+                    "its pinned sha '{sha}' is not a commit id: hex, 7 to 64 characters"
+                )),
+                None => Ok(None),
+            };
+            let branch = |value: Option<String>| match value {
+                Some(reference) if reference.starts_with('-') => {
+                    Err(format!("'{reference}' is not a branch or tag"))
+                }
+                other => Ok(other),
+            };
             match o.get("source").and_then(Value::as_str) {
                 Some("github") => Ok(EntrySource::Github {
                     repo: need("repo")?,
-                    reference: field("ref"),
-                    sha: field("sha"),
+                    reference: branch(field("ref"))?,
+                    sha: commit(field("sha"))?,
                 }),
                 Some("url") => Ok(EntrySource::Url {
                     url: need("url")?,
-                    reference: field("ref"),
-                    sha: field("sha"),
+                    reference: branch(field("ref"))?,
+                    sha: commit(field("sha"))?,
                 }),
                 Some("git-subdir") => Ok(EntrySource::GitSubdir {
                     url: need("url")?,
                     path: need("path")?.trim_matches('/').to_string(),
-                    reference: field("ref"),
-                    sha: field("sha"),
+                    reference: branch(field("ref"))?,
+                    sha: commit(field("sha"))?,
                 }),
                 Some("npm") => Ok(EntrySource::Npm {
                     package: need("package")?,
@@ -1037,6 +1067,44 @@ mod tests {
         );
         // A bare catalog link has no folders to fetch from.
         assert!(EntrySource::Relative("x".into()).fetch(None).is_err());
+    }
+
+    #[test]
+    fn a_catalog_entry_is_held_to_the_plugin_name_and_commit_gates() {
+        let read = |v: Value| entry_source(&v, None);
+        assert!(
+            read(json!({"name": "../../escape", "source": "./x"}))
+                .unwrap_err()
+                .contains("not a plugin name")
+        );
+        assert!(
+            read(json!({"name": "a/b", "source": {"source": "github", "repo": "a/b"}}))
+                .unwrap_err()
+                .contains("not a plugin name")
+        );
+        assert!(
+            read(
+                json!({"name": "tools", "source": {"source": "github", "repo": "a/b",
+                      "sha": "--upload-pack=C:/Windows/System32/calc.exe"}})
+            )
+            .unwrap_err()
+            .contains("not a commit id")
+        );
+        assert!(
+            read(
+                json!({"name": "tools", "source": {"source": "url", "url": "https://x/y",
+                      "ref": "--upload-pack=calc.exe"}})
+            )
+            .unwrap_err()
+            .contains("not a branch or tag")
+        );
+        // A pinned commit of the usual short or full length still reads.
+        for sha in ["a7ee8a3", "a7ee8a3ab1234567890123456789012345678901f"] {
+            assert!(matches!(
+                read(json!({"name": "tools", "source": {"source": "github", "repo": "a/b", "sha": sha}})).unwrap(),
+                EntrySource::Github { sha: Some(_), .. }
+            ));
+        }
     }
 
     #[test]
