@@ -65,3 +65,15 @@ test('new devices are flagged once, after a baseline', async () => {
   assert.equal(madeMachineElsewhere('machine', 'machine', null), false)
   assert.equal(madeMachineElsewhere('desktop', 'desktop', null), false)
 })
+
+test('a sign-in reason is the daemon sentence, capitalised, or nothing at all', async () => {
+  const { daemonReason } = await import('./cloud.js')
+  assert.equal(
+    daemonReason({ state: 'relink', error: 'this computer is no longer in your account' }),
+    'This computer is no longer in your account',
+    'the daemon sentence is shown as written, in sentence case',
+  )
+  assert.equal(daemonReason({ state: 'relink', error: '' }), null, 'an empty sentence is no reason')
+  assert.equal(daemonReason({ state: 'relink' }), null, 'no sentence at all is no reason')
+  assert.equal(daemonReason(undefined), null, 'no Cloud state is no reason')
+})

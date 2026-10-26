@@ -18,6 +18,12 @@ import { join } from 'node:path'
 
 const dir = 'src-tauri/capabilities'
 const phone = new Set(['android', 'iOS'])
+// The console's capability, by the name this project reviews it under. The
+// loop below judges only the files that are there, so a directory that still
+// holds the phone's file passes here while the console's own has gone: the
+// invariant holds over nothing, every command the console invokes is refused
+// at runtime, and this guard prints ok.
+const console_capability = 'default.json'
 const failures = []
 
 let names = []
@@ -28,6 +34,11 @@ try {
 }
 if (names.length === 0 && failures.length === 0) {
   failures.push(`${dir}: holds no capability file, so the console's commands have no ACL at all`)
+}
+if (names.length > 0 && !names.includes(console_capability)) {
+  failures.push(
+    `${join(dir, console_capability)}: missing; the console's commands are granted by that file alone, so deleting, moving or renaming it leaves every invoke refused with this guard still green`,
+  )
 }
 
 for (const name of names) {

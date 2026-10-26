@@ -30,8 +30,15 @@ const MODALS = [
 
 const source = (file) => readFileSync(new URL(`./${file}`, import.meta.url), 'utf8')
 
+// The shapes a real call takes: one that is always open holds `true`, one a
+// picker can sit over holds `!picker`, one that may not have its entry yet
+// holds `Boolean(entry)`. Matching the call as written, not the name alone,
+// is what keeps a hook called with a condition that can be false - or with
+// `false` outright - from passing as wired.
+const WIRED = ['useEscLayer(true,', 'useEscLayer(!', 'useEscLayer(Boolean(']
+
 test('every modal that closes on Esc holds a layer', () => {
-  const missing = MODALS.filter((file) => !source(file).includes('useEscLayer('))
+  const missing = MODALS.filter((file) => !WIRED.some((shape) => source(file).includes(shape)))
   assert.deepEqual(missing, [], `modals that hold no Esc layer: ${missing.join(', ')}`)
 })
 

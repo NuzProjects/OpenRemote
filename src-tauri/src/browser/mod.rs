@@ -384,7 +384,11 @@ pub fn browser_features() -> Features {
         cdp: false,
         viewport: false,
         clear_site: false,
-        print: false,
+        // Printing is not a Windows-only feature: wry implements it as the
+        // system's own dialog on WebKitGTK and WKWebView too, and this crate
+        // has the non-Windows arm for it below. Gating it here disabled a
+        // control that works.
+        print: true,
         devtools: cfg!(debug_assertions),
     }
 }
@@ -950,9 +954,28 @@ mod tests {
             ["cdp", "clearSite", "devtools", "find", "print", "viewport"]
         );
         if !cfg!(windows) {
-            for key in ["find", "cdp", "viewport", "clearSite", "print"] {
+            // Printing is deliberately not in this list: wry has a real print
+            // on every platform, so the flag stays true where these four are
+            // false.
+            for key in ["find", "cdp", "viewport", "clearSite"] {
                 assert_eq!(json[key], serde_json::Value::Bool(false), "{key}");
             }
         }
+    }
+
+    /// The console sends one of these two strings with every DevTools call.
+    /// The variants are what the shell branches on, so a rename on either
+    /// side has to fail here: a wrong answer makes every element pick a
+    /// deadline, which cancels the pick the user is still aiming at.
+    #[test]
+    fn the_console_wait_strings_are_this_builds_wait_variants() {
+        assert!(matches!(
+            serde_json::from_value::<Wait>(serde_json::json!("user")),
+            Ok(Wait::User)
+        ));
+        assert!(matches!(
+            serde_json::from_value::<Wait>(serde_json::json!("deadline")),
+            Ok(Wait::Deadline)
+        ));
     }
 }

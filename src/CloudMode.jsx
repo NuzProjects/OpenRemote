@@ -7,6 +7,7 @@
 import { useState } from 'react'
 import { Copy, House } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
+import { daemonReason } from './cloud.js'
 import { isMobile } from './platform.js'
 import './cloudmode.css'
 
@@ -20,14 +21,6 @@ function MachineNode({ x, y, online, delay }) {
       <line x1={x + 14} y1={y + 9.5} x2={x + 21} y2={y + 9.5} />
     </g>
   )
-}
-
-// Why a sign-in ended, in the daemon's own words, capitalised for the body
-// slot. The daemon knows the reason (a relay that answered 401, or a file it
-// could not read); the door must not state a different one above it.
-function daemonReason(cloud) {
-  const text = cloud?.error
-  return text ? text.charAt(0).toUpperCase() + text.slice(1) : null
 }
 
 // What the screen says for each sign-in state. A phone is Cloud only, so
