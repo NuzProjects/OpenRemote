@@ -457,13 +457,21 @@ export default function BrowserView({ onClosePane = null }) {
         method: 'Runtime.evaluate',
         params: { expression: PICKER_SOURCE, awaitPromise: true, returnByValue: true },
       })
-      const pick = res?.result?.subtype === 'error' ? null : (res?.result?.value ?? null)
+      // No answer: the tab closed, or the page never settled what it was
+      // asked (the shell gives up on it after a deadline). Say so, so the
+      // strip is not left armed with nothing coming.
+      if (!res) {
+        notify('The page did not answer - the pick was cancelled')
+        return
+      }
+      const pick = res.result?.subtype === 'error' ? null : (res.result?.value ?? null)
       if (!pick) return
       const line = formatPicked({ ...pick, url: tab.url, title: tab.title })
       if (insertToComposer(line)) notify('Attached to the chat')
       else notify('No chat open - open one first, then pick again')
     } catch {
-      // The tab closed mid-pick, or the page never answered: back out.
+      // The console could not reach the shell at all: back out, and say it.
+      notify('The page could not be reached - the pick was cancelled')
     } finally {
       setPicking(false)
     }
