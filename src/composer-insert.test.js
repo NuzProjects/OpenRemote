@@ -26,6 +26,46 @@ test('the latest claim wins', () => {
   assert.deepEqual(second, ['hi'])
 })
 
+test('a claim dies with its composer: the pane is told nothing is open', () => {
+  resetInserter()
+  const seen = []
+  const release = claimInserter((text) => seen.push(text))
+  assert.equal(insertToComposer('first'), true)
+  // The composer unmounts: a chat closed, another view opened.
+  release()
+  assert.equal(insertToComposer('after it closed'), false)
+  assert.deepEqual(seen, ['first'], 'a composer that is gone is never written to')
+})
+
+test('releasing an old claim leaves the newer claimant holding the bus', () => {
+  resetInserter()
+  const first = []
+  const second = []
+  const releaseFirst = claimInserter((text) => first.push(text))
+  const releaseSecond = claimInserter((text) => second.push(text))
+  // The first composer unmounts after the second one took the bus.
+  releaseFirst()
+  assert.equal(insertToComposer('hi'), true)
+  assert.deepEqual(second, ['hi'])
+  assert.deepEqual(first, [])
+  // The second one's own release is what clears it.
+  releaseSecond()
+  assert.equal(insertToComposer('again'), false)
+})
+
+test('claiming again from the same composer leaves one live claim', () => {
+  resetInserter()
+  const seen = []
+  // A focus takes the bus a second time; the composer drops the claim it held.
+  const first = claimInserter((text) => seen.push(text))
+  const second = claimInserter((text) => seen.push(text))
+  first()
+  assert.equal(insertToComposer('hi'), true)
+  assert.deepEqual(seen, ['hi'], 'one insert, not two')
+  second()
+  assert.equal(insertToComposer('again'), false)
+})
+
 test('reset forgets the claim', () => {
   resetInserter()
   claimInserter(() => {

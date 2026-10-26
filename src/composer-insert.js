@@ -5,16 +5,26 @@
 
 let current = null
 
-// Claim the bus for an inserter. Stays claimed until someone else claims.
+// Claim the bus for an inserter, and hand back the release that ends the
+// claim. The claim belongs to the composer that made it: releasing it is what
+// a composer's unmount does, so a claim cannot outlive the surface it types
+// into and the browser pane never reports a delivery that went nowhere.
 export function claimInserter(fn) {
-  current = fn
+  const mine = { fn }
+  current = mine
+  return function release() {
+    // A later claim is not this one's to clear: the composer that took the bus
+    // after this one still owns it, and only its own unmount ends that.
+    if (current === mine) current = null
+  }
 }
 
-// Insert text into the claiming composer. False when no composer has
-// claimed yet (no chat open), so the caller can say so instead.
+// Insert text into the claiming composer. False when no live composer holds
+// the bus (no chat open, or the one that claimed has gone away), so the
+// caller can say so instead of claiming it was delivered.
 export function insertToComposer(text) {
   if (!current) return false
-  current(text)
+  current.fn(text)
   return true
 }
 

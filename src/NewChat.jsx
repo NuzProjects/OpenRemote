@@ -381,8 +381,21 @@ export default function NewChat({
     setText((t) => (t ? `${t}\n\n${snippet}` : snippet))
     requestAnimationFrame(() => inputRef.current?.focus())
   }
+  // The claim belongs to this composer: it is released when the screen goes
+  // away, so the browser pane says "no chat open" instead of attaching to a
+  // composer that no longer exists. A focus takes the bus again (a split
+  // pane's other composer may hold it), so the claim held here goes first.
+  const releaseInserter = useRef(null)
+  const takeInserter = () => {
+    releaseInserter.current?.()
+    releaseInserter.current = claimInserter(attach)
+  }
   useEffect(() => {
-    claimInserter(attach)
+    takeInserter()
+    return () => {
+      releaseInserter.current?.()
+      releaseInserter.current = null
+    }
   }, [])
   const openPickerAt = (kind) => {
     const el = boxRef.current?.querySelector(`[data-picker="${kind}"]`)
@@ -566,7 +579,7 @@ export default function NewChat({
         {menus.element}
         <textarea
           value={text}
-          onFocus={() => claimInserter(attach)}
+          onFocus={takeInserter}
           onChange={(e) => {
             setText(e.target.value)
             menus.track(e)
