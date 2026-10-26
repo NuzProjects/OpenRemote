@@ -438,6 +438,14 @@ impl Cloud {
         // promise one that does.
         match self.files.identity_state() {
             Stored::Unreadable => Err(self.cloud_files(IDENTITY_BROKEN)),
+            // A file that parses but holds no usable key is the same dead end
+            // reached by the check above, and it cannot be left to the mint: a
+            // parsable file comes back from it unchanged, so the device would
+            // register a public key whose private half is gone and nothing
+            // could ever link to it.
+            Stored::Value(identity) if identity.private_key().is_none() => {
+                Err(self.cloud_files(KEY_BROKEN))
+            }
             _ => {
                 // The mint is exclusive across processes: an enroll or agent
                 // that started beside this one may have minted first, and that
@@ -1492,6 +1500,52 @@ mod tests {
         assert!(
             matches!(Files::new(&dir).identity_state(), Stored::Unreadable),
             "the damaged file is left exactly where it is"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The other shape of the same damage: a file that parses but holds no
+    /// usable key, put there after the daemon opened. The mint hands a parsable
+    /// file back unchanged rather than overwriting it, so the device would
+    /// register a public key whose private half is gone, finish the sign-in,
+    /// and then fail every handshake with nothing to say why.
+    #[tokio::test]
+    async fn a_sign_in_on_a_key_that_cannot_be_read_says_the_key_is_damaged() {
+        let base = json_backend(
+            r#"{"access_token":"an access token","refresh_token":"a refresh token","expires_in":3600,"token_type":"Bearer"}"#,
+        )
+        .await;
+        let dir = scratch_dir();
+        Files::new(&dir)
+            .save_credentials(&enrolled_credentials())
+            .unwrap();
+        // Opened with no identity at all, then the file arrives damaged.
+        let cloud = Cloud::open(test_config(&base), &dir);
+        let broken = json!({
+            "device_id": DeviceId::new().to_string(),
+            "noise_private": "not base64!",
+            "noise_public": "not base64!",
+        });
+        damage(&dir, "identity.json", broken.to_string().as_bytes());
+
+        let state = state_of(&cloud.begin_signin(52882));
+        let error = cloud.finish_signin("a code", &state).await.err();
+        let error = error.expect("a key that cannot be read cannot be signed in with");
+        assert_eq!(
+            error.to_string(),
+            KEY_BROKEN,
+            "the sentence, not a device that joined"
+        );
+        assert_eq!(
+            cloud.view()["error"].as_str(),
+            Some(KEY_BROKEN),
+            "the console is told which piece is broken"
+        );
+        assert_eq!(cloud.phase(), Phase::Relink, "and is offered a sign-in");
+        assert_eq!(
+            Files::new(&dir).credentials().device_credential.as_deref(),
+            Some("the device credential"),
+            "no registration replaced the credential with one for a device that could never link"
         );
         std::fs::remove_dir_all(&dir).unwrap();
     }
