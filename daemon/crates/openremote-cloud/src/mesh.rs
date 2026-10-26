@@ -1598,6 +1598,70 @@ mod tests {
         assert!(inbound.is_empty());
     }
 
+    /// The window is measured after the sweep, so a peer whose slots are all
+    /// abandoned streams can talk again the moment it comes back, without
+    /// waiting for the periodic sweep or a reconnect. A live window still
+    /// refuses: the cap itself is untouched.
+    #[test]
+    fn a_stalled_peers_abandoned_slots_are_reclaimed_before_the_next_open() {
+        let (mesh, dir) = test_mesh();
+        let mesh = Arc::new(mesh);
+        let peer = DeviceId::new();
+        let header = br#"{"method":"GET","path":"/devices"}"#;
+        let entry = |deadline: Instant| Inbound {
+            request: Request {
+                method: "GET".into(),
+                path: "/devices".into(),
+                content_type: None,
+                body: Vec::new(),
+            },
+            deadline,
+        };
+        {
+            let mut st = mesh.state();
+            for stream in 0..MAX_INBOUND_PER_PEER as u32 {
+                st.inbound.insert(
+                    (peer, stream),
+                    entry(Instant::now() - Duration::from_secs(1)),
+                );
+            }
+        }
+        mesh.on_rpc(peer, &rpc::frame(rpc::OPEN, 99, header));
+        {
+            let st = mesh.state();
+            assert_eq!(
+                st.inbound.len(),
+                1,
+                "the abandoned slots went, and the new stream took one"
+            );
+            assert!(
+                st.inbound.contains_key(&(peer, 99)),
+                "the peer is not refused \"busy\" for streams it already gave up on"
+            );
+        }
+
+        {
+            let mut st = mesh.state();
+            st.inbound.clear();
+            for stream in 100..100 + MAX_INBOUND_PER_PEER as u32 {
+                st.inbound
+                    .insert((peer, stream), entry(Instant::now() + INBOUND_TTL));
+            }
+        }
+        mesh.on_rpc(peer, &rpc::frame(rpc::OPEN, 200, header));
+        let st = mesh.state();
+        assert_eq!(
+            st.inbound.len(),
+            MAX_INBOUND_PER_PEER,
+            "a window of live streams is still full"
+        );
+        assert!(
+            !st.inbound.contains_key(&(peer, 200)),
+            "and the stream over the cap is still refused"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     /// A mesh that cannot be built says so. `mesh::start` used to answer
     /// `None` in silence, which left the console at "connecting" for good
     /// whenever a `cloud/` file was damaged while the daemon was running.
