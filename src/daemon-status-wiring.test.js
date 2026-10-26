@@ -29,10 +29,17 @@ test('the heal poll keeps running for the waiting screen', () => {
   )
 })
 
-test('the first-run screen keeps a way in for a daemon the user runs', () => {
-  // The panel replaces the wizard, and the wizard's manual form was the
-  // only way to reach a daemon the app does not start itself.
-  assert.match(source('App.jsx'), /onManualConnect=\{onboarded \? null : \(\) => setManualConnect\(true\)\}/)
+test('the waiting screen keeps a way in for a daemon the user runs', () => {
+  // The panel replaces the wizard, and the wizard's manual form is the only
+  // way to reach a daemon the app does not start itself. It is offered to
+  // everyone, not just a first run: an address that stopped answering is
+  // replaced by typing a new one, and that is the same form.
+  const app = source('App.jsx')
+  assert.match(app, /<DaemonStatus onManualConnect=\{\(\) => setManualConnect\(true\)\}/)
+  assert.doesNotMatch(app, /onManualConnect=\{onboarded \? null/)
+  // And the manual branch is the first one: it is not behind `onboarded`.
+  assert.match(app, /\{manualConnect \? \(/)
+  assert.doesNotMatch(app, /\{!onboarded && manualConnect/)
   assert.match(source('Onboarding.jsx'), /startManual \? 'setup' : 'welcome'/)
 })
 
