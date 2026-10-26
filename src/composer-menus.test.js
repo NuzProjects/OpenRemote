@@ -7,6 +7,7 @@ import {
   chatInsertion,
   commandItems,
   fileInsertion,
+  filesForQuery,
   holdDismissal,
   mentionItems,
   mentionedChats,
@@ -159,6 +160,14 @@ test('an Esc closes the word it was pressed in, never the composer', () => {
   // A fresh "/" at the same offset opens again, for this composer's life.
   state = step(state.dismissed, '/', 1)
   assert.equal(state.open, true)
+  // Typing on inside the dismissed word keeps it shut: the offset never
+  // moves, so the dismissal still covers the word it was pressed in.
+  state = step(null, '/te', 3)
+  assert.equal(state.open, true)
+  state = step(state.dismissed, '/te', 3, true)
+  assert.equal(state.open, false)
+  state = step(state.dismissed, '/tes', 4)
+  assert.equal(state.open, false, 'a longer word at the same offset is still that word')
   // A word in the middle of the message closes and reopens the same way.
   state = step(null, 'fix the /tests', 14)
   assert.equal(state.open, true)
@@ -171,7 +180,7 @@ test('an Esc closes the word it was pressed in, never the composer', () => {
 })
 
 test('a list that did not load says so instead of showing another chat rows', () => {
-  const line = 'Commands and agents did not load. They retry when the daemon is back.'
+  const line = 'Commands and agents did not load. They load again when the chat changes or the daemon reconnects.'
   const own = ownCommands({ inChat: true, cloud: false })
   const empty = commandItems('', { harnessCommands: [], own, unavailable: line })
   const last = empty[empty.length - 1]
@@ -186,6 +195,28 @@ test('a list that did not load says so instead of showing another chat rows', ()
   assert.equal(at.at(-1).detail, line)
   // An ask that answered adds no line.
   assert.ok(!commandItems('', { own }).some((i) => i.detail === line))
+})
+
+test('a menu trimmed to its last row still ends with the line that says it did not load', () => {
+  const line = 'Commands and agents did not load. They load again when the chat changes or the daemon reconnects.'
+  // More rows than the menu takes: the chats group alone can be this long.
+  const files = Array.from({ length: 90 }, (_, i) => ({ path: `src/f${i}.js`, kind: 'file' }))
+  const trimmed = mentionItems('', { files, unavailable: line })
+  assert.equal(trimmed.length, 80, 'the budget for rows does not grow for the note')
+  assert.equal(trimmed.at(-1).detail, line, 'the note survives the trim')
+  assert.equal(trimmed.at(-1).note, true)
+  assert.equal(trimmed.filter((i) => i.kind === 'file').length, 79, 'the note costs one row')
+  // An answer that arrived is trimmed to the full eighty, with nothing to say.
+  assert.equal(mentionItems('', { files }).length, 80)
+})
+
+test('the @ menu only shows the files asked for the word being typed', () => {
+  const held = { q: 'not', entries: [{ path: 'notes.md', kind: 'file' }] }
+  assert.deepEqual(filesForQuery(held, 'not'), held.entries, 'the word that asked gets its list')
+  assert.deepEqual(filesForQuery(held, 'notes'), [], 'another word does not inherit it')
+  assert.deepEqual(filesForQuery(null, 'not'), [], 'nothing asked, nothing shown')
+  // A word whose ask failed holds an empty answer, not the previous one.
+  assert.deepEqual(filesForQuery({ q: 'not', entries: [] }, 'not'), [])
 })
 
 test('the @ menu groups files, agents, servers and chats', () => {

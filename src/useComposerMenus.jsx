@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useConsole } from './state/console.jsx'
 import ComposerMenu from './ComposerMenu.jsx'
-import { applyPick, argItems, chatList, commandItems, holdDismissal, mentionItems, menuAt, menuKeyOf, ownCommands } from './composer-menus.js'
+import { applyPick, argItems, chatList, commandItems, filesForQuery, holdDismissal, mentionItems, menuAt, menuKeyOf, ownCommands } from './composer-menus.js'
 
 // The / commands this device picked lately, newest first: the menu's
 // "Recent" before anything is typed.
@@ -54,7 +54,7 @@ export function useComposerMenus({
   // The last ask for this harness failed: the menus say so instead of
   // showing rows that belong to another harness or another chat.
   const [unavailable, setUnavailable] = useState(false)
-  const [files, setFiles] = useState([])
+  const [files, setFiles] = useState(null)
 
   const menu = enabled ? menuAt(text, caret) : null
   const menuKey = menuKeyOf(menu)
@@ -103,10 +103,14 @@ export function useComposerMenus({
   const fileQuery = open && menu.kind === '@' ? menu.query : null
   useEffect(() => {
     if (fileQuery == null) return undefined
+    // Nothing is offered until this word's own answer lands: the previous
+    // word's files are not this word's list, and an ask that fails leaves
+    // the menu empty rather than showing them under it.
+    setFiles(null)
     const controller = new AbortController()
     const timer = setTimeout(() => {
       filesFor({ workspace, session: sessionId, deviceId, q: fileQuery, signal: controller.signal })
-        .then((found) => setFiles(found?.entries ?? []))
+        .then((found) => setFiles({ q: fileQuery, entries: found?.entries ?? [] }))
         .catch(() => {})
     }, 120)
     return () => {
@@ -137,7 +141,7 @@ export function useComposerMenus({
       })
     } else if (menu.kind === '@') {
       items = mentionItems(menu.query, {
-        files,
+        files: filesForQuery(files, menu.query),
         agents: view?.agents ?? [],
         servers: view?.mcp_servers ?? [],
         chats: otherChats,
