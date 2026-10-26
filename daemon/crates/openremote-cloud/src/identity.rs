@@ -33,10 +33,14 @@ impl Identity {
         }
     }
 
-    pub fn private_key(&self) -> Vec<u8> {
-        URL_SAFE_NO_PAD
-            .decode(&self.noise_private)
-            .unwrap_or_default()
+    /// This device's Noise private key, when the stored text is the 32 bytes
+    /// an X25519 private key is. Anything else answers `None`: an empty or
+    /// shortened key would make every handshake fail as "that device doesn't
+    /// answer", which blames the peer for what is this computer's damaged
+    /// file, and no mesh can be built without it.
+    pub fn private_key(&self) -> Option<Vec<u8>> {
+        let key = URL_SAFE_NO_PAD.decode(&self.noise_private).ok()?;
+        (key.len() == 32).then_some(key)
     }
 }
 
@@ -64,6 +68,27 @@ pub struct Credentials {
     pub refresh_token: Option<String>,
 }
 
+/// What one of the `cloud/` files holds: the value, nothing at all, or bytes
+/// this daemon cannot read (truncated by a crash, corrupted by the disk, moved
+/// aside by a virus scanner, or overwritten with something that is not this
+/// file). The three cases must stay apart: an absent file is a fresh install
+/// or a device that never joined, while an unreadable one is damaged state the
+/// user has to be told about instead of quietly starting over.
+pub enum Stored<T> {
+    Missing,
+    Unreadable,
+    Value(T),
+}
+
+impl<T> Stored<T> {
+    pub fn value(self) -> Option<T> {
+        match self {
+            Self::Value(value) => Some(value),
+            Self::Missing | Self::Unreadable => None,
+        }
+    }
+}
+
 pub struct Files {
     dir: PathBuf,
 }
@@ -75,9 +100,18 @@ impl Files {
         }
     }
 
-    fn read<T: for<'de> Deserialize<'de>>(&self, name: &str) -> Option<T> {
-        let raw = std::fs::read(self.dir.join(name)).ok()?;
-        serde_json::from_slice(&raw).ok()
+    fn read<T: for<'de> Deserialize<'de>>(&self, name: &str) -> Stored<T> {
+        let raw = match std::fs::read(self.dir.join(name)) {
+            Ok(raw) => raw,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Stored::Missing,
+            // Anything else (permissions, a directory, an I/O error) is not
+            // proof of absence either: the file is there and cannot be read.
+            Err(_) => return Stored::Unreadable,
+        };
+        match serde_json::from_slice(&raw) {
+            Ok(value) => Stored::Value(value),
+            Err(_) => Stored::Unreadable,
+        }
     }
 
     fn write<T: Serialize>(&self, name: &str, value: &T) -> std::io::Result<()> {
@@ -87,6 +121,12 @@ impl Files {
     }
 
     pub fn identity(&self) -> Option<Identity> {
+        self.identity_state().value()
+    }
+
+    /// What `identity.json` holds, damage included: the identity, nothing (a
+    /// fresh install), or bytes that are not this file any more.
+    pub fn identity_state(&self) -> Stored<Identity> {
         self.read("identity.json")
     }
 
@@ -137,7 +177,16 @@ impl Files {
     }
 
     pub fn credentials(&self) -> Credentials {
-        self.read("credentials.json").unwrap_or_default()
+        self.credentials_state().value().unwrap_or_default()
+    }
+
+    /// What `credentials.json` holds, damage included: the credentials, nothing
+    /// (a fresh install, or a device that signed out), or bytes that are not
+    /// this file any more. A damaged file reads as the empty credentials every
+    /// caller expects, and `Cloud::open` is the one place that looks at the
+    /// difference and tells the user.
+    pub fn credentials_state(&self) -> Stored<Credentials> {
+        self.read("credentials.json")
     }
 
     pub fn save_credentials(&self, credentials: &Credentials) -> std::io::Result<()> {

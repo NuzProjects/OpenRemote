@@ -26,12 +26,22 @@ use serde_json::{Value, json};
 
 pub use config::CloudConfig;
 use https::Http;
-use identity::{Account, Credentials, Files, Identity};
+use identity::{Account, Credentials, Files, Identity, Stored};
 pub use mesh::{CloudHost, Mesh, MeshError, PeerContext};
 use registry::{DeviceInfo, Registry, RegistryError};
 
 /// A sign-in left in the browser this long is abandoned.
 const SIGN_IN_WINDOW: Duration = Duration::from_secs(600);
+
+/// What the console is told when this computer's own Cloud state cannot be
+/// used. The phase moves to "sign in again" and the sentence names the damage,
+/// so a file the daemon cannot read is never mistaken for a device that is
+/// still connecting (which is a phase that would never end), and never for
+/// anything the user did.
+pub(crate) const IDENTITY_BROKEN: &str =
+    "this computer's Cloud identity is missing or damaged - sign in again";
+pub(crate) const KEY_BROKEN: &str = "this computer's Cloud key is damaged - sign in again";
+pub(crate) const SIGNIN_BROKEN: &str = "this computer's Cloud sign-in is damaged - sign in again";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -136,11 +146,26 @@ impl Cloud {
     pub fn open(config: CloudConfig, data_dir: &Path) -> Arc<Self> {
         let http = Http::new();
         let files = Files::new(data_dir);
-        let credentials = files.credentials();
-        let phase = if credentials.device_credential.is_some() {
-            Phase::Connecting
-        } else {
-            Phase::SignedOut
+        let credentials = files.credentials_state();
+        let identity = files.identity_state();
+        // A credential only means this device is in Cloud when the identity
+        // behind it can actually carry a mesh: the relay needs this device's
+        // own key and the registry's row is keyed by its id. Opening as
+        // "connecting" on the credential alone made a damaged or missing
+        // `identity.json` a phase that never ended and never said why, so every
+        // shape that cannot work opens as "sign in again" with its own reason.
+        // Absence of both files is a fresh install, not damage: signed out, no
+        // error, exactly as before.
+        let (phase, error) = match (&credentials, &identity) {
+            (Stored::Unreadable, _) => (Phase::SignedOut, Some(SIGNIN_BROKEN)),
+            (Stored::Value(c), _) if c.device_credential.is_none() => (Phase::SignedOut, None),
+            (Stored::Value(c), _) if c.account.is_none() => (Phase::Relink, Some(SIGNIN_BROKEN)),
+            (Stored::Value(_), Stored::Value(id)) => match id.private_key() {
+                Some(_) => (Phase::Connecting, None),
+                None => (Phase::Relink, Some(KEY_BROKEN)),
+            },
+            (Stored::Value(_), _) => (Phase::Relink, Some(IDENTITY_BROKEN)),
+            (Stored::Missing, _) => (Phase::SignedOut, None),
         };
         Arc::new(Self {
             registry: Registry::new(http.clone(), &config.api_base),
@@ -149,11 +174,11 @@ impl Cloud {
             config,
             http,
             inner: Mutex::new(Inner {
-                identity: files.identity(),
-                credentials,
+                identity: identity.value(),
+                credentials: credentials.value().unwrap_or_default(),
                 pending: Vec::new(),
                 phase,
-                error: None,
+                error: error.map(str::to_string),
             }),
             files,
         })
@@ -1170,5 +1195,149 @@ mod tests {
             "only the flow that came back is spent"
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Damage on disk is what a crash, a full disk or a virus scanner leaves,
+    /// never something `save_identity` writes: the file is put there as raw
+    /// bytes, not through `Files`.
+    fn damage(dir: &std::path::Path, name: &str, bytes: &[u8]) {
+        let cloud = dir.join("cloud");
+        std::fs::create_dir_all(&cloud).unwrap();
+        std::fs::write(cloud.join(name), bytes).unwrap();
+    }
+
+    fn enrolled_credentials() -> Credentials {
+        Credentials {
+            device_credential: Some("the device credential".into()),
+            account: Some(Account {
+                id: "acc-1".into(),
+                email: "owner@example.test".into(),
+                name: "owner".into(),
+            }),
+            kind: "desktop".into(),
+            ..Credentials::default()
+        }
+    }
+
+    fn enrolled_on_disk(dir: &std::path::Path) -> Identity {
+        let identity = Identity::generate();
+        Files::new(dir).save_identity(&identity).unwrap();
+        Files::new(dir)
+            .save_credentials(&enrolled_credentials())
+            .unwrap();
+        identity
+    }
+
+    /// A credential with no usable identity behind it is not a device that is
+    /// connecting: no mesh can be built from it, so the phase must say "sign in
+    /// again" and the sentence must name the piece that is broken. Every one of
+    /// these shapes used to open as "connecting", with no error, for good.
+    #[test]
+    fn a_credential_without_a_usable_identity_opens_as_sign_in_again() {
+        let cases: [(&str, Option<&[u8]>); 3] = [
+            ("no identity.json at all", None),
+            (
+                "identity.json truncated by a crash",
+                Some(b"{\"device_id\": \"half"),
+            ),
+            (
+                "identity.json replaced by something else",
+                Some(b"<html>quarantined</html>"),
+            ),
+        ];
+        for (what, on_disk) in cases {
+            let dir = scratch_dir();
+            Files::new(&dir)
+                .save_credentials(&enrolled_credentials())
+                .unwrap();
+            if let Some(bytes) = on_disk {
+                damage(&dir, "identity.json", bytes);
+            }
+            let cloud = Cloud::open(test_config("http://127.0.0.1:9"), &dir);
+            assert_eq!(
+                cloud.phase(),
+                Phase::Relink,
+                "{what} is not a device that is connecting"
+            );
+            assert_eq!(
+                cloud.view()["error"].as_str(),
+                Some(IDENTITY_BROKEN),
+                "{what} says which piece is broken"
+            );
+            assert!(
+                cloud.enrolled(),
+                "{what}: the credential is still there, so the row is still in the account"
+            );
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+
+        // The file parses but its key is not key material: nothing can ever
+        // link with it, and that is a different sentence.
+        let dir = scratch_dir();
+        Files::new(&dir)
+            .save_credentials(&enrolled_credentials())
+            .unwrap();
+        let broken = json!({
+            "device_id": DeviceId::new().to_string(),
+            "noise_private": "not base64!",
+            "noise_public": "not base64!",
+        });
+        damage(&dir, "identity.json", broken.to_string().as_bytes());
+        let cloud = Cloud::open(test_config("http://127.0.0.1:9"), &dir);
+        assert_eq!(cloud.phase(), Phase::Relink);
+        assert_eq!(
+            cloud.view()["error"].as_str(),
+            Some(KEY_BROKEN),
+            "an empty key is named as a damaged key, not as a connecting device"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A damaged `credentials.json` is a signed-out device whose identity
+    /// survives, so signing in again is the same device - and the console is
+    /// told it was damage, not a sign-out the user asked for.
+    #[test]
+    fn a_damaged_sign_in_file_keeps_the_identity_and_says_it_is_damaged() {
+        let dir = scratch_dir();
+        let identity = Identity::generate();
+        Files::new(&dir).save_identity(&identity).unwrap();
+        damage(&dir, "credentials.json", b"{\"device_credential\": ");
+        let cloud = Cloud::open(test_config("http://127.0.0.1:9"), &dir);
+        assert_eq!(cloud.phase(), Phase::SignedOut);
+        assert_eq!(
+            cloud.view()["error"].as_str(),
+            Some(SIGNIN_BROKEN),
+            "the user is told why the sign-in is gone instead of guessing"
+        );
+        assert_eq!(
+            Files::new(&dir).identity().unwrap().device_id,
+            identity.device_id,
+            "the identity is untouched, so signing in again is the same device"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Health is unchanged: nothing on disk is a fresh install (signed out, no
+    /// error to show), and identity plus credential together is connecting.
+    /// This is the test that fails if the damage checks ever cry wolf.
+    #[test]
+    fn a_fresh_install_and_a_healthy_enrollment_open_as_before() {
+        let fresh = scratch_dir();
+        let cloud = Cloud::open(test_config("http://127.0.0.1:9"), &fresh);
+        assert_eq!(cloud.phase(), Phase::SignedOut);
+        assert_eq!(
+            cloud.view()["error"],
+            Value::Null,
+            "a fresh install has nothing wrong with it"
+        );
+        std::fs::remove_dir_all(&fresh).unwrap();
+
+        let healthy = scratch_dir();
+        enrolled_on_disk(&healthy);
+        let cloud = Cloud::open(test_config("http://127.0.0.1:9"), &healthy);
+        assert_eq!(cloud.phase(), Phase::Connecting);
+        assert_eq!(cloud.view()["error"], Value::Null);
+        assert!(cloud.enrolled());
+        std::fs::remove_dir_all(&healthy).unwrap();
     }
 }
