@@ -41,6 +41,12 @@ pub fn main_grok(argv: &[String]) {
         // turn, short enough not to slow the suite down.
         std::thread::sleep(std::time::Duration::from_millis(1500));
     }
+    if scenario == "hold" {
+        // The e2e owns the turn's length: it releases the process when it
+        // has seen what it needed. A fixed sleep would let a busy machine
+        // end the turn before the test got there.
+        crate::wait_for_release();
+    }
 
     // argv: [--output-format, streaming-messages-json, --cwd, <dir>,
     //        (--model, <m>)?, (--permission-mode, <mode>)?,

@@ -44,6 +44,21 @@ pub fn record(file: &str, line: &str) {
     }
 }
 
+/// Hold a scenario's turn open until the e2e creates `fixture-release` in
+/// the workspace it handed the harness. A test that needs the turn still
+/// running (to queue a message, to interrupt it) then decides the length
+/// itself, instead of racing a fixed sleep that a loaded machine can
+/// outrun. The wait is capped so a forgotten release still ends the turn.
+pub fn wait_for_release() {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while std::time::Instant::now() < deadline {
+        if std::path::Path::new("fixture-release").is_file() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
 fn main() {
     // Protocol inference from the real driver's argv. `--version` is the
     // registry's catalog probe - answered before any protocol dispatch.
@@ -404,6 +419,27 @@ impl FixtureAgent {
                     serde_json::json!({"command": "echo fixture", "description": "a fixture command"}),
                 );
                 std::thread::sleep(std::time::Duration::from_millis(700));
+                self.tool_result(&tool_id, "fixture", false);
+                self.assistant_text(&format!("done: {prompt}"));
+                self.result("success", &format!("done: {prompt}"), "completed");
+            }
+            // A turn the suite ends when it is ready: it waits, polling,
+            // for `fixture-release` in the workspace instead of sleeping
+            // for a window the test has to beat. An assertion that races
+            // a turn's length (a queue filling, an interrupt landing
+            // mid-turn) is then decided by the test's own order of
+            // operations, not by how busy the machine is. The wait is
+            // bounded so a forgotten release ends the turn instead of
+            // hanging the suite.
+            "hold" => {
+                let tool_id = format!("toolu_{}", self.next_tool_id);
+                self.next_tool_id += 1;
+                self.assistant_tool_use(
+                    &tool_id,
+                    "Bash",
+                    serde_json::json!({"command": "echo fixture", "description": "a fixture command"}),
+                );
+                wait_for_release();
                 self.tool_result(&tool_id, "fixture", false);
                 self.assistant_text(&format!("done: {prompt}"));
                 self.result("success", &format!("done: {prompt}"), "completed");
