@@ -25,15 +25,24 @@ one above. A version bump never edits a download link anywhere.
 The version-free names start with the first tag after this landed - v0.3.2
 predates them, so its release page has only the versioned assets.
 
+## An installed app does not update itself
+
+Nothing in OpenRemote looks for a newer version. Moving to a newer release
+means downloading the installer from the URLs above and running it, which
+installs over the copy already there. An in-app updater is a named
+follow-up, not a shipped feature: until it exists, a fixed release reaches
+a user when that user downloads it, and no user is ever told a release
+happened.
+
 ## A tag must be on the default branch
 
 The release job's preflight refuses a `v*` tag whose commit is not on the
 default branch's history (GitHub's compare API must report `identical` or
 `behind`). A tag pushed at a local commit, or at work on a branch that was
 never merged, would otherwise publish installers built from code the
-project never accepted, and move `releases/latest`, the site's download
-buttons and the in-app updater for every user. Merge first, then tag the
-commit that is on the default branch.
+project never accepted, and move `releases/latest` and the site's download
+buttons for every user. Merge first, then tag the commit that is on the
+default branch.
 
 ## Nightly
 
@@ -52,8 +61,8 @@ instead of `releases/latest/download`)
 - One rolling release at the tag `nightly`, deleted and recreated each
   night, so the URLs never change while the binaries follow `main`.
 - **Always a prerelease.** That is what keeps `releases/latest` - and with
-  it the site's download buttons and the in-app updater - on the stable
-  channel. Never publish a nightly as a full release.
+  it the site's download buttons - on the stable channel. Never publish a
+  nightly as a full release.
 - A failed night leaves the channel empty until the next run (last night's
   release is deleted before tonight's is built, rather than serving a
   half-updated build). Re-running the failed scheduled run publishes it.
