@@ -142,6 +142,57 @@ const HANDSHAKE_FAILURES_TO_ERROR: u32 = 3;
 /// refresher's five-minute cadence this is ten minutes of a frozen device
 /// list, which is an outage, not a blip.
 const REFRESH_FAILURES_TO_ERROR: u32 = 2;
+/// The two sentences this module puts next to a phase when a connection is
+/// the problem. They are the only notices it may replace with one of its own
+/// or clear again; anything else on screen (a takeover, a removal, a prompt
+/// to sign in) was written by something that knows more and is left alone.
+const UNREACHABLE: &str = "can't reach OpenRemote Cloud";
+const DROPPED: &str = "the connection to OpenRemote Cloud dropped";
+
+/// Whether the notice on screen is one of this module's own generic
+/// connection sentences, and so may be replaced or cleared by it.
+fn generic_notice(error: Option<&str>) -> bool {
+    matches!(error, None | Some(UNREACHABLE) | Some(DROPPED))
+}
+
+/// The refresher's error bookkeeping: how long the device-list fetches have
+/// been failing, and the phase it raised its own notice at. Kept apart from
+/// the loop so the transitions can be read and tested without a live
+/// registry.
+#[derive(Default)]
+struct Surfacer {
+    failures: u32,
+    at: Option<Phase>,
+}
+
+impl Surfacer {
+    /// One failed fetch: the notice to raise, when this is the moment. A run
+    /// of failures raises it once, and only into a slot that says nothing
+    /// more specific: the generic sentence must never overwrite the one that
+    /// explains why (a takeover, a removal, a prompt to sign in), which is
+    /// what a plain re-set of the same string did every five minutes.
+    fn failed(
+        &mut self,
+        phase: Phase,
+        error: Option<&str>,
+    ) -> Option<(Phase, Option<&'static str>)> {
+        self.failures = self.failures.saturating_add(1);
+        if self.failures < REFRESH_FAILURES_TO_ERROR || self.at.is_some() || !generic_notice(error)
+        {
+            return None;
+        }
+        self.at = Some(phase);
+        Some((phase, Some(UNREACHABLE)))
+    }
+
+    /// One good fetch: the phase whose notice to clear, when the notice still
+    /// on screen is exactly the one this loop raised.
+    fn recovered(&mut self, phase: Phase, error: Option<&str>) -> Option<Phase> {
+        self.failures = 0;
+        let at = self.at.take()?;
+        (phase == at && error == Some(UNREACHABLE)).then_some(at)
+    }
+}
 
 /// A device-list entry's noise key, decoded: `None` unless it is exactly
 /// the 32 bytes an X25519 public key is, in clean base64url. Anything
@@ -238,12 +289,14 @@ impl Mesh {
             let Some(id) = d["id"].as_str().and_then(DeviceId::parse) else {
                 continue;
             };
-            let raw = d["noise_pubkey"].as_str();
-            let Some(pubkey) = raw.and_then(validated_pubkey) else {
+            let Some(key) = d["noise_pubkey"].as_str() else {
                 unpinnable.push(id);
                 continue;
             };
-            let key = raw.unwrap_or_default();
+            let Some(pubkey) = validated_pubkey(key) else {
+                unpinnable.push(id);
+                continue;
+            };
             let problem = match pins.get(&id.to_string()) {
                 // A pin that isn't valid key material was never a real
                 // key: an older daemon pinned an empty one when the
@@ -755,15 +808,12 @@ pub fn start(
 /// REFRESH_FAILURES_TO_ERROR consecutive failures (a registry that keeps
 /// refusing the credential, or entries too broken to pin) the console
 /// shows an error next to the phase instead of a silently frozen device
-/// list, and the next good fetch clears it. The loop also rides the
-/// inbound sweep: a stream whose END never arrives gives its slot back
-/// here.
+/// list, and the next good fetch clears it. The notice is raised once per run
+/// of failures and never over one that says something more specific. The loop
+/// also rides the inbound sweep: a stream whose END never arrives gives its
+/// slot back here.
 async fn refresh_devices(cloud: Arc<Cloud>, mesh: Arc<Mesh>) {
-    let mut failures = 0u32;
-    // The phase this loop surfaced its error at, so the next success
-    // clears only what it set, and only if the phase hasn't moved on to
-    // something else meanwhile.
-    let mut surfaced: Option<Phase> = None;
+    let mut surfacer = Surfacer::default();
     loop {
         if let Some(credential) = cloud.device_credential() {
             let ok = match cloud.registry().devices(&credential).await {
@@ -774,20 +824,18 @@ async fn refresh_devices(cloud: Arc<Cloud>, mesh: Arc<Mesh>) {
                 }
                 Err(_) => false,
             };
-            if ok {
-                failures = 0;
-                if let Some(at) = surfaced.take() {
-                    if cloud.phase() == at {
-                        cloud.set_phase(at, None);
-                    }
-                }
+            let (phase, error) = cloud.phase_and_error();
+            let write = if ok {
+                surfacer
+                    .recovered(phase, error.as_deref())
+                    .map(|at| (at, None))
             } else {
-                failures = failures.saturating_add(1);
-                if failures >= REFRESH_FAILURES_TO_ERROR {
-                    let at = cloud.phase();
-                    cloud.set_phase(at, Some("can't reach OpenRemote Cloud".into()));
-                    surfaced = Some(at);
-                }
+                surfacer
+                    .failed(phase, error.as_deref())
+                    .map(|(at, notice)| (at, notice.map(str::to_string)))
+            };
+            if let Some((at, notice)) = write {
+                cloud.set_phase(at, notice);
             }
         }
         {
@@ -1226,6 +1274,92 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Two failed device-list fetches in a row are an outage, not a blip: the
+    /// console gets a notice next to the phase. It is raised once per run of
+    /// failures (rewriting it every five minutes would only churn the view)
+    /// and the next good fetch takes it back down - but only when the notice
+    /// on screen is still the one this loop raised.
+    #[test]
+    fn a_failing_device_list_is_surfaced_once_per_run_and_cleared_once() {
+        let mut surfacer = Surfacer::default();
+        assert_eq!(
+            surfacer.failed(Phase::Online, None),
+            None,
+            "one failed fetch is a blip"
+        );
+        assert_eq!(
+            surfacer.failed(Phase::Online, None),
+            Some((Phase::Online, Some(UNREACHABLE))),
+            "two in a row is an outage the user should see"
+        );
+        assert_eq!(
+            surfacer.failed(Phase::Online, Some(UNREACHABLE)),
+            None,
+            "the notice is raised once, not rewritten on every later failure"
+        );
+        assert_eq!(
+            surfacer.recovered(Phase::Online, Some(UNREACHABLE)),
+            Some(Phase::Online),
+            "the next good fetch clears it"
+        );
+        assert_eq!(
+            surfacer.failed(Phase::Online, None),
+            None,
+            "the run of failures restarted with that success"
+        );
+    }
+
+    /// A notice that came from somewhere that knows more - a takeover, a
+    /// removal, a prompt to sign in - is never replaced by the refresher's
+    /// generic one, however long the outage runs.
+    #[test]
+    fn a_failing_device_list_never_overwrites_a_more_specific_notice() {
+        let takeover = Some("this device connected from somewhere else");
+        let mut surfacer = Surfacer::default();
+        for _ in 0..5 {
+            assert_eq!(
+                surfacer.failed(Phase::Offline, takeover),
+                None,
+                "a specific notice is left alone"
+            );
+        }
+    }
+
+    /// Clearing is the mirror image: a good fetch may only take down the
+    /// notice this loop raised, never one another writer put there.
+    #[test]
+    fn the_refresher_clears_only_the_notice_it_raised() {
+        // The loop raised its own notice at Offline; meanwhile something that
+        // knew more replaced it with the reason.
+        let mut replaced = Surfacer {
+            failures: REFRESH_FAILURES_TO_ERROR,
+            at: Some(Phase::Offline),
+        };
+        assert_eq!(
+            replaced.recovered(
+                Phase::Offline,
+                Some("This device was removed from your account.")
+            ),
+            None,
+            "another writer's notice survives a good fetch"
+        );
+        // Its own notice still comes down.
+        let mut own = Surfacer {
+            failures: REFRESH_FAILURES_TO_ERROR,
+            at: Some(Phase::Offline),
+        };
+        assert_eq!(
+            own.recovered(Phase::Offline, Some(UNREACHABLE)),
+            Some(Phase::Offline),
+            "the notice this loop raised is its to clear"
+        );
+        assert_eq!(
+            own.failed(Phase::Offline, None),
+            None,
+            "and the next outage starts counting from scratch"
+        );
     }
 
     /// An inbound stream whose END never comes gives its slot back at its

@@ -171,6 +171,14 @@ impl Cloud {
         self.inner().phase
     }
 
+    /// The phase and the notice beside it, read together: a caller that
+    /// decides what to write next must never act on half of a pair that
+    /// someone else just replaced.
+    pub(crate) fn phase_and_error(&self) -> (Phase, Option<String>) {
+        let inner = self.inner();
+        (inner.phase, inner.error.clone())
+    }
+
     /// The console's picture of Cloud on this device.
     pub fn view(&self) -> Value {
         let inner = self.inner();
