@@ -264,13 +264,24 @@ pub fn plugin_dir(data_dir: &Path, marketplace: &str, name: &str) -> PathBuf {
 /// A marketplace's name as one path segment: the characters a marketplace
 /// name may carry, and never `.` or `..`.
 fn safe_segment(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= 128
+    one_segment(name)
         && !name.contains("..")
-        && name != "."
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// A name that is one path segment, whatever else it carries: no
+/// separator, no `..`. Removal is held to this rather than to the
+/// plugin-name gate, so a folder installed before that gate existed - or
+/// one a catalog once talked this daemon into creating - can still be
+/// removed, while nothing can reach outside the plugins folder.
+fn one_segment(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && name.chars().count() <= 128
+        && !name.contains(['/', '\\', ':', '\0'])
 }
 
 /// An install's folder, with both segments gated before they become a
@@ -700,8 +711,15 @@ impl PluginHost {
     }
 
     pub fn uninstall(&self, marketplace: &str, name: &str) -> Result<(), PluginError> {
-        let dir = plugin_dir_checked(&self.data_dir, marketplace, name)?;
-        match std::fs::remove_dir_all(dir) {
+        // The record names the folder, and a record written before the
+        // name gate existed may carry anything: it is removed as long as
+        // it is one segment inside the plugins folder.
+        if !one_segment(marketplace) || !one_segment(name) {
+            return Err(PluginError::Invalid(format!(
+                "'{marketplace}/{name}' is not a plugin folder"
+            )));
+        }
+        match std::fs::remove_dir_all(plugin_dir(&self.data_dir, marketplace, name)) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(e.into()),
@@ -1987,6 +2005,37 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(data.path().join("escape/keep.txt")).unwrap(),
             "the user's own"
+        );
+    }
+
+    #[test]
+    fn removal_takes_one_segment_inside_the_plugins_folder_and_no_more() {
+        let data = tempfile::tempdir().unwrap();
+        let host = PluginHost::new(data.path());
+        // A folder installed before the name gate existed: it still
+        // removes, so a folder a catalog once created here can be cleaned
+        // up by hand.
+        let odd = data.path().join("plugins/Old.Market/My Plugin");
+        std::fs::create_dir_all(&odd).unwrap();
+        host.uninstall("Old.Market", "My Plugin").unwrap();
+        assert!(!odd.exists());
+        // Anything that would reach outside the plugins folder is refused,
+        // and the folder it named is untouched.
+        std::fs::create_dir_all(data.path().join("keep")).unwrap();
+        std::fs::write(data.path().join("keep/me.txt"), "keep").unwrap();
+        for (marketplace, name) in [
+            ("official", "../../keep"),
+            ("official", ".."),
+            ("official", "x/y"),
+            ("official", "x\\y"),
+            ("..", "tidy"),
+        ] {
+            let err = host.uninstall(marketplace, name).unwrap_err().to_string();
+            assert!(err.contains("is not a plugin folder"), "{name}: {err}");
+        }
+        assert_eq!(
+            std::fs::read_to_string(data.path().join("keep/me.txt")).unwrap(),
+            "keep"
         );
     }
 
