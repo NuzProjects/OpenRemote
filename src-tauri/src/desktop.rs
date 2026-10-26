@@ -74,6 +74,7 @@ pub fn run() {
             tray::tray_prefs,
             tray::set_tray_prefs,
             browser::browser_open,
+            browser::browser_features,
             browser::browser_tabs,
             browser::browser_close,
             browser::browser_set_bounds,

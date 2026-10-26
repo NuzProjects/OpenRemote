@@ -26,6 +26,7 @@
     "allow-tray-prefs",
     "allow-set-tray-prefs",
     "allow-browser-open",
+    "allow-browser-features",
     "allow-browser-tabs",
     "allow-browser-close",
     "allow-browser-set-bounds",

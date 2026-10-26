@@ -9,6 +9,7 @@ const COMMANDS: &[&str] = &[
     "set_tray_prefs",
     "open_url",
     "browser_open",
+    "browser_features",
     "browser_tabs",
     "browser_close",
     "browser_set_bounds",

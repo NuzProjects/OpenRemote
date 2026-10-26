@@ -292,6 +292,40 @@ pub async fn browser_open(
     open_tab(app, url, bounds, show, None)
 }
 
+/// What this build's shell can actually do with a tab. Find, the DevTools
+/// bridge (element picking and screenshots), device view and forgetting a
+/// site are written against WebView2, so every other build answers false
+/// and the console keeps those controls off its chrome instead of drawing
+/// buttons that fail silently.
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Features {
+    pub find: bool,
+    /// Screenshots and the DevTools protocol: element picking.
+    pub cdp: bool,
+    /// Device view, which drives the page's emulation over the bridge.
+    pub viewport: bool,
+    pub clear_site: bool,
+}
+
+#[tauri::command]
+pub fn browser_features() -> Features {
+    #[cfg(windows)]
+    return Features {
+        find: true,
+        cdp: true,
+        viewport: true,
+        clear_site: true,
+    };
+    #[cfg(not(windows))]
+    Features {
+        find: false,
+        cdp: false,
+        viewport: false,
+        clear_site: false,
+    }
+}
+
 /// The tabs the shell holds, oldest first: a console that reloaded takes
 /// them back instead of leaving them on screen, orphaned.
 #[tauri::command]
@@ -706,5 +740,23 @@ mod tests {
             "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36"
         );
         assert_eq!(phone_agent("odd"), "");
+    }
+
+    /// The console decides what to draw from this, so it has to name every
+    /// feature the four platform-gated commands need, and it has to be
+    /// right about this build.
+    #[test]
+    fn this_build_says_which_browser_features_it_has() {
+        let features = browser_features();
+        let windows = cfg!(windows);
+        assert_eq!(features.find, windows);
+        assert_eq!(features.cdp, windows);
+        assert_eq!(features.viewport, windows);
+        assert_eq!(features.clear_site, windows);
+        // The console reads camelCase keys off the JSON.
+        let json = serde_json::to_value(features).unwrap();
+        for key in ["find", "cdp", "viewport", "clearSite"] {
+            assert!(json.get(key).is_some(), "{key} should be in {json}");
+        }
     }
 }
