@@ -1,5 +1,7 @@
-//! The daemon library: registry, supervisor, HTTP API, SSE. The binary in
-//! `main.rs` is a thin shell over `app::serve`.
+//! The daemon library: registry, supervisor, HTTP API, SSE, phone pairing. The
+//! binary in `main.rs` serves the same router as `app::serve` with the pairing
+//! control routes merged in, because a socket decides who may call those, not a
+//! header check.
 
 pub mod app;
 pub mod cloud_http;

@@ -71,6 +71,11 @@ struct Inner {
     failures: u32,
     phones: Vec<Phone>,
     listener: Option<Running>,
+    /// A sentence for the console about the listener itself, when the daemon
+    /// failed to open it at boot with a phone already paired. The console has
+    /// no other way to know: the phones are still listed and the page simply
+    /// does not answer.
+    notice: Option<String>,
 }
 
 struct LiveCode {
@@ -79,7 +84,10 @@ struct LiveCode {
 }
 
 struct Running {
-    port: u16,
+    /// Where the socket actually bound. Kept beside the task so a later mint
+    /// can tell that the address this computer advertises has moved and
+    /// rebind, instead of pointing a fresh QR at a stale interface.
+    addr: SocketAddr,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -135,6 +143,20 @@ pub enum ExchangeError {
     Expired,
     /// A code or name the page should never have sent.
     Malformed,
+    /// The code was right and the phone could not be written down. No token
+    /// is handed out: a pairing this computer forgets on the next start is
+    /// worse than one that never happened.
+    NotSaved,
+}
+
+/// Why a revoke failed. `Unknown` lets the console stop redrawing a phone the
+/// user already removed; `NotSaved` is the one case that must fail closed.
+#[derive(Debug, PartialEq)]
+pub enum RevokeError {
+    /// No phone here has that id.
+    Unknown,
+    /// The file could not be written, so the phone stays paired.
+    NotSaved,
 }
 
 #[derive(Deserialize)]
@@ -169,6 +191,7 @@ impl PairingHost {
                 failures: 0,
                 phones,
                 listener: None,
+                notice: None,
             }),
             phones_path,
             bind,
@@ -183,11 +206,19 @@ impl PairingHost {
         if self.inner().phones.is_empty() {
             return;
         }
+        // Not fatal: a paired phone keeps its record and the panel says what
+        // went wrong, so the person can show a code again to retry the bind.
         if let Err(err) = self.ensure_listener().await {
-            // Not fatal: the phone page simply does not answer until the
-            // user shows a code again, which re-runs this path.
             eprintln!("openremote-daemon: pairing listener is not up ({err:?})");
+            self.inner().notice = Some(
+                "This computer could not open the pairing port, so a paired phone cannot reach it right now. Showing a code tries again.".to_string(),
+            );
         }
+    }
+
+    /// The sentence the console should show about the listener, if any.
+    pub fn notice(&self) -> Option<String> {
+        self.inner().notice.clone()
     }
 
     /// The data folder this host keeps its digests in.
@@ -205,14 +236,20 @@ impl PairingHost {
     /// Mints a code, replacing any code that was live (which is also how a
     /// stale QR is cancelled), and makes sure the listener is up.
     pub async fn mint(self: &Arc<Self>) -> Result<Mint, MintError> {
+        // The socket comes first. A machine with no network, or with every
+        // candidate port taken, must not leave the previous code redeemable
+        // behind an error the user is looking at: a code nobody can see is a
+        // credential nobody is watching, so a failed mint takes the old one
+        // down with it.
+        let addr = match self.ensure_listener().await {
+            Ok(addr) => addr,
+            Err(err) => {
+                self.cancel().await;
+                return Err(err);
+            }
+        };
         let code = new_code();
         let expires_at = openremote_core::now_ms() + self.code_ttl_ms;
-        // The address is resolved before the code is published, so a machine
-        // with no network never hands out a code it cannot honour.
-        let Some(host) = self.advertised_ip() else {
-            return Err(MintError::NoNetwork);
-        };
-        let port = self.ensure_listener().await?;
         {
             let mut inner = self.inner();
             inner.code = Some(LiveCode {
@@ -220,10 +257,13 @@ impl PairingHost {
                 expires_at,
             });
             inner.failures = 0;
+            // The listener answered this time, so the boot-time complaint is
+            // no longer true.
+            inner.notice = None;
         }
         // The code rides in the fragment: it is never sent to the server in
         // a request line, so no log and no proxy ever holds it.
-        let url = format!("http://{host}:{port}/#{code}");
+        let url = format!("http://{addr}/#{code}");
         // A code left on screen is the only reason this socket is up on a
         // machine with no paired phone, so the socket goes down with the
         // code. Expiry is otherwise only noticed by the next exchange, which
@@ -291,21 +331,32 @@ impl PairingHost {
             .collect()
     }
 
-    /// Removes a paired phone. `None` when no phone has that id, so the
+    /// Removes a paired phone. `Unknown` when no phone has that id, so the
     /// console can say something true instead of redrawing the same list.
-    pub fn revoke(&self, id: &str) -> Option<Vec<PhoneView>> {
+    ///
+    /// Fails closed: the record comes off disk before it comes out of memory,
+    /// and a write that failed puts it back and reports `NotSaved`. Revoking
+    /// is the one path where telling the user it worked when it did not
+    /// leaves a phone that comes back after the next restart.
+    pub fn revoke(&self, id: &str) -> Result<Vec<PhoneView>, RevokeError> {
         let idle = {
             let mut inner = self.inner();
-            let before = inner.phones.len();
-            inner.phones.retain(|p| p.id != id);
-            if inner.phones.len() == before {
-                return None;
-            }
+            let Some(index) = inner.phones.iter().position(|phone| phone.id == id) else {
+                return Err(RevokeError::Unknown);
+            };
+            let removed = inner.phones.remove(index);
             let stored = StoredFile {
                 version: 1,
                 phones: inner.phones.iter().map(StoredPhone::from).collect(),
             };
-            write_phones(&self.phones_path, &stored);
+            if let Err(err) = write_phones(&self.phones_path, &stored) {
+                eprintln!(
+                    "openremote-daemon: can't write {}: {err}",
+                    self.phones_path.display()
+                );
+                inner.phones.insert(index, removed);
+                return Err(RevokeError::NotSaved);
+            }
             inner.phones.is_empty() && inner.code.is_none()
         };
         if idle {
@@ -315,7 +366,7 @@ impl PairingHost {
                 running.task.abort();
             }
         }
-        Some(self.phones())
+        Ok(self.phones())
     }
 
     /// The pairing code answers a phone at most once, inside its TTL, and
@@ -333,15 +384,31 @@ impl PairingHost {
         if now > live.expires_at {
             inner.code = None;
             inner.failures = 0;
+            // A code that ran out is the same situation as a cancel: with no
+            // phone paired, nothing has a reason to keep listening.
+            let idle = inner.phones.is_empty();
+            if idle {
+                if let Some(running) = inner.listener.take() {
+                    running.task.abort();
+                }
+            }
             return Err(ExchangeError::Expired);
         }
         if !openremote_core::same_secret(&body.code, &live.value) {
             inner.failures += 1;
             if inner.failures >= MAX_FAILED_ATTEMPTS {
                 // The guesses are the attack: burn the code rather than let
-                // the same one keep answering.
+                // the same one keep answering. The socket goes with it when
+                // no phone is paired, so burning a code cannot leave the
+                // listener up with nothing behind it for the rest of the TTL.
                 inner.code = None;
                 inner.failures = 0;
+                let idle = inner.phones.is_empty();
+                if idle {
+                    if let Some(running) = inner.listener.take() {
+                        running.task.abort();
+                    }
+                }
             }
             return Err(ExchangeError::Invalid);
         }
@@ -361,7 +428,22 @@ impl PairingHost {
         };
         // Written under the lock: it is a few hundred bytes, and the
         // alternative is two exchanges interleaving into one file.
-        write_phones(&self.phones_path, &stored);
+        if let Err(err) = write_phones(&self.phones_path, &stored) {
+            // Fail closed: a phone this computer cannot remember would come
+            // back gone after a restart, and the token would be fiction.
+            eprintln!(
+                "openremote-daemon: can't write {}: {err}",
+                self.phones_path.display()
+            );
+            inner.phones.pop();
+            let idle = inner.phones.is_empty();
+            if idle {
+                if let Some(running) = inner.listener.take() {
+                    running.task.abort();
+                }
+            }
+            return Err(ExchangeError::NotSaved);
+        }
         Ok((token, phone))
     }
 
@@ -376,18 +458,44 @@ impl PairingHost {
             .cloned()
     }
 
-    fn listener_port(&self) -> Option<u16> {
-        self.inner().listener.as_ref().map(|r| r.port)
+    /// Where the LAN listener is bound, if it is still there. A serve task
+    /// that answered its last request is not a listener, and keeping its
+    /// record would let a later mint hand out a QR for a socket that is
+    /// gone.
+    fn live_addr(&self) -> Option<SocketAddr> {
+        let mut inner = self.inner();
+        if inner
+            .listener
+            .as_ref()
+            .is_some_and(|running| running.task.is_finished())
+        {
+            inner.listener = None;
+            return None;
+        }
+        inner.listener.as_ref().map(|running| running.addr)
     }
 
-    async fn ensure_listener(self: &Arc<Self>) -> Result<u16, MintError> {
-        if let Some(port) = self.listener_port() {
-            return Ok(port);
-        }
+    /// Makes sure the listener is up on the address this computer advertises
+    /// right now, and answers with where it actually bound.
+    ///
+    /// A listener left on an address this machine no longer has (a DHCP
+    /// lease moved it, Wi-Fi was swapped for Ethernet, a VPN came up) is
+    /// closed and rebound here: that is what makes the next code repair a
+    /// stale QR instead of repeating it.
+    async fn ensure_listener(self: &Arc<Self>) -> Result<SocketAddr, MintError> {
+        let Some(want) = self.advertised_ip() else {
+            return Err(MintError::NoNetwork);
+        };
         let _guard = self.listener_lock.lock().await;
-        // A mint that raced us may have bound while we waited.
-        if let Some(port) = self.listener_port() {
-            return Ok(port);
+        if let Some(addr) = self.live_addr() {
+            if addr.ip() == IpAddr::V4(want) {
+                return Ok(addr);
+            }
+            // Same machine, different address: the socket is on an interface
+            // the QR no longer names.
+            if let Some(running) = self.inner().listener.take() {
+                running.task.abort();
+            }
         }
         let listener = match self.bind {
             Bind::Fixed(addr) => tokio::net::TcpListener::bind(addr)
@@ -397,38 +505,32 @@ impl PairingHost {
                 // The machine's own network address, not 0.0.0.0: the
                 // socket then exists on exactly the interface the QR points
                 // at, and on no other - not loopback aliases, not a VPN, not
-                // a second adapter the person did not mean to expose. A
-                // machine without such an address is refused before a code
-                // is ever drawn, because `mint` resolves it first.
-                let ip = self
-                    .advertised_ip()
-                    .ok_or_else(|| MintError::NoPort("no network address to bind".into()))?;
+                // a second adapter the person did not mean to expose.
                 let mut bound = None;
                 for port in PORT_CANDIDATES {
-                    if let Ok(listener) = tokio::net::TcpListener::bind((ip, port)).await {
+                    if let Ok(listener) = tokio::net::TcpListener::bind((want, port)).await {
                         bound = Some(listener);
                         break;
                     }
                 }
                 bound.ok_or_else(|| {
                     MintError::NoPort(format!(
-                        "none of the pairing ports {PORT_CANDIDATES:?} on {ip} is free"
+                        "none of the pairing ports {PORT_CANDIDATES:?} on {want} is free"
                     ))
                 })?
             }
         };
-        let port = listener
+        let addr = listener
             .local_addr()
-            .map_err(|e| MintError::NoPort(e.to_string()))?
-            .port();
+            .map_err(|e| MintError::NoPort(e.to_string()))?;
         let router = Arc::clone(self).routes();
         let task = tokio::spawn(async move {
             // Runs until the socket is dropped (abort on revoke or cancel)
             // or the daemon exits. One connection's error never kills it.
             let _ = axum::serve(listener, router).await;
         });
-        self.inner().listener = Some(Running { port, task });
-        Ok(port)
+        self.inner().listener = Some(Running { addr, task });
+        Ok(addr)
     }
 
     async fn stop_listener(&self) {
@@ -552,19 +654,26 @@ async fn mint(State(host): State<Arc<PairingHost>>) -> Response {
 
 async fn cancel(State(host): State<Arc<PairingHost>>) -> Response {
     host.cancel().await;
-    Json(json!({ "phones": host.phones() })).into_response()
+    Json(json!({ "phones": host.phones(), "notice": host.notice() })).into_response()
 }
 
 async fn phones(State(host): State<Arc<PairingHost>>) -> Response {
-    Json(json!({ "phones": host.phones() })).into_response()
+    Json(json!({ "phones": host.phones(), "notice": host.notice() })).into_response()
 }
 
 async fn revoke(State(host): State<Arc<PairingHost>>, AxumPath(id): AxumPath<String>) -> Response {
     match host.revoke(&id) {
-        Some(phones) => Json(json!({ "phones": phones })).into_response(),
-        None => (
+        Ok(phones) => Json(json!({ "phones": phones, "notice": host.notice() })).into_response(),
+        Err(RevokeError::Unknown) => (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": "That phone is not paired with this computer." })),
+        )
+            .into_response(),
+        Err(RevokeError::NotSaved) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": "This computer could not remove that phone. It is still paired, so try again."
+            })),
         )
             .into_response(),
     }
@@ -608,6 +717,13 @@ async fn pair(State(host): State<Arc<PairingHost>>, Json(body): Json<ExchangeBod
         Err(ExchangeError::Expired) => (
             StatusCode::GONE,
             Json(json!({ "error": "That pairing code expired." })),
+        )
+            .into_response(),
+        Err(ExchangeError::NotSaved) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": "This computer could not save the pairing, so nothing was paired. Try again."
+            })),
         )
             .into_response(),
     }
@@ -730,23 +846,22 @@ fn read_phones(path: &Path) -> Vec<Phone> {
     }
 }
 
-fn write_phones(path: &Path, file: &StoredFile) {
-    let bytes = match serde_json::to_vec_pretty(file) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            eprintln!("openremote-daemon: can't serialize paired phones: {err}");
-            return;
-        }
-    };
-    if let Err(err) = openremote_core::fsx::write_private(path, &bytes) {
-        eprintln!("openremote-daemon: can't write {}: {err}", path.display());
-    }
+/// Writes the phones file. A failure is the caller's to handle: the two
+/// callers that change the list both fail closed on it.
+fn write_phones(path: &Path, file: &StoredFile) -> std::io::Result<()> {
+    let bytes = serde_json::to_vec_pretty(file).map_err(std::io::Error::other)?;
+    openremote_core::fsx::write_private(path, &bytes)
 }
 
 /// An 8 character code from an alphabet with no look-alikes, so a person
-/// reading it off a screen cannot confuse it. 40 bits of UUID randomness,
-/// which single use, the TTL and the attempt limit make enough: five guesses
-/// out of a trillion inside five minutes.
+/// reading it off a screen cannot confuse it.
+///
+/// 40 bits: eight bytes of UUID randomness, each reduced modulo 32. A v4 UUID
+/// is not 16 random bytes (byte 6 pins the version nibble and byte 8 pins the
+/// variant), so those two are skipped rather than folded into the code - the
+/// alternative is a seventh character that can only ever be one of 16, and a
+/// code that is one bit weaker than it says. Five guesses against 2^40, inside
+/// five minutes, is nothing.
 fn new_code() -> String {
     const ALPHABET: &[u8] = b"23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
     let bytes = uuid::Uuid::new_v4().into_bytes();
@@ -754,8 +869,10 @@ fn new_code() -> String {
     // and no character is favoured.
     bytes
         .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != 6 && *index != 8)
         .take(8)
-        .map(|b| ALPHABET[*b as usize % ALPHABET.len()] as char)
+        .map(|(_, b)| ALPHABET[*b as usize % ALPHABET.len()] as char)
         .collect()
 }
 
@@ -787,7 +904,7 @@ fn clean_name(raw: Option<&str>) -> String {
         .unwrap_or_default()
         .chars()
         .filter(|c| !c.is_control())
-        .take(48)
+        .take(40)
         .collect();
     let name = name.trim();
     if name.is_empty() {
@@ -844,6 +961,31 @@ mod tests {
         }
     }
 
+    /// A v4 UUID pins byte 6's high nibble and byte 8's top two bits, so
+    /// drawing from all 16 bytes would make the seventh character weaker than
+    /// the rest. This pins the property the comment claims: every position is
+    /// free to be any of the 32 characters, which is 40 bits over eight.
+    #[test]
+    fn no_position_of_a_code_is_limited_to_a_slice_of_the_alphabet() {
+        const ALPHABET: &[u8] = b"23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+        let mut seen = [0u32; 8];
+        for _ in 0..4000 {
+            for (index, byte) in new_code().bytes().enumerate() {
+                if byte == ALPHABET[0] || byte == ALPHABET[ALPHABET.len() - 1] {
+                    seen[index] += 1;
+                }
+            }
+        }
+        for (index, count) in seen.iter().enumerate() {
+            // Both ends of the alphabet, in every position: a fixed nibble
+            // would leave one of these two at zero.
+            assert!(
+                *count > 20,
+                "position {index} never reached both ends of the alphabet: {seen:?}"
+            );
+        }
+    }
+
     #[test]
     fn tokens_are_long_and_only_their_digest_is_recorded() {
         let token = new_token();
@@ -862,6 +1004,6 @@ mod tests {
         assert_eq!(clean_name(Some("   ")), "Phone");
         assert_eq!(clean_name(Some("iPhone\n")), "iPhone");
         assert_eq!(clean_name(Some("Pi\u{7}xel")), "Pixel");
-        assert_eq!(clean_name(Some(&"x".repeat(200))).len(), 48);
+        assert_eq!(clean_name(Some(&"x".repeat(200))).len(), 40);
     }
 }
