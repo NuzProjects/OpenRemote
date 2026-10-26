@@ -1165,31 +1165,32 @@ async fn npm_fetch(
     registry: Option<&str>,
     to: &Path,
 ) -> Result<String, PluginError> {
-    let (tarball, integrity, resolved) =
-        if package.starts_with("https://") || package.starts_with("http://") {
-            (package.to_string(), None, package.to_string())
-        } else {
-            let (name, inline) = split_package(package);
-            let registry = registry
-                .unwrap_or("https://registry.npmjs.org")
-                .trim_end_matches('/');
-            let url = format!("{registry}/{}", name.replace('/', "%2f"));
-            let body = http_get(&url, "application/json", 64 * 1024 * 1024).await?;
-            let meta: Value = serde_json::from_slice(&body)
-                .map_err(|e| PluginError::Source(format!("{url} is not package metadata: {e}")))?;
-            let spec = inline.or(version).unwrap_or("latest");
-            let chosen = npm_pick(&meta, spec).ok_or_else(|| {
-                PluginError::Source(format!("{name} has no version matching '{spec}'"))
-            })?;
-            let dist = &meta["versions"][&chosen]["dist"];
-            let tarball = dist["tarball"]
-                .as_str()
-                .ok_or_else(|| PluginError::Source(format!("{name} {chosen} has no tarball")))?
-                .to_string();
-            // A registry that offers no digest at all gets no install: an
-            // unchecked tarball is unpacked into the staging folder and
-            // read as a plugin, and an entry may name its own registry.
-            let integrity = dist["integrity"]
+    let (tarball, integrity, resolved) = if package.starts_with("https://")
+        || package.starts_with("http://")
+    {
+        (package.to_string(), None, package.to_string())
+    } else {
+        let (name, inline) = split_package(package);
+        let registry = registry
+            .unwrap_or("https://registry.npmjs.org")
+            .trim_end_matches('/');
+        let url = format!("{registry}/{}", name.replace('/', "%2f"));
+        let body = http_get(&url, "application/json", 64 * 1024 * 1024).await?;
+        let meta: Value = serde_json::from_slice(&body)
+            .map_err(|e| PluginError::Source(format!("{url} is not package metadata: {e}")))?;
+        let spec = inline.or(version).unwrap_or("latest");
+        let chosen = npm_pick(&meta, spec).ok_or_else(|| {
+            PluginError::Source(format!("{name} has no version matching '{spec}'"))
+        })?;
+        let dist = &meta["versions"][&chosen]["dist"];
+        let tarball = dist["tarball"]
+            .as_str()
+            .ok_or_else(|| PluginError::Source(format!("{name} {chosen} has no tarball")))?
+            .to_string();
+        // A registry that offers no digest at all gets no install: an
+        // unchecked tarball is unpacked into the staging folder and
+        // read as a plugin, and an entry may name its own registry.
+        let integrity = dist["integrity"]
                 .as_str()
                 .map(|i| Integrity::Sri(i.to_string()))
                 .or_else(|| {
@@ -1202,8 +1203,8 @@ async fn npm_fetch(
                         "{name} {chosen} names no integrity digest, so the download cannot be checked - refusing it"
                     ))
                 })?;
-            (tarball, Some(integrity), chosen)
-        };
+        (tarball, Some(integrity), chosen)
+    };
     let bytes = http_get(&tarball, "*/*", MAX_ARCHIVE_BYTES).await?;
     if let Some(integrity) = integrity {
         integrity.check(&bytes, &tarball)?;
@@ -1905,9 +1906,11 @@ mod tests {
             base64::engine::general_purpose::STANDARD.encode(sha2::Sha512::digest(bytes))
         );
         assert!(Integrity::Sri(good).check(bytes, "u").is_ok());
-        assert!(Integrity::Sha1(hex(&sha1::Sha1::digest(bytes)))
-            .check(bytes, "u")
-            .is_ok());
+        assert!(
+            Integrity::Sha1(hex(&sha1::Sha1::digest(bytes)))
+                .check(bytes, "u")
+                .is_ok()
+        );
         // An algorithm this daemon cannot compute, and a digest with no
         // algorithm at all, are refusals: the catch-all used to answer
         // "fine" and drop the download check entirely, and a catalog entry
@@ -2104,7 +2107,12 @@ mod tests {
             installed_at: 0,
             updated_at: 0,
         };
-        assert!(rerun_command(data_dir, &record(None)).await.unwrap().is_some());
+        assert!(
+            rerun_command(data_dir, &record(None))
+                .await
+                .unwrap()
+                .is_some()
+        );
         assert_eq!(
             std::fs::read_to_string(installed.join("skills/a/SKILL.md")).unwrap(),
             "# a changed"
