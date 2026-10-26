@@ -750,15 +750,15 @@ impl PluginHost {
             }
         }
         // The name is not one folder inside the plugins folder: it carries
-        // a separator, a `..`, a drive letter, leading whitespace, or
-        // nothing but dots. When no folder answers to it either, nothing
-        // is at stake and the record may go, which is how the plugin list
-        // gets rid of one of these. When something does answer to that
+        // a separator, a `..`, a drive letter, leading whitespace, nothing
+        // but dots, or it is too long. When no folder answers to it either,
+        // nothing is at stake and the record may go, which is how the plugin
+        // list gets rid of one of these. When something does answer to that
         // name, deleting it is not this daemon's call: a path built from
         // such a record is exactly what the name gate exists to stop.
         if plugin_dir(&self.data_dir, marketplace, name).exists() {
             return Err(PluginError::Invalid(format!(
-                "'{marketplace}/{name}' is not one folder inside the plugins folder - no separator, no '..', no leading space, no trailing dot - and something already answers to that name, so OpenRemote will not delete it. Delete that folder yourself, then remove the plugin again to drop its record"
+                "'{marketplace}/{name}' is not one folder inside the plugins folder - no separator, no '..', no leading space, no trailing dot, 128 characters at most - and something already answers to that name, so OpenRemote will not delete it. Delete that folder yourself, then remove the plugin again to drop its record"
             )));
         }
         Ok(())
