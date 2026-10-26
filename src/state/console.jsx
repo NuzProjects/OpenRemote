@@ -27,6 +27,9 @@ export function ConsoleProvider({ children }) {
     const saved = loadConnection()
     return { state: saved.url && saved.token ? 'connecting' : 'new', error: null }
   })
+  // What the shell last said about the daemon, including why it is not
+  // running. Null until it answers once.
+  const [daemon, setDaemon] = useState(null)
   const [capabilities, setCapabilities] = useState(null)
   const [sessions, setSessions] = useState([])
   const [machines, setMachines] = useState([])
@@ -82,6 +85,38 @@ export function ConsoleProvider({ children }) {
     setWatched([])
   }, [])
 
+  // One way in for everything the shell says about the daemon, whether it
+  // arrives as an answer to daemon_info or on the shell's own event. A
+  // daemon that is up is connected to; a reported failure puts the app on
+  // the waiting screen, and never over a working connection (the shell
+  // clears its reason the moment a daemon answers).
+  const applyDaemonInfo = useCallback(
+    (info) => {
+      if (!info) return
+      setDaemon(info)
+      if (info.url && info.token) {
+        connect(info.url, info.token)
+        return
+      }
+      if (info.error) {
+        setConnection((c) => (c.state === 'connected' ? c : { state: 'waiting-daemon', error: null }))
+      }
+    },
+    [connect],
+  )
+
+  // The waiting screen's button: start the sidecar again now, instead of
+  // waiting out the shell's backoff, which grows to half a minute.
+  const retryDaemon = useCallback(async () => {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      await invoke('daemon_restart')
+      setDaemon((d) => (d ? { ...d, error: null } : d))
+    } catch {
+      /* the screen keeps saying what it said */
+    }
+  }, [])
+
   // Fresh capabilities - the harness rows carry the harness's own status
   // words; a sign-in that settled re-reads them.
   const refreshCapabilities = useCallback(async () => {
@@ -99,23 +134,32 @@ export function ConsoleProvider({ children }) {
     let cancelled = false
     let attempt = 0
     const ask = async () => {
+      let info = null
       try {
         const { invoke } = await import('@tauri-apps/api/core')
-        const info = await invoke('daemon_info')
-        if (cancelled) return
-        if (info?.url && info?.token) {
-          connect(info.url, info.token)
-        } else if (attempt < 150) {
-          // The sidecar is still booting (a freshly built exe can take a
-          // slow first run) - keep asking for a long while yet.
-          attempt += 1
-          setTimeout(ask, 600)
-        } else if (!api.ready) {
-          setConnection({ state: 'waiting-daemon', error: null })
-        }
+        info = await invoke('daemon_info')
       } catch {
-        /* the shell will report when it can; the wizard remains reachable */
+        /* the shell will say when it can; keep asking all the same */
       }
+      if (cancelled) return
+      if (info?.url && info?.token) {
+        applyDaemonInfo(info)
+        return
+      }
+      // Not up yet: take what the shell said (it may be the reason it
+      // could not start) and keep asking for a while. A freshly built exe
+      // can take a slow first run, so nothing is called a failure on the
+      // strength of the clock alone.
+      applyDaemonInfo(info)
+      if (!info?.error && attempt < 150) {
+        attempt += 1
+        setTimeout(ask, 600)
+        return
+      }
+      // Either the shell already knows it cannot start, or 90 seconds went
+      // by with no answer at all: show the waiting screen. The poll below
+      // carries on from here and leaves it the moment a daemon answers.
+      setConnection((c) => (c.state === 'connected' ? c : { state: 'waiting-daemon', error: null }))
     }
     ask()
     return () => {
@@ -124,19 +168,23 @@ export function ConsoleProvider({ children }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // The desktop shell owns the sidecar: while the connection holds an
-  // error, keep asking the shell for the daemon's address - a sidecar
-  // that came back on a new port is followed without a reload. The
-  // browser has only the address it was given; its error copy says so.
+  // The desktop shell owns the sidecar: while there is no connection, keep
+  // asking the shell for the daemon's address - a sidecar that came back
+  // on a new port is followed without a reload, and one that appears late
+  // is picked up instead of needing a restart. This runs for the waiting
+  // screen too, not only for an error: a sidecar still being written when
+  // the app first started is the common way to end up there. The browser
+  // has only the address it was given; its error copy says so.
   useEffect(() => {
-    if (!hasTauri || connection.state !== 'error') return
+    if (!hasTauri) return
+    if (connection.state !== 'error' && connection.state !== 'waiting-daemon') return
     let cancelled = false
     const ask = async () => {
       try {
         const { invoke } = await import('@tauri-apps/api/core')
         const info = await invoke('daemon_info')
         if (cancelled) return
-        if (info?.url && info?.token) connect(info.url, info.token)
+        applyDaemonInfo(info)
       } catch {
         /* still gone - the next tick asks again */
       }
@@ -148,6 +196,32 @@ export function ConsoleProvider({ children }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connection.state])
+
+  // And the shell says so the moment the answer changes, on the same event
+  // bus the browser reports its tabs on. A message sent before this
+  // listener exists is not lost: the polls above ask anyway.
+  useEffect(() => {
+    if (!hasTauri) return
+    let cancelled = false
+    let unlisten = null
+    ;(async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event')
+        unlisten = await listen('daemon:status', ({ payload }) => applyDaemonInfo(payload))
+        if (cancelled) {
+          unlisten()
+          unlisten = null
+        }
+      } catch {
+        /* the polls cover it */
+      }
+    })()
+    return () => {
+      cancelled = true
+      if (unlisten) unlisten()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Verify the connection, then load capabilities + sessions.
   useEffect(() => {
@@ -1127,6 +1201,8 @@ export function ConsoleProvider({ children }) {
       runAutomation,
       addProject,
       removeProject,
+      daemon,
+      retryDaemon,
     }),
     [
       api,
@@ -1205,6 +1281,8 @@ export function ConsoleProvider({ children }) {
       runAutomation,
       addProject,
       removeProject,
+      daemon,
+      retryDaemon,
     ],
   )
   return <ConsoleContext.Provider value={value}>{children}</ConsoleContext.Provider>

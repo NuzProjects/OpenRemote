@@ -1,0 +1,91 @@
+/* The screen for a daemon that is not there yet, or did not start. Quiet
+   on purpose: no animation, nothing to watch, one thing to read and one
+   button to press. */
+
+.ds {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-app);
+  padding: 24px;
+}
+
+.ds-panel {
+  width: 100%;
+  max-width: 480px;
+  padding: 36px 40px 32px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.03);
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+
+.ds-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-1);
+}
+
+/* The shell's own words: the only diagnostic the app has, so it is shown
+   whole, wrapped, and in the mono face the console uses for machine
+   text. */
+.ds-detail {
+  margin: 0;
+  padding: 10px 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text-2);
+  font-family: 'Geist Mono', ui-monospace, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.ds-note {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+
+.ds-cta {
+  align-self: flex-start;
+  height: 38px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--text-1);
+  color: #10131a;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: default;
+}
+
+.ds-cta:hover {
+  background: #fff;
+  color: #000;
+}
+
+/* The way to a daemon the app does not run itself: quiet, not a second
+   primary action. */
+.ds-link {
+  align-self: flex-start;
+  margin-top: -4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: default;
+}
+
+.ds-link:hover {
+  color: var(--text-1);
+}

@@ -5,6 +5,7 @@ import NewChat from './NewChat.jsx'
 import ChatView from './ChatView.jsx'
 import CloudMode from './CloudMode.jsx'
 import Onboarding from './Onboarding.jsx'
+import DaemonStatus from './DaemonStatus.jsx'
 import SettingsView from './SettingsView.jsx'
 import PluginsView from './PluginsView.jsx'
 import AutomationsView from './AutomationsView.jsx'
@@ -130,6 +131,10 @@ function Shell() {
   // is the hold's release.
   const mountSessionsRef = useRef(sessions)
   const [sessionsAnswered, setSessionsAnswered] = useState(false)
+  // Set from the waiting screen's "connect by address" link, for someone
+  // who runs the daemon themselves: the first-run wizard opens straight on
+  // its manual form.
+  const [manualConnect, setManualConnect] = useState(false)
   const [{ history, hIndex }, setNav] = useState(() => loadViewState([]))
   // Split panes: more chats beside the primary view, Local and Cloud alike.
   // The primary pane follows the history above; the others hold their own.
@@ -722,7 +727,18 @@ function Shell() {
         canForward={onboarded && hIndex < history.length - 1}
         onSplit={onboarded ? () => setLayout((l) => splitLeaf(l, l.focus, 'row')) : undefined}
       />
-      {!onboarded ? (
+      {!onboarded && manualConnect ? (
+        <div className="app-body">
+          <Onboarding onDone={finishOnboarding} startManual />
+        </div>
+      ) : connection.state === 'waiting-daemon' ? (
+        // No daemon at all: say so, with the shell's reason when it has
+        // one, instead of leaving a setup spinner and no explanation. The
+        // console keeps polling, so this leaves by itself when one starts.
+        <div className="app-body">
+          <DaemonStatus onManualConnect={onboarded ? null : () => setManualConnect(true)} />
+        </div>
+      ) : !onboarded ? (
         <div className="app-body">
           <Onboarding onDone={finishOnboarding} />
         </div>

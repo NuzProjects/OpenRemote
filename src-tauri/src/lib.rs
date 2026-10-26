@@ -17,7 +17,8 @@ mod mobile;
 mod tray;
 
 /// What the shell knows about the running daemon. The console asks for
-/// this once on boot.
+/// this on boot and while it has no connection, and the shell pushes it
+/// whenever the answer changes.
 #[derive(Clone, serde::Serialize, Default)]
 pub struct DaemonInfo {
     /// `http://127.0.0.1:<port>` - ready when Some.
@@ -29,6 +30,10 @@ pub struct DaemonInfo {
     /// The Android app: no window chrome, no tray, and Cloud only, since a
     /// phone runs no chats of its own.
     pub mobile: bool,
+    /// Why the last attempt to run the daemon failed, when one did. The
+    /// console shows this instead of waiting in silence; it is cleared as
+    /// soon as a daemon says READY, and never set while one runs.
+    pub error: Option<String>,
 }
 
 #[derive(Default)]
