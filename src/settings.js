@@ -17,10 +17,17 @@ export function loadPrefs() {
   } catch {
     raw = {}
   }
+  // The superseded key is read under its own guard. This runs before the
+  // first paint (main.jsx), so a storage that refuses to answer has to
+  // leave the default in place rather than take the boot down with it.
+  let migrated = false
+  try {
+    migrated = localStorage.getItem(OLD_REDUCE_KEY) === '1'
+  } catch {
+    migrated = false
+  }
   const reduce =
-    typeof raw.reduce_motion === 'boolean'
-      ? raw.reduce_motion
-      : localStorage.getItem(OLD_REDUCE_KEY) === '1'
+    typeof raw.reduce_motion === 'boolean' ? raw.reduce_motion : migrated
   return {
     reduce_motion: reduce === true,
     density: DENSITIES.includes(raw.density) ? raw.density : 'comfortable',
