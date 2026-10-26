@@ -5,7 +5,7 @@
 
 import { useState } from 'react'
 import { useConsole } from './state/console.jsx'
-import { signedIn } from './cloud.js'
+import { signedIn, daemonReason } from './cloud.js'
 import './panels.css'
 
 const signedName = (email) =>
@@ -16,14 +16,6 @@ const signedName = (email) =>
   ) : (
     'Signed in'
   )
-
-// Why a sign-in ended, in the daemon's own words. The daemon knows the reason
-// (a relay that answered 401, or a file it could not read); the row must not
-// give a different one under it.
-function daemonReason(cloud) {
-  const text = cloud?.error
-  return text ? text.charAt(0).toUpperCase() + text.slice(1) : null
-}
 
 // What the row says for each state. CloudMode says the same things on
 // its door; this is the quiet, in-list version.

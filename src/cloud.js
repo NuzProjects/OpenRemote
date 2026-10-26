@@ -15,6 +15,17 @@ export function needsSignIn(cloud) {
 }
 
 /**
+ * Why a sign-in ended, in the daemon's own words, capitalised for a sentence
+ * slot. The daemon knows the reason (a relay that answered 401, a file it
+ * could not read); the door and the account row both show this, so neither
+ * can state a different reason above or under it.
+ */
+export function daemonReason(cloud) {
+  const text = cloud?.error
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : null
+}
+
+/**
  * Local lists everything that runs on this computer, private or synced;
  * Cloud lists every synced chat, wherever it runs.
  */
