@@ -14,7 +14,7 @@ use tauri::{Manager, RunEvent};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_opener::OpenerExt;
 
-use crate::{DaemonInfo, DaemonState};
+use crate::{DaemonFailure, DaemonFailureKind, DaemonInfo, DaemonState};
 
 /// The daemon, once it has started.
 static DAEMON: OnceLock<Arc<App>> = OnceLock::new();
@@ -82,7 +82,10 @@ fn start_daemon(app: tauri::AppHandle, data_dir: std::path::PathBuf) {
                 // the reason so it can say to reopen the app.
                 let state = app.state::<DaemonState>();
                 *state.info.lock().expect("daemon state lock") = DaemonInfo {
-                    error: Some(e.to_string()),
+                    error: Some(DaemonFailure {
+                        kind: DaemonFailureKind::Start,
+                        text: e.to_string(),
+                    }),
                     mobile: true,
                     ..DaemonInfo::default()
                 };
