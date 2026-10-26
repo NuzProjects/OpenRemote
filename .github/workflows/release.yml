@@ -42,9 +42,14 @@ name: Release
 # to a fixed version rather than `stable`. A tag build holds
 # `contents: write` and the Android signing key, so neither a re-pointed
 # action tag nor a fresh stable release may change what a release compiles
-# or publishes. Bump a pin deliberately: resolve the tag to its commit
-# (https://api.github.com/repos/<owner>/<repo>/git/ref/tags/<tag>) and edit
-# the SHA and its comment together.
+# or publishes. Bump a pin deliberately: resolve the tag to its commit,
+# then edit the SHA and its comment together. An annotated tag takes two
+# requests, because the ref endpoint returns the tag object rather than a
+# commit:
+#   /repos/<owner>/<repo>/git/ref/tags/<tag>    -> object.sha, object.type
+#   /repos/<owner>/<repo>/git/tags/<object.sha> -> object.sha (the commit)
+# Swatinem/rust-cache ships annotated tags, so the second request is not
+# hypothetical.
 
 on:
   push:
