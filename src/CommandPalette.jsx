@@ -182,7 +182,25 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
     setQuery('')
   }
 
+  // Esc and the palette's own key answer from anywhere inside the dialog: Tab
+  // moves focus onto a row, and the key the footer promises for leaving has to
+  // keep working there. Arrows, Enter and Backspace stay with the search
+  // field, so a focused row keeps its own native Enter.
   const onKeyDown = (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      e.stopPropagation()
+      if (page) back()
+      else onClose()
+      return
+    }
+    if (comboFromEvent(e, isMac) === kb.bindings.palette) {
+      // The palette's own key closes it again.
+      e.preventDefault()
+      onClose()
+      return
+    }
+    if (e.target !== inputRef.current) return
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       setCursor((c) => (flat.length ? (c + 1) % flat.length : 0))
@@ -192,18 +210,9 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
     } else if (e.key === 'Enter') {
       e.preventDefault()
       choose(flat[cursor])
-    } else if (e.key === 'Escape') {
-      e.preventDefault()
-      e.stopPropagation()
-      if (page) back()
-      else onClose()
     } else if (e.key === 'Backspace' && !query && page) {
       e.preventDefault()
       back()
-    } else if (comboFromEvent(e, isMac) === kb.bindings.palette) {
-      // The palette's own key closes it again.
-      e.preventDefault()
-      onClose()
     }
   }
 
@@ -215,7 +224,7 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
         if (e.target === e.currentTarget) onClose()
       }}
     >
-      <div className="kb-palette" role="dialog" aria-modal="true" aria-label="Command palette">
+      <div className="kb-palette" role="dialog" aria-modal="true" aria-label="Command palette" onKeyDown={onKeyDown}>
         <div className="kb-search">
           <MagnifyingGlass size={15} />
           {page && <span className="kb-crumb">{kb.source(page)?.title}</span>}
@@ -224,7 +233,6 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
             autoFocus
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={onKeyDown}
             placeholder={page ? 'Search' : 'Type a command or search'}
             spellCheck={false}
             role="combobox"

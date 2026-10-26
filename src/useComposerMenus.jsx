@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useConsole } from './state/console.jsx'
 import ComposerMenu from './ComposerMenu.jsx'
-import { applyPick, argItems, chatList, commandItems, mentionItems, menuAt, ownCommands } from './composer-menus.js'
+import { applyPick, argItems, chatList, commandItems, holdDismissal, mentionItems, menuAt, menuKeyOf, ownCommands } from './composer-menus.js'
 
 // The / commands this device picked lately, newest first: the menu's
 // "Recent" before anything is typed.
@@ -44,33 +44,57 @@ export function useComposerMenus({
   choicesFor = null,
   enabled = true,
 }) {
-  const { commandsFor, filesFor, chats } = useConsole()
+  const { commandsFor, filesFor, chats, connection } = useConsole()
   const [caret, setCaret] = useState(0)
   const [active, setActive] = useState(0)
   // The menu the user closed with Esc stays closed until the caret leaves
   // its word.
   const [dismissed, setDismissed] = useState(null)
   const [view, setView] = useState(null)
+  // The last ask for this harness failed: the menus say so instead of
+  // showing rows that belong to another harness or another chat.
+  const [unavailable, setUnavailable] = useState(false)
   const [files, setFiles] = useState([])
 
   const menu = enabled ? menuAt(text, caret) : null
-  const menuKey = menu ? `${menu.kind}:${menu.start}` : null
+  const menuKey = menuKeyOf(menu)
   const open = Boolean(menu) && dismissed !== menuKey
 
-  // What the harness offers here: asked when the chat (or the harness and
-  // folder a new chat will use) changes - cached by the console.
+  // An Esc shuts the word it was pressed in, not the composer: once the caret
+  // has left that word (the box was cleared, the caret moved on) the
+  // dismissal is spent, so the next "/" or "@" opens the menu again.
   useEffect(() => {
+    setDismissed((held) => holdDismissal(menu, held))
+  }, [menuKey])
+
+  // What the harness offers here: asked when the chat (or the harness and
+  // folder a new chat will use) changes, and again when the daemon comes
+  // back - a failed ask has to retry on its own, since nothing else about
+  // the ask changes.
+  useEffect(() => {
+    // A new chat is not the last one: drop the previous answer while this ask
+    // is in flight, so a rejection leaves an honest empty menu rather than
+    // the commands and agents of the harness the user just left.
+    setView(null)
+    setUnavailable(false)
     if (!enabled || (!harness && !sessionId)) return undefined
     let live = true
     commandsFor({ harness, workspace, session: sessionId, deviceId })
       .then((next) => {
         if (live) setView(next)
       })
-      .catch(() => {})
+      .catch(() => {
+        if (live) setUnavailable(true)
+      })
     return () => {
       live = false
     }
-  }, [enabled, harness, workspace, sessionId, deviceId, commandsFor])
+  }, [enabled, harness, workspace, sessionId, deviceId, commandsFor, connection?.state])
+
+  // Said in place of a list the machine did not answer.
+  const unavailableLine = unavailable
+    ? 'Commands and agents did not load. They retry when the daemon is back.'
+    : null
 
   // Files for the @ word, a beat after typing stops.
   const fileQuery = open && menu.kind === '@' ? menu.query : null
@@ -106,6 +130,7 @@ export function useComposerMenus({
         harnessCommands: view?.commands ?? [],
         own: ownCommands({ inChat, cloud: cloudReady }),
         recent: readRecent(),
+        unavailable: unavailableLine,
       })
     } else if (menu.kind === '@') {
       items = mentionItems(menu.query, {
@@ -114,6 +139,7 @@ export function useComposerMenus({
         servers: view?.mcp_servers ?? [],
         chats: otherChats,
         harness: view?.harness ?? harness,
+        unavailable: unavailableLine,
       })
     } else {
       items = argItems(menu.query, choicesFor?.(menu.arg) ?? [])

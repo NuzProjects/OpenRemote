@@ -14,6 +14,7 @@ import { projectName } from './projects.js'
 import './devices.css'
 import './automations.css'
 import { useBack } from './use-back.js'
+import { useEscLayer } from './esc-layer.js'
 import { pickable } from './harness-manager.js'
 import { EndpointManagerModal } from './EndpointManager.jsx'
 
@@ -94,13 +95,10 @@ export default function AutomationForm({ rule, onClose }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [harness])
 
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.key === 'Escape' && !picker) onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose, picker])
+  // Esc closes the form, unless a picker is open over it - that layer answers
+  // its own Esc - or a dialog is: "Manage endpoints" holds a layer of its own,
+  // so the half-written rule is never closed by the key that closed it.
+  useEscLayer(!picker, onClose)
 
   const currentHarness = available.find((h) => h.id === harness)
   const currentMachine = online.find((m) => m.machine.id === machineId)

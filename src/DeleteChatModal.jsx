@@ -1,24 +1,20 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { X } from '@phosphor-icons/react'
 import { useBack } from './use-back.js'
+import { useEscLayer } from './esc-layer.js'
 import './devices.css'
 import './panels.css'
 import './contextmenu.css'
 
 // Deleting a synced chat is not undoable and reaches every device, so it is
-// asked once, in place. Esc / backdrop / X close it like the other modals.
+// asked once, in place. Esc / backdrop / X close it like the other modals,
+// and Esc here answers only this confirm: a window it was opened over stays
+// open behind it.
 export default function DeleteChatModal({ title, onDelete, onClose }) {
   useBack(true, onClose)
+  useEscLayer(true, onClose)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
-
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
 
   const confirm = async () => {
     setBusy(true)
