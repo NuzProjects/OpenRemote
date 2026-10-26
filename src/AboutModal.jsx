@@ -8,6 +8,7 @@ import './about.css'
 import { isMobile } from './platform.js'
 import { SplashMark } from './Splash.jsx'
 import { useBack } from './use-back.js'
+import { useEscLayer } from './esc-layer.js'
 
 export default function AboutModal({ onClose, daemonVersion, api }) {
   const [view, setView] = useState('about')
@@ -15,15 +16,11 @@ export default function AboutModal({ onClose, daemonVersion, api }) {
     if (view === 'licenses') setView('about')
     else onClose()
   })
+  // Esc closes this window, never the Settings window it was opened over:
+  // that one holds a layer of its own underneath this.
+  useEscLayer(true, onClose)
   const [notices, setNotices] = useState(null)
   const [noticesError, setNoticesError] = useState(null)
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
   // The daemon serves the notices itself (GET /notices), so the text is
   // whatever this build carries - the same file the installers bundle
   // beside the app. Fetched once, only when the licenses are asked for.

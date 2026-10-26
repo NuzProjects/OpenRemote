@@ -254,6 +254,13 @@ export function commandItems(query, { harnessCommands = [], own = [], recent = [
   return items
 }
 
+// The files the menu may show for the word being typed. An answer asked for
+// another word is not this word's list, and a word whose ask failed has
+// none: showing the previous word's files under it reads as a match.
+export function filesForQuery(held, query) {
+  return held && held.q === query ? held.entries : []
+}
+
 // The @ menu: files and folders, agents, MCP servers, other chats -
 // each group filtered by the query.
 export function mentionItems(query, { files = [], agents = [], servers = [], chats = [], harness = '', unavailable = null } = {}) {
@@ -308,8 +315,12 @@ export function mentionItems(query, { files = [], agents = [], servers = [], cha
       disabled: false,
     })
   }
-  if (unavailable) items.push(note(unavailable))
-  return items.slice(0, 80)
+  // The trim is a budget for rows, and the note is the one row that says the
+  // list is short: keep a slot for it, or eighty filled rows push it off the
+  // end and a partial list reads as the whole answer.
+  const rows = items.slice(0, unavailable ? 79 : 80)
+  if (unavailable) rows.push(note(unavailable))
+  return rows
 }
 
 // The argument menu after an OpenRemote command: the choices it takes.

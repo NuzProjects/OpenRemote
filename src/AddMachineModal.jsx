@@ -7,9 +7,11 @@ import { useEffect, useRef, useState } from 'react'
 import { Check, Copy, X } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
 import { useBack } from './use-back.js'
+import { useEscLayer } from './esc-layer.js'
 
 export default function AddMachineModal({ onClose }) {
   useBack(true, onClose)
+  useEscLayer(true, onClose)
   const { createEnrollment, devices, refreshCloud } = useConsole()
   const [enrollment, setEnrollment] = useState(null)
   const [error, setError] = useState(null)
@@ -39,14 +41,6 @@ export default function AddMachineModal({ onClose }) {
     mint()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
 
   // Look for the machine while the modal is open (the poll is slower).
   useEffect(() => {

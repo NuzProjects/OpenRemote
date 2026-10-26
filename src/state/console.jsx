@@ -58,12 +58,22 @@ export function ConsoleProvider({ children }) {
   const polledIdsRef = useRef(new Set())
 
   const connect = useCallback((url, token) => {
+    // A catalog belongs to the daemon that answered it: the next connection
+    // may be another machine's daemon, with other harnesses and endpoints.
+    commandCache.current.clear()
+    setModelsByHarness({})
+    setEndpointsByHarness({})
     saveConnection(url, token)
     setApi(new DaemonApi(url, token))
     setConnection({ state: 'connecting', error: null })
   }, [])
 
   const disconnect = useCallback(() => {
+    // The same, on the way out: nothing this daemon answered may be shown
+    // for the next one.
+    commandCache.current.clear()
+    setModelsByHarness({})
+    setEndpointsByHarness({})
     clearConnection()
     setApi(new DaemonApi(null, null))
     setConnection({ state: 'new', error: null })

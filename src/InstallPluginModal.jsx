@@ -10,6 +10,7 @@ import { X } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
 import { canPickFolder, pickFile, pickFolder } from './pick-folder.js'
 import { CLAUDE_PART_LABEL, POWER_LABEL, RUNTIME_LABEL, entrySource, sourceRequest } from './plugins.js'
+import { useEscLayer } from './esc-layer.js'
 import './devices.css'
 import './plugins.css'
 
@@ -37,14 +38,8 @@ export default function InstallPluginModal({ onClose, entry = null }) {
     onClose()
   }
 
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.key === 'Escape') close()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  // Esc is the same close: a staged copy is cancelled on the way out.
+  useEscLayer(true, close)
 
   const read = async (source) => {
     if (!source) return

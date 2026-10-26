@@ -1,22 +1,15 @@
 // The cheat sheet (Ctrl+/): every action that has a key, by group, with
 // the key as it is bound on this device right now.
 
-import { useEffect } from 'react'
 import { X } from '@phosphor-icons/react'
 import { useKeyboard, isMac } from './keyboard.jsx'
+import { useEscLayer } from './esc-layer.js'
 import { ACTIONS, GROUPS, comboLabel } from './shortcuts.js'
 import './keyboard.css'
 
 export default function ShortcutSheet({ onClose }) {
   const kb = useKeyboard()
-
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  useEscLayer(true, onClose)
 
   const groups = GROUPS.map((g) => ({
     ...g,

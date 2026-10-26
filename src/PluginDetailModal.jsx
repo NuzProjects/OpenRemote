@@ -1,7 +1,6 @@
 // Dedicated modal showing manifest details, runtime facts, requested powers,
 // and install/update actions for a catalog or installed plugin.
 
-import { useEffect } from 'react'
 import { ArrowSquareOut, Warning, X } from '@phosphor-icons/react'
 import PluginIcon from './PluginIcon.jsx'
 import {
@@ -13,6 +12,7 @@ import {
   notSandboxed,
 } from './plugins.js'
 import { openExternal } from './platform.js'
+import { useEscLayer } from './esc-layer.js'
 import './devices.css'
 import './plugins.css'
 
@@ -26,13 +26,9 @@ export function PluginDetailModal({ entry, onClose, onInstall }) {
     onClose?.()
   }
 
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.key === 'Escape') onClose?.()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  // A detail sheet with no entry renders nothing, and holds nothing: an Esc
+  // there belongs to whatever is underneath.
+  useEscLayer(Boolean(entry), handleClose)
 
   if (!entry) return null
 

@@ -12,6 +12,7 @@ import { useConsole } from './state/console.jsx'
 import { harnessName } from './harness-names.js'
 import { SIGNIN_HARNESSES } from './harness-manager.js'
 import { useBack } from './use-back.js'
+import { useEscLayer } from './esc-layer.js'
 import { isPhone, kindLabel, platformLabel, selfLabel } from './cloud.js'
 
 const STATUS_LABEL = {
@@ -33,6 +34,7 @@ function seen(device) {
 
 export default function MachineModal({ device, onOpenChat, onClose }) {
   useBack(true, onClose)
+  useEscLayer(true, onClose)
   const { sessions, thisDevice, apiFor, setDeviceKind, removeDevice, machines } = useConsole()
   const [view, setView] = useState(null)
   const [busyHarness, setBusyHarness] = useState(null)
@@ -46,14 +48,6 @@ export default function MachineModal({ device, onOpenChat, onClose }) {
   // A phone has no harnesses to show or install.
   const reachable = !isPhone(device) && (isMe || (device.online && device.kind === 'machine'))
   const chats = (sessions ?? []).filter((s) => s.executor === device.id)
-
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
 
   // The device's own machine view: this computer's from the poll, a
   // machine's over the mesh.
