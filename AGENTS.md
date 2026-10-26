@@ -116,11 +116,20 @@ an old process is still alive; find it before re-running).
 - The console only ever talks to its own daemon on 127.0.0.1. That daemon
   reaches the user's other devices through the relay (`/devices/{id}/...`
   is another device's API, carried over the mesh).
-- What a peer may ask is the allowlist in `http.rs` (`PEER_ROUTES`):
-  copying synced chats (any device), driving the computer (machines
-  only), acting on one chat (a machine, and the chat is synced and runs
-  there). Private chats never leave the computer. Add to that list with
-  care: everything on it is reachable by every device of the account.
+- What a peer may ask is the allowlist in `http.rs` (`PEER_ROUTES`), in
+  three tiers: copying synced chats (any device of the account), driving
+  the computer (only when this computer is a machine; the caller's own
+  kind is not checked, so a phone may drive a machine), and acting on one
+  chat (a machine, and the chat is synced and runs here). Private chats
+  never leave the computer. Add to that list with care: everything on it
+  is reachable by every device of the account.
+- What a peer can therefore do is more than drive: it can create a chat
+  here with an approval-bypassing permission word, change a stopped
+  chat's word so the next resume runs with it, and answer the approval
+  prompts through `/decisions/{id}/answer`. The approval gate guards
+  against a harness, not against a device; it is not a promise that a
+  peer cannot answer. `docs/cloud-trust-model.md` is the route-by-route
+  table, with what does protect the user instead.
 - Secrets (the daemon token, `state.json`, `cloud/`) are owner-only files.
 
 ## Releases
