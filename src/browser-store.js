@@ -9,7 +9,7 @@ import { insertAfter, newTab } from './browser-tabs.js'
 
 let state = (() => {
   const first = newTab()
-  return { tabs: [first], active: first.key, closed: [], downloads: [], finds: {} }
+  return { tabs: [first], active: first.key, closed: [], downloads: [], finds: {}, features: null }
 })()
 const listeners = new Set()
 const keyHandlers = new Set()
@@ -96,6 +96,12 @@ async function wire() {
   listen('browser:key', ({ payload }) => {
     for (const fn of keyHandlers) fn(payload.chord)
   })
+  // What this build's shell can do with a tab: find in page, the DevTools
+  // bridge (element picking), device view and forgetting a site are written
+  // against Windows' engine, and a control the shell would refuse must not
+  // be drawn as if it worked. Asked once, before the first page.
+  const features = await call('browser_features')
+  if (features) setState(() => ({ features }))
   // The console reloaded while the shell kept its pages (a development
   // reload, a crash of the console's page): take them back, hidden until
   // the view shows one, rather than leave them on screen, orphaned.

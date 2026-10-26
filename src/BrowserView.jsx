@@ -97,7 +97,7 @@ function anchorOf(el) {
 // ---- the view ----
 
 export default function BrowserView({ onClosePane = null }) {
-  const { tabs, active, downloads, finds, closed } = useSyncExternalStore(subscribe, getState)
+  const { tabs, active, downloads, finds, closed, features } = useSyncExternalStore(subscribe, getState)
   const current = tabs.find((t) => t.key === active) ?? tabs[0]
   const pageRef = useRef(null)
   const addressRef = useRef(null)
@@ -119,6 +119,13 @@ export default function BrowserView({ onClosePane = null }) {
   const find = current?.find ?? null
   const findState = (current?.native && finds[current.native]) || null
   const busy = downloads.some((d) => d.state === 'started')
+  // Whether this build's shell implements a browser feature: find, element
+  // picking, device view and forgetting a site are Windows-only in the
+  // shell, which reports what it has. A shell that has not answered yet is
+  // assumed to have everything: the answer lands a moment after the pane
+  // first draws, and controls flashing off and on is worse than one frame
+  // of optimism.
+  const can = (name) => (features ? Boolean(features[name]) : true)
 
   // The address bar follows the tab unless the user is typing in it.
   useEffect(() => {
@@ -164,7 +171,7 @@ export default function BrowserView({ onClosePane = null }) {
   }
   const precapture = () => {
     const tab = shownNative.current
-    if (tab && !parked.current) picture$(tab, 400)
+    if (tab && !parked.current && can('cdp')) picture$(tab, 400)
   }
 
   // Show the active tab's page over the placeholder, hide the one before.
@@ -390,6 +397,10 @@ export default function BrowserView({ onClosePane = null }) {
   const openFind = () => {
     const tab = activeTab()
     if (!tab?.native) return
+    if (!can('find')) {
+      notify('Find in page is not in this build yet')
+      return
+    }
     patchTab(tab.key, { find: { term: tab.find?.term ?? '' } })
     requestAnimationFrame(() => {
       findRef.current?.focus()
@@ -435,6 +446,10 @@ export default function BrowserView({ onClosePane = null }) {
   const startPick = async () => {
     const tab = activeTab()
     if (!tab?.native || picking) return
+    if (!can('cdp')) {
+      notify('Selecting an element is not in this build yet')
+      return
+    }
     setPicking(true)
     try {
       const res = await call('browser_cdp', {
@@ -465,6 +480,10 @@ export default function BrowserView({ onClosePane = null }) {
   const toggleDevice = () => {
     const tab = activeTab()
     if (!tab?.native) return
+    if (!can('viewport')) {
+      notify('Device view is not in this build yet')
+      return
+    }
     patchTab(tab.key, { device: tab.device ? null : { ...DEVICES[0] } })
   }
 
@@ -542,8 +561,20 @@ export default function BrowserView({ onClosePane = null }) {
         { label: 'Zoom out', icon: <MagnifyingGlassMinus size={14} />, hint: 'Ctrl+-', disabled: !live, onSelect: () => zoom(-1) },
         { label: `Actual size (${zoomLabel(current?.zoom ?? 1)})`, icon: <ArrowsClockwise size={14} />, hint: 'Ctrl+0', disabled: !live || !zoomed, onSelect: () => zoom(0) },
         { divider: true },
-        { label: 'Find in page', icon: <MagnifyingGlass size={14} />, hint: 'Ctrl+F', disabled: !live, onSelect: openFind },
-        { label: device ? 'Leave device view' : 'Device view', icon: <DeviceMobile size={14} />, disabled: !live, onSelect: toggleDevice },
+        {
+          label: 'Find in page',
+          icon: <MagnifyingGlass size={14} />,
+          hint: can('find') ? 'Ctrl+F' : 'Not in this build',
+          disabled: !live || !can('find'),
+          onSelect: openFind,
+        },
+        {
+          label: device ? 'Leave device view' : 'Device view',
+          icon: <DeviceMobile size={14} />,
+          hint: can('viewport') ? '' : 'Not in this build',
+          disabled: !live || !can('viewport'),
+          onSelect: toggleDevice,
+        },
         { label: 'Print', icon: <Printer size={14} />, disabled: !live, onSelect: () => onNative('browser_print') },
         { divider: true },
         { label: 'Downloads', icon: <DownloadSimple size={14} />, hint: 'Ctrl+J', onSelect: () => setTimeout(() => setMenu({ kind: 'downloads', ...anchorFor('downloads') }), 0) },
@@ -571,7 +602,7 @@ export default function BrowserView({ onClosePane = null }) {
         { label: said, icon: lock === 'insecure' ? <Warning size={14} /> : <Lock size={14} />, disabled: true },
         { divider: true },
         ...(zoomed ? [{ label: `Zoom ${zoomLabel(current.zoom)}: reset`, icon: <ArrowsClockwise size={14} />, onSelect: () => zoom(0) }] : []),
-        { label: 'Clear cookies and site data', icon: <Trash size={14} />, danger: true, onSelect: () => onNative('browser_clear_site') },
+        { label: 'Clear cookies and site data', icon: <Trash size={14} />, hint: can('clearSite') ? '' : 'Not in this build', danger: true, disabled: !can('clearSite'), onSelect: () => onNative('browser_clear_site') },
       ]
     }
     if (menu.kind === 'downloads') {
@@ -721,8 +752,8 @@ export default function BrowserView({ onClosePane = null }) {
         <button
           type="button"
           className={`bw-btn${device ? ' on' : ''}`}
-          title="Device view"
-          disabled={!live}
+          title={can('viewport') ? 'Device view' : 'Device view is not in this build yet'}
+          disabled={!live || !can('viewport')}
           onClick={toggleDevice}
         >
           <DeviceMobile size={17} />
@@ -730,8 +761,8 @@ export default function BrowserView({ onClosePane = null }) {
         <button
           type="button"
           className={`bw-btn${picking ? ' on' : ''}`}
-          title="Select an element to attach to the chat"
-          disabled={!live}
+          title={can('cdp') ? 'Select an element to attach to the chat' : 'Selecting an element is not in this build yet'}
+          disabled={!live || !can('cdp')}
           onClick={picking ? cancelPick : startPick}
         >
           <Crosshair size={17} />
