@@ -1502,11 +1502,54 @@ fn power_word(power: PluginPower) -> &'static str {
     }
 }
 
+/// The entry fields whose value is a path (or a list of paths) into the
+/// plugin folder: Claude reads each one as that kind of part.
+const ENTRY_PATH_COMPONENTS: &[&str] = &["commands", "agents", "skills", "outputStyles", "themes"];
+
+/// Every component path a catalog entry names, checked against the plugin
+/// folder before it is written into the plugin's Claude manifest.
+///
+/// A component path decides what Claude reads once the plugin is
+/// installed, and the entry is network-fetched JSON, so a catalog could
+/// otherwise point a plugin at any folder on this machine - `"skills":
+/// ["../../.."]` - and have its contents arrive in chats as the plugin's
+/// own parts. The rule is the same one every other folder inside a plugin
+/// passes: relative, forward slashes, no `..`.
+fn entry_paths_inside(entry: &Value) -> Result<(), PluginError> {
+    let Some(fields) = entry.as_object() else {
+        return Ok(());
+    };
+    let who = fields
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("the marketplace entry");
+    for component in ENTRY_PATH_COMPONENTS {
+        let Some(value) = fields.get(*component) else {
+            continue;
+        };
+        for path in as_list(Some(value)) {
+            let Some(path) = path.as_str() else {
+                continue;
+            };
+            if !relative_inside(path) {
+                return Err(PluginError::Invalid(format!(
+                    "{who}'s {component} names '{path}', which is outside the plugin folder - refusing it"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The marketplace entry's part in the plugin's Claude manifest, as Claude
 /// Code itself applies it: with no plugin.json the entry is the manifest;
 /// with one, a strict entry appends its components (hooks replace per
 /// event) and a non-strict entry that lists components is a conflict.
 pub fn apply_entry(root: &Path, entry: &Value) -> Result<(), PluginError> {
+    // Checked before anything is written, and on both branches below: an
+    // entry becomes the manifest itself when the folder has none, so the
+    // same fields can arrive that way round.
+    entry_paths_inside(entry)?;
     const COMPONENTS: &[&str] = &[
         "commands",
         "agents",
@@ -1827,6 +1870,35 @@ mod tests {
         let to = tempfile::tempdir().unwrap();
         let err = unpack(&bytes, to.path()).unwrap_err().to_string();
         assert!(err.contains("outside"), "{err}");
+    }
+
+    #[test]
+    fn an_entry_cannot_aim_claude_at_a_folder_outside_the_plugin() {
+        let dir = folder(&[("local-ai/SKILL.md", "# local ai")]);
+        // Every component that is a path, as a list and as a bare string.
+        for component in ["commands", "agents", "skills", "outputStyles", "themes"] {
+            for value in [json!(["../../../secret-skills"]), json!("/etc/skills")] {
+                let mut entry = serde_json::Map::new();
+                entry.insert("name".into(), json!("climber"));
+                entry.insert(component.to_string(), value);
+                let err = apply_entry(dir.path(), &Value::Object(entry))
+                    .unwrap_err()
+                    .to_string();
+                assert!(err.contains("outside the plugin folder"), "{component}: {err}");
+                // The refusal says which plugin asked.
+                assert!(err.contains("climber"), "{component}: {err}");
+            }
+        }
+        // Nothing was written for any of them.
+        assert!(!dir.path().join(".claude-plugin").join("plugin.json").exists());
+        // A path inside the plugin still rides, on the branch where the
+        // entry is the manifest itself.
+        apply_entry(
+            dir.path(),
+            &json!({"name": "climber", "skills": ["./local-ai"]}),
+        )
+        .unwrap();
+        assert_eq!(plugin_json(dir.path())["skills"], json!(["./local-ai"]));
     }
 
     #[test]
