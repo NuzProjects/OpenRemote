@@ -353,45 +353,120 @@ async fn a_webhook_replay_dedups_and_a_storm_cools_down() {
     );
 
     // The cooldown bounds a storm of DIFFERENT bodies (a dedup key the
-    // sender can vary at will): two distinct deliveries at once - the
-    // first to land reserves, the second arrives milliseconds later,
-    // inside the one-second cooldown, and waits. Exactly one fires.
-    // (The sleep first: the storm's own fire is inside the window.)
-    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    // sender can vary at will): two distinct deliveries go in at once.
+    //
+    // What the guard promises is a rate, not a queue. Two requests this
+    // test joins cannot promise that the daemon takes them up inside the
+    // same second - a loaded machine can hand the second one over later,
+    // and then both firing is the rule working. What must never happen
+    // is two fires inside one window, and what must never happen either
+    // is one body firing twice. Both are read off the chats the daemon
+    // stamped itself, so neither depends on how fast this test runs.
+    //
+    // First wait out the storm's own fire: it is inside the window, and
+    // waiting on the daemon's stamp (not on a guessed duration) is what
+    // makes the pair below meaningful.
+    const COOLDOWN_MS: i64 = 1000;
+    let one = chats(&daemon).await;
+    assert_eq!(one.len(), 1, "the storm opened one chat: {one:?}");
+    wait_until_ms(one[0].1 + COOLDOWN_MS + 250).await;
     let (a, b) = tokio::join!(
         deliver(&daemon, &rule_id, &key, json!({"delivery": 2})),
         deliver(&daemon, &rule_id, &key, json!({"delivery": 3})),
     );
     assert_eq!(a.status, 200, "raw: {}", a.raw);
     assert_eq!(b.status, 200, "raw: {}", b.raw);
-    assert!(
-        fired(&a) ^ fired(&b),
-        "exactly one of the two distinct deliveries fires; a: {} b: {}",
+    let pair = chats(&daemon).await;
+    assert_eq!(
+        pair.len(),
+        1 + usize::from(fired(&a)) + usize::from(fired(&b)),
+        "the storm added exactly the fires it reported; a: {} b: {} chats: {pair:?}",
         a.raw,
         b.raw
     );
+    assert_cooldown_spacing(&pair, COOLDOWN_MS);
 
-    // The window is not a wall: past the cooldown, the delivery that
-    // waited fires, and the one that fired is still deduped (minutes of
-    // window, not one second). One more chat, not two.
-    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-    let (a, b) = tokio::join!(
+    // The window is not a wall: past the cooldown, whichever delivery the
+    // guard refused fires, and the one that fired is still deduped
+    // (minutes of window, not one second). One chat per real delivery,
+    // never two for one.
+    let newest = pair.iter().map(|(_, at)| *at).max().unwrap_or(0);
+    wait_until_ms(newest + COOLDOWN_MS + 250).await;
+    let (a2, b2) = tokio::join!(
         deliver(&daemon, &rule_id, &key, json!({"delivery": 2})),
         deliver(&daemon, &rule_id, &key, json!({"delivery": 3})),
     );
-    assert!(
-        fired(&a) ^ fired(&b),
-        "the waited-out delivery fires, the replayed one does not; a: {} b: {}",
-        a.raw,
-        b.raw
-    );
-    let sessions = call(&daemon, "GET", "/sessions", None).await;
+    assert_eq!(a2.status, 200, "raw: {}", a2.raw);
+    assert_eq!(b2.status, 200, "raw: {}", b2.raw);
     assert_eq!(
-        sessions.body.as_array().map(Vec::len),
-        Some(3),
-        "three fires in total - one per real delivery; raw: {}",
-        sessions.raw
+        usize::from(fired(&a)) + usize::from(fired(&a2)),
+        1,
+        "delivery 2 fires exactly once, ever; first: {} then: {}",
+        a.raw,
+        a2.raw
     );
+    assert_eq!(
+        usize::from(fired(&b)) + usize::from(fired(&b2)),
+        1,
+        "delivery 3 fires exactly once, ever; first: {} then: {}",
+        b.raw,
+        b2.raw
+    );
+    let all = chats(&daemon).await;
+    assert_eq!(
+        all.len(),
+        3,
+        "three fires in total - one per real delivery; chats: {all:?}"
+    );
+    assert_cooldown_spacing(&all, COOLDOWN_MS);
+}
+
+/// Every chat the daemon lists, as (id, created_at in milliseconds). The
+/// daemon's own stamp is the only clock a cooldown assertion may use: a
+/// test that times the requests instead fails on a loaded machine, and a
+/// guard that let two fires into one window would still be a bug.
+async fn chats(daemon: &TestDaemon) -> Vec<(String, i64)> {
+    let reply = call(daemon, "GET", "/sessions", None).await;
+    reply
+        .body
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .map(|s| {
+                    (
+                        s["id"].as_str().unwrap_or_default().to_string(),
+                        s["created_at"].as_i64().unwrap_or(0),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// No two fires inside one cooldown window.
+fn assert_cooldown_spacing(chats: &[(String, i64)], cooldown_ms: i64) {
+    let mut times: Vec<i64> = chats.iter().map(|(_, at)| *at).collect();
+    times.sort_unstable();
+    for pair in times.windows(2) {
+        assert!(
+            pair[1] - pair[0] >= cooldown_ms,
+            "two fires landed inside one {cooldown_ms}ms window: {times:?}"
+        );
+    }
+}
+
+/// Wait for a wall-clock instant, polling: the wait is bounded by the
+/// instant itself, and a machine that stalls only makes it later.
+async fn wait_until_ms(target: i64) {
+    fn now_ms() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0)
+    }
+    while now_ms() < target {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
 }
 
 #[tokio::test]
