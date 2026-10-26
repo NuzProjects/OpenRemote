@@ -57,6 +57,7 @@ What the LAN listener serves, in total:
 | `GET /` | none | the phone page (HTML, no data) |
 | `POST /pair` | the pairing code | the exchange above |
 | `GET /api/home` | the phone token | computer name, harness ids, chat list projection |
+| `GET /favicon.ico` | none | 204, so a browser stops asking |
 | anything else | - | 404 |
 
 `/api/home` is not a proxy into the owner API. It is a small handler that reads the store and the
@@ -68,10 +69,13 @@ marketplaces, automations, MCP servers, or Cloud.
 
 - It can fetch the pairing page while the listener is up. The page carries no data and no secret;
   it is the same bytes for everyone.
-- It can try to redeem a code it did not see. Codes are 50 bits of randomness, live for 5 minutes,
+- It can try to redeem a code it did not see. Codes are 40 bits of randomness (eight characters of a
+  32 character alphabet, drawn so that no position is weaker than the rest), live for 5 minutes,
   single use, and after 5 wrong attempts the live code is destroyed, so guessing is not a path.
 - It can see that a host on this network answers at all, while pairing is on or a phone is paired.
   When neither is true nothing is listening on the LAN at all.
+- It can read anything the network carries, because the connection is plain HTTP. That is its own
+  section below, because it is the one real cost of this design.
 
 ### What it cannot do
 
@@ -88,6 +92,38 @@ marketplaces, automations, MCP servers, or Cloud.
   on their screen; the code *is* the confirmation. There is no desktop-side "accept this device?"
   prompt to social-engineer, and no typing to hand over.
 
+### The trade plain HTTP makes, said out loud
+
+The connection between the phone and the computer is plain HTTP on the local network. Nothing goes
+to the internet, there is no account, and no server sits in the middle, and all of that is true. The
+cost is that anything that can watch this network's traffic can read what crosses it:
+
+- **The code, during the exchange.** `POST /pair` carries it in a body. It is worthless a moment
+  later (it is used up by that request and dies at 5 minutes), so what a sniffer gains is a code it
+  did not need to guess.
+- **Every phone token, on every poll.** `/api/home` carries the token in an `Authorization` header.
+  A token is read-only, but it is durable until the phone is removed from the desktop, and it
+  exposes up to 25 chat titles, which is the user's own content.
+
+There is a second edge to this. Plain HTTP gives the phone no way to verify who answers at
+`http://<ip>:<port>`, and the page keeps its token in `localStorage` keyed to exactly that origin. A
+device that later answers on the same address and port is, to the browser, the same origin, and a
+page served from it can read the key. That key is still read-only and still revocable, and revoking
+from the desktop is one click, but it is the reason the sentences on both surfaces were rewritten
+for this round.
+
+What that means in the product: the desktop says, where the code is shown, that the two devices talk
+straight to each other over the local network and that the connection is not encrypted, so anyone who
+can watch this network's traffic can see the pairing go by; the phone page says the same in one
+sentence. Both say "pair on a network you trust" and neither promises a TLS handshake it does not
+perform.
+
+The next step, recorded here rather than done tonight: pair over TLS with a certificate the daemon
+generates at pairing time and the phone pins when it accepts the code, which turns "somebody could
+be in the middle" into "this page cannot be read by anybody who was not at the first scan". Doing
+that badly tonight (a self-signed certificate accepted blindly) would be worse than plain HTTP with
+an honest sentence.
+
 ## Wire shapes
 
 `POST /pairing/code` (loopback, owner token), body `{}`:
@@ -103,8 +139,9 @@ the phone stores its token against this origin, and a port that changed on every
 strand every paired phone.
 
 Only one code is live at a time: asking again replaces it, which is also the "cancel" (an old QR
-stops working the moment a new one is minted). `POST /pairing/cancel` stops the listener when no
-phone is paired.
+stops working the moment a new one is minted). A mint that fails (no network, or every candidate port
+taken) takes the old code down with it before it reports the error: a code nobody can see is a code
+nobody is watching. `POST /pairing/cancel` stops the listener when no phone is paired.
 
 `POST /pair` (LAN, no credential), body `{ "code": "...", "name": "iPhone" }`:
 
@@ -112,6 +149,9 @@ phone is paired.
 - 404 `{ "error": "That pairing code is not valid." }` (unknown, used, destroyed by failed
   attempts)
 - 410 `{ "error": "That pairing code expired." }`
+- 500 `{ "error": "This computer could not save the pairing, so nothing was paired. Try again." }`
+  (the phones file could not be written; the code is spent and no token is handed out, because a
+  pairing this computer would forget on its next start is worse than none)
 
 `GET /api/home` (LAN, phone token):
 
@@ -124,10 +164,15 @@ phone is paired.
 
 Titles and harness ids only. A chat's workspace path is host filesystem detail and stays home.
 
-`GET /pairing/phones` (loopback, owner token): `{ "phones": [ … ] }`, the same records the mint
-response carries.
+`GET /pairing/phones` (loopback, owner token): `{ "phones": [ … ], "notice": null }`, the same
+records the mint response carries, plus the daemon's own sentence when it could not open the pairing
+port at start with a phone already paired. The console shows that sentence instead of a panel that
+looks fine while the phone cannot reach anything.
 
-`POST /pairing/phones/{id}/revoke` (loopback, owner token): `{ "phones": [ … ] }`.
+`POST /pairing/phones/{id}/revoke` (loopback, owner token): `{ "phones": [ … ], "notice": null }`, or
+404 for an id this computer does not have, or 500 `{ "error": "This computer could not remove that
+phone. It is still paired, so try again." }` when the phones file could not be written. Revocation
+fails closed: the record stays, in memory and on disk, until the write succeeds.
 
 ## Token lifecycle
 
@@ -154,8 +199,11 @@ sits unscanned past its five minutes (a timer minted with the code closes it).
 | code unknown, used, or attempts burnt | "That pairing code is not valid. Show a new one on the computer." |
 | code older than 5 minutes | "That pairing code expired. Show a new one on the computer." |
 | token rejected by `/api/home` | "This computer removed this phone. Scan a new code to pair again." |
+| the pairing could not be saved (500) | "The computer could not save the pairing. Nothing was paired. Show a new code and scan again." |
+| the browser refused to store the token | the pairing still works for this visit, and the page says a reload will need a new code. |
 | the page cannot reach the host at all | the browser's own "site can't be reached". The desktop copy says: keep both on the same network, and allow OpenRemote through the firewall. |
-| no daemon / pairing off | the desktop's Mobile view says so, with the button that turns it on |
+| no daemon / pairing off | the desktop's Mobile view says so, with the button that turns it on, and with no phones paired it also says nothing is listening |
+| the daemon could not open the pairing port at start | the panel shows the daemon's own sentence (`notice`), so a paired phone that cannot reach this computer is explained instead of silent |
 
 ## Rulings made where the brief was silent
 
@@ -174,7 +222,9 @@ sits unscanned past its five minutes (a timer minted with the code closes it).
    where a log or a proxy would capture it.
 6. **The phone's name comes from the page's own user agent string.** The founder asked for no
    typing; "iPhone" or "Android phone" is honest enough to identify a row in a list, and renaming
-   is a follow-up, not tonight.
+   is a follow-up, not tonight. The daemon bounds it to one line and 40 characters, which is the
+   same bound the console applies before drawing it, so a phone cannot push a long name into the
+   list.
 7. **The QR encoder is hand-written in the console.** Neither lockfile has a QR dependency, and
    adding one is not allowed. `src/qr.js` is a small, tested, byte-mode encoder (versions 1 to 7,
    error correction level M), which covers payloads from 14 to 122 bytes; a pairing URL is at most
@@ -188,10 +238,12 @@ sits unscanned past its five minutes (a timer minted with the code closes it).
    before the socket is opened, and the QR carries that address, so binding it exactly means the
    socket exists on the interface the QR points at and on no other: not loopback aliases, not a
    VPN, not a second adapter the person did not mean to expose. The test asserts loopback does not
-   answer. Named limitation: if the machine's address changes while a code is on screen (a DHCP
-   lease, a switch between Wi-Fi and Ethernet, a VPN coming up), the live socket keeps the old
-   address, so that QR may stop working before it expires. The next code re-resolves the address,
-   and a code only lives five minutes; a phone on the wrong network needs a new code anyway.
+   answer. The listener records where it actually bound, and a mint that finds this computer
+   advertising a different address closes that socket and rebinds, so after a DHCP lease moves, a
+   switch from Wi-Fi to Ethernet, or a VPN coming up, the next code names an address something is
+   listening on instead of repeating the stale one. While a code is already on screen the socket
+   keeps the address the QR was drawn with; that QR is five minutes old at most, and a phone on the
+   wrong network needs a new one anyway.
 
 ## How the security story is proved
 
@@ -209,11 +261,22 @@ payload the console draws, the same exchange, the same token.
 | revoking ends one phone's access while the other keeps working, and the last revoke closes the socket | `revoking_a_phone_ends_its_access_and_nothing_idles_on_the_lan` |
 | the phones file holds a digest and never the token, and the phone survives a restart | `paired_phones_survive_a_restart_and_only_their_digest_is_written` |
 | the shipped bind resolves a real address the phone can dial, and does not answer on loopback | `the_production_bind_puts_a_real_network_address_in_the_payload` |
+| ten wrong guesses fired at once still burn the code and pair nothing, because check, compare, burn and mint happen under one lock | `ten_parallel_wrong_guesses_pair_nothing` |
+| a phones file that cannot be written leaves the phone paired and answers 500 rather than reporting a removal that did not happen | `a_revoke_that_cannot_be_saved_keeps_the_phone_paired` |
+| a pairing whose record cannot be written hands out no token at all | `a_pairing_that_cannot_be_saved_hands_out_no_token` |
+
+One rule is not in that table because it has no end-to-end path: a mint that fails after a previous
+code was already live (the error arm calls cancel before reporting). On a machine with a network
+address the only bind is the first one, so a later mint reuses the socket and cannot fail; a test
+would have to change the machine's address mid-run. The arm is four lines and the report says it is
+read, not proved.
 
 ## Explicitly out of scope tonight
 
 - Driving harnesses from the phone: sending prompts, answering approvals, creating chats.
-- TLS, any public exposure, any tunnel or relay, any Cloud involvement, mDNS discovery.
+- Any public exposure, any tunnel or relay, any Cloud involvement, mDNS discovery. TLS with a
+  certificate pinned at the first pairing is the next step (see the plain HTTP section), not a thing
+  done tonight.
 - One phone managing several desktops, or one desktop pairing with several phones at once (the
   list holds many phones; only one code is live at a time).
 - Renaming a paired phone, per-phone permissions, or a phone session log.
