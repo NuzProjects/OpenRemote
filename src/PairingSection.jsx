@@ -56,6 +56,9 @@ export default function PairingSection() {
   const [phones, setPhones] = useState(null)
   const [joined, setJoined] = useState(null)
   const [error, setError] = useState(null)
+  // The daemon's own complaint about the pairing port (it could not bind at
+  // boot with a phone already paired), which no retry here caused.
+  const [notice, setNotice] = useState(null)
   const [busy, setBusy] = useState(false)
   const [now, setNow] = useState(() => Date.now())
 
@@ -64,7 +67,10 @@ export default function PairingSection() {
     api.current
       .phones()
       .then((answer) => {
-        if (!stopped) setPhones(answer.phones ?? [])
+        if (!stopped) {
+          setPhones(answer.phones ?? [])
+          setNotice(answer.notice ?? null)
+        }
       })
       .catch((err) => {
         if (!stopped) setPhones([])
@@ -132,10 +138,13 @@ export default function PairingSection() {
     try {
       const answer = await api.current.cancel()
       if (Array.isArray(answer.phones)) setPhones(answer.phones)
+      setNotice(answer.notice ?? null)
+      // Only a cancel the daemon confirmed takes the card down: if it failed,
+      // the code is still live there, and hiding it would hide that.
+      setLive(null)
     } catch (err) {
       setError(pairingError(err))
     } finally {
-      setLive(null)
       setBusy(false)
     }
   }
@@ -145,6 +154,7 @@ export default function PairingSection() {
     try {
       const answer = await api.current.revoke(id)
       setPhones(answer.phones ?? [])
+      setNotice(answer.notice ?? null)
     } catch (err) {
       // Already gone is the outcome the click wanted.
       if (err?.status === 404) {
@@ -167,6 +177,11 @@ export default function PairingSection() {
         Show a code here and scan it with the phone's camera. The phone opens a read-only view of
         this computer's chats, and nothing leaves your local network.
       </p>
+      <p className="qr-note">
+        The phone and this computer talk straight to each other over the local network, without a
+        server in between, and that connection is not encrypted: a device that can watch this
+        network's traffic can see the pairing go by. Pair on a network you trust.
+      </p>
 
       {!live && (
         <div className="qr-actions">
@@ -188,6 +203,10 @@ export default function PairingSection() {
             <p className="qr-clock">{remainingLabel(live.expires_at, now)}</p>
             <p className="qr-hint">Or open this on the phone:</p>
             <p className="qr-address">{live.url}</p>
+            <p className="qr-note">
+              If the phone cannot reach this computer, allow OpenRemote through Windows Firewall.
+              Both devices must be on the same network.
+            </p>
             <button className="pn-btn" onClick={stop} disabled={busy}>
               Stop showing
             </button>
@@ -196,6 +215,7 @@ export default function PairingSection() {
       )}
 
       {error && <p className="qr-error">{error}</p>}
+      {notice && !error && <p className="qr-error">{notice}</p>}
 
       {phones !== null && phones.length > 0 && (
         <ul className="qr-phones">
@@ -214,7 +234,10 @@ export default function PairingSection() {
         </ul>
       )}
       {phones !== null && phones.length === 0 && (
-        <p className="pn-empty">No phones paired with this computer yet.</p>
+        <p className="pn-empty">
+          No phones paired with this computer. Nothing is listening on your network: the pairing
+          port opens only while a code is on screen or a phone is paired.
+        </p>
       )}
     </div>
   )

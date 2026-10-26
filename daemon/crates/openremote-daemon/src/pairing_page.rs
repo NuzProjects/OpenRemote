@@ -217,9 +217,13 @@ pub const PAGE: &str = r##"<!doctype html>
     <h3>Chats</h3>
     <ul class="chats" id="chats"></ul>
     <p class="empty" id="no-chats" hidden>No chats on this computer yet.</p>
+    <p class="empty" id="warn" hidden></p>
     <footer>
       To undo this, open OpenRemote on the computer and remove this phone from Mobile.
       Nothing here is stored anywhere else: there is no account and no server.
+      This page talks to the computer over the local network in the clear, so a device that can
+      watch this network's traffic can see the pairing and what is shown here. Pair on a network
+      you trust.
     </footer>
   </section>
 </main>
@@ -238,6 +242,7 @@ pub const PAGE: &str = r##"<!doctype html>
   var harnessEl = document.getElementById('harnesses')
   var chatsEl = document.getElementById('chats')
   var noChats = document.getElementById('no-chats')
+  var warn = document.getElementById('warn')
   var sub = document.getElementById('sub')
 
   function store(token, name) {
@@ -361,12 +366,27 @@ pub const PAGE: &str = r##"<!doctype html>
           // The code is spent; keep it out of the address bar.
           history.replaceState(null, '', location.pathname)
           store(answer.body.token, (answer.body.phone && answer.body.phone.name) || phoneName())
-          poll(load())
+          // A browser that refused the key (private mode, a full quota) has
+          // nowhere to put the token, so this page uses it from memory and
+          // says what a reload will cost instead of dying on a null.
+          var kept = load()
+          if (!kept) {
+            kept = { token: answer.body.token, name: phoneName() }
+            warn.hidden = false
+            warn.textContent =
+              'This browser will not keep the pairing, so scanning again after a reload needs a new code.'
+          }
+          poll(kept)
           return
         }
         if (answer.status === 410) {
           showBad('That pairing code expired',
             'Codes last five minutes. Show a new one in OpenRemote on the computer.')
+          return
+        }
+        if (answer.status === 500) {
+          showBad('The computer could not save the pairing',
+            'Nothing was paired. Show a new code in OpenRemote on the computer and scan again.')
           return
         }
         showBad('That pairing code is not valid',
