@@ -719,6 +719,18 @@ fn entry_parts(entry: &Value) -> (Vec<String>, bool) {
     (parts, hooks || mcp || entry.get("lspServers").is_some())
 }
 
+/// A link Discover offers to open, or none.
+///
+/// `homepage` is catalog text and the console hands it to `window.open` or
+/// to the platform's `open_url`, which is to say to the operating system's
+/// handler for whatever scheme it names. Anything that is not an http(s)
+/// link - a `file:` link, a custom protocol some installed program claims -
+/// is not something a review dialog should hand over with one click, so it
+/// never leaves the daemon.
+fn web_link(value: Option<String>) -> Option<String> {
+    value.filter(|url| url.starts_with("https://") || url.starts_with("http://"))
+}
+
 /// The entries of one marketplace's catalog, as Discover shows them: what
 /// each is, whether OpenRemote can install it, what it asks for when that
 /// is knowable before install, and whether an installed copy is behind.
@@ -837,7 +849,7 @@ pub fn entry_views(
             author,
             category: text(&entry["category"]),
             tags,
-            homepage: text(&entry["homepage"]),
+            homepage: web_link(text(&entry["homepage"])),
             source_kind: source.as_ref().map(EntrySource::kind).unwrap_or("unknown"),
             from: source
                 .as_ref()
@@ -1105,6 +1117,48 @@ mod tests {
                 EntrySource::Github { sha: Some(_), .. }
             ));
         }
+    }
+
+    #[test]
+    fn discover_offers_only_http_links_to_open() {
+        let record = MarketplaceRecord {
+            name: "claude-plugins-official".into(),
+            source: MarketplaceSource::Github {
+                repo: "anthropics/claude-plugins-official".into(),
+                reference: None,
+            },
+            enabled: true,
+            removable: true,
+            owner: None,
+            description: None,
+            plugin_count: 3,
+            added_at: 0,
+            refreshed_at: None,
+            error: None,
+            heads: BTreeMap::new(),
+        };
+        let catalog = Catalog {
+            name: "claude-plugins-official".into(),
+            owner: None,
+            description: None,
+            plugin_root: None,
+            entries: vec![
+                json!({"name": "web", "source": {"source": "github", "repo": "a/web"},
+                       "homepage": "https://example.com/web"}),
+                json!({"name": "local", "source": {"source": "github", "repo": "a/local"},
+                       "homepage": "file:///C:/Windows/System32/calc.exe"}),
+                json!({"name": "custom", "source": {"source": "github", "repo": "a/custom"},
+                       "homepage": "vscode://open?x"}),
+            ],
+        };
+        let views = entry_views(&record, &catalog, None, &[], &[]);
+        let by = |n: &str| views.iter().find(|v| v.name == n).unwrap();
+        // A homepage the console would hand to window.open or the OS
+        // handler: http(s) only, so a `file:` link or a custom protocol
+        // never reaches the review dialog.
+        assert_eq!(by("web").homepage.as_deref(), Some("https://example.com/web"));
+        assert_eq!(by("local").homepage, None);
+        assert_eq!(by("custom").homepage, None);
     }
 
     #[test]
