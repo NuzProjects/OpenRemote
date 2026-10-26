@@ -125,6 +125,9 @@ export default function PairingSection() {
       setNow(Date.now())
       setLive(mint)
       if (Array.isArray(mint.phones)) setPhones(mint.phones)
+      // The daemon opened the port to answer this, so a boot-time complaint
+      // about the port is no longer true.
+      setNotice(null)
     } catch (err) {
       setError(pairingError(err))
     } finally {
