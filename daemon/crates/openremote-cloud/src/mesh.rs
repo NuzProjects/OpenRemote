@@ -825,7 +825,16 @@ pub fn start(
     // quarantine): the phase moves to "sign in again" with the reason, instead
     // of leaving the console at "connecting" for good with nothing to read.
     let Some(identity) = cloud.identity() else {
-        cloud.set_phase(Phase::Relink, Some(crate::IDENTITY_BROKEN.into()));
+        // Whichever shape the file is in, the phase has a sentence for it: a
+        // missing identity lets a sign-in join the account as a new device,
+        // while a damaged one has to be reset first. Saying the wrong one would
+        // promise a remedy that does not exist.
+        let sentence = if matches!(cloud.identity_state(), crate::identity::Stored::Unreadable) {
+            crate::IDENTITY_BROKEN
+        } else {
+            crate::IDENTITY_MISSING
+        };
+        cloud.set_phase(Phase::Relink, Some(sentence.into()));
         return None;
     };
     let Some(private) = identity.private_key() else {
@@ -1015,10 +1024,7 @@ async fn relay_session(
         Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
             return match response.status().as_u16() {
                 401 => {
-                    cloud.set_phase(
-                        Phase::Relink,
-                        Some("sign in to OpenRemote Cloud again".into()),
-                    );
+                    cloud.set_phase(Phase::Relink, Some(crate::SIGN_IN_AGAIN.into()));
                     (false, Ended::Stop)
                 }
                 410 => {
@@ -1711,6 +1717,21 @@ mod tests {
             cloud.view()["error"].as_str(),
             Some(crate::IDENTITY_BROKEN),
             "and it says which piece is broken"
+        );
+
+        // The file disappearing is the other shape, and it must not borrow the
+        // sentence that tells the user to reset their files: signing in again
+        // fixes this one.
+        crate::identity::Files::new(&dir).forget_identity().unwrap();
+        cloud.set_phase(Phase::Connecting, None);
+        assert!(
+            start(&cloud, Arc::new(Nop)).is_none(),
+            "no mesh can be built from a missing identity either"
+        );
+        assert_eq!(
+            cloud.view()["error"].as_str(),
+            Some(crate::IDENTITY_MISSING),
+            "a missing identity is offered the sign-in that joins again"
         );
         std::fs::remove_dir_all(&dir).unwrap();
     }

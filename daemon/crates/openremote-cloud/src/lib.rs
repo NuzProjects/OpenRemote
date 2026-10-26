@@ -38,10 +38,25 @@ const SIGN_IN_WINDOW: Duration = Duration::from_secs(600);
 /// so a file the daemon cannot read is never mistaken for a device that is
 /// still connecting (which is a phase that would never end), and never for
 /// anything the user did.
-pub(crate) const IDENTITY_BROKEN: &str =
-    "this computer's Cloud identity is missing or damaged - sign in again";
-pub(crate) const KEY_BROKEN: &str = "this computer's Cloud key is damaged - sign in again";
+///
+/// Each sentence also says what signing in again will get the user, because the
+/// three cases differ. A missing identity mints a new one, so the account gains
+/// a second device row and the old one is a ghost nobody on this computer can
+/// remove: saying so is the honest thing to do. A damaged file cannot be minted
+/// over (the mint never overwrites), so that sentence must not promise a sign-in
+/// that would fail, and it names the only real way out. A damaged sign-in keeps
+/// the identity, so signing in again returns as the same device.
+pub(crate) const IDENTITY_MISSING: &str = "this computer's Cloud identity is missing - signing in again joins your account as a new device";
+pub(crate) const IDENTITY_BROKEN: &str = "this computer's Cloud identity is damaged - it cannot rejoin until this computer's Cloud files are reset";
+pub(crate) const KEY_BROKEN: &str = "this computer's Cloud key is damaged - it cannot rejoin until this computer's Cloud files are reset";
 pub(crate) const SIGNIN_BROKEN: &str = "this computer's Cloud sign-in is damaged - sign in again";
+
+/// What the console is told when something reaches this device with a
+/// credential the backend no longer accepts. The row may still be in the
+/// account, but nothing here can prove this computer is the device that owns
+/// it, and only a sign-in can. The relay and the registry say it the same way,
+/// so one const keeps them from drifting apart.
+pub(crate) const SIGN_IN_AGAIN: &str = "sign in to OpenRemote Cloud again";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -68,6 +83,11 @@ pub enum CloudError {
     SignedOut,
     #[error("this computer's Cloud identity changed while joining - try again")]
     IdentityChanged,
+    /// This computer's own `cloud/` files cannot carry a sign-in. The sentence
+    /// is the one to show: it names the damage, not a request that failed and
+    /// not a filesystem path.
+    #[error("{0}")]
+    CloudFilesBroken(String),
     #[error(transparent)]
     OAuth(#[from] oauth::OAuthError),
     #[error(transparent)]
@@ -164,7 +184,8 @@ impl Cloud {
                 Some(_) => (Phase::Connecting, None),
                 None => (Phase::Relink, Some(KEY_BROKEN)),
             },
-            (Stored::Value(_), _) => (Phase::Relink, Some(IDENTITY_BROKEN)),
+            (Stored::Value(_), Stored::Missing) => (Phase::Relink, Some(IDENTITY_MISSING)),
+            (Stored::Value(_), Stored::Unreadable) => (Phase::Relink, Some(IDENTITY_BROKEN)),
             (Stored::Missing, _) => (Phase::SignedOut, None),
         };
         Arc::new(Self {
@@ -316,12 +337,18 @@ impl Cloud {
                 inner.error = None;
             }
             Err(e) => {
-                inner.phase = if inner.credentials.device_credential.is_some() {
-                    Phase::Connecting
-                } else {
-                    Phase::SignedOut
-                };
-                inner.error = Some(e.to_string());
+                // A damaged cloud/ file is not a failed sign-in. Its sentence
+                // and its phase are already set, and rewriting them to
+                // "connecting" beside an io message would hide the one thing
+                // the user can act on.
+                if !matches!(e, CloudError::CloudFilesBroken(_)) {
+                    inner.phase = if inner.credentials.device_credential.is_some() {
+                        Phase::Connecting
+                    } else {
+                        Phase::SignedOut
+                    };
+                    inner.error = Some(e.to_string());
+                }
             }
         }
         result
@@ -393,16 +420,44 @@ impl Cloud {
 
     fn ensure_identity(&self) -> Result<Identity, CloudError> {
         if let Some(identity) = self.inner().identity.clone() {
+            // The file parses but holds no usable key: registering with its
+            // public half would put a device in the account that can never
+            // complete a handshake, and every later start would say
+            // "connecting" with nothing to read.
+            if identity.private_key().is_none() {
+                return Err(self.cloud_files(KEY_BROKEN));
+            }
             return Ok(identity);
         }
-        // The mint is exclusive across processes: an enroll or agent that
-        // started beside this one may have minted first, and that identity
-        // is the one this device must join with. Two identities on one
-        // machine never pair with one credential, and every Noise
-        // handshake after that fails with nothing to say why.
-        let identity = self.files.mint_identity()?;
-        self.inner().identity = Some(identity.clone());
-        Ok(identity)
+        // Nothing in memory: a fresh install, or a file this daemon cannot
+        // read. The mint refuses to overwrite, so a damaged file fails inside
+        // it with its own path in the message, and the console would show a
+        // path where the user needs a sentence. Name the damage here instead,
+        // and let the browser flow end with the same reason the open-time
+        // check already gave, so a sign-in that cannot work does not quietly
+        // promise one that does.
+        match self.files.identity_state() {
+            Stored::Unreadable => Err(self.cloud_files(IDENTITY_BROKEN)),
+            _ => {
+                // The mint is exclusive across processes: an enroll or agent
+                // that started beside this one may have minted first, and that
+                // identity is the one this device must join with. Two
+                // identities on one machine never pair with one credential,
+                // and every Noise handshake after that fails with nothing to
+                // say why.
+                let identity = self.files.mint_identity()?;
+                self.inner().identity = Some(identity.clone());
+                Ok(identity)
+            }
+        }
+    }
+
+    /// The one way damaged `cloud/` state reaches the console: the phase that
+    /// offers a sign-in, and the sentence that says why. Both are set here so
+    /// the failure cannot be reported as a name-shaped file path.
+    fn cloud_files(&self, sentence: &'static str) -> CloudError {
+        self.set_phase(Phase::Relink, Some(sentence.to_string()));
+        CloudError::CloudFilesBroken(sentence.to_string())
     }
 
     /// A machine joins with the code from an install command.
@@ -548,6 +603,14 @@ impl Cloud {
         self.inner().identity.clone()
     }
 
+    /// What is on disk for this computer's identity, for the one caller that
+    /// has to name the damage rather than act on it: "missing" and "damaged"
+    /// look the same from `identity()` but need different sentences, because
+    /// only one of them lets a sign-in join the account again.
+    pub(crate) fn identity_state(&self) -> Stored<Identity> {
+        self.files.identity_state()
+    }
+
     pub fn registry(&self) -> &Registry {
         &self.registry
     }
@@ -687,6 +750,17 @@ impl Cloud {
         if let (Some(credential), Some(id)) = (self.device_credential(), self.device_id()) {
             match self.registry.delete(&credential, &id.to_string()).await {
                 Ok(()) | Err(RegistryError::Revoked) => {}
+                Err(e @ RegistryError::Unauthorized) => {
+                    // The registry rejecting this credential is the same proof
+                    // the relay's own 401 is, and leave is the only writer that
+                    // holds it right now. Leaving the phase alone would keep
+                    // "online" on screen beside an error that says the
+                    // credential is dead, and the correction would wait for a
+                    // handshake that may not come until the socket does. The
+                    // row is untouched, so nothing local is discarded.
+                    self.set_phase(Phase::Relink, Some(SIGN_IN_AGAIN.into()));
+                    return Err(e.into());
+                }
                 Err(e) => return Err(e.into()),
             }
         }
@@ -939,55 +1013,94 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// A backend that answers every request with the status the test sets:
-    /// the registry's self-delete while the network is down, and once it is
-    /// back, the 410 a row that is already gone comes back as.
-    async fn status_backend(status: Arc<std::sync::atomic::AtomicU16>) -> String {
+    /// A backend whose every answer is one JSON body. A sign-in has to get past
+    /// the token exchange before it reaches this computer's own files, so the
+    /// damage tests need an exchange that succeeds and nothing more.
+    async fn json_backend(body: &'static str) -> String {
+        backend(move |_| (200, body.as_bytes())).await
+    }
+
+    /// A dead device credential behind a relay socket that is merely
+    /// unavailable: the registry's delete is answered 401 while the run's own
+    /// connection is not, so what leave does to the phase and to the run can be
+    /// watched at the same time.
+    async fn dead_credential_backend() -> String {
+        backend(|head| {
+            if head.starts_with("DELETE ") {
+                (401, UNAVAILABLE)
+            } else {
+                (500, UNAVAILABLE)
+            }
+        })
+        .await
+    }
+
+    /// A test backend's answer, picked from the request it is answering.
+    type Answer = dyn Fn(&str) -> (u16, &'static [u8]) + Send + Sync;
+
+    /// One answer per request, chosen from the request line and headers. The
+    /// head and body are read whole first: closing with unread request bytes
+    /// resets the connection instead of answering it.
+    async fn backend(
+        pick: impl Fn(&str) -> (u16, &'static [u8]) + Send + Sync + 'static,
+    ) -> String {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
             .unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
+        let pick: Arc<Answer> = Arc::new(pick);
         tokio::spawn(async move {
             loop {
                 let Ok((stream, _)) = listener.accept().await else {
                     break;
                 };
-                let status = status.load(std::sync::atomic::Ordering::SeqCst);
-                tokio::spawn(async move { answer(stream, status).await });
+                let pick = Arc::clone(&pick);
+                tokio::spawn(async move {
+                    let mut stream = tokio::io::BufReader::new(stream);
+                    let mut head = Vec::new();
+                    let mut line = Vec::new();
+                    loop {
+                        line.clear();
+                        if stream.read_until(b'\n', &mut line).await.unwrap_or(0) == 0 {
+                            return;
+                        }
+                        if matches!(line.as_slice(), b"\r\n" | b"\n") {
+                            break;
+                        }
+                        head.extend_from_slice(&line);
+                    }
+                    let head = String::from_utf8_lossy(&head).into_owned();
+                    let mut body = vec![0u8; content_length(&head)];
+                    if stream.read_exact(&mut body).await.is_err() {
+                        return;
+                    }
+                    let (status, body) = pick(&head);
+                    let head = format!(
+                        "HTTP/1.1 {status} Status\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(head.as_bytes()).await;
+                    let _ = stream.write_all(body).await;
+                });
             }
         });
         base
     }
 
-    /// The head and body are read whole before anything is answered (closing
-    /// with unread request bytes resets the connection), then the status the
-    /// test chose goes back.
-    async fn answer(stream: tokio::net::TcpStream, status: u16) {
-        let mut stream = tokio::io::BufReader::new(stream);
-        let mut head = Vec::new();
-        let mut line = Vec::new();
-        loop {
-            line.clear();
-            if stream.read_until(b'\n', &mut line).await.unwrap_or(0) == 0 {
-                return;
-            }
-            if matches!(line.as_slice(), b"\r\n" | b"\n") {
-                break;
-            }
-            head.extend_from_slice(&line);
-        }
-        let head = String::from_utf8_lossy(&head).into_owned();
-        let mut body = vec![0u8; content_length(&head)];
-        if stream.read_exact(&mut body).await.is_err() {
-            return;
-        }
-        let body = br#"{"message":"OpenRemote Cloud is unavailable"}"#;
-        let head = format!(
-            "HTTP/1.1 {status} Status\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            body.len()
-        );
-        let _ = stream.write_all(head.as_bytes()).await;
-        let _ = stream.write_all(body).await;
+    /// What every backend says when it has nothing useful to say.
+    const UNAVAILABLE: &[u8] = br#"{"message":"OpenRemote Cloud is unavailable"}"#;
+
+    /// A backend that answers every request with the status the test sets:
+    /// the registry's self-delete while the network is down, and once it is
+    /// back, the 410 a row that is already gone comes back as.
+    async fn status_backend(status: Arc<std::sync::atomic::AtomicU16>) -> String {
+        backend(move |_| {
+            (
+                status.load(std::sync::atomic::Ordering::SeqCst),
+                UNAVAILABLE,
+            )
+        })
+        .await
     }
 
     /// A device that is in the account: its identity, its credential, and the
@@ -1108,47 +1221,53 @@ mod tests {
     }
 
     /// A credential the registry rejects is the one failure no retry can fix:
-    /// every later leave answers 401 until the user signs in again. What the
-    /// console must see is the truth - this device is still in the account and
-    /// still connected, so the relay's own 401 can move the phase to "sign in
-    /// again" - and nothing may be forgotten locally in the meantime.
+    /// every later leave answers 401 until the user signs in again. Nothing may
+    /// be forgotten locally in the meantime, the run may not be torn down so
+    /// the relay can still have its say, and the phase may not keep saying
+    /// "online" now that leave holds proof the credential is dead.
     #[tokio::test]
-    async fn a_leave_a_dead_credential_refuses_forgets_nothing_and_does_not_lie_about_the_phase() {
-        use std::sync::atomic::AtomicU16;
-        let status = Arc::new(AtomicU16::new(401));
-        let base = status_backend(Arc::clone(&status)).await;
+    async fn a_leave_a_dead_credential_refuses_forgets_nothing_and_stops_claiming_online() {
+        let base = dead_credential_backend().await;
         let dir = scratch_dir();
         let identity = Identity::generate();
         seed_enrolled(&dir, &identity);
         let cloud = Cloud::open(test_config(&base), &dir);
-        let phase_before = cloud.phase();
 
-        assert!(
-            matches!(
-                cloud.leave().await,
-                Err(CloudError::Registry(RegistryError::Unauthorized))
-            ),
-            "a dead credential is reported as one, not as a generic failure"
-        );
-        // A second attempt answers the same way: this is not a transient the
-        // caller can wait out.
-        assert!(
-            matches!(
-                cloud.leave().await,
-                Err(CloudError::Registry(RegistryError::Unauthorized))
-            ),
-            "retrying cannot fix a credential the registry rejects"
-        );
-        assert_eq!(
-            cloud.phase(),
-            phase_before,
-            "the console is not told the device left an account it is still in"
-        );
-        assert!(cloud.enrolled());
+        for attempt in ["the first", "a second"] {
+            cloud.start(Arc::new(Silent));
+            assert!(cloud.mesh().is_some(), "{attempt}: a run for this device");
+            assert!(
+                matches!(
+                    cloud.leave().await,
+                    Err(CloudError::Registry(RegistryError::Unauthorized))
+                ),
+                "{attempt} leave reports a dead credential as one, not as a generic failure"
+            );
+            assert!(
+                cloud.mesh().is_some(),
+                "{attempt} leave leaves the run up: only the relay's own 401 or removal may end it"
+            );
+            // The relay loop retries its own connection in the background and
+            // writes its phase when an attempt fails, so it is stopped before
+            // reading what leave itself wrote.
+            cloud.stop();
+            assert_eq!(
+                cloud.phase(),
+                Phase::Relink,
+                "{attempt} leave stops claiming a link the backend no longer trusts"
+            );
+            assert_eq!(
+                cloud.view()["error"].as_str(),
+                Some(SIGN_IN_AGAIN),
+                "{attempt} leave says what the relay would have said"
+            );
+        }
+        assert!(cloud.enrolled(), "this device is still in the account");
         let kept = Files::new(&dir).credentials();
         assert_eq!(
             kept.device_credential.as_deref(),
-            Some("the device credential")
+            Some("the device credential"),
+            "the credential is kept: another device can still remove the row"
         );
         assert_eq!(
             kept.refresh_token.as_deref(),
@@ -1206,6 +1325,15 @@ mod tests {
         std::fs::write(cloud.join(name), bytes).unwrap();
     }
 
+    /// The `state` the authorize URL carries, which is what the browser sends
+    /// back when it returns.
+    fn state_of(url: &str) -> String {
+        url.split_once("state=")
+            .and_then(|(_, rest)| rest.split('&').next())
+            .expect("a state on the authorize url")
+            .to_string()
+    }
+
     fn enrolled_credentials() -> Credentials {
         Credentials {
             device_credential: Some("the device credential".into()),
@@ -1234,18 +1362,20 @@ mod tests {
     /// these shapes used to open as "connecting", with no error, for good.
     #[test]
     fn a_credential_without_a_usable_identity_opens_as_sign_in_again() {
-        let cases: [(&str, Option<&[u8]>); 3] = [
-            ("no identity.json at all", None),
+        let cases: [(&str, Option<&[u8]>, &str); 3] = [
+            ("no identity.json at all", None, IDENTITY_MISSING),
             (
                 "identity.json truncated by a crash",
                 Some(b"{\"device_id\": \"half"),
+                IDENTITY_BROKEN,
             ),
             (
                 "identity.json replaced by something else",
                 Some(b"<html>quarantined</html>"),
+                IDENTITY_BROKEN,
             ),
         ];
-        for (what, on_disk) in cases {
+        for (what, on_disk, sentence) in cases {
             let dir = scratch_dir();
             Files::new(&dir)
                 .save_credentials(&enrolled_credentials())
@@ -1261,12 +1391,12 @@ mod tests {
             );
             assert_eq!(
                 cloud.view()["error"].as_str(),
-                Some(IDENTITY_BROKEN),
+                Some(sentence),
                 "{what} says which piece is broken"
             );
             assert!(
                 cloud.enrolled(),
-                "{what}: the credential is still there, so the row is still in the account"
+                "{what}: the credential survived, so a sign-in has the row it names"
             );
             std::fs::remove_dir_all(&dir).unwrap();
         }
@@ -1313,6 +1443,55 @@ mod tests {
             Files::new(&dir).identity().unwrap().device_id,
             identity.device_id,
             "the identity is untouched, so signing in again is the same device"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The sentence a damaged identity shows offers a sign-in, so that sign-in
+    /// has to meet the damage and say so. It used to reach the mint, which
+    /// refuses to overwrite, and hand the console its io error: a filesystem
+    /// path in the same alert, with no control left that could act on it. The
+    /// exchange succeeds here (it is the only part a backend answers), so what
+    /// this pins is the step after it.
+    #[tokio::test]
+    async fn a_sign_in_on_a_damaged_identity_says_it_is_damaged_and_shows_no_path() {
+        let base = json_backend(
+            r#"{"access_token":"an access token","refresh_token":"a refresh token","expires_in":3600,"token_type":"Bearer"}"#,
+        )
+        .await;
+        let dir = scratch_dir();
+        Files::new(&dir)
+            .save_credentials(&enrolled_credentials())
+            .unwrap();
+        damage(&dir, "identity.json", b"{\"device_id\": \"half");
+        let cloud = Cloud::open(test_config(&base), &dir);
+        assert_eq!(cloud.phase(), Phase::Relink, "the open-time check");
+
+        let state = state_of(&cloud.begin_signin(52882));
+        let error = cloud.finish_signin("a code", &state).await.err();
+        let error = error.expect("a damaged identity cannot be signed in over");
+        assert_eq!(
+            error.to_string(),
+            IDENTITY_BROKEN,
+            "the sentence the user already had, not an io message"
+        );
+        assert!(
+            !error.to_string().contains("identity.json"),
+            "no filesystem path reaches the alert"
+        );
+        assert_eq!(
+            cloud.view()["error"].as_str(),
+            Some(IDENTITY_BROKEN),
+            "the failed sign-in does not replace the sentence with an io path"
+        );
+        assert_eq!(
+            cloud.phase(),
+            Phase::Relink,
+            "and does not claim the device is connecting"
+        );
+        assert!(
+            matches!(Files::new(&dir).identity_state(), Stored::Unreadable),
+            "the damaged file is left exactly where it is"
         );
         std::fs::remove_dir_all(&dir).unwrap();
     }
