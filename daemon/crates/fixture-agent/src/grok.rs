@@ -2,9 +2,11 @@
 //! Anthropic-Messages streaming wire (`system/init`, `assistant`,
 //! `result`) exactly as the openremote-grok driver expects. The argv the
 //! real driver builds is the truth: `--output-format
-//! streaming-messages-json --cwd <dir> [--model <m>] [--resume <id>] --
-//! <text>` - every flag first, then end-of-options, then the prompt as
-//! the one positional.
+//! streaming-messages-json --cwd <dir> [--model <m>]
+//! [--permission-mode <mode>] [--resume <id>] --prompt-file <path>`. The
+//! prompt is the file's contents, so chat text never stands in an argv
+//! slot the CLI's parser could read; the inline `--single <text>` form is
+//! still read because the CLI has it.
 //!
 //! Scenarios: `plain` completes the turn; `die` exits after init with no
 //! result (the process died mid-turn - the daemon maps it to a failed
@@ -50,8 +52,8 @@ pub fn main_grok(argv: &[String]) {
 
     // argv: [--output-format, streaming-messages-json, --cwd, <dir>,
     //        (--model, <m>)?, (--permission-mode, <mode>)?,
-    //        (--resume, <id>)?, --single, <text>]
-    // The prompt is `--single`'s value, including a dash-leading one.
+    //        (--resume, <id>)?, --prompt-file, <path>]
+    // The prompt is the file's contents, including a dash-leading one.
     // The e2e watches that "-v ..." comes back as text, not a flag guess.
     let mut prompt = String::new();
     let mut resume: Option<String> = None;
@@ -63,6 +65,12 @@ pub fn main_grok(argv: &[String]) {
             "--single" => {
                 if let Some(text) = argv.get(i + 1) {
                     prompt = text.clone();
+                    i += 1;
+                }
+            }
+            "--prompt-file" => {
+                if let Some(path) = argv.get(i + 1) {
+                    prompt = std::fs::read_to_string(path).unwrap_or_default();
                     i += 1;
                 }
             }

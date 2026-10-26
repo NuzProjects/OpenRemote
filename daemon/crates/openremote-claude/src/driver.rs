@@ -42,7 +42,7 @@ impl Driver {
                 return Err(DriverError::Spawn("claude CLI not found".to_string()));
             }
         };
-        argv.extend(build_argv(&opts));
+        argv.extend(build_argv(&opts)?);
 
         let mut command = Command::new(&program);
         command
@@ -656,7 +656,13 @@ fn catalog_entry(entry: &Value) -> Option<openremote_harness::ModelDescriptor> {
 
 /// The argv after the executable - the SDK's documented order, plus
 /// `--permission-prompt-tool stdio` so approvals reach us.
-fn build_argv(opts: &SpawnOptions) -> Vec<std::ffi::OsString> {
+///
+/// Every word a chat chooses (its model, its approval mode, its effort tier)
+/// arrives as the value of a flag, so a value that is empty or dash-leading
+/// would change what the command means instead of naming one. Refusing to
+/// spawn is the honest answer: once the parser has read such a word there is
+/// nothing downstream that can tell the harness it was meant as text.
+fn build_argv(opts: &SpawnOptions) -> Result<Vec<std::ffi::OsString>, DriverError> {
     let mut argv: Vec<std::ffi::OsString> = vec![
         "--output-format".into(),
         "stream-json".into(),
@@ -667,16 +673,13 @@ fn build_argv(opts: &SpawnOptions) -> Vec<std::ffi::OsString> {
         "stdio".into(),
     ];
     if let Some(model) = &opts.model {
-        argv.push("--model".into());
-        argv.push(model.into());
+        push_word(&mut argv, "--model", model)?;
     }
     if let Some(mode) = &opts.permission_mode {
-        argv.push("--permission-mode".into());
-        argv.push(mode.into());
+        push_word(&mut argv, "--permission-mode", mode)?;
     }
     if let Some(effort) = &opts.effort {
-        argv.push("--effort".into());
-        argv.push(effort.into());
+        push_word(&mut argv, "--effort", effort)?;
     }
     if opts.fast {
         // Claude's own headless fast-mode form: `--settings '{"fastMode":
@@ -716,7 +719,21 @@ fn build_argv(opts: &SpawnOptions) -> Vec<std::ffi::OsString> {
     if opts.include_deltas {
         argv.push("--include-partial-messages".into());
     }
-    argv
+    Ok(argv)
+}
+
+/// One flag and its value, refused when the value could be read as grammar
+/// instead of as a name.
+fn push_word(
+    argv: &mut Vec<std::ffi::OsString>,
+    flag: &str,
+    value: &str,
+) -> Result<(), DriverError> {
+    openremote_core::validate_argv_word(value)
+        .map_err(|why| DriverError::Spawn(format!("{flag} {value:?}: {why}")))?;
+    argv.push(flag.into());
+    argv.push(value.into());
+    Ok(())
 }
 
 async fn read_stdout(
@@ -945,7 +962,7 @@ mod tests {
             plugin_dirs: Vec::new(),
             endpoint: None,
         };
-        let argv = build_argv(&opts);
+        let argv = build_argv(&opts).expect("argv builds");
         let joined = argv
             .iter()
             .map(|s| s.to_string_lossy())
@@ -963,12 +980,52 @@ mod tests {
     }
 
     #[test]
+    fn a_dash_leading_word_is_refused_instead_of_riding_argv() {
+        // The model slot is free text; the CLI's own bypass flag is a legal
+        // model-shaped string, and as a separate argv word the parser would
+        // read it as a flag rather than as a name.
+        let opts = SpawnOptions {
+            cwd: std::path::PathBuf::from("/w"),
+            model: Some("--dangerously-skip-permissions".into()),
+            ..Default::default()
+        };
+        assert!(
+            build_argv(&opts).is_err(),
+            "a dash-leading model is refused, never passed"
+        );
+        let opts = SpawnOptions {
+            cwd: std::path::PathBuf::from("/w"),
+            permission_mode: Some("-x".into()),
+            ..Default::default()
+        };
+        assert!(build_argv(&opts).is_err());
+        let opts = SpawnOptions {
+            cwd: std::path::PathBuf::from("/w"),
+            effort: Some("--dangerously-skip-permissions".into()),
+            ..Default::default()
+        };
+        assert!(build_argv(&opts).is_err());
+
+        // And with honest words, the exploit string is nowhere in the argv.
+        let opts = SpawnOptions {
+            cwd: std::path::PathBuf::from("/w"),
+            model: Some("opus".into()),
+            ..Default::default()
+        };
+        let argv = build_argv(&opts).expect("argv builds");
+        assert!(!argv.iter().any(|word| {
+            word.to_string_lossy()
+                .contains("--dangerously-skip-permissions")
+        }));
+    }
+
+    #[test]
     fn fast_mode_rides_claudes_own_settings_flag() {
         let mut opts = SpawnOptions {
             cwd: std::path::PathBuf::from("/w"),
             ..Default::default()
         };
-        let argv = build_argv(&opts);
+        let argv = build_argv(&opts).expect("argv builds");
         assert!(
             !argv
                 .iter()
@@ -976,7 +1033,7 @@ mod tests {
         );
 
         opts.fast = true;
-        let argv = build_argv(&opts);
+        let argv = build_argv(&opts).expect("argv builds");
         let settings = argv
             .iter()
             .position(|s| *s == std::ffi::OsStr::new("--settings"))
@@ -995,7 +1052,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let argv = build_argv(&opts);
+        let argv = build_argv(&opts).expect("argv builds");
         let flag = argv
             .iter()
             .position(|s| *s == std::ffi::OsStr::new("--mcp-config"))
@@ -1009,7 +1066,7 @@ mod tests {
         );
 
         // No plugins, no flag.
-        let plain = build_argv(&SpawnOptions::default());
+        let plain = build_argv(&SpawnOptions::default()).expect("argv builds");
         assert!(
             !plain
                 .iter()
@@ -1025,6 +1082,7 @@ mod tests {
             ..Default::default()
         };
         let argv: Vec<String> = build_argv(&opts)
+            .expect("argv builds")
             .iter()
             .map(|s| s.to_string_lossy().into_owned())
             .collect();
@@ -1033,7 +1091,7 @@ mod tests {
             joined.contains("--plugin-dir /data/plugins/local/toy --plugin-dir /data/plugins/x/y"),
             "{joined}"
         );
-        let plain = build_argv(&SpawnOptions::default());
+        let plain = build_argv(&SpawnOptions::default()).expect("argv builds");
         assert!(
             !plain
                 .iter()

@@ -11,7 +11,7 @@ use std::time::Duration;
 use openremote_core::TurnOutcome;
 use openremote_harness::{DriverError, DriverEvent, Resolution, SpawnOptions};
 use serde_json::Value;
-use tokio::io::BufReader;
+use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex as AsyncMutex, mpsc};
 
@@ -69,6 +69,10 @@ impl Driver {
     }
 
     /// Run one prompt as its own agy process.
+    ///
+    /// The prompt enters on stdin as one NDJSON message and never touches
+    /// argv: chat text is arbitrary, and a word a chat typed must not stand
+    /// anywhere the CLI's parser could read it as a flag.
     pub async fn send_prompt(&mut self, text: &str) -> Result<(), DriverError> {
         let program = match &self.resolution {
             Resolution::Executable(path) => path.clone(),
@@ -82,30 +86,15 @@ impl Driver {
             }
         };
         let cwd = self.opts.cwd.clone();
+        let conversation = self.shared.conversation.lock().unwrap().clone();
+        let args = build_args(&self.opts, conversation.as_deref())?;
         let mut command = Command::new(program);
-        // agy 1.4+ takes the next argv word after `--print` as the prompt,
-        // even when that word is another flag. `--output-format` must
-        // come first, and the prompt rides on `--print` last. A
-        // dash-leading prompt is still text: it is the flag's value, not
-        // a bare positional the parser can guess at.
         command
-            .arg("--output-format")
-            .arg("stream-json")
+            .args(&args)
             .current_dir(&cwd)
-            .stdin(Stdio::null())
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        if let Some(model) = &self.opts.model {
-            command.arg("--model").arg(model);
-        }
-        if let Some(mode) = &self.opts.permission_mode {
-            // Antigravity's own execution-mode words.
-            command.arg("--mode").arg(mode);
-        }
-        if let Some(conversation) = self.shared.conversation.lock().unwrap().clone() {
-            command.arg("--conversation").arg(conversation);
-        }
-        command.arg("--print").arg(text);
         // Windows: no console flash, no Ctrl-C from a shared console; the
         // why lives on openremote_harness::creation_flags.
         #[cfg(windows)]
@@ -115,6 +104,10 @@ impl Driver {
         let mut child = command
             .spawn()
             .map_err(|e| DriverError::Spawn(format!("agy: {e}")))?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| DriverError::Spawn("stdin not piped".into()))?;
         let stdout = child
             .stdout
             .take()
@@ -127,6 +120,14 @@ impl Driver {
             let mut guard = self.shared.child.lock().await;
             *guard = Some(child);
         }
+        // One message for one prompt, then the pipe closes. Print mode runs a
+        // turn per message and ends the run at stdin EOF, so closing the pipe
+        // is what tells the CLI this prompt is complete.
+        let frame = prompt_frame(text);
+        if let Err(e) = stdin.write_all(frame.as_bytes()).await {
+            return Err(DriverError::Spawn(format!("agy stdin: {e}")));
+        }
+        drop(stdin);
         tokio::spawn(read_prompt(
             openremote_harness::LineReader::new(BufReader::new(stdout)),
             self.session_tx.clone(),
@@ -175,6 +176,72 @@ impl Driver {
             "antigravity print mode has no remote approval channel".into(),
         ))
     }
+}
+
+/// The argv after the executable: every flag, then `--print=` last.
+///
+/// Print mode reads its prompt from stdin when `--print` carries none of its
+/// own: `--input-format stream-json` reads one NDJSON message per line and runs
+/// a turn per message. That is what keeps chat text out of argv. The form is
+/// the CLI's own: an inline empty value turns print mode on without asking for
+/// a prompt, and a `--print <word>` followed by more flags is refused rather
+/// than guessed at (agy 1.4.7).
+fn build_args(
+    opts: &SpawnOptions,
+    conversation: Option<&str>,
+) -> Result<Vec<std::ffi::OsString>, DriverError> {
+    let mut args: Vec<std::ffi::OsString> = vec![
+        "--output-format".into(),
+        "stream-json".into(),
+        "--input-format".into(),
+        "stream-json".into(),
+    ];
+    if let Some(model) = &opts.model {
+        push_word(&mut args, "--model", model)?;
+    }
+    if let Some(mode) = &opts.permission_mode {
+        // Antigravity's own execution-mode words.
+        push_word(&mut args, "--mode", mode)?;
+    }
+    if let Some(conversation) = conversation {
+        push_word(&mut args, "--conversation", conversation)?;
+    }
+    args.push("--print=".into());
+    Ok(args)
+}
+
+/// The one line that carries a prompt.
+///
+/// Antigravity's stream input names each message `event`, and a user turn is a
+/// `user` event holding an Anthropic-shaped message body (agy 1.4.7 refuses a
+/// line whose `event` or `message` field is missing before any turn starts).
+/// Building it as JSON is the whole point: the prompt is a string value, so no
+/// word in it can be read as an option.
+fn prompt_frame(text: &str) -> String {
+    let mut frame = serde_json::json!({
+        "event": "user",
+        "message": {
+            "role": "user",
+            "content": [{"type": "text", "text": text}],
+        },
+    })
+    .to_string();
+    frame.push('\n');
+    frame
+}
+
+/// One flag and its value, refused when the value could be read as grammar
+/// instead of as a name.
+fn push_word(
+    args: &mut Vec<std::ffi::OsString>,
+    flag: &str,
+    value: &str,
+) -> Result<(), DriverError> {
+    openremote_core::validate_argv_word(value)
+        .map_err(|why| DriverError::Spawn(format!("{flag} {value:?}: {why}")))?;
+    args.push(flag.into());
+    args.push(value.into());
+    Ok(())
 }
 
 async fn read_prompt(
@@ -408,4 +475,55 @@ pub async fn models(
         });
     }
     Ok(models)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn opts(model: Option<&str>, mode: Option<&str>) -> SpawnOptions {
+        SpawnOptions {
+            cwd: std::path::PathBuf::from("/w"),
+            model: model.map(str::to_string),
+            permission_mode: mode.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_prompt_rides_stdin_and_never_appears_in_argv() {
+        let exploit = "--dangerously-skip-permissions fix the build";
+        let args = build_args(&opts(Some("gemini-3-pro"), Some("auto")), None).expect("args build");
+        let words: Vec<String> = args
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        // Print mode is on, and it carries no prompt of its own.
+        assert!(words.iter().any(|word| word == "--print="), "{words:?}");
+        // Nothing a chat typed is in there, neither as a word nor inside one.
+        for word in &words {
+            assert!(!word.contains("--dangerously-skip-permissions"), "{word}");
+            assert!(!word.contains("fix the build"), "{word}");
+        }
+
+        // The prompt itself is one JSON line on stdin.
+        let frame = prompt_frame(exploit);
+        assert_eq!(
+            frame.matches('\n').count(),
+            1,
+            "one newline-terminated line"
+        );
+        let value: Value = serde_json::from_str(frame.trim_end()).expect("the frame is JSON");
+        assert_eq!(value["event"], "user");
+        assert_eq!(value["message"]["role"], "user");
+        assert_eq!(value["message"]["content"][0]["type"], "text");
+        assert_eq!(value["message"]["content"][0]["text"], exploit);
+    }
+
+    #[test]
+    fn a_dash_leading_word_is_refused_before_it_reaches_argv() {
+        assert!(build_args(&opts(Some("--dangerously-skip-permissions"), None), None).is_err());
+        assert!(build_args(&opts(None, Some("-x")), None).is_err());
+        assert!(build_args(&opts(None, None), Some("--dangerously-skip-permissions")).is_err());
+    }
 }

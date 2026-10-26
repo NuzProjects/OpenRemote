@@ -127,24 +127,15 @@ impl Driver {
                 return Err(DriverError::Spawn("pi CLI not found".to_string()));
             }
         };
+        let args = build_args(&opts)?;
         let mut command = Command::new(program);
-        command.args(&prefix);
         command
-            .arg("--mode")
-            .arg("rpc")
-            .arg("--session-dir")
-            .arg(".pi-sessions")
+            .args(&prefix)
+            .args(&args)
             .current_dir(&opts.cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        if let Some(model) = &opts.model {
-            command.arg("--model").arg(model);
-        }
-        // Resume pi's own conversation by id (pi accepts path|id).
-        if let Some(resume) = &opts.resume {
-            command.arg("--session").arg(resume);
-        }
         // Windows: no console flash, no Ctrl-C from a shared console; the
         // why lives on openremote_harness::creation_flags.
         #[cfg(windows)]
@@ -411,6 +402,58 @@ async fn discard_child(shared: &Arc<Shared>) {
     let mut child = shared.child.lock().await;
     let _ = child.start_kill();
     let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+}
+
+/// The argv after the executable, in pi's rpc shape.
+///
+/// Every word a chat chooses arrives as the value of a flag, so a value that is
+/// empty or dash-leading would change what the command means instead of naming
+/// one.
+fn build_args(opts: &SpawnOptions) -> Result<Vec<std::ffi::OsString>, DriverError> {
+    let mut args: Vec<std::ffi::OsString> = vec![
+        "--mode".into(),
+        "rpc".into(),
+        "--session-dir".into(),
+        ".pi-sessions".into(),
+    ];
+    if let Some(model) = &opts.model {
+        push_word(&mut args, "--model", model)?;
+    }
+    // Resume pi's own conversation. pi accepts `path|id` here, and only an id
+    // may pass: a path-shaped ref would make the CLI open a transcript that is
+    // not this chat's.
+    if let Some(resume) = &opts.resume {
+        if !is_session_ref(resume) {
+            return Err(DriverError::Spawn(format!(
+                "--session {resume:?}: only one of pi's own session ids can resume a chat"
+            )));
+        }
+        args.push("--session".into());
+        args.push(resume.into());
+    }
+    Ok(args)
+}
+
+/// Whether a resume ref is shaped like an id rather than a path.
+fn is_session_ref(value: &str) -> bool {
+    !value.is_empty()
+        && !value.starts_with('-')
+        && !value.starts_with('.')
+        && !value.chars().any(|c| matches!(c, '/' | '\\' | ':' | '\0'))
+}
+
+/// One flag and its value, refused when the value could be read as grammar
+/// instead of as a name.
+fn push_word(
+    args: &mut Vec<std::ffi::OsString>,
+    flag: &str,
+    value: &str,
+) -> Result<(), DriverError> {
+    openremote_core::validate_argv_word(value)
+        .map_err(|why| DriverError::Spawn(format!("{flag} {value:?}: {why}")))?;
+    args.push(flag.into());
+    args.push(value.into());
+    Ok(())
 }
 
 /// pi's own outcome words from `message_end`.
@@ -691,5 +734,61 @@ mod tests {
         let response = rx.blocking_recv().expect("the waiter got its response");
         let expected = json!("s-1");
         assert_eq!(response.pointer("/data/sessionId"), Some(&expected));
+    }
+
+    #[test]
+    fn a_dash_leading_word_is_refused_before_it_reaches_argv() {
+        let opts = SpawnOptions {
+            cwd: std::path::PathBuf::from("/w"),
+            model: Some("--dangerously-skip-permissions".into()),
+            ..Default::default()
+        };
+        assert!(
+            build_args(&opts).is_err(),
+            "a dash-leading model is refused, never passed"
+        );
+
+        let argv = build_args(&SpawnOptions {
+            cwd: std::path::PathBuf::from("/w"),
+            model: Some("pi-model-1".into()),
+            ..Default::default()
+        })
+        .expect("argv builds");
+        assert!(!argv.iter().any(|word| {
+            word.to_string_lossy()
+                .contains("--dangerously-skip-permissions")
+        }));
+    }
+
+    #[test]
+    fn a_path_shaped_resume_ref_is_refused() {
+        // pi reads `--session path|id`, so a path-shaped ref would open a
+        // transcript that is not this chat's.
+        for bad in [
+            "../other-chat.jsonl",
+            "C:\\Users\\me\\.pi-sessions\\x.jsonl",
+            "/home/me/.pi-sessions/x",
+            ".pi-sessions/x",
+            "--dangerously-skip-permissions",
+            "",
+        ] {
+            let opts = SpawnOptions {
+                cwd: std::path::PathBuf::from("/w"),
+                resume: Some(bad.to_string()),
+                ..Default::default()
+            };
+            assert!(build_args(&opts).is_err(), "{bad:?} must not pass");
+        }
+        let opts = SpawnOptions {
+            cwd: std::path::PathBuf::from("/w"),
+            resume: Some("01J8Z6Q4X9R7M2K3".into()),
+            ..Default::default()
+        };
+        let argv = build_args(&opts).expect("argv builds");
+        let at = argv
+            .iter()
+            .position(|word| *word == std::ffi::OsStr::new("--session"))
+            .expect("--session rides argv for a real id");
+        assert_eq!(argv[at + 1].to_string_lossy(), "01J8Z6Q4X9R7M2K3");
     }
 }

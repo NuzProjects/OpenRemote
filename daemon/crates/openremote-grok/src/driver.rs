@@ -83,6 +83,10 @@ impl Driver {
 
     /// Run one prompt as its own grok process; the reader maps the
     /// Anthropic-wire frames onto driver events.
+    ///
+    /// The prompt reaches the CLI as a file (`--prompt-file`), never as an
+    /// argv word: chat text is arbitrary, and `--single <prompt>` would put it
+    /// where grok's parser looks for options.
     pub async fn send_prompt(&mut self, text: &str) -> Result<(), DriverError> {
         let (program, prefix): (PathBuf, Vec<std::ffi::OsString>) = match &self.resolution {
             Resolution::Executable(path) => (path.clone(), Vec::new()),
@@ -95,32 +99,20 @@ impl Driver {
         };
 
         let cwd = self.opts.cwd.clone();
+        let resume = self.shared.session_ref.lock().unwrap().clone();
+        // Validate first, write second: a refused word never leaves a file
+        // behind.
+        let prompt_file = prompt_path();
+        let args = build_args(&self.opts, resume.as_deref(), &prompt_file)?;
+        write_prompt(&prompt_file, text)?;
         let mut command = Command::new(program);
-        command.args(&prefix);
-        // grok 1.0.67 requires `--single <PROMPT>`. The next word is the
-        // prompt, so other flags must come first. A dash-leading prompt
-        // is still text: it is the flag's value, not a bare positional.
         command
-            .arg("--output-format")
-            .arg("streaming-messages-json")
-            .arg("--cwd")
-            .arg(&cwd)
+            .args(&prefix)
+            .args(&args)
             .current_dir(&cwd)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        if let Some(model) = &self.opts.model {
-            command.arg("--model").arg(model);
-        }
-        if let Some(mode) = &self.opts.permission_mode {
-            command.arg("--permission-mode").arg(mode);
-        }
-        let resume = self.shared.session_ref.lock().unwrap().clone();
-        if let Some(resume) = resume {
-            // grok's own UUID session id - value form, no flag surface.
-            command.arg("--resume").arg(resume);
-        }
-        command.arg("--single").arg(text);
         // A key set in the user environment is a sign-in. This process may
         // have been started before that variable existed, so hand it to
         // the child when it is missing here.
@@ -133,17 +125,27 @@ impl Driver {
         command.creation_flags(openremote_harness::creation_flags());
 
         *self.shared.reason.lock().unwrap() = EofReason::Completed;
-        let mut child = command
-            .spawn()
-            .map_err(|e| DriverError::Spawn(format!("grok: {e}")))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| DriverError::Spawn("stdout not piped".into()))?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| DriverError::Spawn("stderr not piped".into()))?;
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(e) => {
+                let _ = std::fs::remove_file(&prompt_file);
+                return Err(DriverError::Spawn(format!("grok: {e}")));
+            }
+        };
+        let stdout = match child.stdout.take() {
+            Some(stdout) => stdout,
+            None => {
+                let _ = std::fs::remove_file(&prompt_file);
+                return Err(DriverError::Spawn("stdout not piped".into()));
+            }
+        };
+        let stderr = match child.stderr.take() {
+            Some(stderr) => stderr,
+            None => {
+                let _ = std::fs::remove_file(&prompt_file);
+                return Err(DriverError::Spawn("stderr not piped".into()));
+            }
+        };
         {
             let mut guard = self.shared.child.lock().await;
             *guard = Some(child);
@@ -153,6 +155,7 @@ impl Driver {
             openremote_harness::LineReader::new(BufReader::new(stdout)),
             self.session_tx.clone(),
             Arc::clone(&self.shared),
+            prompt_file,
         ));
         tokio::spawn(drain_stderr(
             openremote_harness::LineReader::new(BufReader::new(stderr)),
@@ -201,11 +204,101 @@ impl Driver {
     }
 }
 
+/// The argv after the executable, in grok's print-mode shape.
+///
+/// The prompt is a file the CLI reads (`--prompt-file`), never a word in here:
+/// chat text is arbitrary, and `--single <prompt>` would put it where grok's
+/// parser looks for options.
+fn build_args(
+    opts: &SpawnOptions,
+    resume: Option<&str>,
+    prompt_file: &std::path::Path,
+) -> Result<Vec<std::ffi::OsString>, DriverError> {
+    let mut args: Vec<std::ffi::OsString> = vec![
+        "--output-format".into(),
+        "streaming-messages-json".into(),
+        "--cwd".into(),
+        opts.cwd.as_os_str().to_owned(),
+    ];
+    if let Some(model) = &opts.model {
+        push_word(&mut args, "--model", model)?;
+    }
+    if let Some(mode) = &opts.permission_mode {
+        push_word(&mut args, "--permission-mode", mode)?;
+    }
+    if let Some(resume) = resume {
+        // grok's own UUID session id - value form, no flag surface.
+        push_word(&mut args, "--resume", resume)?;
+    }
+    args.push("--prompt-file".into());
+    args.push(prompt_file.as_os_str().to_owned());
+    Ok(args)
+}
+
+/// One flag and its value, refused when the value could be read as grammar
+/// instead of as a name.
+fn push_word(
+    args: &mut Vec<std::ffi::OsString>,
+    flag: &str,
+    value: &str,
+) -> Result<(), DriverError> {
+    openremote_core::validate_argv_word(value)
+        .map_err(|why| DriverError::Spawn(format!("{flag} {value:?}: {why}")))?;
+    args.push(flag.into());
+    args.push(value.into());
+    Ok(())
+}
+
+/// A fresh path for one prompt, in the OS temp folder.
+///
+/// Not the workspace: that folder is the user's own project, and a chat has no
+/// business writing files into it. Not a fixed name either: the counter and
+/// the process id keep two turns, and two daemons, apart.
+fn prompt_path() -> std::path::PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!("openremote-grok-{}-{n}.prompt", std::process::id()))
+}
+
+/// Write the prompt where the CLI reads it.
+///
+/// `create_new` refuses a path that already exists instead of following
+/// whatever sits there, so nothing planted by another process can redirect the
+/// write; a failed write leaves no half file behind.
+fn write_prompt(path: &std::path::Path, text: &str) -> Result<(), DriverError> {
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|e| DriverError::Spawn(format!("grok prompt file: {e}")))?;
+    if let Err(e) = file.write_all(text.as_bytes()) {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err(DriverError::Spawn(format!("grok prompt file: {e}")));
+    }
+    Ok(())
+}
+
+/// Removes the prompt file when the turn's reader ends - early return, EOF or
+/// kill alike.
+struct PromptFile(Option<std::path::PathBuf>);
+
+impl Drop for PromptFile {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
 async fn read_prompt(
     mut reader: openremote_harness::LineReader<BufReader<tokio::process::ChildStdout>>,
     tx: mpsc::Sender<DriverEvent>,
     shared: Arc<Shared>,
+    prompt_file: std::path::PathBuf,
 ) {
+    let _prompt_file = PromptFile(Some(prompt_file));
     let mut saw_result = false;
     loop {
         // Bounded, lossy reads (harness audit F11): an over-long line is
@@ -366,5 +459,77 @@ async fn drain_stderr(
         if tx.send(DriverEvent::Stderr { line }).await.is_err() {
             return;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn opts(model: Option<&str>, mode: Option<&str>) -> SpawnOptions {
+        SpawnOptions {
+            cwd: std::path::PathBuf::from("/w"),
+            model: model.map(str::to_string),
+            permission_mode: mode.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_prompt_is_a_file_and_never_an_argv_word() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("prompt.txt");
+        let exploit = "--dangerously-skip-permissions fix the build";
+        write_prompt(&path, exploit).expect("prompt file");
+        assert_eq!(std::fs::read_to_string(&path).expect("read back"), exploit);
+
+        let args = build_args(
+            &opts(Some("grok-4.7"), Some("default")),
+            Some("0b1c"),
+            &path,
+        )
+        .expect("args build");
+        let words: Vec<String> = args
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        // grok's documented data path: the flag names the file, and only the
+        // path rides the command line.
+        let at = words
+            .iter()
+            .position(|word| word == "--prompt-file")
+            .expect("the prompt goes in a file");
+        assert_eq!(words[at + 1], path.to_string_lossy());
+        assert!(!words.iter().any(|word| word == "--single"));
+        for word in &words {
+            assert!(!word.contains("--dangerously-skip-permissions"), "{word}");
+            assert!(!word.contains("fix the build"), "{word}");
+        }
+    }
+
+    #[test]
+    fn a_dash_leading_word_is_refused_before_it_reaches_argv() {
+        let path = std::path::PathBuf::from("/tmp/openremote.prompt");
+        assert!(build_args(&opts(Some("--always-approve"), None), None, &path).is_err());
+        assert!(build_args(&opts(None, Some("-x")), None, &path).is_err());
+        assert!(
+            build_args(
+                &opts(None, None),
+                Some("--dangerously-skip-permissions"),
+                &path
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn a_prompt_file_is_created_fresh_and_never_written_over_a_link() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("prompt.txt");
+        write_prompt(&path, "one").expect("first write");
+        // A second write at the same path refuses instead of following
+        // whatever is there now.
+        assert!(write_prompt(&path, "two").is_err());
+        assert_eq!(std::fs::read_to_string(&path).expect("read back"), "one");
     }
 }
