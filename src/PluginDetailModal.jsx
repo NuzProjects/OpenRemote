@@ -11,7 +11,7 @@ import {
   entryState,
   notSandboxed,
 } from './plugins.js'
-import { openExternal } from './platform.js'
+import { openExternal, webLink } from './platform.js'
 import { useEscLayer } from './esc-layer.js'
 import './devices.css'
 import './plugins.css'
@@ -37,6 +37,10 @@ export function PluginDetailModal({ entry, onClose, onInstall }) {
   const state = entryState(entry)
   const isNotSandboxed = Boolean(entry.not_sandboxed) || notSandboxed(entry)
   const fromSource = entry.from || entry.marketplace || entry.source_kind
+  // The catalog says where its homepage is; the button only exists when
+  // that is a web page, since anything else would be handed to the
+  // system's handler for that scheme.
+  const homepage = webLink(entry.homepage)
 
   return (
     <div className="dv-modal-backdrop" onClick={handleClose}>
@@ -155,12 +159,12 @@ export function PluginDetailModal({ entry, onClose, onInstall }) {
             </div>
           )}
 
-          {entry.homepage && (
+          {homepage && (
             <div className="pg-detail-modal-homepage">
               <button
                 type="button"
                 className="pn-btn pg-homepage-btn"
-                onClick={() => openExternal(entry.homepage).catch(() => {})}
+                onClick={() => openExternal(homepage).catch(() => {})}
               >
                 <ArrowSquareOut size={14} />
                 <span>Homepage</span>
