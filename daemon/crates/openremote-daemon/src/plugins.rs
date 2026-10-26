@@ -110,8 +110,11 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Option<T>, Plu
     }
 }
 
-/// Claude's own rule for a plugin name: kebab-case, short.
-fn valid_name(name: &str) -> bool {
+/// Claude's own rule for a plugin name: kebab-case, short. A name passes
+/// this before it may become a folder under `<data dir>/plugins/
+/// <marketplace>/`, whoever supplied it - the plugin's own manifest, or the
+/// catalog entry a marketplace install came from.
+pub fn valid_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 64
         && name
@@ -256,6 +259,41 @@ fn claude_dirs(dir: &Path) -> Vec<String> {
 /// Where an installed plugin's folder lives.
 pub fn plugin_dir(data_dir: &Path, marketplace: &str, name: &str) -> PathBuf {
     data_dir.join("plugins").join(marketplace).join(name)
+}
+
+/// A marketplace's name as one path segment: the characters a marketplace
+/// name may carry, and never `.` or `..`.
+fn safe_segment(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 128
+        && !name.contains("..")
+        && name != "."
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// An install's folder, with both segments gated before they become a
+/// path. `plugin_dir` joins whatever it is given, and the answer decides
+/// which folder an install replaces or an update swaps into, so a name
+/// that came from a catalog - or from an old `state.json` - is checked
+/// again here rather than trusted.
+fn plugin_dir_checked(
+    data_dir: &Path,
+    marketplace: &str,
+    name: &str,
+) -> Result<PathBuf, PluginError> {
+    if !valid_name(name) {
+        return Err(PluginError::Invalid(format!(
+            "'{name}' is not a plugin name: lowercase letters, digits and dashes, up to 64"
+        )));
+    }
+    if !safe_segment(marketplace) {
+        return Err(PluginError::Invalid(format!(
+            "'{marketplace}' is not a marketplace name"
+        )));
+    }
+    Ok(plugin_dir(data_dir, marketplace, name))
 }
 
 /// What a plugin offers a composer, read from its own folder the way
@@ -561,10 +599,6 @@ impl PluginHost {
         }
     }
 
-    pub fn dir_of(&self, marketplace: &str, name: &str) -> PathBuf {
-        plugin_dir(&self.data_dir, marketplace, name)
-    }
-
     /// Fetch and read a plugin into a staging folder. Nothing is installed
     /// until `install` runs on the user's approval.
     pub async fn stage(
@@ -572,6 +606,13 @@ impl PluginHost {
         request: StageRequest,
         builtin_ids: Vec<String>,
     ) -> Result<(String, Manifest, String), PluginError> {
+        // A marketplace install takes the catalog entry's name, not the
+        // plugin's own, and that name becomes a folder. It passes the same
+        // gate a manifest name passes, here, before anything is fetched or
+        // written.
+        if let Some(entry_name) = &request.entry_name {
+            plugin_dir_checked(&self.data_dir, &request.marketplace, entry_name)?;
+        }
         let id = uuid::Uuid::new_v4().to_string();
         let dir = self.root.join(".staging").join(&id);
         let fetched = dir.join("plugin");
@@ -652,14 +693,15 @@ impl PluginHost {
     /// Move an approved install into place. An installed plugin of the
     /// same id is replaced whole - an update never mixes two versions.
     pub fn install(&self, staged: Staged) -> Result<(), PluginError> {
-        let target = self.dir_of(&staged.marketplace, &staged.name);
-        let result = swap_in(&self.root, &staged.root, &target);
+        let result = plugin_dir_checked(&self.data_dir, &staged.marketplace, &staged.name)
+            .and_then(|target| swap_in(&self.root, &staged.root, &target));
         let _ = std::fs::remove_dir_all(&staged.dir);
         result
     }
 
     pub fn uninstall(&self, marketplace: &str, name: &str) -> Result<(), PluginError> {
-        match std::fs::remove_dir_all(self.dir_of(marketplace, name)) {
+        let dir = plugin_dir_checked(&self.data_dir, marketplace, name)?;
+        match std::fs::remove_dir_all(dir) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(e.into()),
@@ -907,6 +949,20 @@ async fn git(dir: &Path, args: &[&str]) -> Result<String, PluginError> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// A pinned commit: hex, 7 to 64 characters (git's shortest abbreviation
+/// up to a full sha256 id). Hex excludes a leading dash by itself, which
+/// is the point: git parses options anywhere on its command line, so a
+/// `sha` of `--upload-pack=<program>` would make git run that program.
+pub fn is_commit_id(sha: &str) -> bool {
+    (7..=64).contains(&sha.len()) && sha.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// A value from outside that git would read as an option if it led with a
+/// dash - a URL, a branch or tag, a folder inside a repository.
+fn not_an_option(word: &str) -> bool {
+    !word.starts_with('-')
+}
+
 /// Fetch one commit of a repository at depth one - the pinned `sha`, else
 /// the `reference` (a branch or tag), else the default branch - with only
 /// `subdir` checked out when one is named, and its history dropped.
@@ -918,13 +974,30 @@ pub async fn git_fetch(
     subdir: Option<&str>,
     to: &Path,
 ) -> Result<String, PluginError> {
-    // A URL is an argument git would read as an option if it led with a
-    // dash.
-    if url.starts_with('-') || reference.is_some_and(|r| r.starts_with('-')) {
+    // Every value here can come from a catalog, and git parses options
+    // anywhere: each one is checked, and the ones that become positional
+    // arguments are passed after `--` below, so nothing can be read as an
+    // option. This runs before git starts, i.e. before the staged plugin
+    // review - a program git was tricked into starting would run first.
+    if !not_an_option(url) {
         return Err(PluginError::Invalid(format!("'{url}' is not a git URL")));
     }
+    if let Some(reference) = reference {
+        if !not_an_option(reference) {
+            return Err(PluginError::Invalid(format!(
+                "'{reference}' is not a branch or tag"
+            )));
+        }
+    }
+    if let Some(sha) = sha {
+        if !is_commit_id(sha) {
+            return Err(PluginError::Invalid(format!(
+                "'{sha}' is not a commit id: hex, 7 to 64 characters"
+            )));
+        }
+    }
     if let Some(sub) = subdir {
-        if !relative_inside(sub) {
+        if !relative_inside(sub) || !not_an_option(sub) {
             return Err(PluginError::Invalid(format!(
                 "'{sub}' is not a folder inside the repository"
             )));
@@ -933,21 +1006,24 @@ pub async fn git_fetch(
     std::fs::create_dir_all(to)?;
     let failed = |e: PluginError| PluginError::Source(format!("git could not fetch {url}: {e}"));
     git(to, &["init", "--quiet"]).await.map_err(failed)?;
-    git(to, &["remote", "add", "origin", url])
+    git(to, &["remote", "add", "--", "origin", url])
         .await
         .map_err(failed)?;
     if let Some(sub) = subdir {
         git(to, &["sparse-checkout", "init", "--cone"])
             .await
             .map_err(failed)?;
-        git(to, &["sparse-checkout", "set", sub])
+        git(to, &["sparse-checkout", "set", "--", sub])
             .await
             .map_err(failed)?;
     }
     let want = sha.or(reference).unwrap_or("HEAD");
-    git(to, &["fetch", "--quiet", "--depth", "1", "origin", want])
-        .await
-        .map_err(failed)?;
+    git(
+        to,
+        &["fetch", "--quiet", "--depth", "1", "--", "origin", want],
+    )
+    .await
+    .map_err(failed)?;
     git(to, &["checkout", "--quiet", "FETCH_HEAD"])
         .await
         .map_err(failed)?;
@@ -966,11 +1042,25 @@ pub async fn git_fetch(
 /// The commit a branch or tag (or the default branch) points at now,
 /// without fetching anything.
 pub async fn git_head(url: &str, reference: Option<&str>) -> Result<String, PluginError> {
-    if url.starts_with('-') {
+    // `ls-remote` takes the same option set as `fetch`, `--upload-pack`
+    // included, so both values pass the same gate and the positional ones
+    // go after `--`.
+    if !not_an_option(url) {
         return Err(PluginError::Invalid(format!("'{url}' is not a git URL")));
     }
+    if let Some(reference) = reference {
+        if !not_an_option(reference) {
+            return Err(PluginError::Invalid(format!(
+                "'{reference}' is not a branch or tag"
+            )));
+        }
+    }
     let here = std::env::temp_dir();
-    let out = git(&here, &["ls-remote", url, reference.unwrap_or("HEAD")]).await?;
+    let out = git(
+        &here,
+        &["ls-remote", "--", url, reference.unwrap_or("HEAD")],
+    )
+    .await?;
     out.split_whitespace()
         .next()
         .map(String::from)
@@ -1311,7 +1401,7 @@ pub async fn rerun_command(
         return Ok(None);
     }
     let root = data_dir.join("plugins");
-    let target = plugin_dir(data_dir, &plugin.marketplace, &plugin.name);
+    let target = plugin_dir_checked(data_dir, &plugin.marketplace, &plugin.name)?;
     let fresh = root.join(".staging").join(uuid::Uuid::new_v4().to_string());
     copy_in(printed, fresh.clone()).await?;
     // The Claude manifest written at install (from the marketplace entry)
@@ -1729,6 +1819,138 @@ mod tests {
         assert!(!relative_inside("/etc"));
         assert!(!relative_inside("C:/x"));
         assert!(!relative_inside("a\\b"));
+    }
+
+    #[tokio::test]
+    async fn a_catalog_entry_that_climbs_out_is_refused_before_anything_is_fetched() {
+        let data = tempfile::tempdir().unwrap();
+        let host = PluginHost::new(data.path());
+        let source = folder(&[(
+            "openremote.json",
+            r#"{"api": 1, "name": "tidy", "runtime": "content"}"#,
+        )]);
+        // Where an entry named `../../escape` would resolve from
+        // plugins/<marketplace>/: an install replaces that folder whole.
+        std::fs::create_dir_all(data.path().join("escape")).unwrap();
+        std::fs::write(data.path().join("escape/keep.txt"), "the user's own").unwrap();
+        let request = |name: &str| StageRequest {
+            fetch: Fetch::Folder(source.path().to_path_buf()),
+            marketplace: "official".into(),
+            entry_name: Some(name.into()),
+            entry: None,
+            recorded: PluginSource::Folder {
+                path: source.path().display().to_string(),
+            },
+        };
+        let err = host
+            .stage(request("../../escape"), builtins())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not a plugin name"), "{err}");
+        // Refused before the fetch, so nothing was staged and nothing
+        // outside the plugins folder moved.
+        assert!(!data.path().join("plugins").exists());
+        assert_eq!(
+            std::fs::read_to_string(data.path().join("escape/keep.txt")).unwrap(),
+            "the user's own"
+        );
+    }
+
+    #[test]
+    fn an_install_cannot_choose_a_folder_outside_the_plugins_root() {
+        let data = tempfile::tempdir().unwrap();
+        let host = PluginHost::new(data.path());
+        let fetched = data.path().join("plugins/.staging/x/plugin");
+        std::fs::create_dir_all(&fetched).unwrap();
+        std::fs::write(
+            fetched.join("openremote.json"),
+            r#"{"api": 1, "name": "tidy", "runtime": "content"}"#,
+        )
+        .unwrap();
+        let manifest = read_manifest(&fetched, &builtins()).unwrap();
+        std::fs::create_dir_all(data.path().join("escape")).unwrap();
+        std::fs::write(data.path().join("escape/keep.txt"), "the user's own").unwrap();
+        // A staged install whose name came from somewhere that skipped the
+        // gate: install checks the segments itself.
+        let staged = Staged {
+            dir: data.path().join("plugins/.staging/x"),
+            root: fetched,
+            manifest,
+            name: "../../escape".into(),
+            marketplace: "official".into(),
+            source: PluginSource::Folder { path: "x".into() },
+            resolved: None,
+            command: None,
+        };
+        let err = host.install(staged).unwrap_err().to_string();
+        assert!(err.contains("not a plugin name"), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(data.path().join("escape/keep.txt")).unwrap(),
+            "the user's own"
+        );
+    }
+
+    #[test]
+    fn a_pinned_commit_is_a_hex_commit_id() {
+        assert!(is_commit_id("a7ee8a3"));
+        assert!(is_commit_id("A7EE8A3"));
+        assert!(is_commit_id(&"0".repeat(40)));
+        assert!(is_commit_id(&"a".repeat(64)));
+        assert!(!is_commit_id("a7ee8a"));
+        assert!(!is_commit_id(&"a".repeat(65)));
+        assert!(!is_commit_id("main"));
+        assert!(!is_commit_id("--upload-pack=C:/Windows/System32/calc.exe"));
+        assert!(!is_commit_id("-a7ee8a3"));
+        assert!(!is_commit_id(""));
+    }
+
+    #[tokio::test]
+    async fn a_hostile_pinned_commit_is_refused_before_git_starts() {
+        let to = tempfile::tempdir().unwrap().path().join("clone");
+        let err = git_fetch(
+            "https://example.invalid/tools.git",
+            None,
+            Some("--upload-pack=notepad.exe"),
+            None,
+            &to,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("not a commit id"), "{err}");
+        // git never started: `to` is not even made, and `git init` would
+        // have left a .git in it.
+        assert!(!to.exists());
+    }
+
+    #[tokio::test]
+    async fn option_shaped_git_values_are_refused_before_git_starts() {
+        let to = tempfile::tempdir().unwrap().path().join("clone");
+        let cases: [(Option<&str>, Option<&str>); 3] = [
+            (Some("--upload-pack=x"), None),
+            (Some("-x"), None),
+            (None, Some("--stdin")),
+        ];
+        for (reference, subdir) in cases {
+            let err = git_fetch(
+                "https://example.invalid/tools.git",
+                reference,
+                None,
+                subdir,
+                &to,
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+            assert!(err.contains("not a"), "{reference:?} {subdir:?}: {err}");
+            assert!(!to.exists(), "{reference:?} {subdir:?} ran git");
+        }
+        let err = git_head("https://example.invalid/tools.git", Some("--upload-pack=x"))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not a branch or tag"), "{err}");
     }
 
     #[test]
