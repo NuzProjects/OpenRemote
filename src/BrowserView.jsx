@@ -34,7 +34,7 @@ import { hasTauri, isMobile } from './platform.js'
 import { PICKER_CANCEL, PICKER_SOURCE, formatPicked } from './browser-pick.js'
 import { insertToComposer } from './composer-insert.js'
 import { omnibox, security, shownAddress } from './browser-omnibox.js'
-import { closeTab, cycle, newTab, tabTitle } from './browser-tabs.js'
+import { closeTab, cycle, newTab, openBelongs, tabTitle } from './browser-tabs.js'
 import { adopt, call, getState, onKey, patchTab, setState, subscribe } from './browser-store.js'
 import { FLOATING, covered } from './browser-occlusion.js'
 import { DEVICES, fitDevice, fileName, nextZoom, zoomLabel } from './browser-chrome.js'
@@ -115,6 +115,7 @@ export default function BrowserView({ onClosePane = null }) {
   const [notice, setNotice] = useState(null)
   const noticeTimer = useRef(0)
   const shownNative = useRef(null)
+  const mounted = useRef(true)
   const device = current?.device ?? null
   const find = current?.find ?? null
   const findState = (current?.native && finds[current.native]) || null
@@ -190,14 +191,17 @@ export default function BrowserView({ onClosePane = null }) {
     })()
   }, [current?.native])
 
-  // Leaving the view hides the page; the tab stays.
-  useEffect(
-    () => () => {
-      const shown = shownNative.current
-      if (shown) call('browser_hide', { tab: shown })
-    },
-    [],
-  )
+  // Leaving the view hides the pages; the tabs stay. Every page is hidden,
+  // not just the one showing: a page can be built for a tab that closed
+  // while it opened, and a page left drawn over the console has no tab
+  // strip to close it with.
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      for (const t of getState().tabs) if (t.native) call('browser_hide', { tab: t.native })
+    }
+  }, [])
 
   // The page follows the placeholder: window resizes, split drags, the
   // sidebar opening, the find and device bars.
@@ -339,8 +343,17 @@ export default function BrowserView({ onClosePane = null }) {
     const bounds = rect()
     if (!bounds) return
     patchTab(tab.key, { url, loading: true })
-    const native = await call('browser_open', { url, bounds, show: true })
+    // The page is built hidden and shown below, once this console has a
+    // tab and a pane to place it in.
+    const native = await call('browser_open', { url, bounds, show: false })
     if (!native) return
+    // The tab may have been closed, or the whole pane, while the shell was
+    // building the page: then nothing would own it, so it is closed rather
+    // than left floating over the console.
+    if (!openBelongs(getState().tabs, tab.key, mounted.current)) {
+      call('browser_close', { tab: native })
+      return
+    }
     shownNative.current = native
     adopt(tab.key, native)
   }

@@ -46,3 +46,12 @@ export function tabTitle(tab) {
   if (tab.url && tab.url !== 'about:blank') return tab.url.replace(/^https?:\/\//, '')
   return 'New tab'
 }
+
+// Whether a page that has just finished opening still has somewhere to be:
+// a tab in the list that points at it and a browser pane still on screen.
+// Both can go while the shell builds the page (a close, Ctrl+W, the pane's
+// X). A page that lands anyway has no tab strip to close it with and floats
+// over the console, so it is closed instead of shown.
+export function openBelongs(tabs, key, mounted) {
+  return Boolean(mounted) && tabs.some((t) => t.key === key)
+}

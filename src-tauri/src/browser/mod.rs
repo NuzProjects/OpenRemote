@@ -196,7 +196,10 @@ pub fn open_tab(
         .on_document_title_changed(move |webview, title| {
             update(&on_title, webview.label(), |tab| tab.title = title);
         })
-        // A page asking for a new window gets a tab instead.
+        // A page asking for a new window gets a tab instead. The page stays
+        // hidden until the console says it has the tab: a pane that closed
+        // while the page was being built must not leave it drawn over the
+        // console with no tab strip to close it.
         .on_new_window(move |url, _features| {
             let app = on_popup.clone();
             let opener = popup_from.clone();
@@ -209,7 +212,7 @@ pub fn open_tab(
                     .get(&opener)
                     .and_then(|tab| tab.bounds);
                 if let Some(bounds) = bounds {
-                    let _ = open_tab(app, url, bounds, true, Some(opener));
+                    let _ = open_tab(app, url, bounds, false, Some(opener));
                 }
             });
             NewWindowResponse::Deny

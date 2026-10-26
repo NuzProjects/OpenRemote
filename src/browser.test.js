@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { omnibox, security } from './browser-omnibox.js'
-import { closeTab, cycle, insertAfter, newTab, tabTitle } from './browser-tabs.js'
+import { closeTab, cycle, insertAfter, newTab, openBelongs, tabTitle } from './browser-tabs.js'
 import { covered } from './browser-occlusion.js'
 import { DEVICES, fileName, fitDevice, nextZoom, zoomLabel } from './browser-chrome.js'
 
@@ -87,4 +87,13 @@ test('a menu overlapping the page swaps in its picture; one beside it does not',
   assert.equal(covered(page, [{ left: 1100, top: 50, right: 1400, bottom: 300, width: 300, height: 250 }]), true)
   assert.equal(covered(page, [{ left: 0, top: 0, right: 280, bottom: 900, width: 280, height: 900 }]), false)
   assert.equal(covered(page, []), false)
+})
+
+test('a page that opens after its tab or its pane is gone is closed, not shown', () => {
+  const [a, b] = [newTab(), newTab()]
+  assert.equal(openBelongs([a, b], a.key, true), true)
+  // The tab was closed while the shell was building the page.
+  assert.equal(openBelongs([b], a.key, true), false)
+  // The pane was closed while the shell was building the page.
+  assert.equal(openBelongs([a, b], a.key, false), false)
 })
