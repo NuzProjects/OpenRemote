@@ -739,29 +739,74 @@ impl PluginHost {
                 return remove_plugin_folder(&self.data_dir, marketplace, name);
             }
             // Windows drops a trailing dot and a trailing space when it
-            // makes a folder, so a record carrying either was installed
-            // under the trimmed name: `tidy.` is `tidy` on disk, and
-            // refusing it would strand a plugin the user can no longer
-            // remove anywhere. Removing the trimmed folder is removing
-            // what those records mean.
-            let trimmed = name.trim_end_matches(['.', ' ']);
-            if !trimmed.is_empty() && trimmed != name && one_segment(trimmed) {
-                return remove_plugin_folder(&self.data_dir, marketplace, trimmed);
+            // makes a folder, so there a record carrying either was
+            // installed under the trimmed name - `tidy.` is `tidy` on disk -
+            // and refusing it would strand a plugin the user can no longer
+            // remove anywhere. Everywhere else nothing was dropped at
+            // install time: `tidy.` is a folder of its own there, and `tidy`
+            // is a different plugin's folder in the same marketplace, so
+            // trimming would delete a folder the record never named.
+            let folder_name = installed_as(name, cfg!(windows));
+            if folder_name != name && !folder_name.is_empty() && one_segment(folder_name) {
+                return remove_plugin_folder(&self.data_dir, marketplace, folder_name);
             }
         }
-        // The name is not one folder inside the plugins folder: it carries
-        // a separator, a `..`, a drive letter, leading whitespace, nothing
-        // but dots, or it is too long. When no folder answers to it either,
-        // nothing is at stake and the record may go, which is how the plugin
-        // list gets rid of one of these. When something does answer to that
-        // name, deleting it is not this daemon's call: a path built from
-        // such a record is exactly what the name gate exists to stop.
-        if plugin_dir(&self.data_dir, marketplace, name).exists() {
-            return Err(PluginError::Invalid(format!(
-                "'{marketplace}/{name}' is not one folder inside the plugins folder - no separator, no '..', no leading space, no trailing dot, 128 characters at most - and something already answers to that name, so OpenRemote will not delete it. Delete that folder yourself, then remove the plugin again to drop its record"
-            )));
-        }
-        Ok(())
+        // The name is not one folder inside the plugins folder: it carries a
+        // separator, a `..`, a drive letter, leading whitespace, nothing but
+        // dots, or it is too long. Whether anything answers to it decides
+        // which of the two remaining answers is right.
+        let target = plugin_dir(&self.data_dir, marketplace, name);
+        unremovable(marketplace, name, &target, target.try_exists())
+    }
+}
+
+/// What to do about a record whose name is not one folder inside the plugins
+/// folder, given what the file system said about the folder the name would
+/// build.
+///
+/// Something there: refuse, because deleting it is not this daemon's call, and
+/// a path built from such a record is exactly what the name gate exists to
+/// stop. The message prints the path it will not touch, because deleting it
+/// falls to the person, and calls it this plugin's folder rather than "that
+/// folder": a name like `...` normalises to the marketplace folder itself on
+/// Windows, where "delete that folder" would read as "delete every plugin in
+/// here".
+///
+/// Nothing there: let the record go, which is how the plugin list gets rid of
+/// one of these.
+///
+/// A check that failed: refuse too. A folder this daemon cannot stat is not an
+/// absent folder, and dropping the record would leave it as an orphan nothing
+/// looks at again.
+fn unremovable(
+    marketplace: &str,
+    name: &str,
+    target: &Path,
+    checked: std::io::Result<bool>,
+) -> Result<(), PluginError> {
+    match checked {
+        Ok(true) => Err(PluginError::Invalid(format!(
+            "'{marketplace}/{name}' is not one folder inside the plugins folder - no separator, no '..', no leading space, no trailing dot, 128 characters at most. Its own folder would be {}, which OpenRemote will not delete: if that is this plugin's folder, delete it yourself, then remove the plugin again to drop its record",
+            target.display()
+        ))),
+        Ok(false) => Ok(()),
+        Err(e) => Err(PluginError::Source(format!(
+            "could not check whether this plugin's folder {} is still there ({e}), so OpenRemote will not remove the plugin: try again once it can be read",
+            target.display()
+        ))),
+    }
+}
+
+/// The name a record's folder was installed under. Windows drops trailing
+/// dots and trailing spaces when it creates a folder, so there `tidy.` was
+/// installed as `tidy`; every other system keeps them, so `tidy.` is the
+/// folder's own name and `tidy` belongs to a different plugin. Taking the
+/// system as an argument keeps the difference testable from either side.
+fn installed_as(name: &str, windows: bool) -> &str {
+    if windows {
+        name.trim_end_matches(['.', ' '])
+    } else {
+        name
     }
 }
 
@@ -999,13 +1044,23 @@ pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// The argument list git is started with: the neutral settings first, then
+/// the call's own words. Kept apart from the spawn so that "every call is
+/// neutral" is a thing a test can see without starting git.
+fn git_argv(args: &[&str]) -> Vec<String> {
+    GIT_NEUTRAL
+        .iter()
+        .chain(args.iter())
+        .map(|a| (*a).to_string())
+        .collect()
+}
+
 async fn git(dir: &Path, args: &[&str]) -> Result<String, PluginError> {
     // Every git call this daemon makes is one step of fetching a plugin,
     // and none of them should be shaped by the machine's git
     // configuration: the neutral arguments go first, before the
     // subcommand.
-    let mut all = GIT_NEUTRAL.to_vec();
-    all.extend_from_slice(args);
+    let all = git_argv(args);
     let output = tokio::process::Command::new("git")
         .args(&all)
         .current_dir(dir)
@@ -2282,6 +2337,23 @@ mod tests {
     }
 
     #[test]
+    fn a_trailing_dot_names_the_trimmed_folder_on_windows_only() {
+        // The rule that decides whether removal may look at a trimmed name,
+        // checked from both sides on any machine: Windows dropped the dot
+        // when it made the folder, nothing else did.
+        assert_eq!(installed_as("tidy.", true), "tidy");
+        assert_eq!(installed_as("tidy ", true), "tidy");
+        assert_eq!(installed_as("tidy.", false), "tidy.");
+        assert_eq!(installed_as("tidy ", false), "tidy ");
+        // A dot or a space inside the name is part of it everywhere, and a
+        // name with nothing to drop is itself.
+        assert_eq!(installed_as("my.plugin", true), "my.plugin");
+        assert_eq!(installed_as("My Plugin", true), "My Plugin");
+        assert_eq!(installed_as("tidy", true), "tidy");
+        assert_eq!(installed_as("...", true), "");
+    }
+
+    #[test]
     fn removal_takes_one_segment_inside_the_plugins_folder_and_no_more() {
         let data = tempfile::tempdir().unwrap();
         let host = PluginHost::new(data.path());
@@ -2292,14 +2364,42 @@ mod tests {
         std::fs::create_dir_all(&odd).unwrap();
         host.uninstall("Old.Market", "My Plugin").unwrap();
         assert!(!odd.exists());
-        // A record carrying what Windows drops when it creates the folder
-        // names the folder it was installed as, and removes that: the
-        // user's only way to be rid of the plugin.
-        for record in ["tidy.", "tidy "] {
-            let folder = data.path().join("plugins/official/tidy");
-            std::fs::create_dir_all(folder.join("skills")).unwrap();
-            host.uninstall("official", record).unwrap();
-            assert!(!folder.exists(), "{record:?} left its folder behind");
+        // A record carrying a trailing dot or space is a Windows shape: Win32
+        // drops both when it creates the folder, so `tidy.` was installed as
+        // `tidy` and removing `tidy` is removing what the record means, the
+        // user's only way to be rid of the plugin. Windows makes one folder
+        // of the two names, so this is asserted on Windows only: elsewhere
+        // nothing was dropped at install time, `tidy.` is a folder of its
+        // own, and `tidy` belongs to a different plugin in the same
+        // marketplace, which the trimmed delete would have taken with it.
+        let decoy = data.path().join("plugins/official/tidy");
+        std::fs::create_dir_all(decoy.join("skills")).unwrap();
+        std::fs::write(decoy.join("keep.txt"), "another plugin").unwrap();
+        if cfg!(windows) {
+            host.uninstall("official", "tidy.").unwrap();
+            assert!(!decoy.exists(), "the trimmed folder was left behind");
+        } else {
+            // Its own folder is there and so is the decoy: the record is
+            // refused, and neither folder is touched.
+            let own = data.path().join("plugins/official/tidy.");
+            std::fs::create_dir_all(own.join("skills")).unwrap();
+            let err = host.uninstall("official", "tidy.").unwrap_err().to_string();
+            assert!(
+                err.contains("is not one folder inside the plugins folder"),
+                "{err}"
+            );
+            assert!(own.exists(), "the record's own folder was deleted");
+            assert_eq!(
+                std::fs::read_to_string(decoy.join("keep.txt")).unwrap(),
+                "another plugin"
+            );
+            // A trailing space with no folder of its own removes nothing and
+            // says so, and the decoy is still there afterwards.
+            host.uninstall("official", "tidy ").unwrap();
+            assert_eq!(
+                std::fs::read_to_string(decoy.join("keep.txt")).unwrap(),
+                "another plugin"
+            );
         }
         // A record naming a folder that is not there removes nothing, and
         // reports nothing to remove, so the list can drop the record.
@@ -2312,7 +2412,8 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&nested).unwrap(), "keep");
         // A name that does resolve to something, and is not one folder
         // inside the plugins folder, is refused: nothing of it is deleted,
-        // and the refusal says why in the user's terms.
+        // and the refusal says why in the user's terms, printing the path it
+        // will not touch.
         std::fs::create_dir_all(data.path().join("keep")).unwrap();
         std::fs::write(data.path().join("keep/me.txt"), "keep").unwrap();
         // `...` is a folder of its own on Linux and the marketplace folder
@@ -2329,17 +2430,71 @@ mod tests {
                 err.contains("is not one folder inside the plugins folder"),
                 "{name:?}: {err}"
             );
+            // The instruction lands on one folder, named by its path, and
+            // says it is this plugin's own: a name like `...` resolves to the
+            // marketplace folder itself on Windows, where "delete that
+            // folder" would read as "delete every plugin in here".
             assert!(
-                err.contains("Delete that folder yourself"),
+                err.contains("if that is this plugin's folder, delete it yourself"),
+                "{name:?}: {err}"
+            );
+            assert!(
+                err.contains(&name_path(data.path(), name)),
                 "{name:?}: {err}"
             );
             // It no longer claims the name is not a plugin folder.
             assert!(!err.contains("is not a plugin folder"), "{name:?}: {err}");
         }
+        // A folder that cannot be stat-ed is not an absent one: it keeps the
+        // record and says the check failed. Provoking a real stat error is not
+        // portable - Windows truncates a name at a NUL byte and reports no
+        // such folder, which would read as "nothing there" - so that arm is
+        // checked where it is pure, below.
         assert_eq!(
             std::fs::read_to_string(data.path().join("keep/me.txt")).unwrap(),
             "keep"
         );
+    }
+
+    #[test]
+    fn a_folder_that_cannot_be_checked_keeps_the_record() {
+        let target = Path::new("plugins").join("official").join("..");
+        for kind in [
+            std::io::ErrorKind::PermissionDenied,
+            std::io::ErrorKind::InvalidFilename,
+        ] {
+            let said = unremovable("official", "..", &target, Err(std::io::Error::from(kind)))
+                .unwrap_err()
+                .to_string();
+            // It says the check failed, not that the folder is gone, and it
+            // names the folder so the person can look.
+            assert!(
+                said.contains("could not check whether this plugin's folder"),
+                "{kind:?}: {said}"
+            );
+            assert!(
+                said.contains(&target.display().to_string()),
+                "{kind:?}: {said}"
+            );
+            assert!(!said.contains("is not one folder"), "{kind:?}: {said}");
+        }
+        // Nothing there: the record may go.
+        unremovable("official", "x/y", &target, Ok(false)).unwrap();
+        // Something there: refused, with the path and the qualification.
+        let said = unremovable("official", "...", &target, Ok(true))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            said.contains("if that is this plugin's folder, delete it yourself"),
+            "{said}"
+        );
+        assert!(said.contains(&target.display().to_string()), "{said}");
+    }
+
+    /// The path a refusal prints for a record name, spelled the way a temp
+    /// directory spells it: only used to check the message carries it.
+    fn name_path(data_dir: &Path, name: &str) -> String {
+        plugin_dir(data_dir, "official", name).display().to_string()
     }
 
     #[test]
@@ -2502,6 +2657,32 @@ mod tests {
         assert!(!is_commit_id("--upload-pack=C:/Windows/System32/calc.exe"));
         assert!(!is_commit_id("-a7ee8a3"));
         assert!(!is_commit_id(""));
+    }
+
+    #[test]
+    fn every_git_call_is_shaped_by_the_neutral_settings_first() {
+        // What this proves is the wiring - the settings are prepended to
+        // every call's own words - and not that git honours them. Showing
+        // that needs a repository with a submodule and a machine gitconfig
+        // saying `submodule.recurse=true`, which is machine state a test
+        // here is not allowed to write: see the removal note in the report.
+        let argv = git_argv(&["fetch", "--depth", "1", "origin", "main"]);
+        let neutral: Vec<String> = GIT_NEUTRAL.iter().map(|a| (*a).to_string()).collect();
+        // Settings, then the call: never the other way round, since git
+        // reads `-c` only before the subcommand.
+        assert_eq!(&argv[..neutral.len()], &neutral[..]);
+        assert_eq!(
+            &argv[neutral.len()..],
+            ["fetch", "--depth", "1", "origin", "main"]
+        );
+        // Both settings that would otherwise shape a plugin fetch: a
+        // `.gitmodules` must stay inert, and `ext::` must not reach a
+        // program.
+        assert_eq!(GIT_NEUTRAL.len() % 2, 0, "each setting is a -c and a key");
+        assert!(argv.iter().any(|a| a == "submodule.recurse=false"));
+        assert!(argv.iter().any(|a| a == "protocol.ext.allow=never"));
+        // A call with no words of its own still carries them.
+        assert_eq!(git_argv(&[]), neutral);
     }
 
     #[tokio::test]
