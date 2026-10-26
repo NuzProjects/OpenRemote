@@ -142,6 +142,97 @@ const HANDSHAKE_FAILURES_TO_ERROR: u32 = 3;
 /// refresher's five-minute cadence this is ten minutes of a frozen device
 /// list, which is an outage, not a blip.
 const REFRESH_FAILURES_TO_ERROR: u32 = 2;
+/// The two sentences this module puts next to a phase when a connection is
+/// the problem. They are the only notices it may replace with one of its own
+/// or clear again; anything else on screen (a takeover, a removal, a prompt
+/// to sign in) was written by something that knows more and is left alone.
+const UNREACHABLE: &str = "can't reach OpenRemote Cloud";
+const DROPPED: &str = "the connection to OpenRemote Cloud dropped";
+
+/// Whether the notice on screen is one of this module's own generic
+/// connection sentences, and so may be replaced or cleared by it.
+fn generic_notice(error: Option<&str>) -> bool {
+    matches!(error, None | Some(UNREACHABLE) | Some(DROPPED))
+}
+
+/// What the relay loop writes into the phase once a session has ended, or
+/// `None` when there is nothing truer to say than what is already there.
+///
+/// A phase that still says "online" is demoted on the first retry whatever
+/// ended the session: the sentence described a link that is gone. The phase is
+/// demoted whatever the slot holds, but the sentence is only replaced when it
+/// is this loop's own generic one, so a specific reason that is still true is
+/// not made vaguer. A run of handshakes that never even established is an
+/// outage (a proxy in front of the relay 503ing through a maintenance window, a
+/// deploy) and reaches the console as one - raised once per run, and never on
+/// top of a notice that already explains why the phase moved.
+fn retry_notice(
+    was_online: bool,
+    error: Option<&str>,
+    established: bool,
+    failures: u32,
+) -> Option<(Phase, Option<&'static str>)> {
+    if was_online {
+        // A retry always demotes the phase, because "online" beside no link is
+        // a lie the console would keep showing. The sentence is only replaced
+        // when the slot holds this loop's own generic one: a specific reason
+        // that is still true must not be overwritten with a vaguer sentence.
+        return Some((Phase::Offline, generic_notice(error).then_some(DROPPED)));
+    }
+    if !established && failures == HANDSHAKE_FAILURES_TO_ERROR && generic_notice(error) {
+        return Some((Phase::Offline, Some(UNREACHABLE)));
+    }
+    None
+}
+
+/// The refresher's error bookkeeping: how long the device-list fetches have
+/// been failing, and the phase it raised its own notice at. Kept apart from
+/// the loop so the transitions can be read and tested without a live
+/// registry.
+#[derive(Default)]
+struct Surfacer {
+    failures: u32,
+    at: Option<Phase>,
+}
+
+impl Surfacer {
+    /// One failed fetch: the notice to raise, when this is the moment. A run
+    /// of failures raises it once, and only into a slot that says nothing
+    /// more specific: the generic sentence must never overwrite the one that
+    /// explains why (a takeover, a removal, a prompt to sign in), which is
+    /// what a plain re-set of the same string did every five minutes.
+    fn failed(
+        &mut self,
+        phase: Phase,
+        error: Option<&str>,
+    ) -> Option<(Phase, Option<&'static str>)> {
+        // A notice that is no longer what is on screen is no longer a reason
+        // to stay quiet either. The relay loop writes "online" when the link
+        // comes back and clears the sentence with it, so the outage this loop
+        // reported can vanish from the view while the registry is still down.
+        // Without this the refresher went deaf at the first outage until a
+        // fetch succeeded, and the console read "online" beside a frozen
+        // device list for the rest of it.
+        if self.at != Some(phase) || error != Some(UNREACHABLE) {
+            self.at = None;
+        }
+        self.failures = self.failures.saturating_add(1);
+        if self.failures < REFRESH_FAILURES_TO_ERROR || self.at.is_some() || !generic_notice(error)
+        {
+            return None;
+        }
+        self.at = Some(phase);
+        Some((phase, Some(UNREACHABLE)))
+    }
+
+    /// One good fetch: the phase whose notice to clear, when the notice still
+    /// on screen is exactly the one this loop raised.
+    fn recovered(&mut self, phase: Phase, error: Option<&str>) -> Option<Phase> {
+        self.failures = 0;
+        let at = self.at.take()?;
+        (phase == at && error == Some(UNREACHABLE)).then_some(at)
+    }
+}
 
 /// A device-list entry's noise key, decoded: `None` unless it is exactly
 /// the 32 bytes an X25519 public key is, in clean base64url. Anything
@@ -238,12 +329,14 @@ impl Mesh {
             let Some(id) = d["id"].as_str().and_then(DeviceId::parse) else {
                 continue;
             };
-            let raw = d["noise_pubkey"].as_str();
-            let Some(pubkey) = raw.and_then(validated_pubkey) else {
+            let Some(key) = d["noise_pubkey"].as_str() else {
                 unpinnable.push(id);
                 continue;
             };
-            let key = raw.unwrap_or_default();
+            let Some(pubkey) = validated_pubkey(key) else {
+                unpinnable.push(id);
+                continue;
+            };
             let problem = match pins.get(&id.to_string()) {
                 // A pin that isn't valid key material was never a real
                 // key: an older daemon pinned an empty one when the
@@ -708,6 +801,10 @@ enum Ended {
     Retry,
     /// Stop: the credential is no good, or this device was removed.
     Stop,
+    /// Stop because this daemon closed the session itself: sign-out, leave or
+    /// shutdown. The caller owns the phase it wants shown, so a phase this
+    /// loop would otherwise correct must be left alone.
+    Closed,
 }
 
 /// Starts the mesh for a joined device: the relay connection (kept up with
@@ -755,15 +852,12 @@ pub fn start(
 /// REFRESH_FAILURES_TO_ERROR consecutive failures (a registry that keeps
 /// refusing the credential, or entries too broken to pin) the console
 /// shows an error next to the phase instead of a silently frozen device
-/// list, and the next good fetch clears it. The loop also rides the
-/// inbound sweep: a stream whose END never arrives gives its slot back
-/// here.
+/// list, and the next good fetch clears it. The notice is raised once per run
+/// of failures and never over one that says something more specific. The loop
+/// also rides the inbound sweep: a stream whose END never arrives gives its
+/// slot back here.
 async fn refresh_devices(cloud: Arc<Cloud>, mesh: Arc<Mesh>) {
-    let mut failures = 0u32;
-    // The phase this loop surfaced its error at, so the next success
-    // clears only what it set, and only if the phase hasn't moved on to
-    // something else meanwhile.
-    let mut surfaced: Option<Phase> = None;
+    let mut surfacer = Surfacer::default();
     loop {
         if let Some(credential) = cloud.device_credential() {
             let ok = match cloud.registry().devices(&credential).await {
@@ -774,20 +868,18 @@ async fn refresh_devices(cloud: Arc<Cloud>, mesh: Arc<Mesh>) {
                 }
                 Err(_) => false,
             };
-            if ok {
-                failures = 0;
-                if let Some(at) = surfaced.take() {
-                    if cloud.phase() == at {
-                        cloud.set_phase(at, None);
-                    }
-                }
+            let (phase, error) = cloud.phase_and_error();
+            let write = if ok {
+                surfacer
+                    .recovered(phase, error.as_deref())
+                    .map(|at| (at, None))
             } else {
-                failures = failures.saturating_add(1);
-                if failures >= REFRESH_FAILURES_TO_ERROR {
-                    let at = cloud.phase();
-                    cloud.set_phase(at, Some("can't reach OpenRemote Cloud".into()));
-                    surfaced = Some(at);
-                }
+                surfacer
+                    .failed(phase, error.as_deref())
+                    .map(|(at, notice)| (at, notice.map(str::to_string)))
+            };
+            if let Some((at, notice)) = write {
+                cloud.set_phase(at, notice);
             }
         }
         {
@@ -828,18 +920,10 @@ async fn relay_loop(
             return;
         };
         let (established, ended) = relay_session(cloud, mesh, &credential, &mut out_rx).await;
-        match ended {
-            Ended::Stop => return,
-            Ended::Retry => {}
-        }
         mesh.drop_links();
-        if cloud.phase() == Phase::Online {
-            // However the session ended, the user must not be left looking
-            // at a stale "online".
-            cloud.set_phase(
-                Phase::Offline,
-                Some("the connection to OpenRemote Cloud dropped".into()),
-            );
+        let (phase, error) = cloud.phase_and_error();
+        let was_online = phase == Phase::Online;
+        if was_online {
             // The link was up: this is a fresh drop, not a run of failures.
             backoff = Duration::from_secs(1);
         }
@@ -847,14 +931,24 @@ async fn relay_loop(
             handshake_failures = 0;
         } else {
             handshake_failures = handshake_failures.saturating_add(1);
-            if handshake_failures >= HANDSHAKE_FAILURES_TO_ERROR {
-                // The endpoint answers something, but the session never
-                // comes up (a proxy in front of the relay 503ing through a
-                // maintenance window). A run of those must reach the user
-                // instead of leaving the phase at whatever it was with no
-                // error.
-                cloud.set_phase(Phase::Offline, Some("can't reach OpenRemote Cloud".into()));
+        }
+        if let Some((at, notice)) = retry_notice(
+            was_online,
+            error.as_deref(),
+            established,
+            handshake_failures,
+        ) {
+            // This runs before the Stop exit below on purpose: a credential
+            // that dies mid-session must not leave "online" behind, because
+            // nothing is connected any more and the next start is a sign-in
+            // this loop will not make. A session this daemon closed itself is
+            // the exception, and it says so.
+            if !matches!(ended, Ended::Closed) {
+                cloud.set_phase(at, notice.map(str::to_string));
             }
+        }
+        if matches!(ended, Ended::Stop | Ended::Closed) {
+            return;
         }
         // Frames queued during the dead session rode links that were just
         // dropped and can't be delivered in order; anything queued during
@@ -898,7 +992,7 @@ async fn relay_session(
         request.headers_mut().insert("x-openremote-version", value);
     }
     let Ok(stream) = cloud.http().connect(&uri).await else {
-        cloud.set_phase(Phase::Offline, Some("can't reach OpenRemote Cloud".into()));
+        cloud.set_phase(Phase::Offline, Some(UNREACHABLE.into()));
         return (false, Ended::Retry);
     };
     let ws = match tokio_tungstenite::client_async(request, stream).await {
@@ -996,7 +1090,12 @@ async fn relay_session(
                 }
             }
             outgoing = out_rx.recv() => {
-                let Some((to, payload)) = outgoing else { return (true, Ended::Stop) };
+                let Some((to, payload)) = outgoing else {
+                    // Nobody can send any more: this daemon is closing the run
+                    // (sign-out, leave, shutdown), so the phase is the caller's
+                    // to write and this loop must not report a drop it caused.
+                    return (true, Ended::Closed);
+                };
                 let mut frame = to.to_bytes().to_vec();
                 frame.extend_from_slice(&payload);
                 if sink.send(Message::Binary(frame.into())).await.is_err() {
@@ -1226,6 +1325,208 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Two failed device-list fetches in a row are an outage, not a blip: the
+    /// console gets a notice next to the phase. It is raised once per run of
+    /// failures (rewriting it every five minutes would only churn the view)
+    /// and the next good fetch takes it back down - but only when the notice
+    /// on screen is still the one this loop raised.
+    #[test]
+    fn a_failing_device_list_is_surfaced_once_per_run_and_cleared_once() {
+        let mut surfacer = Surfacer::default();
+        assert_eq!(
+            surfacer.failed(Phase::Online, None),
+            None,
+            "one failed fetch is a blip"
+        );
+        assert_eq!(
+            surfacer.failed(Phase::Online, None),
+            Some((Phase::Online, Some(UNREACHABLE))),
+            "two in a row is an outage the user should see"
+        );
+        assert_eq!(
+            surfacer.failed(Phase::Online, Some(UNREACHABLE)),
+            None,
+            "the notice is raised once, not rewritten on every later failure"
+        );
+        assert_eq!(
+            surfacer.recovered(Phase::Online, Some(UNREACHABLE)),
+            Some(Phase::Online),
+            "the next good fetch clears it"
+        );
+        assert_eq!(
+            surfacer.failed(Phase::Online, None),
+            None,
+            "the run of failures restarted with that success"
+        );
+    }
+
+    /// A notice that came from somewhere that knows more - a takeover, a
+    /// removal, a prompt to sign in - is never replaced by the refresher's
+    /// generic one, however long the outage runs.
+    #[test]
+    fn a_failing_device_list_never_overwrites_a_more_specific_notice() {
+        let takeover = Some("this device connected from somewhere else");
+        let mut surfacer = Surfacer::default();
+        for _ in 0..5 {
+            assert_eq!(
+                surfacer.failed(Phase::Offline, takeover),
+                None,
+                "a specific notice is left alone"
+            );
+        }
+    }
+
+    /// Clearing is the mirror image: a good fetch may only take down the
+    /// notice this loop raised, never one another writer put there.
+    #[test]
+    fn the_refresher_clears_only_the_notice_it_raised() {
+        // The loop raised its own notice at Offline; meanwhile something that
+        // knew more replaced it with the reason.
+        let mut replaced = Surfacer {
+            failures: REFRESH_FAILURES_TO_ERROR,
+            at: Some(Phase::Offline),
+        };
+        assert_eq!(
+            replaced.recovered(
+                Phase::Offline,
+                Some("This device was removed from your account.")
+            ),
+            None,
+            "another writer's notice survives a good fetch"
+        );
+        // Its own notice still comes down.
+        let mut own = Surfacer {
+            failures: REFRESH_FAILURES_TO_ERROR,
+            at: Some(Phase::Offline),
+        };
+        assert_eq!(
+            own.recovered(Phase::Offline, Some(UNREACHABLE)),
+            Some(Phase::Offline),
+            "the notice this loop raised is its to clear"
+        );
+        assert_eq!(
+            own.failed(Phase::Offline, None),
+            None,
+            "and the next outage starts counting from scratch"
+        );
+    }
+
+    /// A handshake that keeps failing must reach the console as an outage:
+    /// one failed attempt is a deploy-window blip, a run of them is a relay
+    /// nobody can get to, and the phase must not sit at "connecting" with no
+    /// notice. It is raised once per run, and a session that did come up is
+    /// never reported as one.
+    #[test]
+    fn a_run_of_failed_handshakes_surfaces_an_outage_once() {
+        assert_eq!(
+            retry_notice(false, None, false, 1),
+            None,
+            "one failed handshake is a blip"
+        );
+        assert_eq!(
+            retry_notice(false, None, false, HANDSHAKE_FAILURES_TO_ERROR - 1),
+            None,
+            "two in a row are still a blip"
+        );
+        assert_eq!(
+            retry_notice(false, None, false, HANDSHAKE_FAILURES_TO_ERROR),
+            Some((Phase::Offline, Some(UNREACHABLE))),
+            "three in a row is an outage the user should see"
+        );
+        assert_eq!(
+            retry_notice(false, None, false, HANDSHAKE_FAILURES_TO_ERROR + 4),
+            None,
+            "the notice is raised once, not rewritten on every later retry"
+        );
+        assert_eq!(
+            retry_notice(false, None, true, HANDSHAKE_FAILURES_TO_ERROR),
+            None,
+            "a session that came up is not an outage"
+        );
+    }
+
+    /// An "online" that is no longer true is demoted on the first retry,
+    /// whether or not the session had established and however it ended.
+    #[test]
+    fn online_is_demoted_on_the_first_retry() {
+        assert_eq!(
+            retry_notice(true, None, true, 0),
+            Some((Phase::Offline, Some(DROPPED))),
+            "a link that was up and dropped is not left saying online"
+        );
+        assert_eq!(
+            retry_notice(true, None, false, 1),
+            Some((Phase::Offline, Some(DROPPED))),
+            "and neither is one whose session was already gone"
+        );
+        assert_eq!(
+            retry_notice(
+                true,
+                Some("this device connected from somewhere else"),
+                true,
+                0
+            ),
+            Some((Phase::Offline, None)),
+            "the phase is demoted, but a specific reason is not replaced by a vaguer one"
+        );
+    }
+
+    /// The generic outage sentence never lands on top of the one that
+    /// explains why the phase moved.
+    #[test]
+    fn an_outage_never_overwrites_a_more_specific_notice() {
+        let takeover = Some("this device connected from somewhere else");
+        assert_eq!(
+            retry_notice(false, takeover, false, HANDSHAKE_FAILURES_TO_ERROR),
+            None,
+            "the takeover sentence is left alone"
+        );
+    }
+
+    /// A notice the relay cleared is raised again. The relay writes "online"
+    /// with no sentence when the link comes back, so the phase and the reason
+    /// this loop put on screen can both go away without any fetch succeeding.
+    /// Nothing else clears the failure count, so the notice must come back on
+    /// the next failed fetch: the alternative was a console reading "online"
+    /// beside a frozen device list for the whole outage.
+    #[test]
+    fn a_notice_another_writer_cleared_is_raised_again_on_the_next_failed_fetch() {
+        let mut surfacer = Surfacer::default();
+        assert_eq!(
+            surfacer.failed(Phase::Offline, None),
+            None,
+            "one failed fetch is a blip"
+        );
+        assert_eq!(
+            surfacer.failed(Phase::Offline, None),
+            Some((Phase::Offline, Some(UNREACHABLE))),
+            "the outage is raised"
+        );
+        assert_eq!(
+            surfacer.failed(Phase::Offline, Some(UNREACHABLE)),
+            None,
+            "and is not rewritten while it is still on screen"
+        );
+
+        // The relay reconnects: the phase is now Online with no sentence, so
+        // the notice this loop raised is gone from the view.
+        assert_eq!(
+            surfacer.failed(Phase::Online, None),
+            Some((Phase::Online, Some(UNREACHABLE))),
+            "a cleared notice is raised again"
+        );
+        assert_eq!(
+            surfacer.failed(Phase::Online, Some(DROPPED)),
+            Some((Phase::Online, Some(UNREACHABLE))),
+            "a generic sentence from the other loop is not a reason to stay quiet either"
+        );
+        assert_eq!(
+            surfacer.failed(Phase::Online, Some(UNREACHABLE)),
+            None,
+            "and once it is back on screen the run settles again"
+        );
     }
 
     /// An inbound stream whose END never comes gives its slot back at its

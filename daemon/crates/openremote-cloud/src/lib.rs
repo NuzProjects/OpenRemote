@@ -171,6 +171,14 @@ impl Cloud {
         self.inner().phase
     }
 
+    /// The phase and the notice beside it, read together: a caller that
+    /// decides what to write next must never act on half of a pair that
+    /// someone else just replaced.
+    pub(crate) fn phase_and_error(&self) -> (Phase, Option<String>) {
+        let inner = self.inner();
+        (inner.phase, inner.error.clone())
+    }
+
     /// The console's picture of Cloud on this device.
     pub fn view(&self) -> Value {
         let inner = self.inner();
@@ -636,11 +644,30 @@ impl Cloud {
 
     /// The user removed this device from their account here: it leaves for
     /// good, and joins as a new device if it signs in again.
+    ///
+    /// The registry's delete is the part that cannot be redone later: the
+    /// device's row lives in the account, and once the credential that can
+    /// remove it has been forgotten here, only another device can clean it up.
+    /// So a delete that fails is reported and nothing local is discarded:
+    /// the next leave (or unenroll) still has what it needs to finish. A 410
+    /// is that same delete already succeeded - the row is gone - and the
+    /// local side goes ahead.
     pub async fn leave(&self) -> Result<(), CloudError> {
-        self.stop();
+        // The delete comes first, and the mesh keeps running until it lands.
+        // Tearing the run down before the gate left a refused leave looking
+        // enrolled and online while connected to nothing, with no way back: the
+        // only start is the boot path, and the refresher that would notice a
+        // row deleted elsewhere was just aborted. The delete does not need the
+        // link down, so a failure now leaves the device exactly as it was.
         if let (Some(credential), Some(id)) = (self.device_credential(), self.device_id()) {
-            let _ = self.registry.delete(&credential, &id.to_string()).await;
+            match self.registry.delete(&credential, &id.to_string()).await {
+                Ok(()) | Err(RegistryError::Revoked) => {}
+                Err(e) => return Err(e.into()),
+            }
         }
+        // The row is gone or never existed: nothing may keep talking to the
+        // relay with a credential that no longer names a device.
+        self.stop();
         let refresh = self.inner().credentials.refresh_token.clone();
         if let Some(token) = refresh {
             oauth::revoke(
@@ -883,6 +910,228 @@ mod tests {
             Files::new(&dir).identity().unwrap().device_id,
             other.device_id,
             "the identity on disk is left alone"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A backend that answers every request with the status the test sets:
+    /// the registry's self-delete while the network is down, and once it is
+    /// back, the 410 a row that is already gone comes back as.
+    async fn status_backend(status: Arc<std::sync::atomic::AtomicU16>) -> String {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let status = status.load(std::sync::atomic::Ordering::SeqCst);
+                tokio::spawn(async move { answer(stream, status).await });
+            }
+        });
+        base
+    }
+
+    /// The head and body are read whole before anything is answered (closing
+    /// with unread request bytes resets the connection), then the status the
+    /// test chose goes back.
+    async fn answer(stream: tokio::net::TcpStream, status: u16) {
+        let mut stream = tokio::io::BufReader::new(stream);
+        let mut head = Vec::new();
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            if stream.read_until(b'\n', &mut line).await.unwrap_or(0) == 0 {
+                return;
+            }
+            if matches!(line.as_slice(), b"\r\n" | b"\n") {
+                break;
+            }
+            head.extend_from_slice(&line);
+        }
+        let head = String::from_utf8_lossy(&head).into_owned();
+        let mut body = vec![0u8; content_length(&head)];
+        if stream.read_exact(&mut body).await.is_err() {
+            return;
+        }
+        let body = br#"{"message":"OpenRemote Cloud is unavailable"}"#;
+        let head = format!(
+            "HTTP/1.1 {status} Status\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        let _ = stream.write_all(head.as_bytes()).await;
+        let _ = stream.write_all(body).await;
+    }
+
+    /// A device that is in the account: its identity, its credential, and the
+    /// desktop tokens a sign-out would otherwise leave behind.
+    fn seed_enrolled(dir: &std::path::Path, identity: &Identity) {
+        Files::new(dir).save_identity(identity).unwrap();
+        Files::new(dir)
+            .save_credentials(&Credentials {
+                device_credential: Some("the device credential".into()),
+                account: Some(Account {
+                    id: "acc-1".into(),
+                    email: "owner@example.test".into(),
+                    name: "owner".into(),
+                }),
+                kind: "desktop".into(),
+                access_token: Some("an account access token".into()),
+                access_expires_at: 0,
+                refresh_token: Some("the account refresh token".into()),
+            })
+            .unwrap();
+    }
+
+    /// A host that does nothing: these tests never reach a peer's request.
+    /// Only a run needs one, and a run is what a refused leave must not break.
+    struct Silent;
+    impl CloudHost for Silent {
+        fn dispatch(
+            &self,
+            _: PeerContext,
+            _: crate::rpc::Request,
+        ) -> futures_util::future::BoxFuture<'static, crate::rpc::Response> {
+            Box::pin(std::future::ready(crate::rpc::Response {
+                status: 200,
+                content_type: None,
+                body: Vec::new(),
+            }))
+        }
+        fn note(&self, _: PeerContext, _: Value) {}
+        fn linked(&self, _: DeviceId) {}
+        fn online(&self, _: DeviceId) {}
+        fn revoked(&self) {}
+    }
+
+    /// Leaving is only done when the registry has dropped the device's row:
+    /// the row outlives everything local, so forgetting the credential while
+    /// it stays in the account leaves a device nobody can remove from here
+    /// again. A delete that fails is reported and keeps what a retry needs; a
+    /// row the registry says is already gone finishes the leave.
+    #[tokio::test]
+    async fn a_leave_the_registry_refuses_keeps_its_credential_and_says_so() {
+        use std::sync::atomic::{AtomicU16, Ordering};
+        let status = Arc::new(AtomicU16::new(500));
+        let base = status_backend(Arc::clone(&status)).await;
+        let dir = scratch_dir();
+        let identity = Identity::generate();
+        seed_enrolled(&dir, &identity);
+        let cloud = Cloud::open(test_config(&base), &dir);
+        // A run is up, the way it is for a device that is in Cloud and
+        // connected. Nothing rebuilds a run except the boot path, so a refused
+        // leave that stopped this one would leave the console reading "online"
+        // beside a device that is connected to nothing, with no way back.
+        cloud.start(Arc::new(Silent));
+        assert!(cloud.mesh().is_some(), "a run for this device");
+        let phase_before = cloud.phase();
+
+        assert!(
+            matches!(cloud.leave().await, Err(CloudError::Registry(_))),
+            "the console is told the device could not be removed"
+        );
+        let kept = Files::new(&dir).credentials();
+        assert_eq!(
+            kept.device_credential.as_deref(),
+            Some("the device credential"),
+            "the credential that can still remove the row is kept"
+        );
+        assert_eq!(
+            kept.refresh_token.as_deref(),
+            Some("the account refresh token"),
+            "the token a retry revokes is kept too"
+        );
+        assert!(cloud.enrolled(), "this device is still in the account");
+        assert_eq!(
+            Files::new(&dir).identity().unwrap().device_id,
+            identity.device_id,
+            "the identity the row belongs to is kept with it"
+        );
+        assert_eq!(
+            cloud.phase(),
+            phase_before,
+            "the console shows what it showed before: still in the account, still connected"
+        );
+        assert!(
+            cloud.mesh().is_some(),
+            "the refused leave did not tear the run down, so the relay's own 401 or removal can still move the phase"
+        );
+
+        // The registry is reachable again and no longer has the row.
+        status.store(410, Ordering::SeqCst);
+        cloud
+            .leave()
+            .await
+            .expect("a row the registry no longer has is out of the account");
+        assert!(!cloud.enrolled(), "the leave finished this time");
+        assert_eq!(cloud.phase(), Phase::SignedOut);
+        assert!(
+            cloud.mesh().is_none(),
+            "the finished leave stops the run: nothing talks to the relay with a dead credential"
+        );
+        assert!(
+            Files::new(&dir).identity().is_none(),
+            "a sign-in from here is a new device"
+        );
+        assert!(
+            Files::new(&dir).credentials().refresh_token.is_none(),
+            "no token survives the leave"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A credential the registry rejects is the one failure no retry can fix:
+    /// every later leave answers 401 until the user signs in again. What the
+    /// console must see is the truth - this device is still in the account and
+    /// still connected, so the relay's own 401 can move the phase to "sign in
+    /// again" - and nothing may be forgotten locally in the meantime.
+    #[tokio::test]
+    async fn a_leave_a_dead_credential_refuses_forgets_nothing_and_does_not_lie_about_the_phase() {
+        use std::sync::atomic::AtomicU16;
+        let status = Arc::new(AtomicU16::new(401));
+        let base = status_backend(Arc::clone(&status)).await;
+        let dir = scratch_dir();
+        let identity = Identity::generate();
+        seed_enrolled(&dir, &identity);
+        let cloud = Cloud::open(test_config(&base), &dir);
+        let phase_before = cloud.phase();
+
+        assert!(
+            matches!(
+                cloud.leave().await,
+                Err(CloudError::Registry(RegistryError::Unauthorized))
+            ),
+            "a dead credential is reported as one, not as a generic failure"
+        );
+        // A second attempt answers the same way: this is not a transient the
+        // caller can wait out.
+        assert!(
+            matches!(
+                cloud.leave().await,
+                Err(CloudError::Registry(RegistryError::Unauthorized))
+            ),
+            "retrying cannot fix a credential the registry rejects"
+        );
+        assert_eq!(
+            cloud.phase(),
+            phase_before,
+            "the console is not told the device left an account it is still in"
+        );
+        assert!(cloud.enrolled());
+        let kept = Files::new(&dir).credentials();
+        assert_eq!(
+            kept.device_credential.as_deref(),
+            Some("the device credential")
+        );
+        assert_eq!(
+            kept.refresh_token.as_deref(),
+            Some("the account refresh token")
+        );
+        assert_eq!(
+            Files::new(&dir).identity().unwrap().device_id,
+            identity.device_id
         );
         std::fs::remove_dir_all(&dir).unwrap();
     }
