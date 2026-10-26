@@ -721,7 +721,14 @@ pub(crate) fn swap_in(plugins_root: &Path, from: &Path, target: &Path) -> Result
             .join(uuid::Uuid::new_v4().to_string());
         std::fs::create_dir_all(trash.parent().expect("trash parent"))?;
         std::fs::rename(target, &trash)?;
-        std::fs::rename(from, target)?;
+        if let Err(e) = std::fs::rename(from, target) {
+            // The old copy is in .trash and nothing ever looks in there
+            // again: a failed rename (a running chat holds the folder on
+            // Windows) would leave the plugin gone while the store still
+            // lists it as installed and on. Put it back.
+            let _ = std::fs::rename(&trash, target);
+            return Err(e.into());
+        }
         let _ = std::fs::remove_dir_all(&trash);
     } else {
         std::fs::rename(from, target)?;
@@ -1432,10 +1439,48 @@ pub async fn rerun_command(
         std::fs::create_dir_all(fresh.join(".claude-plugin"))?;
         std::fs::copy(target.join(&manifest), fresh.join(&manifest))?;
     }
+    // The folder the user approved was a statement about what the plugin
+    // may do. A command's output can change afterwards, so the new copy is
+    // read here and a power the record does not carry is not swapped in
+    // live: it waits for an install from Plugins, where the review shows
+    // it. A copy that cannot be read as a plugin is refused for the same
+    // reason - the last copy stays, and the note says what happened.
+    let new_powers = match read_manifest(&fresh, &[]) {
+        Ok(manifest) => manifest.powers,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&fresh);
+            return Err(PluginError::Invalid(format!(
+                "its new copy cannot be read as a plugin ({e}) - install it from Plugins to review it"
+            )));
+        }
+    };
+    let added: Vec<&str> = new_powers
+        .iter()
+        .filter(|power| !plugin.powers.contains(power))
+        .map(|power| power_word(*power))
+        .collect();
+    if !added.is_empty() {
+        let _ = std::fs::remove_dir_all(&fresh);
+        return Err(PluginError::Invalid(format!(
+            "its new copy asks for {}, which you have not approved - install it from Plugins to review the change",
+            added.join(", ")
+        )));
+    }
     let swapped = swap_in(&root, &fresh, &target);
     let _ = std::fs::remove_dir_all(&fresh);
     swapped?;
     Ok(Some(hash))
+}
+
+/// A power in the words the approval screen uses.
+fn power_word(power: PluginPower) -> &'static str {
+    match power {
+        PluginPower::RunPrograms => "starting programs",
+        PluginPower::ReadChats => "reading chats",
+        PluginPower::AgentTools => "agent tools",
+        PluginPower::Network => "the network",
+        PluginPower::Microphone => "the microphone",
+    }
 }
 
 /// The marketplace entry's part in the plugin's Claude manifest, as Claude
@@ -1942,6 +1987,91 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(data.path().join("escape/keep.txt")).unwrap(),
             "the user's own"
+        );
+    }
+
+    #[test]
+    fn a_failed_swap_puts_the_old_copy_back() {
+        let root = tempfile::tempdir().unwrap();
+        let plugins = root.path().join("plugins");
+        let target = plugins.join("official/tidy");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("openremote.json"), "the old copy").unwrap();
+        // The incoming folder is not there, so the second rename fails the
+        // way a folder a running chat still holds open makes it fail.
+        swap_in(&plugins, &root.path().join("missing"), &target).unwrap_err();
+        // The plugin is where the store says it is, still.
+        assert_eq!(
+            std::fs::read_to_string(target.join("openremote.json")).unwrap(),
+            "the old copy"
+        );
+        // And .trash is not left holding the only copy.
+        let left = std::fs::read_dir(plugins.join(".trash")).map(|it| it.count());
+        assert_eq!(left.unwrap_or(0), 0);
+    }
+
+    #[tokio::test]
+    async fn a_command_plugins_new_powers_are_not_swapped_in_unreviewed() {
+        let data = tempfile::tempdir().unwrap();
+        let data_dir = data.path();
+        let installed = data_dir.join("plugins/generated/gen");
+        std::fs::create_dir_all(installed.join("skills/a")).unwrap();
+        std::fs::write(installed.join("skills/a/SKILL.md"), "# a").unwrap();
+        std::fs::write(
+            installed.join("openremote.json"),
+            r#"{"api": 1, "name": "gen", "runtime": "content"}"#,
+        )
+        .unwrap();
+        // What the approved command prints now: a changed copy of the same
+        // plugin, at first with the powers the user approved.
+        let printed = tempfile::tempdir().unwrap();
+        let folder = printed.path().join("gen");
+        std::fs::create_dir_all(folder.join("skills/a")).unwrap();
+        std::fs::write(folder.join("skills/a/SKILL.md"), "# a changed").unwrap();
+        std::fs::write(
+            folder.join("openremote.json"),
+            r#"{"api": 1, "name": "gen", "runtime": "content"}"#,
+        )
+        .unwrap();
+        let record = |resolved: Option<String>| InstalledPlugin {
+            name: "gen".into(),
+            marketplace: "generated".into(),
+            resolved,
+            command: Some(ApprovedCommand {
+                command: format!("echo {}", folder.display()),
+                timeout_secs: 30,
+            }),
+            version: None,
+            description: None,
+            runtime: PluginRuntime::Content,
+            powers: Vec::new(),
+            source: PluginSource::Marketplace {
+                marketplace: "generated".into(),
+                plugin: "gen".into(),
+                from: "a command".into(),
+            },
+            scope: openremote_core::PluginScope::Machine,
+            enabled: true,
+            installed_at: 0,
+            updated_at: 0,
+        };
+        assert!(rerun_command(data_dir, &record(None)).await.unwrap().is_some());
+        assert_eq!(
+            std::fs::read_to_string(installed.join("skills/a/SKILL.md")).unwrap(),
+            "# a changed"
+        );
+        // The output grows an MCP server, which runs programs: a power the
+        // user never saw. It is not swapped in behind their back.
+        std::fs::write(folder.join(".mcp.json"), "{}").unwrap();
+        let err = rerun_command(data_dir, &record(None))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("starting programs"), "{err}");
+        assert!(!installed.join(".mcp.json").exists());
+        assert_eq!(
+            std::fs::read_to_string(installed.join("skills/a/SKILL.md")).unwrap(),
+            "# a changed"
         );
     }
 
