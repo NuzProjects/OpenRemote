@@ -1161,6 +1161,9 @@ async fn npm_fetch(
                 .as_str()
                 .ok_or_else(|| PluginError::Source(format!("{name} {chosen} has no tarball")))?
                 .to_string();
+            // A registry that offers no digest at all gets no install: an
+            // unchecked tarball is unpacked into the staging folder and
+            // read as a plugin, and an entry may name its own registry.
             let integrity = dist["integrity"]
                 .as_str()
                 .map(|i| Integrity::Sri(i.to_string()))
@@ -1168,8 +1171,13 @@ async fn npm_fetch(
                     dist["shasum"]
                         .as_str()
                         .map(|s| Integrity::Sha1(s.to_string()))
-                });
-            (tarball, integrity, chosen)
+                })
+                .ok_or_else(|| {
+                    PluginError::Source(format!(
+                        "{name} {chosen} names no integrity digest, so the download cannot be checked - refusing it"
+                    ))
+                })?;
+            (tarball, Some(integrity), chosen)
         };
     let bytes = http_get(&tarball, "*/*", MAX_ARCHIVE_BYTES).await?;
     if let Some(integrity) = integrity {
@@ -1206,7 +1214,20 @@ impl Integrity {
                     base64::engine::general_purpose::STANDARD.encode(sha1::Sha1::digest(bytes))
                         == want
                 }
-                _ => true,
+                // A digest in an algorithm this daemon does not know is
+                // refused instead of accepted: answering "fine" here would
+                // silently drop the check entirely, and the registry that
+                // chose the digest is the one serving the tarball.
+                Some((algorithm, _)) => {
+                    return Err(PluginError::Source(format!(
+                        "{url} is checked with {algorithm}, an integrity algorithm this OpenRemote cannot verify - refusing it"
+                    )));
+                }
+                None => {
+                    return Err(PluginError::Source(format!(
+                        "{url} names an integrity digest with no algorithm - refusing it"
+                    )));
+                }
             },
             Integrity::Sha1(want) => hex(&sha1::Sha1::digest(bytes)).eq_ignore_ascii_case(want),
         };
@@ -1809,6 +1830,39 @@ mod tests {
         assert_eq!(npm_pick(&meta, "^4"), None);
         assert_eq!(split_package("@scope/x@1.2.3"), ("@scope/x", Some("1.2.3")));
         assert_eq!(split_package("@scope/x"), ("@scope/x", None));
+    }
+
+    #[test]
+    fn an_integrity_digest_this_daemon_cannot_check_is_refused() {
+        use base64::Engine;
+        use sha2::Digest;
+        let bytes = b"a tarball";
+        let good = format!(
+            "sha512-{}",
+            base64::engine::general_purpose::STANDARD.encode(sha2::Sha512::digest(bytes))
+        );
+        assert!(Integrity::Sri(good).check(bytes, "u").is_ok());
+        assert!(Integrity::Sha1(hex(&sha1::Sha1::digest(bytes)))
+            .check(bytes, "u")
+            .is_ok());
+        // An algorithm this daemon cannot compute, and a digest with no
+        // algorithm at all, are refusals: the catch-all used to answer
+        // "fine" and drop the download check entirely, and a catalog entry
+        // may name the registry that supplies both the tarball and the
+        // digest.
+        for sri in ["sha999-anything", "md5-1B2M2Y8AsgTpgAmY7PhCfg==", "sha512"] {
+            let err = Integrity::Sri(sri.to_string())
+                .check(bytes, "https://x/t.tgz")
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("refusing it"), "{sri}: {err}");
+        }
+        let wrong = Integrity::Sri("sha512-AAAA".into())
+            .check(bytes, "u")
+            .unwrap_err()
+            .to_string();
+        assert!(wrong.contains("does not match"), "{wrong}");
+        assert!(Integrity::Sha1("00".into()).check(bytes, "u").is_err());
     }
 
     #[test]
