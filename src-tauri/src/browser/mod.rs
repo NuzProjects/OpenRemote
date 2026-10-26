@@ -198,7 +198,8 @@ fn profile_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(base.join("browser").join("profile"))
 }
 
-fn console() -> EventTarget {
+/// The console's webview, for anything the shell has to tell it directly.
+pub(crate) fn console() -> EventTarget {
     EventTarget::Webview {
         label: CONSOLE.into(),
     }

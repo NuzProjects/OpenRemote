@@ -17,12 +17,14 @@ name: Release
 # Two channels share this one pipeline:
 #
 # - Stable: a `v*` tag. Its release is the newest release, so
-#   `releases/latest/download/<name>` follows it and the in-app updater's
-#   latest.json (written from that release) is what a stable install sees.
+#   `releases/latest/download/<name>` follows it, and that URL is how a
+#   user moves to a newer version: the app does not look for updates on
+#   its own, so an installed copy changes only when someone runs a newer
+#   installer over it.
 # - Nightly: the scheduled run. It builds whatever is on the default
 #   branch and replaces the rolling `nightly` release, which is marked
 #   prerelease on purpose - a nightly must never become `latest`, or the
-#   stable download URLs and the updater would move to a test build. The
+#   stable download URLs would move to a test build. The
 #   release is deleted and recreated each night so its download URLs stay
 #   fixed (.../releases/download/nightly/OpenRemote-Setup-x64.exe) while
 #   the binaries follow main. The previous nightly's commit is written
@@ -250,9 +252,9 @@ jobs:
       # A tag can point at a commit no branch contains: a local commit, or
       # work on a branch that was never merged. Publishing from one would
       # ship installers built from code the project never accepted, move
-      # `releases/latest` and the in-app updater for every user, and do it
-      # through the pipeline that holds the release token and the Android
-      # signing key. The compare API answers whether this commit is on the
+      # `releases/latest` for every user, and do it through the pipeline
+      # that holds the release token and the Android signing key. The
+      # compare API answers whether this commit is on the
       # default branch's history: identical or behind is fine (a
       # maintenance tag on an older commit), ahead or diverged is not.
       - name: preflight (the tag is on the default branch)

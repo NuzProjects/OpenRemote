@@ -14,11 +14,12 @@ const ALL_HARNESSES = new Intl.ListFormat('en', { type: 'conjunction' }).format(
 // connection plumbing: the daemon comes up with the app. A quiet setup
 // beat shows only while it boots (a moment), and the manual connect form
 // is a fallback for when auto-connection genuinely fails (browser mode,
-// a daemon that never answered).
-export default function Onboarding({ onDone }) {
+// a daemon that never answered). `startManual` opens straight on that
+// form, for the waiting screen's "connect by address" link.
+export default function Onboarding({ onDone, startManual = false }) {
   const { connection, capabilities, connect } = useConsole()
-  const [step, setStep] = useState('welcome') // welcome | setup | ready
-  const [manual, setManual] = useState(false)
+  const [step, setStep] = useState(startManual ? 'setup' : 'welcome') // welcome | setup | ready
+  const [manual, setManual] = useState(startManual)
   const [url, setUrl] = useState('')
   const [token, setToken] = useState('')
 

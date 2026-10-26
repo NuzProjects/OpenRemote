@@ -6,7 +6,7 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
-use tauri::{Manager, State, WindowEvent};
+use tauri::{Emitter, Manager, State, WindowEvent};
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 
@@ -47,6 +47,7 @@ fn daemon_restart(
         let _ = child.kill();
     }
     *state.info.lock().expect("daemon state lock") = DaemonInfo::default();
+    tell_console(&app);
     spawn_daemon(app);
 }
 
@@ -155,8 +156,10 @@ fn spawn_daemon(app: tauri::AppHandle) {
                     // quarantined by a scanner, truncated by an
                     // interrupted copy, locked by another process. That
                     // can be transient while the app lives, so retry on
-                    // the growing wait; the info stays clear meanwhile.
+                    // the growing wait, and give the console the reason so
+                    // it says something instead of waiting in silence.
                     eprintln!("openremote: the daemon could not be started: {err}");
+                    report_failure(&app, err.to_string());
                     respawn_delay(wait).await;
                     if daemon_slot_claimed(&app) {
                         return;
@@ -174,7 +177,11 @@ fn spawn_daemon(app: tauri::AppHandle) {
 
             let mut info = DaemonInfo::default();
             let mut published = false;
+            let mut exit = None;
             while let Some(event) = rx.recv().await {
+                if let CommandEvent::Terminated(payload) = &event {
+                    exit = payload.code;
+                }
                 if let CommandEvent::Stdout(line) = event {
                     let line = String::from_utf8_lossy(&line).trim().to_string();
                     if let Some(addr) = line.strip_prefix("READY ") {
@@ -206,12 +213,19 @@ fn spawn_daemon(app: tauri::AppHandle) {
                 return;
             }
             // Clear the dead daemon's info so daemon_info stops answering
-            // with an address nothing listens on. The replacement
-            // repopulates it when it says READY and DATA_DIR.
+            // with an address nothing listens on, and say why it went. The
+            // replacement repopulates both when it says READY and DATA_DIR.
             *app.state::<DaemonState>()
                 .info
                 .lock()
                 .expect("daemon state lock") = DaemonInfo::default();
+            report_failure(
+                &app,
+                match exit {
+                    Some(code) => format!("the daemon stopped (exit code {code})"),
+                    None => "the daemon stopped".to_string(),
+                },
+            );
             eprintln!("openremote: the daemon exited, respawning");
             respawn_delay(wait).await;
             if daemon_slot_claimed(&app) {
@@ -237,6 +251,38 @@ fn daemon_slot_claimed(app: &tauri::AppHandle) -> bool {
         .lock()
         .expect("daemon state lock")
         .is_some()
+}
+
+/// Hand what the shell knows about the daemon to the console. The console
+/// also asks `daemon_info` on its own, and that is what makes this safe to
+/// miss: a spawn that fails before the console has loaded its listener is
+/// still there when the console asks. This is the same event bus the
+/// browser reports its tabs on, not a second way of talking.
+fn tell_console(app: &tauri::AppHandle) {
+    let info = app
+        .state::<DaemonState>()
+        .info
+        .lock()
+        .expect("daemon state lock")
+        .clone();
+    let _ = app.emit_to(browser::console(), "daemon:status", info);
+}
+
+/// Record why the daemon is not running, and tell the console. A daemon
+/// that is up is never described as failed: the address it published
+/// stays, so a stale reason from another spawn cannot sit over a live one.
+fn report_failure(app: &tauri::AppHandle, error: String) {
+    {
+        let state = app.state::<DaemonState>();
+        let mut info = state.info.lock().expect("daemon state lock");
+        if info.url.is_none() {
+            *info = DaemonInfo {
+                error: Some(error),
+                ..DaemonInfo::default()
+            };
+        }
+    }
+    tell_console(app);
 }
 
 /// Sleep out a respawn wait on the runtime's blocking pool. The shell
@@ -290,8 +336,12 @@ fn publish(app: &tauri::AppHandle, info: &mut DaemonInfo) {
         .as_deref()
         .and_then(read_daemon_token_at)
         .or_else(read_daemon_token_default);
+    // A daemon that answered is not a failure: whatever a failed attempt
+    // left here stops being true the moment one says READY.
+    info.error = None;
     let state = app.state::<DaemonState>();
     *state.info.lock().expect("daemon state lock") = info.clone();
+    tell_console(app);
 }
 
 /// The daemon's default data dir is `~/.openremote`; its `token` file holds

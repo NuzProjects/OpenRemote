@@ -72,10 +72,21 @@ fn start_daemon(app: tauri::AppHandle, data_dir: std::path::PathBuf) {
                     token: Some(daemon.token),
                     data_dir: Some(daemon.data_dir.display().to_string()),
                     mobile: true,
+                    ..DaemonInfo::default()
                 };
                 let _ = DAEMON.set(daemon.app);
             }
-            Err(e) => eprintln!("openremote: the daemon didn't start: {e}"),
+            Err(e) => {
+                eprintln!("openremote: the daemon didn't start: {e}");
+                // A phone cannot restart it from a button: give the console
+                // the reason so it can say to reopen the app.
+                let state = app.state::<DaemonState>();
+                *state.info.lock().expect("daemon state lock") = DaemonInfo {
+                    error: Some(e.to_string()),
+                    mobile: true,
+                    ..DaemonInfo::default()
+                };
+            }
         }
     });
 }
