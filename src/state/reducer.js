@@ -60,6 +60,10 @@ export function chatFromSession(session) {
     // The daemon keeps each chat's title, so every device shows the same
     // name before the transcript loads.
     title: session.title ?? null,
+    // The session's own last-write stamp, in ms. A poll beat is a snapshot
+    // taken at some moment: comparing stamps is how the merge knows
+    // whether the name it carries is newer than the one on screen.
+    updatedAt: session.updated_at ?? 0,
     // The device that runs a synced chat; none for a private one.
     executor: session.executor ?? null,
     // Messages waiting for the running turn to end (the daemon's queue),
@@ -86,12 +90,20 @@ export function chatFromSession(session) {
 /// the stream folded - the timeline and its cursor, the pending
 /// decision, the context numbers, the decisions list, and the running
 /// cost and thinking-token totals (the session payload carries neither
-/// total, so nothing else can restore them).
+/// total, so nothing else can restore them). The title is the one fact the
+/// stamp decides: the daemon's name is the truth, but a beat taken before a
+/// rename this console already folded must not take the newer name back.
 export function mergeSessionIntoChat(existing, session) {
   const fresh = chatFromSession(session)
+  // The session's last-write stamp says when this snapshot was taken, so a
+  // beat that raced a rename loses to the rename. A beat carrying no title
+  // at all (a session the daemon has not named yet) never blanks the name
+  // the console derived from the first prompt.
+  const beatIsNewer = (fresh.updatedAt ?? 0) >= (existing.updatedAt ?? 0)
   return {
     ...fresh,
-    title: existing.title ?? fresh.title,
+    title: (beatIsNewer ? fresh.title : null) ?? existing.title,
+    updatedAt: Math.max(existing.updatedAt ?? 0, fresh.updatedAt ?? 0),
     timeline: existing.timeline,
     foldedSeq: existing.foldedSeq,
     pendingDecisionId: existing.pendingDecisionId,
@@ -117,6 +129,27 @@ export function vanishedChatIds(chats, sessions, polledIds) {
     gone.push(id)
   }
   return gone
+}
+
+/// Retire the live items of a turn that is over. A settled message or
+/// reasoning block normally replaces them, but a turn can end without one:
+/// an interrupt, a stop, a harness that exited. The partial text is real
+/// and stays in the transcript; only its liveness was a claim nobody can
+/// still make, and a block that keeps a caret breathing says an idle chat
+/// is still speaking. `turn` narrows the sweep to one turn; null is every
+/// live item, for when the session itself is over.
+function retireLiveItems(chat, turn) {
+  for (let i = 0; i < chat.timeline.length; i++) {
+    const item = chat.timeline[i]
+    if (turn != null && item.turn !== turn) continue
+    if (item.kind === 'stream') {
+      // The settled shape message.added pushes, so nothing downstream has
+      // to know this reply arrived in fragments.
+      chat.timeline[i] = { kind: 'message', id: item.id, role: 'agent', text: item.text }
+    } else if (item.kind === 'reasoning-stream') {
+      chat.timeline[i] = { kind: 'reasoning', id: item.id, turn: item.turn, text: item.text }
+    }
+  }
 }
 
 /// Fold one event into the chat. Events arrive in seq order; the timeline
@@ -149,6 +182,12 @@ export function foldEvent(chat, event) {
       if (payload.reason != null) chat.lastError = payload.reason
       else if (payload.status !== 'failed') chat.lastError = null
       chat.running = ['starting', 'working', 'waiting'].includes(payload.status)
+      // A stop or a failure ends the turn with no settled message ever
+      // coming; a turn that is working or waiting on an answer is still
+      // speaking, and its live block stays honest.
+      if (payload.status === 'failed' || payload.status === 'stopped') {
+        retireLiveItems(chat, null)
+      }
       break
     }
     case 'queue.changed': {
@@ -168,6 +207,14 @@ export function foldEvent(chat, event) {
       // the session is healthy and reports no error.
       if (session.last_error != null) chat.lastError = session.last_error
       else if (session.status !== 'failed') chat.lastError = null
+      // A rename arrives as this event with the whole session, so the name
+      // the user asked for lands on the open chat now instead of on the
+      // next beat. The stamp is what keeps a beat read before the rename
+      // from undoing it.
+      if (session.title != null) chat.title = session.title
+      if (Number.isFinite(session.updated_at)) {
+        chat.updatedAt = Math.max(chat.updatedAt ?? 0, session.updated_at)
+      }
       if (session.model) chat.model = session.model
       if (session.effort) chat.effort = session.effort
       if (session.permission_mode) chat.permissionMode = session.permission_mode
@@ -344,7 +391,13 @@ export function foldEvent(chat, event) {
       break
     }
     case 'turn.started':
+      break
     case 'turn.completed':
+      // A turn that succeeded was settled by its message.added, so there is
+      // nothing left to retire. One that was interrupted or failed was not,
+      // and the partial reply is all the user is left with.
+      retireLiveItems(chat, payload.turn ?? null)
+      break
     case 'message.delta':
     default:
       break

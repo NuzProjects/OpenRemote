@@ -730,7 +730,7 @@ export class DaemonApi {
       let skipped = 0
       try {
         const query = cursor == null ? '' : `?after=${cursor}`
-        const response = await fetch(`${this.url}/sessions/${id}/events${query}`, {
+        const response = await fetch(`${this.url}${this.prefix}/sessions/${id}/events${query}`, {
           headers: { Authorization: `Bearer ${this.token}` },
           // No timeout: this connection's lifetime is the stream itself
           // (the stop handle and the poll decide when it ends).

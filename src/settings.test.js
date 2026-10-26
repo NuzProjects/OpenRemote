@@ -178,3 +178,34 @@ test('pushRecentWorkspace dedupes, fronts, and caps at eight', () => {
   assert.equal(loadRecentWorkspaces().length, 8)
   assert.equal(loadRecentWorkspaces()[0], 'extra-9')
 })
+
+test('a storage that refuses to answer leaves the defaults, before first paint', () => {
+  // The boot reads prefs at module scope (main.jsx) so the first frame is
+  // never animated, spaced or readable by accident. Every read in here
+  // has to fall through to the defaults when storage refuses: one that
+  // sat outside its guard took the whole boot down instead.
+  const real = globalThis.localStorage
+  globalThis.localStorage = {
+    getItem: () => {
+      throw new Error('storage is not available')
+    },
+    setItem: () => {
+      throw new Error('storage is not available')
+    },
+    removeItem: () => {
+      throw new Error('storage is not available')
+    },
+    clear: () => {},
+  }
+  try {
+    const p = loadPrefs()
+    assert.equal(p.reduce_motion, false)
+    assert.equal(p.density, 'comfortable')
+    assert.equal(p.startup_view, 'new')
+    assert.equal(p.privacy_mode, false)
+    // Saving under the same storage is already a no-op, never a throw.
+    savePrefs({ density: 'compact' })
+  } finally {
+    globalThis.localStorage = real
+  }
+})

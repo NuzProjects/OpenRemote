@@ -456,3 +456,103 @@ test('the queue folds from the session and from queue.changed, and an empty one 
   foldEvent(chat, { seq: 4, type: 'session.updated', session: { id: 's1', harness: 'claude', status: 'working' } })
   assert.deepEqual(chat.queue.map((m) => m.text), ['third'])
 })
+
+test('a rename lands live, and a beat snapshotted before it never takes the name back', () => {
+  let chat = chatFromSession(session({ status: 'working', updated_at: 1000 }))
+  foldEvent(chat, event(2, { type: 'message.added', message: { id: 'm1', turn: 1, role: 'user', text: 'do the thing' } }))
+  // A fresh chat is never anonymous: the console names it from the first
+  // prompt before the daemon has written a title of its own.
+  assert.equal(chat.title, 'do the thing')
+
+  // /rename stores the title, and the daemon emits the whole session.
+  foldEvent(chat, event(3, { type: 'session.updated', session: session({ status: 'working', title: 'Release triage', updated_at: 2000 }) }))
+  assert.equal(chat.title, 'Release triage', 'the rename folds into the open chat')
+
+  // The poll beat read the session before the rename wrote it, and its
+  // answer lands after: the older snapshot must not take the name back.
+  const stale = mergeSessionIntoChat(chat, session({ status: 'working', title: 'do the thing', updated_at: 1500 }))
+  assert.equal(stale.title, 'Release triage', 'a beat taken before the rename keeps the new name')
+  assert.equal(stale.updatedAt, 2000, 'the record keeps the newest session stamp it has seen')
+
+  // The next beat is newer than the rename and agrees with it.
+  const next = mergeSessionIntoChat(stale, session({ status: 'idle', title: 'Release triage', updated_at: 2400 }))
+  assert.equal(next.title, 'Release triage')
+  assert.equal(next.updatedAt, 2400)
+})
+
+test('a rename made on another device reaches a chat this console is not streaming', () => {
+  // With no live stream the poll beat is the only witness, so the
+  // payload's newer name has to land.
+  const record = chatFromSession(session({ status: 'idle', title: 'do the thing', updated_at: 1000 }))
+  const merged = mergeSessionIntoChat(record, session({ status: 'idle', title: 'Renamed elsewhere', updated_at: 5000 }))
+  assert.equal(merged.title, 'Renamed elsewhere')
+})
+
+test('a beat that carries no title keeps the one derived from the first prompt', () => {
+  // The daemon names a session from its first prompt too, but a session
+  // created before that write reports none: the console's own name is all
+  // there is, and a beat must not blank it.
+  let chat = chatFromSession(session({ status: 'working', updated_at: 1000 }))
+  foldEvent(chat, event(2, { type: 'message.added', message: { id: 'm1', turn: 1, role: 'user', text: 'do the thing' } }))
+  const merged = mergeSessionIntoChat(chat, session({ status: 'working', updated_at: 1200 }))
+  assert.equal(merged.title, 'do the thing')
+})
+
+test('a turn that ends without its settled message retires the live reply', () => {
+  let chat = chatFromSession(session({ status: 'working' }))
+  foldEvent(chat, event(2, { type: 'message.added', message: { id: 'm1', turn: 1, role: 'user', text: 'count them' } }))
+  foldEvent(chat, event(3, { type: 'reasoning.delta', turn: 1, text: 'counting' }))
+  foldEvent(chat, event(4, { type: 'message.delta', turn: 1, text: 'There are ' }))
+  assert.equal(railItems(chat).at(-1).kind, 'stream')
+
+  // Esc. The harness never sends the assistant message that would have
+  // settled the stream, so the partial text is all there is - and a live
+  // block would keep a caret breathing in an idle chat.
+  foldEvent(chat, event(5, { type: 'turn.completed', turn: 1, outcome: 'interrupted', coarse: 'stopped' }))
+  const rail = railItems(chat)
+  assert.equal(rail.length, 3, 'the ending adds and drops nothing')
+  assert.equal(rail[1].kind, 'reasoning')
+  assert.equal(rail[1].text, 'counting')
+  assert.equal(rail[2].kind, 'message')
+  assert.equal(rail[2].role, 'agent')
+  assert.equal(rail[2].text, 'There are ', 'the partial reply is kept, not deleted')
+  assert.ok(!rail.some((item) => item.kind === 'stream' || item.kind === 'reasoning-stream'))
+})
+
+test('an interrupted turn settles only its own live items', () => {
+  let chat = chatFromSession(session({ status: 'working' }))
+  foldEvent(chat, event(2, { type: 'message.delta', turn: 1, text: 'first ' }))
+  foldEvent(chat, event(3, { type: 'turn.completed', turn: 1, outcome: 'interrupted', coarse: 'stopped' }))
+  foldEvent(chat, event(4, { type: 'message.delta', turn: 2, text: 'second ' }))
+  assert.equal(railItems(chat).at(-1).kind, 'stream', 'the next turn still streams')
+  foldEvent(chat, event(5, { type: 'turn.completed', turn: 2, outcome: 'failed', coarse: 'failed' }))
+  const rail = railItems(chat)
+  assert.equal(rail[0].kind, 'message')
+  assert.equal(rail[1].kind, 'message')
+  assert.equal(rail[1].text, 'second ')
+})
+
+test('a session that dies mid-reply retires the live reply with no turn event', () => {
+  // A harness that exits mid-turn reports the failure as a status. There
+  // is no turn.completed to name the turn, and the caret must still go.
+  let chat = chatFromSession(session({ status: 'working' }))
+  foldEvent(chat, event(2, { type: 'message.delta', turn: 1, text: 'Half a sen' }))
+  foldEvent(chat, event(3, { type: 'session.status_changed', status: 'failed', reason: 'the harness exited' }))
+  let rail = railItems(chat)
+  assert.equal(rail[0].kind, 'message')
+  assert.equal(rail[0].text, 'Half a sen')
+  assert.equal(chat.lastError, 'the harness exited')
+
+  // A stop ends it the same way.
+  const stopped = chatFromSession(session({ status: 'working' }))
+  foldEvent(stopped, event(2, { type: 'message.delta', turn: 1, text: 'Halfway' }))
+  foldEvent(stopped, event(3, { type: 'session.status_changed', status: 'stopped', reason: null }))
+  assert.equal(railItems(stopped)[0].kind, 'message')
+
+  // A turn waiting on the user's answer is not over: its reply is still
+  // being written, and its caret is the truth.
+  const waiting = chatFromSession(session({ status: 'working' }))
+  foldEvent(waiting, event(2, { type: 'message.delta', turn: 1, text: 'I need to ask' }))
+  foldEvent(waiting, event(3, { type: 'session.status_changed', status: 'waiting', reason: null }))
+  assert.equal(railItems(waiting)[0].kind, 'stream')
+})
