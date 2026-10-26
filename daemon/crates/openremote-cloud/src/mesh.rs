@@ -155,6 +155,30 @@ fn generic_notice(error: Option<&str>) -> bool {
     matches!(error, None | Some(UNREACHABLE) | Some(DROPPED))
 }
 
+/// What the relay loop writes into the phase once a session has ended, or
+/// `None` when there is nothing truer to say than what is already there.
+///
+/// A phase that still says "online" is demoted on the first retry whatever
+/// ended the session: the sentence described a link that is gone. A run of
+/// handshakes that never even established is an outage (a proxy in front of
+/// the relay 503ing through a maintenance window, a deploy) and reaches the
+/// console as one - raised once per run, and never on top of a notice that
+/// already explains why the phase moved.
+fn retry_notice(
+    was_online: bool,
+    error: Option<&str>,
+    established: bool,
+    failures: u32,
+) -> Option<(Phase, Option<&'static str>)> {
+    if was_online {
+        return Some((Phase::Offline, Some(DROPPED)));
+    }
+    if !established && failures == HANDSHAKE_FAILURES_TO_ERROR && generic_notice(error) {
+        return Some((Phase::Offline, Some(UNREACHABLE)));
+    }
+    None
+}
+
 /// The refresher's error bookkeeping: how long the device-list fetches have
 /// been failing, and the phase it raised its own notice at. Kept apart from
 /// the loop so the transitions can be read and tested without a live
@@ -876,18 +900,10 @@ async fn relay_loop(
             return;
         };
         let (established, ended) = relay_session(cloud, mesh, &credential, &mut out_rx).await;
-        match ended {
-            Ended::Stop => return,
-            Ended::Retry => {}
-        }
         mesh.drop_links();
-        if cloud.phase() == Phase::Online {
-            // However the session ended, the user must not be left looking
-            // at a stale "online".
-            cloud.set_phase(
-                Phase::Offline,
-                Some("the connection to OpenRemote Cloud dropped".into()),
-            );
+        let (phase, error) = cloud.phase_and_error();
+        let was_online = phase == Phase::Online;
+        if was_online {
             // The link was up: this is a fresh drop, not a run of failures.
             backoff = Duration::from_secs(1);
         }
@@ -895,14 +911,17 @@ async fn relay_loop(
             handshake_failures = 0;
         } else {
             handshake_failures = handshake_failures.saturating_add(1);
-            if handshake_failures >= HANDSHAKE_FAILURES_TO_ERROR {
-                // The endpoint answers something, but the session never
-                // comes up (a proxy in front of the relay 503ing through a
-                // maintenance window). A run of those must reach the user
-                // instead of leaving the phase at whatever it was with no
-                // error.
-                cloud.set_phase(Phase::Offline, Some("can't reach OpenRemote Cloud".into()));
-            }
+        }
+        if let Some((at, notice)) = retry_notice(
+            was_online,
+            error.as_deref(),
+            established,
+            handshake_failures,
+        ) {
+            cloud.set_phase(at, notice.map(str::to_string));
+        }
+        if matches!(ended, Ended::Stop) {
+            return;
         }
         // Frames queued during the dead session rode links that were just
         // dropped and can't be delivered in order; anything queued during
@@ -946,7 +965,7 @@ async fn relay_session(
         request.headers_mut().insert("x-openremote-version", value);
     }
     let Ok(stream) = cloud.http().connect(&uri).await else {
-        cloud.set_phase(Phase::Offline, Some("can't reach OpenRemote Cloud".into()));
+        cloud.set_phase(Phase::Offline, Some(UNREACHABLE.into()));
         return (false, Ended::Retry);
     };
     let ws = match tokio_tungstenite::client_async(request, stream).await {
@@ -1359,6 +1378,68 @@ mod tests {
             own.failed(Phase::Offline, None),
             None,
             "and the next outage starts counting from scratch"
+        );
+    }
+
+    /// A handshake that keeps failing must reach the console as an outage:
+    /// one failed attempt is a deploy-window blip, a run of them is a relay
+    /// nobody can get to, and the phase must not sit at "connecting" with no
+    /// notice. It is raised once per run, and a session that did come up is
+    /// never reported as one.
+    #[test]
+    fn a_run_of_failed_handshakes_surfaces_an_outage_once() {
+        assert_eq!(
+            retry_notice(false, None, false, 1),
+            None,
+            "one failed handshake is a blip"
+        );
+        assert_eq!(
+            retry_notice(false, None, false, HANDSHAKE_FAILURES_TO_ERROR - 1),
+            None,
+            "two in a row are still a blip"
+        );
+        assert_eq!(
+            retry_notice(false, None, false, HANDSHAKE_FAILURES_TO_ERROR),
+            Some((Phase::Offline, Some(UNREACHABLE))),
+            "three in a row is an outage the user should see"
+        );
+        assert_eq!(
+            retry_notice(false, None, false, HANDSHAKE_FAILURES_TO_ERROR + 4),
+            None,
+            "the notice is raised once, not rewritten on every later retry"
+        );
+        assert_eq!(
+            retry_notice(false, None, true, HANDSHAKE_FAILURES_TO_ERROR),
+            None,
+            "a session that came up is not an outage"
+        );
+    }
+
+    /// An "online" that is no longer true is demoted on the first retry,
+    /// whether or not the session had established and however it ended.
+    #[test]
+    fn online_is_demoted_on_the_first_retry() {
+        assert_eq!(
+            retry_notice(true, None, true, 0),
+            Some((Phase::Offline, Some(DROPPED))),
+            "a link that was up and dropped is not left saying online"
+        );
+        assert_eq!(
+            retry_notice(true, None, false, 1),
+            Some((Phase::Offline, Some(DROPPED))),
+            "and neither is one whose session was already gone"
+        );
+    }
+
+    /// The generic outage sentence never lands on top of the one that
+    /// explains why the phase moved.
+    #[test]
+    fn an_outage_never_overwrites_a_more_specific_notice() {
+        let takeover = Some("this device connected from somewhere else");
+        assert_eq!(
+            retry_notice(false, takeover, false, HANDSHAKE_FAILURES_TO_ERROR),
+            None,
+            "the takeover sentence is left alone"
         );
     }
 
