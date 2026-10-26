@@ -417,6 +417,18 @@ export default function BrowserView({ onClosePane = null }) {
     noticeTimer.current = setTimeout(() => setNotice(null), 4000)
   }
 
+  // The shell refuses every download a page starts: a page must never write
+  // a file the user did not ask for. The downloads menu is not where anyone
+  // looks, so the pane says it too. The ref starts at whatever was already
+  // listed, so reopening the pane does not replay old ones.
+  const blocked = downloads.find((d) => d.state === 'blocked') ?? null
+  const saidBlocked = useRef(blocked?.id ?? 0)
+  useEffect(() => {
+    if (!blocked || blocked.id === saidBlocked.current) return
+    saidBlocked.current = blocked.id
+    notify(`Blocked a download: ${fileName(blocked.path ?? blocked.url)}. Open the link in your default browser to save it.`)
+  }, [blocked?.id])
+
   // Point at an element on the page and attach it to the chat: its
   // address, its kind and its words land in the composer's draft, where
   // the agent reads them. The picker runs in the page; Esc backs out.
@@ -569,7 +581,7 @@ export default function BrowserView({ onClosePane = null }) {
         ...downloads.slice(0, 12).map((d) => ({
           label: fileName(d.path ?? d.url),
           icon: d.state === 'failed' ? <Warning size={14} /> : <DownloadSimple size={14} />,
-          hint: d.state === 'started' ? 'Downloading' : d.state === 'failed' ? 'Failed' : 'Show in folder',
+          hint: d.state === 'started' ? 'Downloading' : d.state === 'blocked' ? 'Blocked' : d.state === 'failed' ? 'Failed' : 'Show in folder',
           disabled: d.state !== 'done' || !d.path,
           onSelect: () => call('browser_reveal', { path: d.path }),
         })),
