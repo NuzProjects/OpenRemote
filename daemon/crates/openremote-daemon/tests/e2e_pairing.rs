@@ -47,7 +47,7 @@ impl Reply {
 /// One daemon: its loopback router (with the pairing control routes merged,
 /// exactly as `main.rs` merges them) and nothing else.
 struct Daemon {
-    _data_dir: tempfile::TempDir,
+    data_dir: tempfile::TempDir,
     app: Arc<App>,
     host: Arc<PairingHost>,
     control: SocketAddr,
@@ -60,7 +60,12 @@ async fn start(ttl_ms: i64) -> Daemon {
 /// The same daemon, on an address the test already knows: that is how a
 /// socket that should not exist yet can be probed by name.
 async fn start_at(addr: SocketAddr, ttl_ms: i64) -> Daemon {
-    let data_dir = tempfile::tempdir().expect("temp data dir");
+    start_over(tempfile::tempdir().expect("temp data dir"), addr, ttl_ms).await
+}
+
+/// A daemon over a data folder the test prepared itself, for the cases where
+/// the folder is the thing under test (a phones file that cannot be written).
+async fn start_over(data_dir: tempfile::TempDir, addr: SocketAddr, ttl_ms: i64) -> Daemon {
     let store = Arc::new(StdMutex::new(
         Store::open(data_dir.path().to_path_buf()).expect("store"),
     ));
@@ -84,7 +89,7 @@ async fn start_at(addr: SocketAddr, ttl_ms: i64) -> Daemon {
         let _ = axum::serve(listener, router).await;
     });
     Daemon {
-        _data_dir: data_dir,
+        data_dir,
         app,
         host,
         control,
@@ -402,18 +407,29 @@ async fn wrong_codes_burn_the_live_code_rather_than_feed_guesses() {
         assert_eq!(reply.status, 404, "guess {attempt} must not pair");
     }
     // Five guesses in, the real code is dead too: the guesses were the
-    // attack, and the person at the machine shows a new one.
-    let real = http(
+    // attack, and the person at the machine shows a new one. With no phone
+    // paired the socket goes with the code, so the answer is a refused
+    // connection or, if a connection was already open, a 404 either way.
+    match try_http(
         lan,
         "POST",
         "/pair",
         None,
         Some(&format!(r#"{{"code":"{code}","name":"x"}}"#)),
     )
-    .await;
-    assert_eq!(
-        real.status, 404,
-        "the code must not survive the attempt limit"
+    .await
+    {
+        None => {}
+        Some(reply) => assert_eq!(
+            reply.status, 404,
+            "the code must not survive the attempt limit: {}",
+            reply.body
+        ),
+    }
+    // And nothing of this feature is answering the network any more.
+    assert!(
+        try_http(lan, "GET", "/", None, None).await.is_none(),
+        "burning the last code left the listener up"
     );
 }
 
@@ -673,6 +689,148 @@ async fn nothing_listens_until_a_code_is_live() {
 }
 
 #[tokio::test]
+async fn ten_parallel_wrong_guesses_pair_nothing() {
+    // The sequential test above proves the limit. This one proves the limit
+    // holds when ten guesses arrive at once: the counter, the code, the burn
+    // and the mint all live under one lock, so there is no window where two
+    // requests both see "four failures so far".
+    let daemon = start(CODE_TTL_MS).await;
+    let (code, _url, lan) = mint(&daemon).await;
+
+    let mut guesses = Vec::new();
+    for n in 0..10u8 {
+        // Well formed, eight characters, one wrong: the daemon's own
+        // comparison is what must refuse them, not a length check.
+        let mut wrong = code.clone().into_bytes();
+        let last = wrong.len() - 1;
+        wrong[last] = if wrong[last] == b'2' { b'3' } else { b'2' };
+        let body = format!(
+            r#"{{"code":"{}","name":"phone {n}"}}"#,
+            String::from_utf8(wrong).expect("ascii")
+        );
+        guesses.push(tokio::spawn(async move {
+            try_http(lan, "POST", "/pair", None, Some(&body)).await
+        }));
+    }
+    let mut answered = 0;
+    for handle in guesses {
+        let reply = handle.await.expect("guess task");
+        if let Some(reply) = reply {
+            answered += 1;
+            assert_eq!(reply.status, 404, "a wrong guess answered {}", reply.body);
+            assert!(
+                !reply.body.contains("\"token\""),
+                "a wrong guess minted a token: {}",
+                reply.body
+            );
+        }
+    }
+    assert!(answered > 0, "no guess was answered at all");
+
+    // Nobody is paired, so nothing a phone could use exists: and the code is
+    // gone, which is why the fifth guess also closed the socket even though
+    // no phone is holding it up.
+    let listed = http(
+        daemon.control,
+        "GET",
+        "/pairing/phones",
+        Some(OWNER_TOKEN),
+        None,
+    )
+    .await;
+    assert_eq!(listed.json()["phones"].as_array().map(Vec::len), Some(0));
+    assert!(
+        try_http(lan, "GET", "/", None, None).await.is_none(),
+        "burning the last code left the listener up"
+    );
+}
+
+#[tokio::test]
+async fn a_pairing_that_cannot_be_saved_hands_out_no_token() {
+    // A phones path that cannot be written (here it is a folder, so the file
+    // cannot be created). Nothing is handed out: a phone this computer would
+    // forget on its next start is worse than one that never paired.
+    let data_dir = tempfile::tempdir().expect("temp data dir");
+    std::fs::create_dir(data_dir.path().join("paired-phones.json")).expect("blocking folder");
+    let daemon = start_over(
+        data_dir,
+        "127.0.0.1:0".parse().expect("loopback"),
+        CODE_TTL_MS,
+    )
+    .await;
+    let (code, _url, lan) = mint(&daemon).await;
+
+    let body = format!(r#"{{"code":"{code}","name":"iPhone"}}"#);
+    let answer = http(lan, "POST", "/pair", None, Some(&body)).await;
+    assert_eq!(answer.status, 500, "{}", answer.body);
+    assert!(!answer.body.contains("\"token\""), "{}", answer.body);
+
+    let listed = http(
+        daemon.control,
+        "GET",
+        "/pairing/phones",
+        Some(OWNER_TOKEN),
+        None,
+    )
+    .await;
+    assert_eq!(
+        listed.json()["phones"].as_array().map(Vec::len),
+        Some(0),
+        "a phone that could not be written was kept in memory"
+    );
+}
+
+#[tokio::test]
+async fn a_revoke_that_cannot_be_saved_keeps_the_phone_paired() {
+    // Revoking is the one path that must fail closed. The write is made to
+    // fail after a successful pairing (the file is replaced by a folder), so
+    // the removal has somewhere to fail.
+    let daemon = start(CODE_TTL_MS).await;
+    let (code, _url, lan) = mint(&daemon).await;
+    let body = format!(r#"{{"code":"{code}","name":"iPhone"}}"#);
+    let paired = http(lan, "POST", "/pair", None, Some(&body)).await;
+    assert_eq!(paired.status, 200, "{}", paired.body);
+    let phone_id = paired.json()["phone"]["id"]
+        .as_str()
+        .expect("id")
+        .to_string();
+
+    let phones_path = daemon.data_dir.path().join("paired-phones.json");
+    std::fs::remove_file(&phones_path).expect("remove the phones file");
+    std::fs::create_dir(&phones_path).expect("blocking folder");
+
+    let answer = http(
+        daemon.control,
+        "POST",
+        &format!("/pairing/phones/{phone_id}/revoke"),
+        Some(OWNER_TOKEN),
+        Some("{}"),
+    )
+    .await;
+    assert_eq!(answer.status, 500, "{}", answer.body);
+    assert!(
+        !answer.body.contains("\"phones\": []"),
+        "a failed revoke redrew the list as empty: {}",
+        answer.body
+    );
+
+    // The phone is still paired, so the desktop still knows about it and the
+    // token still works: the removal simply did not happen.
+    let listed = http(
+        daemon.control,
+        "GET",
+        "/pairing/phones",
+        Some(OWNER_TOKEN),
+        None,
+    )
+    .await;
+    assert_eq!(listed.json()["phones"].as_array().map(Vec::len), Some(1));
+    let token = paired.json()["token"].as_str().expect("token").to_string();
+    let home = http(lan, "GET", "/api/home", Some(&token), None).await;
+    assert_eq!(home.status, 200, "{}", home.body);
+}
+
+#[tokio::test]
 async fn the_production_bind_puts_a_real_network_address_in_the_payload() {
     // The only test that exercises the shipped binding: the machine's own
     // address, not loopback, so a phone on the same network can reach it.
@@ -694,8 +852,15 @@ async fn the_production_bind_puts_a_real_network_address_in_the_payload() {
     let mint = match host.mint().await {
         Ok(mint) => mint,
         // A machine with no route off loopback cannot pair a phone, and the
-        // desktop says exactly that. Nothing to assert about an address.
-        Err(openremote_daemon::pairing::MintError::NoNetwork) => return,
+        // desktop says exactly that. Nothing to assert about an address, and
+        // a green run here is not coverage of the shipped bind.
+        Err(openremote_daemon::pairing::MintError::NoNetwork) => {
+            eprintln!(
+                "SKIPPED the_production_bind_puts_a_real_network_address_in_the_payload: \
+                 this machine has no LAN address, so the shipped bind has not been exercised"
+            );
+            return;
+        }
         Err(err) => panic!("mint: {err:?}"),
     };
     let host_part = mint
