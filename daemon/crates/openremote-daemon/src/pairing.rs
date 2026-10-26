@@ -964,24 +964,39 @@ mod tests {
     /// A v4 UUID pins byte 6's high nibble and byte 8's top two bits, so
     /// drawing from all 16 bytes would make the seventh character weaker than
     /// the rest. This pins the property the comment claims: every position is
-    /// free to be any of the 32 characters, which is 40 bits over eight.
+    /// free to be any of the 32 characters, which is 40 bits over eight. It
+    /// fails on the old draw (which took byte 6 as it was), and it fails on
+    /// the per-end count rather than a combined one, because position 7 there
+    /// still reached the bottom of the alphabet while never reaching the top.
     #[test]
     fn no_position_of_a_code_is_limited_to_a_slice_of_the_alphabet() {
         const ALPHABET: &[u8] = b"23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
-        let mut seen = [0u32; 8];
+        const LOW: u8 = ALPHABET[0];
+        const HIGH: u8 = ALPHABET[ALPHABET.len() - 1];
+        // One counter per end, never one total. A position drawing from only
+        // the low half still reaches ALPHABET[0] about once in eight codes,
+        // so a combined count stays comfortably green while half the alphabet
+        // is out of reach: that is the shape of this test's first version,
+        // and why it now counts each end on its own.
+        let mut low = [0u32; 8];
+        let mut high = [0u32; 8];
         for _ in 0..4000 {
             for (index, byte) in new_code().bytes().enumerate() {
-                if byte == ALPHABET[0] || byte == ALPHABET[ALPHABET.len() - 1] {
-                    seen[index] += 1;
+                if byte == LOW {
+                    low[index] += 1;
+                } else if byte == HIGH {
+                    high[index] += 1;
                 }
             }
         }
-        for (index, count) in seen.iter().enumerate() {
-            // Both ends of the alphabet, in every position: a fixed nibble
-            // would leave one of these two at zero.
+        for index in 0..8 {
             assert!(
-                *count > 20,
-                "position {index} never reached both ends of the alphabet: {seen:?}"
+                low[index] > 20,
+                "position {index} never drew the first character: low={low:?} high={high:?}"
+            );
+            assert!(
+                high[index] > 20,
+                "position {index} never drew the last character: low={low:?} high={high:?}"
             );
         }
     }

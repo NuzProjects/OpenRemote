@@ -690,10 +690,15 @@ async fn nothing_listens_until_a_code_is_live() {
 
 #[tokio::test]
 async fn ten_parallel_wrong_guesses_pair_nothing() {
-    // The sequential test above proves the limit. This one proves the limit
-    // holds when ten guesses arrive at once: the counter, the code, the burn
-    // and the mint all live under one lock, so there is no window where two
-    // requests both see "four failures so far".
+    // What this proves: ten guesses arriving together pair nothing, no token
+    // is handed out, and the fifth burn takes the socket down with the code
+    // even though no phone is paired - so a burst cannot keep a listener
+    // answering after the code it was opened for is gone. It does not prove
+    // the counter has no window where two requests both read "four failures",
+    // because every answer here is a 404 either way and a refused connection
+    // is tolerated; the counter sits under the same lock as the code, but a
+    // test would have to see the fifth and sixth attempts share a read to
+    // show it, and this one cannot.
     let daemon = start(CODE_TTL_MS).await;
     let (code, _url, lan) = mint(&daemon).await;
 

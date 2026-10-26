@@ -261,15 +261,17 @@ payload the console draws, the same exchange, the same token.
 | revoking ends one phone's access while the other keeps working, and the last revoke closes the socket | `revoking_a_phone_ends_its_access_and_nothing_idles_on_the_lan` |
 | the phones file holds a digest and never the token, and the phone survives a restart | `paired_phones_survive_a_restart_and_only_their_digest_is_written` |
 | the shipped bind resolves a real address the phone can dial, and does not answer on loopback | `the_production_bind_puts_a_real_network_address_in_the_payload` |
-| ten wrong guesses fired at once still burn the code and pair nothing, because check, compare, burn and mint happen under one lock | `ten_parallel_wrong_guesses_pair_nothing` |
+| ten wrong guesses fired at once pair nothing, and the fifth burn takes the socket down with the code | `ten_parallel_wrong_guesses_pair_nothing` |
 | a phones file that cannot be written leaves the phone paired and answers 500 rather than reporting a removal that did not happen | `a_revoke_that_cannot_be_saved_keeps_the_phone_paired` |
 | a pairing whose record cannot be written hands out no token at all | `a_pairing_that_cannot_be_saved_hands_out_no_token` |
 
-One rule is not in that table because it has no end-to-end path: a mint that fails after a previous
-code was already live (the error arm calls cancel before reporting). On a machine with a network
-address the only bind is the first one, so a later mint reuses the socket and cannot fail; a test
-would have to change the machine's address mid-run. The arm is four lines and the report says it is
-read, not proved.
+One rule is not in that table because the suite cannot reach it: a mint that fails after a previous code
+was already live (the error arm calls cancel before it reports, so nothing stays redeemable behind an
+error the user is looking at). The arm is reachable in production, which is why it exists: a mint after
+the address moved can rebind and find every candidate port taken (`NoPort`), and a machine whose
+network went away resolves nothing at all (`NoNetwork`). Proving it end to end would mean moving or
+dropping this machine's network under a running daemon, which no test here can do. The report says it
+is read, not proved.
 
 ## Explicitly out of scope tonight
 
