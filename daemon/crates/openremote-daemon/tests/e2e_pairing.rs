@@ -137,12 +137,16 @@ async fn try_http(
     let Ok(mut stream) = tokio::net::TcpStream::connect(addr).await else {
         return None;
     };
-    stream.write_all(request.as_bytes()).await.expect("write");
+    // A peer that drops the connection before or while we write has not
+    // answered, and that is what a socket with nothing behind it looks like
+    // on the way out: no answer, not a panic in the test.
+    if stream.write_all(request.as_bytes()).await.is_err() {
+        return None;
+    }
     let mut raw = Vec::new();
     match tokio::time::timeout(Duration::from_secs(20), stream.read_to_end(&mut raw)).await {
-        Ok(read) => {
-            read.expect("read");
-        }
+        Ok(Ok(_)) => {}
+        Ok(Err(_)) => return None,
         Err(_) => panic!("{method} {path}: never answered within 20s"),
     }
     let raw = String::from_utf8_lossy(&raw).to_string();
@@ -615,13 +619,21 @@ async fn paired_phones_survive_a_restart_and_only_their_digest_is_written() {
 
 #[tokio::test]
 async fn nothing_listens_until_a_code_is_live() {
-    // Pick a loopback port the daemon will be given by name, so the test can
-    // probe it before anything is live.
-    let probe = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-        .await
-        .expect("probe");
-    let addr = probe.local_addr().expect("probe addr");
-    drop(probe);
+    // A fixed loopback port the daemon is given by name, so this test can
+    // probe it before anything is live. Fixed, and outside the range the
+    // operating system hands to a port-0 bind: the other suites bind port 0
+    // while this one waits, and a port out of that range cannot be taken
+    // from under it. The candidate is proved free by binding it here first.
+    let mut addr = None;
+    for port in 41011..41021u16 {
+        let candidate: SocketAddr = format!("127.0.0.1:{port}").parse().expect("loopback");
+        if let Ok(listener) = tokio::net::TcpListener::bind(candidate).await {
+            drop(listener);
+            addr = Some(candidate);
+            break;
+        }
+    }
+    let addr = addr.expect("a free fixed loopback port");
 
     // A short life, so the test can watch the socket go down with the code.
     let daemon = start_at(addr, 300).await;

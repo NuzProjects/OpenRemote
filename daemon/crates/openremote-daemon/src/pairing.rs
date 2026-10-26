@@ -625,7 +625,9 @@ async fn home(State(host): State<Arc<PairingHost>>, request: Request) -> Respons
             .into_response();
     };
     let mut chats = host.app.supervisor.sessions();
-    chats.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    // Newest first: a phone shows the chats someone would resume, not the
+    // oldest ones in the store.
+    chats.sort_by_key(|chat| std::cmp::Reverse(chat.updated_at));
     chats.truncate(CHAT_LIMIT);
     let chats: Vec<Value> = chats
         .iter()
