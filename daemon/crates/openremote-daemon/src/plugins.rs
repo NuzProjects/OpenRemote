@@ -41,6 +41,17 @@ const MAX_ENTRIES: usize = 20_000;
 /// Names a plugin cannot take: the routes' own words.
 const RESERVED_NAMES: &[&str] = &["stage"];
 
+/// The ids of the harnesses this program carries, which a plugin may never
+/// take: `plugin:name` namespacing and the plugin list would otherwise
+/// show two different things under one id.
+///
+/// The install path passes the ids the harness registry probed; a command
+/// plugin's update is re-read from another thread of the supervisor and
+/// reaches no registry, so the ids are stated here. They are stable by
+/// contract, and this list is the reason a copy that renames itself
+/// `claude` is refused on update as well as at install.
+const HARNESS_IDS: &[&str] = &["claude", "codex", "grok", "pi", "opencode", "agy"];
+
 #[derive(Debug, thiserror::Error)]
 pub enum PluginError {
     /// The plugin itself is wrong - its manifest, its name, its powers.
@@ -276,11 +287,17 @@ fn safe_segment(name: &str) -> bool {
 /// plugin-name gate, so a folder installed before that gate existed - or
 /// one a catalog once talked this daemon into creating - can still be
 /// removed, while nothing can reach outside the plugins folder.
+///
+/// Two shapes are refused on top of that: a name that ends in a dot, and
+/// one that surrounding whitespace makes differ from its trimmed form.
+/// Windows resolves `...`, `a.` and `a ` to `.`, `a` and `a`, so a segment
+/// of those shapes names a different folder than the record does, and a
+/// removal would then land on something the record never meant.
 fn one_segment(name: &str) -> bool {
     !name.is_empty()
-        && name != "."
-        && name != ".."
         && name.chars().count() <= 128
+        && name.trim() == name
+        && !name.ends_with('.')
         && !name.contains(['/', '\\', ':', '\0'])
 }
 
@@ -743,8 +760,16 @@ pub(crate) fn swap_in(plugins_root: &Path, from: &Path, target: &Path) -> Result
             // The old copy is in .trash and nothing ever looks in there
             // again: a failed rename (a running chat holds the folder on
             // Windows) would leave the plugin gone while the store still
-            // lists it as installed and on. Put it back.
-            let _ = std::fs::rename(&trash, target);
+            // lists it as installed and on. Put it back, and when even
+            // that fails, say where the copy is: the next start empties
+            // .trash, so a silent failure here would lose it for good
+            // while reporting only the first error.
+            if let Err(back) = std::fs::rename(&trash, target) {
+                return Err(PluginError::Source(format!(
+                    "could not replace it ({e}) and could not put the old copy back ({back}); it is in {}, copy it out before the next start",
+                    trash.display()
+                )));
+            }
             return Err(e.into());
         }
         let _ = std::fs::remove_dir_all(&trash);
@@ -944,8 +969,14 @@ pub fn hex(bytes: &[u8]) -> String {
 }
 
 async fn git(dir: &Path, args: &[&str]) -> Result<String, PluginError> {
+    // Every git call this daemon makes is one step of fetching a plugin,
+    // and none of them should be shaped by the machine's git
+    // configuration: the neutral arguments go first, before the
+    // subcommand.
+    let mut all = GIT_NEUTRAL.to_vec();
+    all.extend_from_slice(args);
     let output = tokio::process::Command::new("git")
-        .args(args)
+        .args(&all)
         .current_dir(dir)
         .stdin(std::process::Stdio::null())
         // git asks for nothing: a private repo it has no stored
@@ -987,6 +1018,19 @@ pub fn is_commit_id(sha: &str) -> bool {
 fn not_an_option(word: &str) -> bool {
     !word.starts_with('-')
 }
+
+/// `git` arguments that make it deaf to the machine's own configuration
+/// for the two settings that would otherwise change what a plugin fetch
+/// does: a repository's `.gitmodules` must stay inert (whether checkout
+/// recurses into submodules is `submodule.recurse`, which a user may have
+/// turned on), and a `ext::` URL must never reach an external program
+/// (git's own escape hatch, off by default and therefore worth stating).
+const GIT_NEUTRAL: &[&str] = &[
+    "-c",
+    "submodule.recurse=false",
+    "-c",
+    "protocol.ext.allow=never",
+];
 
 /// Fetch one commit of a repository at depth one - the pinned `sha`, else
 /// the `reference` (a branch or tag), else the default branch - with only
@@ -1216,6 +1260,18 @@ async fn npm_fetch(
     Ok(resolved)
 }
 
+/// The digest a package download is checked against, as npm states it.
+///
+/// A package install's registry is named by the marketplace entry, so the
+/// digest and the file it describes can come from the same document: what
+/// this check proves is that the bytes arrived as that registry described
+/// them, which against the real npm registry is a transport substitution
+/// and nothing more. Where the entry names its own registry, the digest
+/// buys nothing an attacker who chose that registry did not already
+/// control, and it is not meant to - taking plugins from a third-party
+/// catalog is trusting that catalog. What it does close is the silent
+/// skip: an algorithm this program cannot check, or no digest at all, is
+/// a refusal, not a pass.
 enum Integrity {
     /// `sha512-<base64>` (the registry's `dist.integrity`).
     Sri(String),
@@ -1459,17 +1515,20 @@ pub async fn rerun_command(
         std::fs::copy(target.join(&manifest), fresh.join(&manifest))?;
     }
     // The folder the user approved was a statement about what the plugin
-    // may do. A command's output can change afterwards, so the new copy is
-    // read here and a power the record does not carry is not swapped in
-    // live: it waits for an install from Plugins, where the review shows
-    // it. A copy that cannot be read as a plugin is refused for the same
+    // may do and who it is. A command's output can change afterwards, so
+    // the new copy is read here, by the same gate an install passes (its
+    // own name included: taking a harness id is refused whatever the
+    // folder is called), and a power the record does not carry is not
+    // swapped in live: it waits for an install from Plugins, where the
+    // review shows it. A copy that would not pass is refused for the same
     // reason - the last copy stays, and the note says what happened.
-    let new_powers = match read_manifest(&fresh, &[]) {
+    let harness_ids: Vec<String> = HARNESS_IDS.iter().map(|id| id.to_string()).collect();
+    let new_powers = match read_manifest(&fresh, &harness_ids) {
         Ok(manifest) => manifest.powers,
         Err(e) => {
             let _ = std::fs::remove_dir_all(&fresh);
             return Err(PluginError::Invalid(format!(
-                "its new copy cannot be read as a plugin ({e}) - install it from Plugins to review it"
+                "its new copy is not something this OpenRemote would install ({e}) - install it from Plugins to review it"
             )));
         }
     };
@@ -2104,9 +2163,18 @@ mod tests {
             ("official", "x/y"),
             ("official", "x\\y"),
             ("..", "tidy"),
+            // Shapes Windows resolves to a different folder than the
+            // record names: `...` is `.`, a trailing dot and a trailing
+            // space are dropped, so the joined path would land on
+            // something the record never meant.
+            ("official", "..."),
+            ("official", "."),
+            ("official", "tidy."),
+            ("official", "tidy "),
+            ("official", " tidy"),
         ] {
             let err = host.uninstall(marketplace, name).unwrap_err().to_string();
-            assert!(err.contains("is not a plugin folder"), "{name}: {err}");
+            assert!(err.contains("is not a plugin folder"), "{name:?}: {err}");
         }
         assert_eq!(
             std::fs::read_to_string(data.path().join("keep/me.txt")).unwrap(),
@@ -2201,6 +2269,64 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(installed.join("skills/a/SKILL.md")).unwrap(),
             "# a changed"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_command_plugins_copy_cannot_take_a_harness_id() {
+        let data = tempfile::tempdir().unwrap();
+        let data_dir = data.path();
+        let installed = data_dir.join("plugins/generated/gen");
+        std::fs::create_dir_all(installed.join("skills/a")).unwrap();
+        std::fs::write(installed.join("skills/a/SKILL.md"), "# a").unwrap();
+        std::fs::write(
+            installed.join("openremote.json"),
+            r#"{"api": 1, "name": "gen", "runtime": "content"}"#,
+        )
+        .unwrap();
+        // The command's output now calls itself `claude`, a harness id:
+        // an install of the same folder would be refused for it, and an
+        // update must not slip it in as the plugin the chats already have.
+        let printed = tempfile::tempdir().unwrap();
+        let folder = printed.path().join("gen");
+        std::fs::create_dir_all(folder.join("skills/a")).unwrap();
+        std::fs::write(folder.join("skills/a/SKILL.md"), "# a changed").unwrap();
+        std::fs::write(
+            folder.join("openremote.json"),
+            r#"{"api": 1, "name": "claude", "runtime": "content"}"#,
+        )
+        .unwrap();
+        let record = InstalledPlugin {
+            name: "gen".into(),
+            marketplace: "generated".into(),
+            resolved: None,
+            command: Some(ApprovedCommand {
+                command: format!("echo {}", folder.display()),
+                timeout_secs: 30,
+            }),
+            version: None,
+            description: None,
+            runtime: PluginRuntime::Content,
+            powers: Vec::new(),
+            source: PluginSource::Marketplace {
+                marketplace: "generated".into(),
+                plugin: "gen".into(),
+                from: "a command".into(),
+            },
+            scope: openremote_core::PluginScope::Machine,
+            enabled: true,
+            installed_at: 0,
+            updated_at: 0,
+        };
+        let err = rerun_command(data_dir, &record)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("taken by OpenRemote itself"), "{err}");
+        // The approved copy is still the one on disk.
+        assert_eq!(
+            std::fs::read_to_string(installed.join("skills/a/SKILL.md")).unwrap(),
+            "# a"
         );
     }
 
