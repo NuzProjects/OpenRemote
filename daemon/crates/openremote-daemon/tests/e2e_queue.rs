@@ -48,10 +48,20 @@ fn queue_len(session: &Value) -> usize {
     session["queue"].as_array().map(|q| q.len()).unwrap_or(0)
 }
 
+/// Let the held turn end. These tests need a turn that is still running
+/// while they queue, look and interrupt, so the fixture holds it open
+/// until this file appears: the turn lasts exactly as long as the test
+/// needs, and a busy machine cannot end it first.
+fn release(ws: &tempfile::TempDir) {
+    std::fs::write(ws.path().join("fixture-release"), b"go").expect("release the held turn");
+}
+
 #[tokio::test]
 async fn a_queued_message_waits_for_the_turn_then_runs_as_its_own() {
     let daemon = start_daemon(&[("claude", fixture_agent())]).await;
-    let ws = workspace(Some("slow"));
+    // `hold`: the turn stays open until this test releases it, so the
+    // queue fills and is read on the test's own schedule.
+    let ws = workspace(Some("hold"));
     let id = session(&daemon, "claude", &ws).await;
     let path = format!("/sessions/{id}/events");
 
@@ -95,6 +105,10 @@ async fn a_queued_message_waits_for_the_turn_then_runs_as_its_own() {
     )
     .await;
 
+    // The turn has been open all along; now let it end, and the one
+    // message left in the queue runs as its own turn.
+    release(&ws);
+
     let events = until_count(&daemon, &path, "turn.completed", 2).await;
     until_status(&daemon, &id, &["idle"]).await;
     assert_eq!(
@@ -129,7 +143,10 @@ async fn a_queued_message_waits_for_the_turn_then_runs_as_its_own() {
 #[tokio::test]
 async fn an_interrupt_holds_the_queue_until_resume() {
     let daemon = start_daemon(&[("claude", fixture_agent())]).await;
-    let ws = workspace(Some("slow"));
+    // The turn is held open, so the interrupt lands inside it however
+    // slow the machine is. What the test asserts is the queue's state
+    // after the interrupt, which the hold makes deterministic.
+    let ws = workspace(Some("hold"));
     let id = session(&daemon, "claude", &ws).await;
     let path = format!("/sessions/{id}/events");
 
@@ -152,6 +169,9 @@ async fn an_interrupt_holds_the_queue_until_resume() {
         json!({"request_id": "q2-i"}),
     )
     .await;
+    // The interrupt has landed inside the turn (the turn could not have
+    // ended on its own); let the harness finish so the boundary arrives.
+    release(&ws);
     until_count(&daemon, &path, "turn.completed", 1).await;
     let held = until_status(&daemon, &id, &["idle"]).await;
     assert_eq!(held["queue_paused"], true, "{held}");
@@ -243,7 +263,9 @@ async fn steering_a_queued_message_puts_it_into_the_running_claude_turn() {
 #[tokio::test]
 async fn steer_on_a_one_process_per_prompt_harness_interrupts_and_runs_next() {
     let daemon = start_daemon(&[("grok", fixture_agent())]).await;
-    let ws = workspace(Some("slow"));
+    // Held: the steer has to land inside a turn that is still running,
+    // and on this harness it kills that turn's process.
+    let ws = workspace(Some("hold"));
     let id = session(&daemon, "grok", &ws).await;
     let path = format!("/sessions/{id}/events");
 
@@ -260,6 +282,9 @@ async fn steer_on_a_one_process_per_prompt_harness_interrupts_and_runs_next() {
         json!({"request_id": "q4-s", "text": "second"}),
     )
     .await;
+    // The first turn was cut short by the steer; the message runs next,
+    // and its process needs the same release the first one never got.
+    release(&ws);
 
     let events = until_count(&daemon, &path, "turn.completed", 2).await;
     until_status(&daemon, &id, &["idle"]).await;
