@@ -2,11 +2,15 @@
 // it runs none itself - so this is where the phones are: what signing in
 // on one gets you, and the phones already in the Cloud, each opening the
 // same device detail every other device gets.
+//
+// Pairing by QR code sits above all of that and depends on none of it: a
+// phone scans a code from this computer, on this network, with no account.
 
 import { useState } from 'react'
 import { DeviceMobile } from '@phosphor-icons/react'
 import MachineModal from './MachineModal.jsx'
 import CloudStateRow from './CloudStateRow.jsx'
+import PairingSection from './PairingSection.jsx'
 import { useConsole } from './state/console.jsx'
 import { usePrivacyMode } from './privacy.js'
 import { isPhone, platformLabel, selfLabel, signedIn } from './cloud.js'
@@ -42,6 +46,8 @@ export default function MobileView({ onOpenChat }) {
         Install OpenRemote on a phone and sign in with the same moreweb account. Synced chats appear
         there, and from a phone a new chat can run on one of your machines.
       </p>
+
+      <PairingSection />
 
       {!inCloud ? (
         <div className="pn-list pn-list--tight">
