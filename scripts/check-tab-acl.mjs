@@ -12,11 +12,17 @@
 // purpose, with the permissions that tab needs and no app command among
 // them - do not widen this one.
 //
+// A capability can also be declared inline in the app config, in
+// `app.security.capabilities`: it is not a file anyone reads as a
+// capability, and nothing stops that one carrying "windows" either. The
+// same rules judge it here.
+//
 // Usage: node scripts/check-tab-acl.mjs
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const dir = 'src-tauri/capabilities'
+const conf = 'src-tauri/tauri.conf.json'
 const phone = new Set(['android', 'iOS'])
 // The console's capability, by the name this project reviews it under. The
 // loop below judges only the files that are there, so a directory that still
@@ -25,6 +31,27 @@ const phone = new Set(['android', 'iOS'])
 // at runtime, and this guard prints ok.
 const console_capability = 'default.json'
 const failures = []
+
+// One capability, from either place it can be declared.
+function judge(cap, where) {
+  const platforms = Array.isArray(cap.platforms) ? cap.platforms : []
+  const phoneOnly = platforms.length > 0 && platforms.every((platform) => phone.has(platform))
+  if (phoneOnly) return
+
+  if ('windows' in cap) {
+    failures.push(
+      `${where}: scoped by window (${JSON.stringify(cap.windows)}), and the browser's tabs share that window with the console; scope it with "webviews": ["main"] instead`,
+    )
+  }
+
+  const webviews = cap.webviews
+  const ok = Array.isArray(webviews) && webviews.length === 1 && webviews[0] === 'main'
+  if (!ok) {
+    failures.push(
+      `${where}: webviews is ${JSON.stringify(webviews)}, not ["main"]; only the console's own webview may hold these permissions`,
+    )
+  }
+}
 
 let names = []
 try {
@@ -50,24 +77,33 @@ for (const name of names) {
     failures.push(`${path}: does not parse: ${err.message}`)
     continue
   }
+  judge(cap, path)
+}
 
-  const platforms = Array.isArray(cap.platforms) ? cap.platforms : []
-  const phoneOnly = platforms.length > 0 && platforms.every((platform) => phone.has(platform))
-  if (phoneOnly) continue
-
-  if ('windows' in cap) {
-    failures.push(
-      `${path}: scoped by window (${JSON.stringify(cap.windows)}), and the browser's tabs share that window with the console; scope it with "webviews": ["main"] instead`,
-    )
+// The same invariant for the ones the app config can declare inline.
+let declared = []
+try {
+  const parsed = JSON.parse(readFileSync(conf, 'utf8'))
+  const list = parsed?.app?.security?.capabilities
+  if (list === undefined) {
+    declared = []
+  } else if (!Array.isArray(list)) {
+    failures.push(`${conf}: app.security.capabilities is not a list; it cannot be read as one`)
+  } else {
+    declared = list
   }
-
-  const webviews = cap.webviews
-  const ok = Array.isArray(webviews) && webviews.length === 1 && webviews[0] === 'main'
-  if (!ok) {
-    failures.push(
-      `${path}: webviews is ${JSON.stringify(webviews)}, not ["main"]; only the console's own webview may hold these permissions`,
-    )
+} catch (err) {
+  failures.push(`${conf}: cannot be read: ${err.message}`)
+}
+for (const [i, entry] of declared.entries()) {
+  // A name points at a file in the directory above, which is judged there.
+  if (typeof entry === 'string') continue
+  if (!entry || typeof entry !== 'object') {
+    failures.push(`${conf}: app.security.capabilities[${i}] is ${JSON.stringify(entry)}, not a name or a capability`)
+    continue
   }
+  const label = entry.identifier ? ` (${entry.identifier})` : ''
+  judge(entry, `${conf}: inline capability ${i + 1}${label}`)
 }
 
 if (failures.length > 0) {
