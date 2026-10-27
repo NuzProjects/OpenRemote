@@ -42,7 +42,7 @@ sessions.
 | route | tier | what a peer can do | what it cannot |
 |---|---|---|---|
 | `GET /sync/summary` | Sync | list every synced chat on this computer: id, executor device, head, updated_at, plus deletion tombstones | see a private chat at all: the store filters to chats with an executor (`store.rs`, `summaries`) |
-| `GET /sync/sessions/{id}/events` | Sync | read a synced chat's event log verbatim, from a byte offset: the whole transcript, tool inputs and outputs included | read a private chat (404, `sync.rs`, `range`), read a tombstoned chat (410), or write anything into the log through this route |
+| `GET /sync/sessions/{id}/events` | Sync | read a synced chat's event log verbatim, from an event number (`seq >= from`, `store.rs`): the whole transcript, tool inputs and outputs included | read a private chat (404, `sync.rs`, `range`), read a tombstoned chat (410), or write anything into the log through this route |
 
 ### Machine tier (17)
 
