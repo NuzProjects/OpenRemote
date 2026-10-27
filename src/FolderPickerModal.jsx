@@ -9,6 +9,7 @@ import './folders.css'
 import { useBack } from './use-back.js'
 import { useDialog } from './dialog-focus.js'
 import { usePrivacyMode } from './privacy.js'
+import { errorCopy } from './error-copy.js'
 
 export default function FolderPickerModal({ api, where, start, onChoose, onClose }) {
   const privacy = usePrivacyMode()
@@ -43,7 +44,7 @@ export default function FolderPickerModal({ api, where, start, onChoose, onClose
     } catch (err) {
       // Stopped on purpose (superseded or unmounted), not a failure.
       if (controller.signal.aborted || token !== openSeq.current) return
-      setError(err.message ?? String(err))
+      setError(errorCopy(err))
     } finally {
       if (token === openSeq.current) setLoading(false)
     }

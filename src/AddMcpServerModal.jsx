@@ -9,6 +9,7 @@ import './devices.css'
 import { useBack } from './use-back.js'
 import { useDialog } from './dialog-focus.js'
 import { checkMcpCommand } from './form-checks.js'
+import { errorCopy } from './error-copy.js'
 
 const STATUS = { online: 'Online', offline: 'Offline', waiting: 'Has not checked in' }
 
@@ -65,7 +66,7 @@ export default function AddMcpServerModal({ onClose }) {
       })
       onClose()
     } catch (err) {
-      setError(err.message ?? String(err))
+      setError(errorCopy(err))
       setBusy(false)
     }
   }

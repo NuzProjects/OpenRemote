@@ -4,6 +4,7 @@ import { useConsole } from './state/console.jsx'
 import './signin.css'
 import { useBack } from './use-back.js'
 import { useDialog } from './dialog-focus.js'
+import { errorCopy } from './error-copy.js'
 
 // The harness's own sign-in, relayed. The daemon runs the CLI's own
 // login command on the machine; the CLI's words stream in here (the
@@ -31,7 +32,7 @@ export default function SignInModal({ harnessId, onDone, deviceId = null }) {
     let cancelled = false
     const relay = signIn(harnessId, { onBeat: (beat) => !cancelled && setView(beat), deviceId })
     relay.promise.catch((err) => {
-      if (!cancelled && !err?.cancelled) setError(err?.message ?? String(err))
+      if (!cancelled && !err?.cancelled) setError(errorCopy(err))
     })
     return () => {
       cancelled = true
@@ -54,7 +55,7 @@ export default function SignInModal({ harnessId, onDone, deviceId = null }) {
       await feedSignIn(harnessId, answer.trim(), deviceId)
       setAnswer('')
     } catch (err) {
-      setError(err?.message ?? String(err))
+      setError(errorCopy(err))
     }
   }
 

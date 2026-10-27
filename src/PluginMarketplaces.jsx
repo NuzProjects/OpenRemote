@@ -8,6 +8,7 @@ import { useState } from 'react'
 import { useConsole } from './state/console.jsx'
 import { canPickFolder, pickFolder } from './pick-folder.js'
 import { fetchedLabel } from './plugins.js'
+import { errorCopy } from './error-copy.js'
 
 // Where a marketplace is fetched from, in a line.
 function sourceText(source) {
@@ -37,7 +38,7 @@ export default function PluginMarketplaces() {
       await addMarketplace(source)
       setValue('')
     } catch (err) {
-      setError(err.message ?? String(err))
+      setError(errorCopy(err))
     } finally {
       setAdding(false)
     }
@@ -49,7 +50,7 @@ export default function PluginMarketplaces() {
     try {
       await action()
     } catch (err) {
-      setError(err.message ?? String(err))
+      setError(errorCopy(err))
     } finally {
       setBusy(null)
     }

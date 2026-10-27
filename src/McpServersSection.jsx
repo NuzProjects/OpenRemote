@@ -9,6 +9,7 @@ import { armRow, clearRow, rowIsArmed } from './row-confirm.js'
 import { useArmedRow } from './use-armed-row.js'
 import './devices.css'
 import './panels.css'
+import { errorCopy } from './error-copy.js'
 
 // The state word the design rules: derived, never stored.
 function serverState(p) {
@@ -53,7 +54,7 @@ export default function McpServersSection() {
     try {
       await action(...args)
     } catch (err) {
-      setError(err.message ?? String(err))
+      setError(errorCopy(err))
     }
   }
 
@@ -63,7 +64,7 @@ export default function McpServersSection() {
     try {
       await removeMcpServer(id)
     } catch (err) {
-      setError(err.message ?? String(err))
+      setError(errorCopy(err))
     }
   }
 

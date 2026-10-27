@@ -5,6 +5,7 @@ import { useDialog } from './dialog-focus.js'
 import './devices.css'
 import './panels.css'
 import './contextmenu.css'
+import { errorCopy } from './error-copy.js'
 
 // Deleting a synced chat is not undoable and reaches every device, so it is
 // asked once, in place. Esc / backdrop / X close it like the other modals,
@@ -25,7 +26,7 @@ export default function DeleteChatModal({ title, onDelete, onClose }) {
       await onDelete()
       onClose()
     } catch (err) {
-      setError(err.message ?? String(err))
+      setError(errorCopy(err))
       setBusy(false)
     }
   }

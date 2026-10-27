@@ -10,6 +10,7 @@ import { useConsole } from './state/console.jsx'
 import { cloudAlert, daemonReason } from './cloud.js'
 import { isMobile } from './platform.js'
 import './cloudmode.css'
+import { errorCopy } from './error-copy.js'
 
 // One machine checking in: a small card with its status dot - green for
 // online, hollow for not-yet. The same vocabulary the machine cards use.
@@ -101,7 +102,7 @@ export default function CloudMode({ onBackToLocal }) {
       // No browser could be opened from here: hand over the link instead.
       setLink(started?.opened ? null : started?.authorize_url ?? null)
     } catch (err) {
-      setError(err.message ?? String(err))
+      setError(errorCopy(err))
     } finally {
       setBusy(false)
     }

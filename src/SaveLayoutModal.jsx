@@ -16,6 +16,7 @@ import './devices.css'
 import './panels.css'
 import './contextmenu.css'
 import './save-layout.css'
+import { errorCopy } from './error-copy.js'
 
 export default function SaveLayoutModal({ layout, currentView, onClose, onSaved }) {
   const { sessions } = useConsole()
@@ -43,7 +44,7 @@ export default function SaveLayoutModal({ layout, currentView, onClose, onSaved 
       onSaved?.(saved)
       onClose()
     } catch (err) {
-      setError(err?.message ?? String(err))
+      setError(errorCopy(err))
     }
   }
 

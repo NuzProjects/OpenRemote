@@ -13,6 +13,7 @@ import { usePrivacyMode } from './privacy.js'
 import './devices.css'
 import { useBack } from './use-back.js'
 import { useDialog } from './dialog-focus.js'
+import { errorCopy } from './error-copy.js'
 
 export default function HarnessManagerModal({ onClose, onSignIn }) {
   const privacy = usePrivacyMode()
@@ -45,7 +46,7 @@ export default function HarnessManagerModal({ onClose, onSignIn }) {
     try {
       await installHarness(machineId, harnessId, options)
     } catch (err) {
-      setError({ harnessId, message: err.message ?? String(err) })
+      setError({ harnessId, message: errorCopy(err) })
     } finally {
       setBusy(null)
     }

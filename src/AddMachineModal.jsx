@@ -8,6 +8,7 @@ import { Check, Copy, X } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
 import { useBack } from './use-back.js'
 import { useDialog } from './dialog-focus.js'
+import { errorCopy } from './error-copy.js'
 
 export default function AddMachineModal({ onClose }) {
   useBack(true, onClose)
@@ -32,7 +33,7 @@ export default function AddMachineModal({ onClose }) {
     try {
       setEnrollment(await createEnrollment())
     } catch (err) {
-      setError(err.message ?? String(err))
+      setError(errorCopy(err))
     }
   }
 

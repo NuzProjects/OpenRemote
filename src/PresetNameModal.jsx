@@ -8,6 +8,7 @@ import './devices.css'
 import './panels.css'
 import './contextmenu.css'
 import './rename-chat.css'
+import { errorCopy } from './error-copy.js'
 
 // Saving a chat's setup as a New chat preset. It asks the same kind of
 // question the rename dialog asks - a name for something the console already
@@ -58,7 +59,7 @@ export default function PresetNameModal({ preset, onSave, onClose }) {
       }
       onClose()
     } catch (err) {
-      setError(err?.message ?? String(err))
+      setError(errorCopy(err))
       setBusy(false)
     }
   }

@@ -20,6 +20,7 @@ import './devices.css'
 import './panels.css'
 import './contextmenu.css'
 import './race.css'
+import { errorCopy } from './error-copy.js'
 
 // The sentence each refusal prints. race.js decides why; this says it in words
 // the console already uses (numbers, plain sentences, no jargon).
@@ -99,7 +100,7 @@ export default function RaceModal({ free, onClose, onStarted }) {
         started.push(id)
         await sendPrompt(id, call.text)
       } catch (err) {
-        stoppedAt = { harness: call.harness, message: err?.message ?? String(err) }
+        stoppedAt = { harness: call.harness, message: errorCopy(err) }
         break
       }
     }

@@ -7,6 +7,7 @@ import './devices.css'
 import './panels.css'
 import './contextmenu.css'
 import './rename-chat.css'
+import { errorCopy } from './error-copy.js'
 
 // Renaming a chat, in the console, in one field. Every chat starts as "A new
 // task" and the only other way to change it is the `/rename` command, which
@@ -58,7 +59,7 @@ export default function RenameChatModal({ title, synced = false, onRename, onClo
       await onRename(verdict.value)
       onClose()
     } catch (err) {
-      setError(err?.message ?? String(err))
+      setError(errorCopy(err))
       setBusy(false)
     }
   }

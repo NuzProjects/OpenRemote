@@ -11,14 +11,17 @@ import { usePrivacyMode } from './privacy.js'
 import { isPhone, kindLabel, platformLabel, selfLabel } from './cloud.js'
 import { list as asList, text } from './shape.js'
 import './devices.css'
+import { errorCopy } from './error-copy.js'
 
 function detail(device) {
   // The card prints what the list sorts, so it reads through the same
   // coercions: a malformed row must not throw inside the pane it opens.
+  // The whole record goes to kindLabel with only its kind repaired: which kind
+  // a device is depends on its platform too, so handing over the kind alone
+  // would label a paired phone as a desktop.
   const platform = platformLabel(text(device?.platform))
-  return [platform, kindLabel({ kind: text(device?.kind) }), text(device?.app_version)]
-    .filter(Boolean)
-    .join(' · ')
+  const kind = kindLabel({ ...(device ?? {}), kind: text(device?.kind) })
+  return [platform, kind, text(device?.app_version)].filter(Boolean).join(' · ')
 }
 
 export default function MachinesView({ onOpenChat, openDevice = null }) {
@@ -52,7 +55,7 @@ export default function MachinesView({ onOpenChat, openDevice = null }) {
     try {
       await setDeviceKind(me.id, me.kind === 'machine' ? 'desktop' : 'machine')
     } catch (err) {
-      setError(err.message ?? String(err))
+      setError(errorCopy(err))
     } finally {
       setBusy(false)
     }

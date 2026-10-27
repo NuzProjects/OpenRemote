@@ -20,6 +20,7 @@ import { useBack } from './use-back.js'
 import { useDialog } from './dialog-focus.js'
 import { pickable } from './harness-manager.js'
 import { EndpointManagerModal } from './EndpointManager.jsx'
+import { errorCopy } from './error-copy.js'
 
 const TRIGGERS = [
   { id: 'schedule', name: 'On a schedule' },
@@ -225,7 +226,7 @@ export default function AutomationForm({ rule, onClose }) {
       if (editing && saved?.enabled !== enabled) await enableAutomation(saved.id, enabled)
       onClose()
     } catch (err) {
-      setError(err.message ?? String(err))
+      setError(errorCopy(err))
       setBusy(false)
     }
   }

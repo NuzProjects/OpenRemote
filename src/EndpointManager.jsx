@@ -17,6 +17,7 @@ import { formDiffers } from './form-dirty.js'
 import { checkBaseUrl } from './endpoint-form.js'
 import './devices.css'
 import './panels.css'
+import { errorCopy } from './error-copy.js'
 
 const AUTH_KINDS = [
   { id: 'bearer', name: 'Bearer token' },
@@ -164,7 +165,7 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
       await load()
       onChanged?.()
     } catch (err) {
-      setError(err.message ?? String(err))
+      setError(errorCopy(err))
     } finally {
       setSaving(false)
     }
@@ -178,7 +179,7 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
       await load()
       onChanged?.()
     } catch (err) {
-      setError(err.message ?? String(err))
+      setError(errorCopy(err))
     }
   }
 
@@ -189,7 +190,7 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
       await load()
       onChanged?.()
     } catch (err) {
-      setError(err.message ?? String(err))
+      setError(errorCopy(err))
     }
   }
 
@@ -200,7 +201,7 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
       await load()
       onChanged?.()
     } catch (err) {
-      setError(err.message ?? String(err))
+      setError(errorCopy(err))
     }
   }
 
@@ -211,7 +212,7 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
       await load()
       onChanged?.()
     } catch (err) {
-      setError(err.message ?? String(err))
+      setError(errorCopy(err))
     }
   }
 
@@ -222,7 +223,7 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
       const models = (await api.device(deviceId).endpointModels(id)) ?? []
       setTested((t) => ({ ...t, [id]: { ok: true, count: models.length } }))
     } catch (err) {
-      setTested((t) => ({ ...t, [id]: { ok: false, message: err.message ?? String(err) } }))
+      setTested((t) => ({ ...t, [id]: { ok: false, message: errorCopy(err) } }))
     } finally {
       setTesting(null)
     }

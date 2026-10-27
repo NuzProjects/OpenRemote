@@ -7,6 +7,7 @@ import { useState } from 'react'
 import { useConsole } from './state/console.jsx'
 import { cloudAlert, signedIn, daemonReason } from './cloud.js'
 import './panels.css'
+import { errorCopy } from './error-copy.js'
 
 const signedName = (email) =>
   email ? (
@@ -78,7 +79,7 @@ export default function CloudStateRow({ one = 'computer' }) {
       // No browser could be opened from here: hand over the link instead.
       setLink(started?.opened ? null : started?.authorize_url ?? null)
     } catch (err) {
-      setError(err.message ?? String(err))
+      setError(errorCopy(err))
     } finally {
       setBusy(false)
     }

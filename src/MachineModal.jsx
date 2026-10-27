@@ -14,6 +14,7 @@ import { SIGNIN_HARNESSES } from './harness-manager.js'
 import { useBack } from './use-back.js'
 import { useDialog } from './dialog-focus.js'
 import { isPhone, kindLabel, platformLabel, selfLabel } from './cloud.js'
+import { errorCopy } from './error-copy.js'
 
 const STATUS_LABEL = {
   starting: 'Starting',
@@ -63,7 +64,7 @@ export default function MachineModal({ device, onOpenChat, onClose }) {
       setView((list ?? [])[0] ?? null)
       setError(null)
     } catch (err) {
-      setError(err.message ?? String(err))
+      setError(errorCopy(err))
       throw err
     }
   }
@@ -88,7 +89,7 @@ export default function MachineModal({ device, onOpenChat, onClose }) {
     try {
       await action()
     } catch (err) {
-      setError(err.message ?? String(err))
+      setError(errorCopy(err))
     } finally {
       setBusy(false)
     }
@@ -102,7 +103,7 @@ export default function MachineModal({ device, onOpenChat, onClose }) {
       await apiFor(isMe ? null : device.id).installHarness(view.machine.id, harnessId)
       await load().catch(() => {})
     } catch (err) {
-      setError(err.message ?? String(err))
+      setError(errorCopy(err))
     } finally {
       setBusyHarness(null)
     }
