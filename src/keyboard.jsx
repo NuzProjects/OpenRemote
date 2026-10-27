@@ -10,6 +10,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import {
   actionForCombo,
   blocksWhileTyping,
+  clearStaleOverrides,
   comboFromEvent,
   comboLabel,
   effectiveBindings,
@@ -18,6 +19,7 @@ import {
   rebind,
   resetOne,
   saveOverrides,
+  staleOverrides,
   typesIn,
   unbind,
 } from './shortcuts.js'
@@ -130,6 +132,10 @@ export function KeyboardProvider({ children }) {
       unbind: (id) => commit(unbind(overrides, id)),
       reset: (id) => commit(resetOne(overrides, id, isMac)),
       resetAll: () => commit({}),
+      // A saved key whose action this build no longer has. Shown, not dropped,
+      // so the settings page can say so and clear it.
+      staleBindings: staleOverrides(overrides),
+      clearStale: () => commit(clearStaleOverrides(overrides)),
     }),
     [bindings, overrides, run, available, source, register, commit],
   )

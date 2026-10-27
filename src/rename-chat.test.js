@@ -75,9 +75,10 @@ test('the dialog is in the modal family and saves on Enter', () => {
   // Enter saves; the field is selected on open so typing replaces the name.
   assert.match(modal, /e\.key !== 'Enter'/)
   assert.match(modal, /input\.select\(\)/)
-  // An empty name cannot be saved, and a refusal keeps the dialog open.
+  // An empty name cannot be saved, and a refusal keeps the dialog open with
+  // the daemon's words quoted by error-copy, never adopted as the app's own.
   assert.match(modal, /disabled=\{busy \|\| verdict\.state === 'empty'\}/)
-  assert.match(modal, /setError\(err\?\.message \?\? String\(err\)\)/)
+  assert.match(modal, /setError\(errorCopy\(err\)\)/)
   assert.match(modal, /<p className="cv-error-line">\{error\}<\/p>/)
   // The limit is the rule's, not a second number in the field: the attribute
   // counts UTF-16 units while cleanName counts code points, so it halved an

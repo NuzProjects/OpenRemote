@@ -12,6 +12,8 @@ globalThis.localStorage = {
 const {
   ACTIONS,
   blocksWhileTyping,
+  captureRefusal,
+  clearStaleOverrides,
   comboFromEvent,
   comboLabel,
   firesWhileTyping,
@@ -25,6 +27,7 @@ const {
   fuzzyScore,
   rankMatches,
   defaultKey,
+  staleOverrides,
   typesIn,
 } = await import('./shortcuts.js')
 
@@ -125,12 +128,14 @@ test('unbind leaves an action with no key', () => {
   assert.equal(effectiveBindings(unbind({}, 'interrupt')).interrupt, null)
 })
 
-test('overrides round-trip and garbage is dropped', () => {
+test('overrides round-trip, a removed action keeps its key, and garbage is dropped', () => {
   localStorage.clear()
   saveOverrides({ archive: 'Mod+N', 'new-chat': null })
   assert.deepEqual(loadOverrides(), { archive: 'Mod+N', 'new-chat': null })
+  // An id this build no longer has is the user's saved key: kept so the
+  // settings page can show it and clear it (see the stale-row test).
   localStorage.setItem('openremote-shortcuts', JSON.stringify({ archive: 42, nope: 'Mod+Q', stop: 'Mod++' }))
-  assert.deepEqual(loadOverrides(), {})
+  assert.deepEqual(loadOverrides(), { nope: 'Mod+Q' })
   localStorage.setItem('openremote-shortcuts', '{not json')
   assert.deepEqual(loadOverrides(), {})
 })
@@ -183,4 +188,44 @@ test('only the actions that leave the chat stand down while typing', () => {
     assert.equal(blocksWhileTyping(id), false, `${id} keeps the composer where it is`)
   }
   assert.equal(blocksWhileTyping('no-such-action'), false, 'an unknown id has no policy')
+})
+
+// ---- a rebind capture refuses a key the dispatcher cannot deliver ----
+
+test('a capture refuses the keys that would only ever be typed into a box', () => {
+  assert.match(captureRefusal('N'), /no modifier|typed/)
+  assert.match(captureRefusal('Shift+A'), /no modifier|typed/)
+  assert.match(captureRefusal('Backspace'), /no modifier|typed/)
+  assert.match(captureRefusal(''), /not a key/)
+  assert.equal(captureRefusal(null), 'That is not a key OpenRemote can bind.')
+})
+
+test('a capture takes the keys the dispatcher delivers, Esc and the function keys included', () => {
+  assert.equal(captureRefusal('Mod+N'), null)
+  assert.equal(captureRefusal('Ctrl+Shift+J'), null)
+  assert.equal(captureRefusal('Alt+Up'), null)
+  assert.equal(captureRefusal('Esc'), null, 'the interrupt key is delivered while typing, so it can be bound')
+  assert.equal(captureRefusal('F5'), null)
+  assert.equal(captureRefusal('Mod+Shift+\\'), null)
+})
+
+// ---- a saved key whose action is gone is shown, not dropped ----
+
+test('a stored binding for a removed action survives the load and is listed as stale', () => {
+  localStorage.clear()
+  localStorage.setItem(
+    'openremote-shortcuts',
+    JSON.stringify({ 'gone-action': 'Mod+G', 'new-chat': 'Mod+J', broken: 'Nope+Nope' }),
+  )
+  const loaded = loadOverrides()
+  assert.equal(loaded['gone-action'], 'Mod+G', 'the key is the user\'s, so it is kept')
+  assert.equal(loaded['new-chat'], 'Mod+J')
+  assert.equal(Object.hasOwn(loaded, 'broken'), false, 'a malformed combo is still dropped')
+  // It never takes a key: the live map walks the catalog only.
+  assert.equal(effectiveBindings(loaded, false)['gone-action'], undefined)
+  assert.deepEqual(staleOverrides(loaded), [{ id: 'gone-action', combo: 'Mod+G' }])
+  // Clearing forgets the stale one and leaves the real overrides alone.
+  assert.deepEqual(clearStaleOverrides(loaded), { 'new-chat': 'Mod+J' })
+  assert.deepEqual(clearStaleOverrides({}), {})
+  assert.deepEqual(staleOverrides({}), [])
 })
