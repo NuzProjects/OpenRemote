@@ -2,8 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, DotsThree, FloppyDisk, SquaresFour, X } from '@phosphor-icons/react'
 import ContextMenu from './ContextMenu.jsx'
 import SplitGlyph from './SplitGlyph.jsx'
+import { HarnessMark } from './brand-marks.jsx'
 import { useHint, useKeyboard } from './keyboard.jsx'
 import { MIN_PANES, loadLayouts, offerLayouts } from './layouts.js'
+import { paneChatId, paneHeader } from './pane-header.js'
+import { projectFor } from './projects.js'
+import { useConsole } from './state/console.jsx'
 import {
   MAX_PANES,
   acceptsChatDrop,
@@ -118,6 +122,18 @@ function Pane({
   // read this one value, so nothing offers a split the shell will refuse.
   const splittable = Boolean(canSplit) && !full
   const label = labelFor(node)
+  // What a person needs to tell this header from the one beside it: the chat
+  // record's own project, harness and status, on top of the shell's label for
+  // the pane. A pane holding no chat keeps the role's name.
+  const { chats, projects } = useConsole()
+  const chatId = paneChatId(node.view, currentChat)
+  const chat = chatId ? (chats?.[chatId] ?? null) : null
+  const head = paneHeader({
+    label,
+    chat,
+    project: chat ? projectFor(projects ?? [], chat.workspace) : null,
+  })
+  const headTitle = primary ? head.title : `${head.title} - drag onto another pane's edge to move it`
   const hintRight = useHint('split-right')
   const hintDown = useHint('split-down')
   const kb = useKeyboard()
@@ -233,8 +249,8 @@ function Pane({
       {showHeader && (
         <header className="split-bar">
           <span
-            className="split-label"
-            title={primary ? label : `${label} - drag onto another pane's edge to move it`}
+            className={`split-label${head.chat ? ' split-label--chat' : ''}`}
+            title={headTitle}
             draggable={!primary && node.view !== 'new'}
             onDragStart={(e) => {
               // The same pair the sidebar writes: the private type the panes
@@ -244,7 +260,13 @@ function Pane({
               e.dataTransfer.effectAllowed = 'move'
             }}
           >
-            {label}
+            {/* The sidebar's dot, in the sidebar's language: same classes, same
+                status values, so a streaming or waiting pane reads the same as
+                its row does. */}
+            {head.chat && <span className={`dot dot--${head.status}`} aria-hidden="true" />}
+            {head.chat && head.harness && <HarnessMark harness={head.harness} size={12} />}
+            <span className="split-title">{head.title}</span>
+            {head.project && <span className="split-project">{`· ${head.project}`}</span>}
           </span>
           <div className="split-actions">
             <button

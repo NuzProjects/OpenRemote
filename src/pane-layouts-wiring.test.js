@@ -71,3 +71,31 @@ test('the word keeps the header row, and the stylesheet says so', () => {
   assert.match(rule, /width: auto/)
   assert.match(rule, /font-size: 11\.5px/)
 })
+
+// ---- what the header says ----
+
+test('a chat pane header shows the chat, a role pane keeps the role name', () => {
+  // The record comes from the console, the same source the sidebar reads.
+  assert.match(area, /import \{ useConsole \} from '\.\/state\/console\.jsx'/)
+  assert.match(area, /import \{ paneChatId, paneHeader \} from '\.\/pane-header\.js'/)
+  assert.match(area, /const \{ chats, projects \} = useConsole\(\)/)
+  assert.match(area, /const chatId = paneChatId\(node\.view, currentChat\)/)
+  assert.match(area, /const head = paneHeader\(\{/)
+  assert.match(area, /projectFor\(projects \?\? \[\], chat\.workspace\)/)
+})
+
+test('the header wears the sidebar dot and the sidebar harness mark, one line', () => {
+  // Same classes and statuses as the sidebar's row: one language, not two.
+  assert.match(area, /className=\{`dot dot--\$\{head\.status\}`\}/)
+  assert.match(area, /<HarnessMark harness=\{head\.harness\} size=\{12\} \/>/)
+  // The title truncates while the controls keep their width.
+  assert.match(area, /<span className="split-title">\{head\.title\}<\/span>/)
+  assert.match(area, /<span className="split-project">\{`· \$\{head\.project\}`\}<\/span>/)
+  assert.match(css, /\.split-title \{[\s\S]{0,140}text-overflow: ellipsis/)
+  assert.match(css, /\.split-project \{[\s\S]{0,200}text-overflow: ellipsis/)
+  assert.match(css, /\.split-actions \{\s*flex: none/, 'the actions never give ground to the title')
+  // A role pane renders none of the chat parts: no dot, no mark, no project.
+  assert.match(area, /\{head\.chat && <span className=\{`dot dot--/)
+  assert.match(area, /\{head\.chat && head\.harness && <HarnessMark/)
+  assert.match(area, /\{head\.project && <span className="split-project">/)
+})

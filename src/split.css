@@ -130,12 +130,39 @@
 
 .split-label {
   flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
-  overflow: hidden;
   color: var(--text-3);
   font-size: 12px;
+}
+
+/* The title is the one part that gives ground: it truncates the way the
+   sidebar's row does, and the project beside it only after the title has, so
+   the split toggle, Layouts and the overflow never move. */
+.split-title {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.split-project {
+  flex: 0 1 auto;
+  min-width: 12px;
+  max-width: 45%;
+  overflow: hidden;
+  color: var(--text-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.85;
+}
+
+/* A chat pane's header carries the chat's own name, so it takes the brighter
+   ink a live sidebar row uses rather than the role's muted grey. */
+.split-label--chat {
+  color: var(--text-2);
 }
 
 /* A chat title is a thing you can drag to another pane's edge. */
