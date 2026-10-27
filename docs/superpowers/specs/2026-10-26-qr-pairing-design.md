@@ -61,9 +61,10 @@ What the LAN listener serves, in total:
 | anything else | - | 404 |
 
 `/api/home` is not a proxy into the owner API. It is a small handler that reads the store and the
-supervisor and projects four fields per chat. There is no route, no query parameter, and no header
-that makes it reach `/sessions/{id}/prompts`, the harness control surface, the filesystem, plugins,
-marketplaces, automations, MCP servers, or Cloud.
+supervisor and projects five fields per chat: `id`, `title`, `harness`, `status` and `updated_at`.
+There is no route, no query parameter, and no header that makes it reach
+`/sessions/{id}/prompts`, the harness control surface, the filesystem, plugins, marketplaces,
+automations, MCP servers, or Cloud.
 
 ### What a hostile device on the same LAN can do
 
@@ -72,6 +73,13 @@ marketplaces, automations, MCP servers, or Cloud.
 - It can try to redeem a code it did not see. Codes are 40 bits of randomness (eight characters of a
   32 character alphabet, drawn so that no position is weaker than the rest), live for 5 minutes,
   single use, and after 5 wrong attempts the live code is destroyed, so guessing is not a path.
+- It can burn the live code without knowing it. Five wrong guesses destroy the code, and when no
+  phone is paired that closes the socket with it, so anything that can reach the port can keep
+  pairing unavailable for as long as it keeps sending five requests per code; no secret is touched
+  and nothing is learned. A cooldown after a few wrong guesses was not chosen because it costs the
+  person at the machine more than it costs the attacker: they would sit out a timer the attacker set,
+  while the attacker loses only the time it already spends sending requests, and its guesses have to
+  be thrown away anyway.
 - It can see that a host on this network answers at all, while pairing is on or a phone is paired.
   When neither is true nothing is listening on the LAN at all.
 - It can read anything the network carries, because the connection is plain HTTP. That is its own
@@ -111,6 +119,14 @@ device that later answers on the same address and port is, to the browser, the s
 page served from it can read the key. That key is still read-only and still revocable, and revoking
 from the desktop is one click, but it is the reason both surfaces say the connection is not
 encrypted.
+
+The device that answers on that address need not be another machine. The listener takes the first
+free port of six fixed candidates, and while nothing is listening there (the daemon is not running,
+or it is running with no code live and no phone paired) any unprivileged process on this computer can
+bind that address and port, wait for the phones that keep polling, and read their bearer tokens out of
+the `Authorization` header. Nothing here prevents that; what limits it is that the token only opens
+the one read route, is revoked in one click, and exposes the same list of titles a watcher on the
+network could already read.
 
 What that means in the product: the desktop says, where the code is shown, that the two devices talk
 straight to each other over the local network and that the connection is not encrypted, so anyone who
@@ -157,12 +173,13 @@ nobody is watching. `POST /pairing/cancel` stops the listener when no phone is p
 
 ```json
 { "computer": { "name": "studio", "harnesses": ["claude", "codex"] },
-  "phone": { "name": "iPhone" },
+  "phone": { "id": "…", "name": "iPhone" },
   "chats": [ { "id": "…", "title": "Fix the flaky e2e", "harness": "claude",
                "status": "idle", "updated_at": 1761516000000 } ] }
 ```
 
-Titles and harness ids only. A chat's workspace path is host filesystem detail and stays home.
+Titles, harness ids, status and update times only. A chat's workspace path is host filesystem detail
+and stays home.
 
 `GET /pairing/phones` (loopback, owner token): `{ "phones": [ … ], "notice": null }`, the same
 records the mint response carries, plus the daemon's own sentence when it could not open the pairing
@@ -205,12 +222,20 @@ sits unscanned past its five minutes (a timer minted with the code closes it).
 | no daemon / pairing off | the desktop's Mobile view says so, with the button that turns it on, and with no phones paired it also says nothing is listening |
 | the daemon could not open the pairing port at start | the panel shows the daemon's own sentence (`notice`), so a paired phone that cannot reach this computer is explained instead of silent |
 
+The second row has a window worth stating, because an old code has two possible answers. An exchange
+that arrives after the code's expiry and before the expiry sweep is answered 410 with "That pairing
+code expired"; the sweep runs 250 ms after the expiry and drops the code, so any scan after that is
+answered 404 with "That pairing code is not valid" instead. With no phone paired the sweep also closes
+the socket, so the page more often finds nothing to reach at all. The expired sentence is therefore
+real, short-lived copy and not the common outcome: for a code that has been sitting on a screen, the
+honest description is that the code is simply gone.
+
 ## Rulings this design had to make on its own
 
 1. **The scoped surface is a small handler set, not an HTTP proxy.** "Proxy" allows
-   either; a set of three explicit read-only handlers is the smallest thing that can exist, and it
-   makes "the phone cannot reach the owner API" structural rather than a filter someone can get
-   wrong later.
+   either; the four routes it serves (the page, the exchange, one read-only home route, and a
+   204 favicon) are the smallest surface that can exist, and they make "the phone cannot reach the
+   owner API" structural rather than a filter someone can get wrong later.
 2. **The control routes live on the existing loopback router.** The console already has exactly
    one address and one token for its daemon; adding a second port would mean teaching the console,
    the shell, and the Android app about a third address. `/pairing/*` is merged into the loopback
@@ -266,7 +291,7 @@ payload the console draws, the same exchange, the same token.
 | the socket is down at first boot (a refused connection, not a 401), comes up with a code, and closes by itself when that code expires unscanned | `nothing_listens_until_a_code_is_live` |
 | revoking ends one phone's access while the other keeps working, and the last revoke closes the socket | `revoking_a_phone_ends_its_access_and_nothing_idles_on_the_lan` |
 | the phones file holds a digest and never the token, and the phone survives a restart | `paired_phones_survive_a_restart_and_only_their_digest_is_written` |
-| the shipped bind resolves a real address the phone can dial, and does not answer on loopback | `the_production_bind_puts_a_real_network_address_in_the_payload` |
+| the shipped bind resolves a real address the phone can dial, and does not answer on loopback (on a machine with no LAN address the test prints `SKIPPED` and returns, so a green run there does not cover this row) | `the_production_bind_puts_a_real_network_address_in_the_payload` |
 | ten wrong guesses fired at once pair nothing, and the fifth burn takes the socket down with the code | `ten_parallel_wrong_guesses_pair_nothing` |
 | a phones file that cannot be written leaves the phone paired and answers 500 rather than reporting a removal that did not happen | `a_revoke_that_cannot_be_saved_keeps_the_phone_paired` |
 | a pairing whose record cannot be written hands out no token at all | `a_pairing_that_cannot_be_saved_hands_out_no_token` |
