@@ -349,7 +349,8 @@
   background: var(--bg-hover);
 }
 
-/* hour and minute, not the native clock - its popup cannot be styled */
+/* hour and minute, as pickers - the box keeps its shape and the two halves
+   read as numbers inside it, each with the small caret that says it opens */
 .af-time {
   display: flex;
   align-items: center;
@@ -361,7 +362,10 @@
   color-scheme: dark;
 }
 
-.af-time select {
+.af-time button {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   height: 28px;
   padding: 0 2px;
   border: 0;
@@ -370,10 +374,11 @@
   font: inherit;
   font-size: 13px;
   font-weight: 500;
+  font-variant-numeric: tabular-nums;
   cursor: default;
 }
 
-.af-time select:focus {
+.af-time button:focus {
   outline: none;
 }
 

@@ -5,7 +5,8 @@
 // unless the human is setting a new one.
 
 import { useCallback, useEffect, useState } from 'react'
-import { X } from '@phosphor-icons/react'
+import { CaretDown, X } from '@phosphor-icons/react'
+import PickerMenu from './PickerMenu.jsx'
 import { useConsole } from './state/console.jsx'
 import { useBack } from './use-back.js'
 import { useEscLayer } from './esc-layer.js'
@@ -45,6 +46,9 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
   const [error, setError] = useState(null)
   const [tested, setTested] = useState({}) // id -> { ok, count } | { ok: false, message }
   const [testing, setTesting] = useState(null)
+  const [picker, setPicker] = useState(null)
+
+  const openPicker = (kind) => (e) => setPicker({ kind, x: e.clientX, y: e.clientY })
 
   const load = useCallback(async () => {
     setPending(true)
@@ -285,14 +289,32 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
           </label>
           <label className="dv-host">
             Credential
-            <select value={form.authKind} onChange={(e) => setForm((f) => ({ ...f, authKind: e.target.value }))}>
-              {AUTH_KINDS.map((k) => (
-                <option key={k.id} value={k.id}>
-                  {k.name}
-                </option>
-              ))}
-            </select>
+            <button
+              type="button"
+              className="dv-select"
+              onClick={openPicker('authKind')}
+              aria-haspopup="listbox"
+              aria-expanded={picker?.kind === 'authKind'}
+            >
+              {authLabel(form.authKind)}
+              <CaretDown size={12} />
+            </button>
           </label>
+          {picker?.kind === 'authKind' && (
+            <PickerMenu
+              label="Credential"
+              searchPlaceholder="Search credential kinds"
+              items={AUTH_KINDS.map((k) => ({ id: k.id, name: k.name }))}
+              groups={null}
+              selectedId={form.authKind}
+              onChoose={(id) => {
+                setForm((f) => ({ ...f, authKind: id }))
+                setPicker(null)
+              }}
+              onClose={() => setPicker(null)}
+              anchor={{ left: picker.x, top: picker.y }}
+            />
+          )}
           {form.authKind !== 'none' && (
             <label className="dv-host">
               Key{form.id ? ' (leave empty to keep the saved one)' : ''}

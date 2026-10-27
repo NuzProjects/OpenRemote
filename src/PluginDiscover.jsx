@@ -12,6 +12,7 @@ import {
   X,
 } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
+import PickerMenu from './PickerMenu.jsx'
 import PluginCard from './PluginCard.jsx'
 import PluginDetailModal from './PluginDetailModal.jsx'
 import {
@@ -29,6 +30,9 @@ export default function PluginDiscover({ onInstall }) {
   const [expandedCategories, setExpandedCategories] = useState(() => new Set())
   const [dismissedErrors, setDismissedErrors] = useState(() => new Set())
   const [fetching, setFetching] = useState([])
+  const [picker, setPicker] = useState(null)
+
+  const openPicker = (kind) => (e) => setPicker({ kind, x: e.clientX, y: e.clientY })
 
   const refreshOne = async (name) => {
     setFetching((curr) => (curr.includes(name) ? curr : [...curr, name]))
@@ -141,33 +145,67 @@ export default function PluginDiscover({ onInstall }) {
           )}
         </div>
 
-        <select
+        {/* Two filters, the console's own dropdown engine: an OS-drawn list
+            could not be searched, keyboard-navigated or themed. */}
+        <button
+          type="button"
           className="pg-select"
-          value={category}
-          onChange={(e) => setCategory(e.target.value)}
+          onClick={openPicker('category')}
           aria-label="Category"
+          aria-haspopup="listbox"
+          aria-expanded={picker?.kind === 'category'}
         >
-          <option value="">All categories</option>
-          {categoryOptions.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
-            </option>
-          ))}
-        </select>
+          {categoryOptions.find((opt) => opt.value === category)?.label ?? 'All categories'}
+          <CaretDown size={11} />
+        </button>
+        {picker?.kind === 'category' && (
+          <PickerMenu
+            label="Category"
+            searchPlaceholder="Search categories"
+            items={[
+              { id: '', name: 'All categories' },
+              ...categoryOptions.map((opt) => ({ id: opt.value, name: opt.label })),
+            ]}
+            groups={null}
+            selectedId={category}
+            onChoose={(id) => {
+              setCategory(id)
+              setPicker(null)
+            }}
+            onClose={() => setPicker(null)}
+            anchor={{ left: picker.x, top: picker.y }}
+          />
+        )}
 
-        <select
+        <button
+          type="button"
           className="pg-select"
-          value={market}
-          onChange={(e) => setMarket(e.target.value)}
+          onClick={openPicker('market')}
           aria-label="Marketplace"
+          aria-haspopup="listbox"
+          aria-expanded={picker?.kind === 'market'}
         >
-          <option value="">All marketplaces</option>
-          {on.map((m) => (
-            <option key={m.name} value={m.name}>
-              {m.name}
-            </option>
-          ))}
-        </select>
+          {market || 'All marketplaces'}
+          <CaretDown size={11} />
+        </button>
+        {picker?.kind === 'market' && (
+          <PickerMenu
+            label="Marketplace"
+            searchPlaceholder="Search marketplaces"
+            items={[
+              { id: '', name: 'All marketplaces' },
+              ...on.map((m) => ({ id: m.name, name: m.name })),
+            ]}
+            groups={null}
+            selectedId={market}
+            onChoose={(id) => {
+              setMarket(id)
+              setPicker(null)
+            }}
+            onClose={() => setPicker(null)}
+            anchor={{ left: picker.x, top: picker.y }}
+          />
+        )}
 
         <button
           type="button"

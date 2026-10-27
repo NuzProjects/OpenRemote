@@ -122,8 +122,13 @@ export default function PickerMenu({
   // The empty state reads differently by cause: a search that found
   // nothing names the query; a list with nothing in it yet says so
   // plainly ("no harnesses yet" is the moment the footer row carries
-  // the action).
-  const plural = (word) => word.toLowerCase() + (word.endsWith('s') ? 'es' : 's')
+  // the action). A label ending in a consonant and a y takes "ies".
+  const plural = (word) => {
+    const lower = word.toLowerCase()
+    if (lower.endsWith('s')) return `${lower}es`
+    if (/[^aeiou]y$/.test(lower)) return `${lower.slice(0, -1)}ies`
+    return `${lower}s`
+  }
   const emptyLine = query.trim()
     ? `No ${plural(label)} match "${query}"`
     : `No ${plural(label)} yet`
