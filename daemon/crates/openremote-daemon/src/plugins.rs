@@ -775,6 +775,15 @@ impl PluginHost {
 /// Nothing there: let the record go, which is how the plugin list gets rid of
 /// one of these.
 ///
+/// A record can be safe and still stuck: one whose name resolves to a folder
+/// that is not this plugin's - `...`, say, which is the marketplace folder on
+/// Windows - is refused every time it is asked, so it stays in the list and
+/// nothing in the UI can drop it. The way out is the one the refusal names, by
+/// hand, and for that shape it means deleting a folder this plugin does not
+/// own. Leaving the record there is the price of never deleting a folder it did
+/// not name, and it is the honest limit of this rule rather than a claim that
+/// every record has a way out.
+///
 /// A check that failed: refuse too. A folder this daemon cannot stat is not an
 /// absent folder, and dropping the record would leave it as an orphan nothing
 /// looks at again.
