@@ -235,6 +235,11 @@ export default function MachineModal({ device, onOpenChat, onClose }) {
           )}
           {confirmRemove ? (
             <>
+              {/* The safe answer first: the eye, the cursor and the Tab order
+                  all reach "Keep" before the press that leaves. */}
+              <button className="dv-act" onClick={() => setConfirmRemove(false)}>
+                Keep
+              </button>
               <button
                 className="dv-act"
                 disabled={busy}
@@ -247,9 +252,6 @@ export default function MachineModal({ device, onOpenChat, onClose }) {
               >
                 <Trash size={14} />
                 {isMe ? 'Leave Cloud' : 'Remove'}
-              </button>
-              <button className="dv-act" onClick={() => setConfirmRemove(false)}>
-                Keep
               </button>
             </>
           ) : (

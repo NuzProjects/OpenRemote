@@ -294,7 +294,7 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
                       onClick={() => remove(entry.id)}
                       title="Its saved key goes with it, and there is no undo"
                     >
-                      Remove it
+                      Remove it and its key
                     </button>
                   ) : (
                     <button type="button" className="pn-btn" onClick={() => setArmed((curr) => armRow(curr, entry.id))}>

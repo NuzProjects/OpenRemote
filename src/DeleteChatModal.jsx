@@ -46,7 +46,8 @@ export default function DeleteChatModal({ title, onDelete, onClose }) {
           </button>
         </div>
         <p className="dv-modal-hint">
-          <strong className="pv">{title}</strong> is deleted from every device it is synced to. This can't be undone.
+          <strong className="pv">{title}</strong> is deleted here, and on every device it is synced to. The
+          files it changed on disk stay where they are. This can&apos;t be undone.
         </p>
         {error && <p className="cv-error-line">{error}</p>}
         <div className="ctx-modal-actions">

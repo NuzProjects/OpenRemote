@@ -129,7 +129,7 @@ export default function McpServersSection() {
                       onClick={() => remove(p.id)}
                       title="Its launch command and binding go with it, and there is no undo"
                     >
-                      Remove it
+                      Remove it and its launch command
                     </button>
                   ) : (
                     <button type="button" className="pn-btn" onClick={() => setArmed((curr) => armRow(curr, p.id))}>

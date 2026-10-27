@@ -315,6 +315,15 @@ function InstalledPlugins({ onUpdate }) {
               {orphaned && (
                 <div className="pg-sub">Its marketplace was removed: it keeps working, with no more updates.</div>
               )}
+              {confirmRemove === p.id && (
+                // What the second press takes, in the row it takes it from: a
+                // tooltip is not saying it before it happens, because a person
+                // reading the armed row is not hovering anything.
+                <div className="pg-sub">
+                  Its folder on this computer is deleted. Its marketplace still lists it, so it can be
+                  installed again from there.
+                </div>
+              )}
             </div>
           )
         })}
