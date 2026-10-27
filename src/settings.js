@@ -11,6 +11,12 @@ const RECENTS_KEY = 'openremote-recent-workspaces'
 // whitelisted field by field; a list of records has no business in that
 // path, and one damaged preset must never take the boot with it.
 const PRESETS_KEY = 'openremote-presets'
+// When this console last looked at each chat: a map of chat id to the
+// activity stamp it showed then. Its own key for the presets' reason - it is
+// a record the person's looking writes, not a preference the boot applies,
+// and one damaged entry must read as "no record" rather than take the first
+// paint with it.
+const CHAT_SEEN_KEY = 'openremote-chat-seen'
 // Superseded by PREFS_KEY's reduce_motion; read only, for the migration.
 const OLD_REDUCE_KEY = 'openremote-reduce-motion'
 
@@ -155,6 +161,28 @@ export function loadStoredPresets() {
 export function saveStoredPresets(rows) {
   try {
     localStorage.setItem(PRESETS_KEY, JSON.stringify(Array.isArray(rows) ? rows : []))
+  } catch {
+    /* storage unavailable: the session keeps what it has in memory */
+  }
+}
+// Which chats this console has looked at since, stored as the map itself.
+// This layer guarantees only the container - a plain object - and never
+// reads a stamp: what counts as moved, which entries are junk and how many
+// are worth keeping is unread.js's rule, so a damaged entry is dropped
+// there rather than silently reinterpreted here.
+export function loadStoredChatSeen() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(CHAT_SEEN_KEY) ?? '{}')
+    return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}
+  } catch {
+    return {}
+  }
+}
+
+export function saveStoredChatSeen(seen) {
+  try {
+    const map = seen && typeof seen === 'object' && !Array.isArray(seen) ? seen : {}
+    localStorage.setItem(CHAT_SEEN_KEY, JSON.stringify(map))
   } catch {
     /* storage unavailable: the session keeps what it has in memory */
   }

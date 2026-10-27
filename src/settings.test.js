@@ -22,6 +22,8 @@ const {
   loadRecentWorkspaces,
   pushRecentWorkspace,
   samePath,
+  loadStoredChatSeen,
+  saveStoredChatSeen,
 } = await import('./settings.js')
 
 const stubDoc = () => {
@@ -230,5 +232,42 @@ test('a storage that refuses to answer leaves the defaults, before first paint',
     savePrefs({ density: 'compact' })
   } finally {
     globalThis.localStorage = real
+  }
+})
+
+// ---- when this console last looked at each chat ----
+
+test('chat records round-trip through their own key', () => {
+  localStorage.clear()
+  saveStoredChatSeen({ 'chat-1': 1700000000000, 'chat-2': 1700000000500 })
+  assert.deepEqual(loadStoredChatSeen(), { 'chat-1': 1700000000000, 'chat-2': 1700000000500 })
+  assert.ok(localStorage.getItem('openremote-chat-seen'))
+})
+
+test('a damaged chat record reads as no record at all', () => {
+  for (const raw of ['{not json', '["a"]', '"a string"', '42', 'null']) {
+    localStorage.clear()
+    localStorage.setItem('openremote-chat-seen', raw)
+    assert.deepEqual(loadStoredChatSeen(), {}, raw)
+  }
+})
+
+test('a storage that refuses to answer leaves no records rather than throwing', () => {
+  const original = globalThis.localStorage
+  globalThis.localStorage = {
+    getItem: () => {
+      throw new Error('denied')
+    },
+    setItem: () => {
+      throw new Error('denied')
+    },
+    removeItem: () => {},
+    clear: () => {},
+  }
+  try {
+    assert.deepEqual(loadStoredChatSeen(), {})
+    saveStoredChatSeen({ a: 1 })
+  } finally {
+    globalThis.localStorage = original
   }
 })
