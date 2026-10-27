@@ -21,6 +21,31 @@ function detail(device) {
   return [platformLabel(device.platform), device.app_version].filter(Boolean).join(' · ')
 }
 
+// An account with no phones used to leave the grid empty under a heading
+// that counts zero, which reads as a page that stopped halfway. This row
+// is the account half of the story, and it deliberately never repeats the
+// pairing panel above it: a phone paired to this computer over its network
+// and a phone signed in to the Cloud are different things, and one empty
+// state mistaken for the other sends a user to pair a phone they already
+// paired. No control here: the first step is on the phone itself, so a
+// button in this row would have nothing to do.
+function NoPhonesYet() {
+  return (
+    <div className="pn-list pn-list--tight">
+      <div className="pn-row">
+        <div>
+          <div className="pn-name">No phones in your Cloud yet.</div>
+          <div className="pn-detail">
+            A phone signed in to your Cloud lists the chats you sync and can
+            drive your machines. Install OpenRemote on the phone and sign in
+            with the same account.
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function MobileView({ onOpenChat }) {
   const privacy = usePrivacyMode()
   const { devices, thisDevice, cloud } = useConsole()
@@ -48,32 +73,32 @@ export default function MobileView({ onOpenChat }) {
         <div className="pn-list pn-list--tight">
           <CloudStateRow one="phone" />
         </div>
+      ) : phones.length === 0 ? (
+        <NoPhonesYet />
       ) : (
-        <>
-          <div className="dv-grid">
-            {phones.map((device) => (
-              <button
-                key={device.id}
-                className="dv-card"
-                onClick={() => setOpenId(device.id)}
-                title={privacy ? undefined : device.name}
-              >
-                <span className="dv-icon">
-                  <DeviceMobile size={19} weight="light" />
-                </span>
-                <span className="dv-name">
-                  <span className="pv">{device.name}</span>
-                  {device.id === thisDevice && <span className="dv-badge">{selfLabel(device)}</span>}
-                </span>
-                <span className="dv-detail">{detail(device)}</span>
-                <span className="dv-status">
-                  <span className={`dv-dot dv-dot--${device.online ? 'online' : 'offline'}`} />
-                  {device.online ? 'Online' : 'Offline'}
-                </span>
-              </button>
-            ))}
-          </div>
-        </>
+        <div className="dv-grid">
+          {phones.map((device) => (
+            <button
+              key={device.id}
+              className="dv-card"
+              onClick={() => setOpenId(device.id)}
+              title={privacy ? undefined : device.name}
+            >
+              <span className="dv-icon">
+                <DeviceMobile size={19} weight="light" />
+              </span>
+              <span className="dv-name">
+                <span className="pv">{device.name}</span>
+                {device.id === thisDevice && <span className="dv-badge">{selfLabel(device)}</span>}
+              </span>
+              <span className="dv-detail">{detail(device)}</span>
+              <span className="dv-status">
+                <span className={`dv-dot dv-dot--${device.online ? 'online' : 'offline'}`} />
+                {device.online ? 'Online' : 'Offline'}
+              </span>
+            </button>
+          ))}
+        </div>
       )}
 
       {open && (
