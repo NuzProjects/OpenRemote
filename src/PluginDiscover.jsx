@@ -20,6 +20,7 @@ import {
   isStale,
   searchEntries,
 } from './plugins.js'
+import { errorCopy } from './error-copy.js'
 
 export default function PluginDiscover({ onInstall }) {
   const { catalog, marketplaces, refreshMarketplace } = useConsole()
@@ -30,16 +31,25 @@ export default function PluginDiscover({ onInstall }) {
   const [expandedCategories, setExpandedCategories] = useState(() => new Set())
   const [dismissedErrors, setDismissedErrors] = useState(() => new Set())
   const [fetching, setFetching] = useState([])
+  // A refresh whose request threw before any marketplace record could carry the
+  // answer. Kept apart from the record's own error so a failure that says
+  // nothing still says something here.
+  const [refreshError, setRefreshError] = useState(null)
   const [picker, setPicker] = useState(null)
 
   const openPicker = (kind) => (e) => setPicker({ kind, x: e.clientX, y: e.clientY })
 
   const refreshOne = async (name) => {
     setFetching((curr) => (curr.includes(name) ? curr : [...curr, name]))
+    setRefreshError((curr) => (curr?.name === name ? null : curr))
     try {
       await refreshMarketplace(name)
-    } catch {
-      // Errors surface on the marketplace record
+    } catch (err) {
+      // A marketplace record carries the error when the fetch itself answered
+      // badly; a throw means the request never landed, and that used to leave
+      // the list looking merely empty. Same card as the record errors, with the
+      // same Try again.
+      setRefreshError({ name, message: errorCopy(err) })
     } finally {
       setFetching((curr) => curr.filter((n) => n !== name))
     }
@@ -222,6 +232,32 @@ export default function PluginDiscover({ onInstall }) {
           />
         </button>
       </div>
+
+      {refreshError && (
+        <div className="pg-errors">
+          {/* The request never reached the catalogue, so no marketplace record
+              carries the reason: this card is the reason, and its button is the
+              same Try again the record errors use. */}
+          <div className="pg-error-card" role="alert">
+            <div className="pg-error-card-main">
+              <Warning size={16} weight="bold" className="pg-error-icon" />
+              <div className="pg-error-content">
+                <h4 className="pg-error-title">Couldn&apos;t refresh {refreshError.name}</h4>
+                <p className="pg-error-msg">{refreshError.message}</p>
+              </div>
+            </div>
+            <div className="pg-error-actions">
+              <button
+                type="button"
+                className="pn-btn pg-error-btn"
+                onClick={() => handleRetry(refreshError.name)}
+              >
+                Try again
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {failed.length > 0 && (
         <div className="pg-errors">

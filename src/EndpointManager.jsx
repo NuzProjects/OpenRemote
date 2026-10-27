@@ -50,6 +50,10 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
+  // A list read that failed. The skeleton belongs to `pending` only: without
+  // this, a failed read showed the "no endpoints yet" line, which is a lie, and
+  // nothing ever asked again.
+  const [loadError, setLoadError] = useState(null)
   const [tested, setTested] = useState({}) // id -> { ok, count } | { ok: false, message }
   const [testing, setTesting] = useState(null)
   const [picker, setPicker] = useState(null)
@@ -105,11 +109,14 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
 
   const load = useCallback(async () => {
     setPending(true)
+    setLoadError(null)
     try {
       const list = (await api.device(deviceId).modelEndpoints({ harness })) ?? []
       setEndpoints(list)
-    } catch {
-      /* the poll heals */
+    } catch (err) {
+      // There is no poll here to heal it: this call is the poll. Say what
+      // failed, and give the pane a button that asks again.
+      setLoadError(errorCopy(err))
     } finally {
       setPending(false)
     }
@@ -268,6 +275,22 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
       )}
       {pending ? (
         <span className="nc-skeleton" aria-hidden="true" />
+      ) : loadError ? (
+        // The list could not be read. Not the empty state: "no endpoints yet"
+        // would claim something the pane never learned.
+        <div className="dv-error pn-row pn-row--stack" role="alert">
+          <div className="pn-row-main">
+            <div>
+              <div className="pn-name">The endpoint list could not be read</div>
+              <div className="pn-detail">{loadError}</div>
+            </div>
+          </div>
+          <div className="pn-actions">
+            <button type="button" className="pn-btn" onClick={load}>
+              Try again
+            </button>
+          </div>
+        </div>
       ) : (
         <div className="pn-list pn-list--wide">
           {endpoints.length === 0 && !editing && (
