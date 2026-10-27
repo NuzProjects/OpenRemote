@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createServer } from 'node:net'
-import { DaemonApi, parseCursor, parseSseLine, sessionGone } from './daemon.js'
+import { DaemonApi, parseCursor, parseSseFrame, sessionGone } from './daemon.js'
 
 // ---- the resume cursor ----
 
@@ -20,18 +20,37 @@ test('a cursor counts only as a non-negative integer', () => {
   assert.equal(parseCursor(NaN), null)
 })
 
-// ---- one SSE line ----
+// ---- one SSE frame ----
 
-test('an id line carries the frame seq, a data line its event', () => {
-  assert.deepEqual(parseSseLine('id: 7'), { seq: 7 })
-  assert.deepEqual(parseSseLine('id: 0'), { seq: 0 })
-  assert.deepEqual(parseSseLine('data: {"seq":7,"type":"a"}'), { event: { seq: 7, type: 'a' } })
-  assert.deepEqual(parseSseLine('data: {not json'), { malformed: true })
+test('a frame carries its seq on an id line and its event on data lines', () => {
+  assert.deepEqual(parseSseFrame('id: 7'), { seq: 7 })
+  assert.deepEqual(parseSseFrame('id: 0'), { seq: 0 })
+  assert.deepEqual(parseSseFrame('data: {"seq":7,"type":"a"}'), {
+    seq: null,
+    event: { seq: 7, type: 'a' },
+  })
+  assert.deepEqual(parseSseFrame('data: {not json'), { seq: null, malformed: true })
+  // Multi-line data is one JSON value the protocol splits across lines, and
+  // the space after the colon is optional. A sender that does either is not
+  // a sender the console may ignore.
+  assert.deepEqual(parseSseFrame('id: 3\ndata: {"seq":3,\ndata: "type":"split"}'), {
+    seq: 3,
+    event: { seq: 3, type: 'split' },
+  })
+  assert.deepEqual(parseSseFrame('id:3\ndata:{"seq":3,"type":"tight"}'), {
+    seq: 3,
+    event: { seq: 3, type: 'tight' },
+  })
+  // A carriage return is part of the line ending, not the payload.
+  assert.deepEqual(parseSseFrame('id: 4\r\ndata: {"seq":4,"type":"crlf"}\r'), {
+    seq: 4,
+    event: { seq: 4, type: 'crlf' },
+  })
   // Separators, keep-alive comments, and an id that is not a number are
   // nothing the reader can use.
-  assert.equal(parseSseLine(''), null)
-  assert.equal(parseSseLine(': keep-alive'), null)
-  assert.equal(parseSseLine('id: soon'), null)
+  assert.equal(parseSseFrame(''), null)
+  assert.equal(parseSseFrame(': keep-alive'), null)
+  assert.equal(parseSseFrame('id: soon'), null)
 })
 
 // ---- the SSE reader over a stubbed fetch ----
@@ -113,6 +132,32 @@ test('a stream that dies between a frame id and its data does not claim that seq
   // would resume past an event the console never folded, and nothing would
   // replay it.
   const { seen, cursor } = await collect('id: 1\ndata: {"seq":1,"type":"a"}\n\nid: 2\n')
+  assert.deepEqual(seen.map((event) => event.type), ['a'])
+  assert.equal(cursor, 1)
+})
+
+test('a multi-line frame reaches onEvent whole, through a real stream', async () => {
+  // The fixture is the one a hand-written sender produces: data split over
+  // two lines, CRLF line endings, and one frame with no space after the
+  // colon. A reader that took a frame to be one `data: ` line folded
+  // nothing here and left the chat empty.
+  const { seen, cursor } = await collect(
+    'id: 1\r\ndata: {"seq":1,\r\ndata: "type":"split"}\r\n\r\n' +
+      'id:2\ndata:{"seq":2,"type":"tight"}\n\n',
+  )
+  assert.deepEqual(seen, [
+    { seq: 1, type: 'split' },
+    { seq: 2, type: 'tight' },
+  ])
+  assert.equal(cursor, 2)
+})
+
+test('a frame still open when the stream dies is not folded', async () => {
+  // A blank line is what ends a frame, so the last one may be half written.
+  // Dropping it and resuming after the last complete frame replays it whole.
+  const { seen, cursor } = await collect(
+    'id: 1\ndata: {"seq":1,"type":"a"}\n\nid: 2\ndata: {"seq":2,"type":"b"}',
+  )
   assert.deepEqual(seen.map((event) => event.type), ['a'])
   assert.equal(cursor, 1)
 })

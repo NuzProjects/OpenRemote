@@ -34,25 +34,42 @@ export function parseCursor(value) {
   return null
 }
 
-// One line of an SSE frame. The daemon writes each frame as
-// `id: <seq>\ndata: <json>` - the id line first, so even a frame whose
-// data cannot be parsed has its seq in hand. Returns `{ seq }` for an id
-// line, `{ event }` for a well-formed data line, `{ malformed: true }` for
-// a data line that is not JSON, and null for everything else (frame
-// separators, keep-alive comments, an unreadable id).
-export function parseSseLine(line) {
-  if (line.startsWith('id: ')) {
-    const seq = parseCursor(line.slice(4))
-    return seq == null ? null : { seq }
-  }
-  if (line.startsWith('data: ')) {
-    try {
-      return { event: JSON.parse(line.slice(6)) }
-    } catch {
-      return { malformed: true }
+// One SSE frame, as the protocol defines it: the lines up to the blank line
+// that ends it. `id` carries the frame's seq (the daemon writes it first, so
+// even a frame whose data cannot be parsed has its position in hand) and
+// `data` carries JSON, which the protocol allows to arrive as several lines
+// joined by a newline before parsing. A line is `field: value` with one
+// optional space after the colon, and a trailing carriage return belongs to
+// the line ending, not the payload - both are things a hand-written sender
+// does, and either one silently emptied a chat when the reader took a frame
+// to be one `data: ` line. Returns `{ seq }` for a frame with an id and no
+// data, `{ seq, event }` for a well-formed one, `{ seq, malformed: true }`
+// for data that is not JSON, and null for a frame that carries nothing this
+// reader can use (a separator or a keep-alive).
+export function parseSseFrame(lines) {
+  let seq = null
+  const data = []
+  for (const raw of String(lines ?? '').split('\n')) {
+    const line = raw.replace(/\r$/, '')
+    // A frame separator, a keep-alive comment (`: ping`), or a line with no
+    // field: none of them is a field this reader reads.
+    const colon = line.indexOf(':')
+    if (colon <= 0) continue
+    const field = line.slice(0, colon)
+    const value = line.slice(colon + 1).replace(/^ /, '')
+    if (field === 'id') {
+      const parsed = parseCursor(value)
+      if (parsed != null) seq = parsed
+    } else if (field === 'data') {
+      data.push(value)
     }
   }
-  return null
+  if (!data.length) return seq == null ? null : { seq }
+  try {
+    return { seq, event: JSON.parse(data.join('\n')) }
+  } catch {
+    return { seq, malformed: true }
+  }
 }
 
 // Whether a stream close means the session itself is gone: the daemon
@@ -729,9 +746,6 @@ export class DaemonApi {
       // A garbage cursor is deliberately absent: one clean full replay
       // rather than a resume that can never find its position.
       let cursor = parseCursor(after)
-      // The id line of the frame being read, kept only so a frame whose
-      // data arrived and was rejected can still step past its own seq.
-      let lastId = cursor
       let skipped = 0
       try {
         const query = cursor == null ? '' : `?after=${cursor}`
@@ -752,6 +766,35 @@ export class DaemonApi {
         const reader = response.body.getReader()
         const decoder = new TextDecoder()
         let buffer = ''
+        // The frame being read, its lines joined. SSE ends a frame with a
+        // blank line, so until that blank line the payload may still be
+        // half written - which is why a frame still open when the stream
+        // dies is dropped rather than parsed.
+        let frame = ''
+        const fold = (text) => {
+          const parsed = parseSseFrame(text)
+          if (!parsed) return
+          if (parsed.event) {
+            // The event's own seq when it carries a sane one; the frame's
+            // id line otherwise. Either way the cursor only moves
+            // forward to a real position.
+            cursor = parseCursor(parsed.event.seq) ?? parsed.seq ?? cursor
+            onEvent(parsed.event)
+            return
+          }
+          if (parsed.malformed) {
+            // A frame the console cannot read is skipped, not fatal: its
+            // seq arrived with the frame, so the cursor still moves past
+            // it and a reconnect never replays into the same bad line
+            // forever.
+            skipped += 1
+            if (skipped === 1 || skipped === 10) {
+              console.error(`OpenRemote: skipped ${skipped} unreadable event frames in session ${id}`)
+            }
+            cursor = parsed.seq ?? cursor
+          }
+          // An id with no data behind it is not a frame: the cursor stays.
+        }
         while (true) {
           const { done, value } = await reader.read()
           if (done) break
@@ -760,25 +803,11 @@ export class DaemonApi {
           while ((index = buffer.indexOf('\n')) >= 0) {
             const line = buffer.slice(0, index).replace(/\r$/, '')
             buffer = buffer.slice(index + 1)
-            const parsed = parseSseLine(line)
-            if (parsed?.seq != null) {
-              lastId = parsed.seq
-            } else if (parsed?.event) {
-              // The event's own seq when it carries a sane one; the id
-              // line otherwise. Either way the cursor only moves
-              // forward to a real position.
-              cursor = parseCursor(parsed.event.seq) ?? lastId ?? cursor
-              onEvent(parsed.event)
-            } else if (parsed?.malformed) {
-              // A frame the console cannot read is skipped, not fatal:
-              // its seq already arrived on the id: line, so the cursor
-              // still moves past it and a reconnect never replays into
-              // the same bad line forever.
-              skipped += 1
-              if (skipped === 1 || skipped === 10) {
-                console.error(`OpenRemote: skipped ${skipped} unreadable event frames in session ${id}`)
-              }
-              cursor = lastId ?? cursor
+            if (line === '') {
+              fold(frame)
+              frame = ''
+            } else {
+              frame += (frame ? '\n' : '') + line
             }
           }
         }
