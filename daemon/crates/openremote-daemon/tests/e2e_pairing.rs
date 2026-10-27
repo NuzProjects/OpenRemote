@@ -20,35 +20,20 @@ use openremote_daemon::app::{App, AppOptions};
 use openremote_daemon::pairing::{CODE_TTL_MS, ExchangeBody, PairingHost};
 use openremote_daemon::registry::HarnessRegistry;
 use openremote_daemon::supervisor::Supervisor;
-use serde_json::Value;
+
+mod common;
 
 /// A stand-in for the owner token. Never a real one: the tests assert this
 /// string never leaves loopback, and a test that used a real token would be
 /// proving the wrong thing in a log somewhere.
 const OWNER_TOKEN: &str = "e2e-owner-token-never-on-the-lan";
 
-struct Reply {
-    status: u16,
-    body: String,
-    headers: Vec<(String, String)>,
-}
-
-impl Reply {
-    fn json(&self) -> Value {
-        serde_json::from_str(&self.body).unwrap_or(Value::Null)
-    }
-    fn header(&self, name: &str) -> Option<&str> {
-        self.headers
-            .iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case(name))
-            .map(|(_, v)| v.as_str())
-    }
-}
-
-/// One daemon: its loopback router (with the pairing control routes merged,
-/// exactly as `main.rs` merges them) and nothing else.
+/// One daemon for a pairing test. `common` builds it: the data folder, the
+/// owner token, the loopback router with the pairing control routes merged
+/// exactly as `main.rs` merges them. This only adds what no other suite
+/// wants, the pairing host and the app behind it.
 struct Daemon {
-    data_dir: tempfile::TempDir,
+    inner: common::TestDaemon,
     app: Arc<App>,
     host: Arc<PairingHost>,
     control: SocketAddr,
@@ -67,46 +52,14 @@ async fn start_at(addr: SocketAddr, ttl_ms: i64) -> Daemon {
 /// A daemon over a data folder the test prepared itself, for the cases where
 /// the folder is the thing under test (a phones file that cannot be written).
 async fn start_over(data_dir: tempfile::TempDir, addr: SocketAddr, ttl_ms: i64) -> Daemon {
-    let store = Arc::new(StdMutex::new(
-        Store::open(data_dir.path().to_path_buf()).expect("store"),
-    ));
-    let supervisor = Supervisor::new(store.clone(), HarnessRegistry::none());
-    let app = App::assemble(
-        AppOptions {
-            data_dir: data_dir.path().to_path_buf(),
-            token: OWNER_TOKEN.into(),
-            cloud: dead_cloud(),
-        },
-        store,
-        supervisor,
-    );
-    let host = PairingHost::open_on(Arc::clone(&app), addr, ttl_ms);
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-        .await
-        .expect("bind control");
-    let control = listener.local_addr().expect("control addr");
-    let router = openremote_daemon::http::router(Arc::clone(&app)).merge(host.control_router());
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, router).await;
-    });
+    let (inner, app, host) =
+        common::start_pairing_daemon_over(data_dir, addr, OWNER_TOKEN.to_string(), ttl_ms).await;
+    let control = inner.addr;
     Daemon {
-        data_dir,
+        inner,
         app,
         host,
         control,
-    }
-}
-
-fn dead_cloud() -> openremote_cloud::CloudConfig {
-    // No Cloud in this feature at all: the address answers nothing, so a
-    // stray attempt fails fast and loudly rather than reaching a real one.
-    openremote_cloud::CloudConfig {
-        api_base: "http://127.0.0.1:9/v1/openremote".into(),
-        auth_issuer: "http://127.0.0.1:9/v1/auth".into(),
-        client_id: openremote_cloud::config::CLIENT_ID.into(),
-        device_name: "pairing-e2e".into(),
-        platform: std::env::consts::OS.into(),
-        redirect_uri: None,
     }
 }
 
@@ -116,7 +69,7 @@ async fn http(
     path: &str,
     bearer: Option<&str>,
     body: Option<&str>,
-) -> Reply {
+) -> common::RawReply {
     try_http(addr, method, path, bearer, body)
         .await
         .expect("the listener answered")
@@ -129,51 +82,8 @@ async fn try_http(
     path: &str,
     bearer: Option<&str>,
     body: Option<&str>,
-) -> Option<Reply> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let body = body.unwrap_or_default();
-    let mut request = format!("{method} {path} HTTP/1.1\r\nHost: localhost\r\n");
-    if let Some(token) = bearer {
-        request.push_str(&format!("Authorization: Bearer {token}\r\n"));
-    }
-    request.push_str(&format!(
-        "Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    ));
-    let Ok(mut stream) = tokio::net::TcpStream::connect(addr).await else {
-        return None;
-    };
-    // A peer that drops the connection before or while we write has not
-    // answered, and that is what a socket with nothing behind it looks like
-    // on the way out: no answer, not a panic in the test.
-    if stream.write_all(request.as_bytes()).await.is_err() {
-        return None;
-    }
-    let mut raw = Vec::new();
-    match tokio::time::timeout(Duration::from_secs(20), stream.read_to_end(&mut raw)).await {
-        Ok(Ok(_)) => {}
-        Ok(Err(_)) => return None,
-        Err(_) => panic!("{method} {path}: never answered within 20s"),
-    }
-    let raw = String::from_utf8_lossy(&raw).to_string();
-    let (head, body) = raw.split_once("\r\n\r\n").expect("header block");
-    let status = head
-        .lines()
-        .next()
-        .and_then(|l| l.split_whitespace().nth(1))
-        .and_then(|c| c.parse().ok())
-        .unwrap_or(0);
-    let headers = head
-        .lines()
-        .skip(1)
-        .filter_map(|l| l.split_once(':'))
-        .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
-        .collect();
-    Some(Reply {
-        status,
-        body: body.trim_end_matches(['\r', '\n', '\0']).to_string(),
-        headers,
-    })
+) -> Option<common::RawReply> {
+    common::try_raw_http(addr, method, path, bearer, &[], body).await
 }
 
 /// The console's mint, as the shipped client makes it.
@@ -186,7 +96,7 @@ async fn mint(daemon: &Daemon) -> (String, String, SocketAddr) {
         Some("{}"),
     )
     .await;
-    assert_eq!(reply.status, 200, "mint: {}", reply.body);
+    assert_eq!(reply.status, 200, "mint: {}", reply.text());
     let json = reply.json();
     let url = json["url"].as_str().expect("url").to_string();
     let code = json["code"].as_str().expect("code").to_string();
@@ -217,12 +127,12 @@ async fn a_fake_phone_pairs_and_can_reach_only_its_own_route() {
             .unwrap_or_default()
             .starts_with("text/html")
     );
-    assert!(page.body.contains("OpenRemote"));
+    assert!(page.text().contains("OpenRemote"));
     assert!(
-        !page.body.contains(OWNER_TOKEN),
+        !page.text().contains(OWNER_TOKEN),
         "the page leaks the owner token"
     );
-    assert!(!page.body.contains(&code), "the page leaks the live code");
+    assert!(!page.text().contains(&code), "the page leaks the live code");
     assert!(
         page.header("content-security-policy").is_some(),
         "the page carries a CSP"
@@ -232,30 +142,30 @@ async fn a_fake_phone_pairs_and_can_reach_only_its_own_route() {
     // The exchange: the code buys this phone one scoped token.
     let body = format!(r#"{{"code":"{code}","name":"iPhone"}}"#);
     let paired = http(lan, "POST", "/pair", None, Some(&body)).await;
-    assert_eq!(paired.status, 200, "exchange: {}", paired.body);
+    assert_eq!(paired.status, 200, "exchange: {}", paired.text());
     let json = paired.json();
     let token = json["token"].as_str().expect("token").to_string();
     assert_eq!(token.len(), 64);
     assert_eq!(json["phone"]["name"], "iPhone");
     assert!(json["computer"]["name"].as_str().is_some());
     assert!(
-        !paired.body.contains(OWNER_TOKEN),
+        !paired.text().contains(OWNER_TOKEN),
         "the exchange leaks the owner token"
     );
 
     // What the phone may read.
     let home = http(lan, "GET", "/api/home", Some(&token), None).await;
-    assert_eq!(home.status, 200, "home: {}", home.body);
+    assert_eq!(home.status, 200, "home: {}", home.text());
     let home_json = home.json();
     assert!(home_json["computer"]["name"].as_str().is_some());
     assert!(home_json["chats"].is_array());
     assert_eq!(home_json["phone"]["name"], "iPhone");
     assert!(
-        !home.body.contains(OWNER_TOKEN),
+        !home.text().contains(OWNER_TOKEN),
         "the phone route leaks the owner token"
     );
     assert!(
-        !home.body.contains("workspace"),
+        !home.text().contains("workspace"),
         "a chat's workspace path is host detail and stays home"
     );
 
@@ -320,10 +230,13 @@ async fn a_fake_phone_pairs_and_can_reach_only_its_own_route() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["name"], "iPhone");
     assert!(
-        !list.body.contains(&token),
+        !list.text().contains(&token),
         "the phone's token is never listed"
     );
-    assert!(!list.body.contains("digest"), "the digest is never listed");
+    assert!(
+        !list.text().contains("digest"),
+        "the digest is never listed"
+    );
 }
 
 #[tokio::test]
@@ -333,7 +246,7 @@ async fn a_code_is_single_use_and_expires() {
     let body = format!(r#"{{"code":"{code}","name":"Pixel"}}"#);
 
     let first = http(lan, "POST", "/pair", None, Some(&body)).await;
-    assert_eq!(first.status, 200, "{}", first.body);
+    assert_eq!(first.status, 200, "{}", first.text());
 
     // The same code, again: the phone it already made is the only one.
     let replay = http(lan, "POST", "/pair", None, Some(&body)).await;
@@ -341,7 +254,7 @@ async fn a_code_is_single_use_and_expires() {
     assert!(
         replay.json()["token"].is_null(),
         "a replay must not mint a token: {}",
-        replay.body
+        replay.text()
     );
     let list = http(
         daemon.control,
@@ -366,14 +279,15 @@ async fn a_code_is_single_use_and_expires() {
     )
     .await;
     assert_eq!(
-        late.status, 410,
+        late.status,
+        410,
         "an expired code answers 410: {}",
-        late.body
+        late.text()
     );
     assert!(
         late.json()["token"].is_null(),
         "an expired code must not mint a token: {}",
-        late.body
+        late.text()
     );
     // Nothing was written: an expired exchange leaves no phone behind.
     let after = http(
@@ -422,9 +336,10 @@ async fn wrong_codes_burn_the_live_code_rather_than_feed_guesses() {
     {
         None => {}
         Some(reply) => assert_eq!(
-            reply.status, 404,
+            reply.status,
+            404,
             "the code must not survive the attempt limit: {}",
-            reply.body
+            reply.text()
         ),
     }
     // And nothing of this feature is answering the network any more.
@@ -480,14 +395,14 @@ async fn revoking_a_phone_ends_its_access_and_nothing_idles_on_the_lan() {
         Some("{}"),
     )
     .await;
-    assert_eq!(revoked.status, 200, "{}", revoked.body);
+    assert_eq!(revoked.status, 200, "{}", revoked.text());
     assert_eq!(revoked.json()["phones"].as_array().map(Vec::len), Some(1));
 
     // The phone's next word is 401: there is no record left to match, and
     // the other phone is untouched.
     let after = http(lan, "GET", "/api/home", Some(&token), None).await;
     assert_eq!(after.status, 401);
-    assert!(after.body.contains("removed"), "{}", after.body);
+    assert!(after.text().contains("removed"), "{}", after.text());
     assert_eq!(
         http(lan, "GET", "/api/home", Some(&second_token), None)
             .await
@@ -517,7 +432,7 @@ async fn revoking_a_phone_ends_its_access_and_nothing_idles_on_the_lan() {
         Some("{}"),
     )
     .await;
-    assert_eq!(drained.status, 200, "{}", drained.body);
+    assert_eq!(drained.status, 200, "{}", drained.text());
     let closed = tokio::time::timeout(Duration::from_secs(3), async {
         // Ask until nothing answers: a closed socket is a refused
         // connection, so the loop ends when the probe fails rather than when
@@ -723,11 +638,11 @@ async fn ten_parallel_wrong_guesses_pair_nothing() {
         let reply = handle.await.expect("guess task");
         if let Some(reply) = reply {
             answered += 1;
-            assert_eq!(reply.status, 404, "a wrong guess answered {}", reply.body);
+            assert_eq!(reply.status, 404, "a wrong guess answered {}", reply.text());
             assert!(
-                !reply.body.contains("\"token\""),
+                !reply.text().contains("\"token\""),
                 "a wrong guess minted a token: {}",
-                reply.body
+                reply.text()
             );
         }
     }
@@ -768,8 +683,8 @@ async fn a_pairing_that_cannot_be_saved_hands_out_no_token() {
 
     let body = format!(r#"{{"code":"{code}","name":"iPhone"}}"#);
     let answer = http(lan, "POST", "/pair", None, Some(&body)).await;
-    assert_eq!(answer.status, 500, "{}", answer.body);
-    assert!(!answer.body.contains("\"token\""), "{}", answer.body);
+    assert_eq!(answer.status, 500, "{}", answer.text());
+    assert!(!answer.text().contains("\"token\""), "{}", answer.text());
 
     let listed = http(
         daemon.control,
@@ -795,13 +710,13 @@ async fn a_revoke_that_cannot_be_saved_keeps_the_phone_paired() {
     let (code, _url, lan) = mint(&daemon).await;
     let body = format!(r#"{{"code":"{code}","name":"iPhone"}}"#);
     let paired = http(lan, "POST", "/pair", None, Some(&body)).await;
-    assert_eq!(paired.status, 200, "{}", paired.body);
+    assert_eq!(paired.status, 200, "{}", paired.text());
     let phone_id = paired.json()["phone"]["id"]
         .as_str()
         .expect("id")
         .to_string();
 
-    let phones_path = daemon.data_dir.path().join("paired-phones.json");
+    let phones_path = daemon.inner.data_dir().join("paired-phones.json");
     std::fs::remove_file(&phones_path).expect("remove the phones file");
     std::fs::create_dir(&phones_path).expect("blocking folder");
 
@@ -813,11 +728,11 @@ async fn a_revoke_that_cannot_be_saved_keeps_the_phone_paired() {
         Some("{}"),
     )
     .await;
-    assert_eq!(answer.status, 500, "{}", answer.body);
+    assert_eq!(answer.status, 500, "{}", answer.text());
     assert!(
-        !answer.body.contains("\"phones\": []"),
+        !answer.text().contains("\"phones\": []"),
         "a failed revoke redrew the list as empty: {}",
-        answer.body
+        answer.text()
     );
 
     // The phone is still paired, so the desktop still knows about it and the
@@ -833,7 +748,7 @@ async fn a_revoke_that_cannot_be_saved_keeps_the_phone_paired() {
     assert_eq!(listed.json()["phones"].as_array().map(Vec::len), Some(1));
     let token = paired.json()["token"].as_str().expect("token").to_string();
     let home = http(lan, "GET", "/api/home", Some(&token), None).await;
-    assert_eq!(home.status, 200, "{}", home.body);
+    assert_eq!(home.status, 200, "{}", home.text());
 }
 
 #[tokio::test]
@@ -849,7 +764,7 @@ async fn the_production_bind_puts_a_real_network_address_in_the_payload() {
         AppOptions {
             data_dir: data_dir.path().to_path_buf(),
             token: OWNER_TOKEN.into(),
-            cloud: dead_cloud(),
+            cloud: common::dead_cloud(),
         },
         store,
         supervisor,
@@ -974,7 +889,7 @@ async fn pair_one_phone(daemon: &Daemon) -> (String, SocketAddr) {
         Some(&format!("{{\"code\":\"{code}\",\"name\":\"Pixel\"}}")),
     )
     .await;
-    assert_eq!(reply.status, 200, "pair: {}", reply.body);
+    assert_eq!(reply.status, 200, "pair: {}", reply.text());
     let id = reply.json()["phone"]["id"]
         .as_str()
         .expect("phone id")
@@ -993,7 +908,7 @@ fn reopen_at(data_dir: &std::path::Path, addr: SocketAddr) -> Arc<PairingHost> {
         AppOptions {
             data_dir,
             token: OWNER_TOKEN.into(),
-            cloud: dead_cloud(),
+            cloud: common::dead_cloud(),
         },
         store,
         supervisor,
@@ -1014,7 +929,7 @@ async fn a_moved_address_tells_the_panel_the_phones_must_pair_again() {
         assert!(daemon.host.phones().iter().any(|p| p.id == id));
         (daemon, lan)
     };
-    let data_dir = daemon.data_dir.path().to_path_buf();
+    let data_dir = daemon.inner.data_dir().to_path_buf();
     let file = std::fs::read_to_string(data_dir.join("paired-phones.json")).expect("phones file");
     assert!(
         file.contains(&lan.to_string()),
@@ -1079,11 +994,12 @@ async fn a_revoke_racing_a_mint_never_leaves_a_code_on_a_closed_socket() {
         );
         let minted = minted.expect("the control listener answered the mint");
         let revoked = revoked.expect("the control listener answered the revoke");
-        assert_eq!(minted.status, 200, "round {round}: mint {}", minted.body);
+        assert_eq!(minted.status, 200, "round {round}: mint {}", minted.text());
         assert_eq!(
-            revoked.status, 200,
+            revoked.status,
+            200,
             "round {round}: revoke {}",
-            revoked.body
+            revoked.text()
         );
         let url = minted.json()["url"].as_str().expect("url").to_string();
         let named: SocketAddr = url
