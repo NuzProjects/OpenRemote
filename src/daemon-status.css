@@ -1,6 +1,6 @@
 /* The screen for a daemon that is not there yet, or did not start. Quiet
-   on purpose: no animation, nothing to watch, one thing to read and one
-   button to press. */
+   on purpose: no animation to watch, one thing to read and one button to
+   press. */
 
 .ds {
   flex: 1;
@@ -16,7 +16,7 @@
   max-width: 480px;
   padding: 36px 40px 32px;
   border: 1px solid var(--line);
-  border-radius: 18px;
+  border-radius: var(--radius);
   background: rgba(255, 255, 255, 0.03);
   display: flex;
   flex-direction: column;
@@ -25,7 +25,7 @@
 
 .ds-title {
   margin: 0;
-  font-size: 20px;
+  font-size: 16px;
   font-weight: 600;
   letter-spacing: -0.01em;
   color: var(--text-1);
@@ -42,7 +42,7 @@
   background: rgba(0, 0, 0, 0.25);
   color: var(--text-2);
   font-family: 'Geist Mono', ui-monospace, Consolas, monospace;
-  font-size: 11.5px;
+  font-size: 12.5px;
   line-height: 1.55;
   overflow-wrap: anywhere;
 }
@@ -50,26 +50,56 @@
 .ds-note {
   margin: 0;
   color: var(--text-2);
-  font-size: 13.5px;
+  font-size: 13px;
   line-height: 1.6;
 }
 
+/* The one action on the screen, in the console's primary language: amber
+   with a white label, and the press pulse every primary action shares - a
+   small scale dip and an amber bloom, on the house curve. Nothing here
+   invents a colour; amber marks the interaction and the greys do the rest. */
 .ds-cta {
   align-self: flex-start;
   height: 38px;
-  padding: 0 18px;
+  padding: 0 16px;
   border: 0;
-  border-radius: 9px;
-  background: var(--text-1);
-  color: #10131a;
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: #fff;
   font-size: 13px;
   font-weight: 500;
   cursor: default;
+  box-shadow: 0 0 18px rgba(220, 162, 75, 0.25);
+  transition:
+    transform 0.12s cubic-bezier(0.2, 0, 0, 1),
+    box-shadow 0.12s cubic-bezier(0.2, 0, 0, 1);
 }
 
 .ds-cta:hover {
-  background: #fff;
-  color: #000;
+  filter: brightness(1.08);
+}
+
+.ds-cta:active {
+  transform: scale(0.9);
+  box-shadow: 0 0 34px rgba(220, 162, 75, 0.45);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-cta {
+    transition: none;
+  }
+
+  .ds-cta:active {
+    transform: none;
+  }
+}
+
+html[data-reduce-motion] .ds-cta {
+  transition: none;
+}
+
+html[data-reduce-motion] .ds-cta:active {
+  transform: none;
 }
 
 /* The way to a daemon the app does not run itself: quiet, not a second
