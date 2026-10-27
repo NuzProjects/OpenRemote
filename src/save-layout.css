@@ -1,0 +1,56 @@
+/* The save-layout dialog: one field under the family's hint, and the family's
+   actions under it. No new colour - text tiers, one hairline border, and the
+   amber the console gives a primary button when it is ready. */
+
+.sl-field {
+  display: block;
+  margin-top: 14px;
+}
+
+.sl-label {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-3);
+}
+
+.sl-input {
+  display: block;
+  width: 100%;
+  height: 32px;
+  margin-top: 5px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-1);
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.sl-input::placeholder {
+  color: var(--text-3);
+}
+
+.sl-input:focus {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.sl-error {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #f87171;
+}
+
+/* Amber marks the primary interaction, and only the border and the label say
+   so: no fill, no shadow - the console's own primary treatment. */
+.sl-save:not(:disabled) {
+  border-color: rgba(220, 162, 75, 0.45);
+  color: var(--accent);
+}
+
+.sl-save:not(:disabled):hover {
+  background: rgba(220, 162, 75, 0.08);
+  color: var(--accent);
+}

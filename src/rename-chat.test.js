@@ -85,17 +85,32 @@ test('the dialog is in the modal family and saves on Enter', () => {
   assert.match(modal, /if \(verdict\.state === 'unchanged'\) \{[\s\S]{0,40}onClose\(\)/)
 })
 
-test('the sidebar menu offers Rename and hosts the dialog', () => {
+test('the sidebar menu offers Rename and asks the shell to open the dialog', () => {
   const sidebar = source('Sidebar.jsx')
   assert.match(sidebar, /label: 'Rename'/)
-  assert.match(sidebar, /setRenaming\(row\)/)
-  assert.match(sidebar, /<RenameChatModal/)
-  // The dialog is fed the row's record and writes through the console, so
-  // every surface showing the chat renames in the same beat.
-  assert.match(sidebar, /title=\{renaming\.title\}/)
-  assert.match(sidebar, /onRename=\{\(next\) => renameTo\(renaming\.id, next\)\}/)
-  // The console call is the one the slash command makes, and the row shows
-  // the new name at once (the provider does not fold the answer itself).
-  assert.match(sidebar, /await renameChat\(id, next\)/)
+  // The row menu asks for the dialog; the shell hosts it above both surfaces
+  // that offer renaming (the sidebar's rows and the palette's focused chat).
+  assert.match(sidebar, /onSelect: \(\) => onRenameChat\(row\.id\)/)
+  assert.doesNotMatch(sidebar, /<RenameChatModal/)
+  // The row shows the name just saved until the console's record carries it.
+  assert.match(sidebar, /renamedTitles\[session\.id\]/)
   assert.match(sidebar, /shownTitle\(/)
+})
+
+test('the shell hosts the dialog and owns the one-beat overlay', () => {
+  const app = source('App.jsx')
+  assert.match(app, /<RenameChatModal/)
+  assert.match(app, /onRenameChat={openRename}/)
+  assert.match(app, /renamedTitles={renamed}/)
+  // The focused pane's chat, not the address: a split can have focus on a
+  // chat the primary view is not showing.
+  assert.match(app, /const focusedChatId = focused\?\.view && isChatView\(focused\.view\)/)
+  assert.match(app, /const openRename = \(id = focusedChatId\) => \{/)
+  // The write is the console's own rename call, optimistic for one beat and
+  // taken back when it fails, so the dialog stays open with the reason.
+  assert.match(app, /await renameChat\(id, next\)/)
+  assert.match(app, /setRenamed\(\(map\) => \(\{ \.\.\.map, \[id\]: next \}\)\)/)
+  // The overlay is dropped once the record agrees, so a rename from another
+  // device still lands.
+  assert.match(app, /known === name\) stale = true/)
 })

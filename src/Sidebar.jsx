@@ -37,7 +37,6 @@ import { lineFor, missingLines, pruneLines, questionKey, questionLine, rememberL
 import { HarnessMark } from './brand-marks.jsx'
 import ContextMenu from './ContextMenu.jsx'
 import DeleteChatModal from './DeleteChatModal.jsx'
-import RenameChatModal from './RenameChatModal.jsx'
 import { shownTitle } from './rename-chat.js'
 import { usePrivacyMode } from './privacy.js'
 import { useHint, useShortcut } from './keyboard.jsx'
@@ -47,8 +46,27 @@ import './sidebar.css'
 // hover control, short enough that the sidebar keeps no history of its own.
 const UNDO_MS = 8000
 
-export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit, onAddProject, onNewChatIn, onReveal }) {
-  const { connection, sessions, chats, devices, thisDevice, projects, projectsAnswered, sessionsAnswered, removeProject, archived, setChatArchived, deleteChat, renameChat, api } = useConsole()
+// No overlay, as one stable value: a fresh object here would rebuild the rows
+// memo on every render of a sidebar with no rename in flight.
+const NO_TITLES = {}
+
+export default function Sidebar({
+  open,
+  active,
+  mode,
+  onMode,
+  onSelect,
+  onSplit,
+  onAddProject,
+  onNewChatIn,
+  onReveal,
+  // The shell hosts the rename dialog above both surfaces that offer it, so
+  // the row menu only asks for it. `renamedTitles` is the one-beat overlay of
+  // names just saved, until the console's own record carries them.
+  onRenameChat = null,
+  renamedTitles = NO_TITLES,
+}) {
+  const { connection, sessions, chats, devices, thisDevice, projects, projectsAnswered, sessionsAnswered, removeProject, archived, setChatArchived, deleteChat, api } = useConsole()
   const privacy = usePrivacyMode()
   const [query, setQuery] = useState('')
   const [collapsed, setCollapsed] = useState({})
@@ -60,14 +78,6 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   const [armed, setArmed] = useState(null)
   const [menu, setMenu] = useState(null)
   const [deleting, setDeleting] = useState(null)
-  // The chat whose name is being changed. The sidebar is the only surface
-  // that offers this today, so it also hosts the dialog; the transcript's
-  // header gets the same dialog when its own work lands.
-  const [renaming, setRenaming] = useState(null)
-  // The names just saved, until the console's own record carries them: the
-  // provider returns the daemon's answer but does not fold it (its own file),
-  // so without this a renamed row would keep its old name until the next beat.
-  const [renamed, setRenamed] = useState({})
   // The archive's way back. Archive is a hover button at the row's edge, so a
   // mispress otherwise costs a hunt through Settings > Archived chats that a
   // first-time user does not know exists. One line, for a moment after the
@@ -111,7 +121,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
       return {
         id: session.id,
         title: shownTitle(
-          renamed[session.id],
+          renamedTitles[session.id],
           chats[session.id]?.title ?? session.title ?? 'A new task',
         ),
         status: liveStatus ?? 'idle',
@@ -126,24 +136,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
         synced: Boolean(session.executor),
       }
     })
-  }, [sessions, archived, chats, mode, devices, thisDevice, renamed])
-
-  // The overlay has done its job once the console's own record carries the
-  // name, and it has to go then: kept longer, it would hide a later rename
-  // made on another device.
-  useEffect(() => {
-    if (Object.keys(renamed).length === 0) return
-    setRenamed((map) => {
-      const left = {}
-      let stale = false
-      for (const [id, name] of Object.entries(map)) {
-        const known = chats[id]?.title ?? sessions.find((s) => s.id === id)?.title
-        if (known === name) stale = true
-        else left[id] = name
-      }
-      return stale ? left : map
-    })
-  }, [chats, sessions, renamed])
+  }, [sessions, archived, chats, mode, devices, thisDevice, renamedTitles])
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -342,23 +335,6 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
     setUndo(null)
   }
 
-  // Rename through the console (the same call the slash command makes) with
-  // one beat of optimism: the row shows the new name at once, and a failure
-  // takes it back before the dialog hears about it.
-  const renameTo = async (id, next) => {
-    setRenamed((map) => ({ ...map, [id]: next }))
-    try {
-      await renameChat(id, next)
-    } catch (err) {
-      setRenamed((map) => {
-        const left = { ...map }
-        delete left[id]
-        return left
-      })
-      throw err
-    }
-  }
-
   // Right-click on a chat: the same actions as the hover buttons, plus the
   // split directions - the same four words the pane header and the main
   // area's own menu use.
@@ -369,13 +345,17 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
       { label: 'Open', icon: <ChatCircle size={14} />, onSelect: () => onSelect(row.id) },
       // Renaming is the first thing a new user needs and the last thing they
       // find: `/rename` exists, and the row's name is what the list's search
-      // matches on. The dialog is the same one the transcript's header will
-      // use when that half lands.
-      {
-        label: 'Rename',
-        icon: <PencilSimple size={14} />,
-        onSelect: () => setRenaming(row),
-      },
+      // matches on. The dialog belongs to the shell (it is the same one the
+      // palette's row opens), so this only asks for it.
+      ...(onRenameChat
+        ? [
+            {
+              label: 'Rename',
+              icon: <PencilSimple size={14} />,
+              onSelect: () => onRenameChat(row.id),
+            },
+          ]
+        : []),
       ...(canSplit
         ? [
             { divider: true },
@@ -815,16 +795,6 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
             await deleteChat(deleting.id)
             if (deleting.id === active) onSelect('new')
           }}
-        />
-      )}
-      {renaming && (
-        <RenameChatModal
-          title={renaming.title}
-          synced={renaming.synced}
-          onClose={() => setRenaming(null)}
-          // The row redraws from console state, so the new name reaches this
-          // list at once and every pane on the next beat.
-          onRename={(next) => renameTo(renaming.id, next)}
         />
       )}
     </aside>

@@ -15,6 +15,7 @@ import {
   Desktop,
   DeviceMobile,
   FileCode,
+  FloppyDisk,
   FolderOpen,
   GearSix,
   HardDrives,
@@ -23,7 +24,9 @@ import {
   MagnifyingGlass,
   PuzzlePiece,
   Repeat,
+  SquaresFour,
   StopCircle,
+  TrashSimple,
   UserCircle,
 } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
@@ -60,6 +63,8 @@ import { isPhone } from './cloud.js'
 import { chatStatus } from './state/reducer.js'
 import { loadSeen, recordSeen, storeSeen } from './unread.js'
 import { markAllSeen, movedLine, sinceLastLook, whatHappened, whenLabel } from './since-last-look.js'
+import { capacityLine, loadLayouts, restoreShape, saveLayouts, withoutLayout } from './layouts.js'
+import { armRow, clearRow, rowIsArmed } from './row-confirm.js'
 import './keyboard.css'
 
 const VIEW_ICONS = {
@@ -83,11 +88,11 @@ const SECTION_ORDER = ['Actions', 'Chats', 'Views', 'Projects', 'Machines']
 const SECTION_CAP = 8
 
 // The pages with no keyboard source behind them, so the crumb has a name.
-const PAGE_TITLES = { since: 'Since your last look', 'caught-up': 'Since your last look' }
+const PAGE_TITLES = { since: 'Since your last look', 'caught-up': 'Since your last look', layouts: 'Layouts' }
 
 const projectLabel = (p) => p.folders[0].split(/[\\/]/).filter(Boolean).pop()
 
-export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onOpenProject, onOpenMachine, onRace, raceFree }) {
+export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onOpenProject, onOpenMachine, onRace, raceFree, panes = 1, paneCapacity = 4, onSaveLayout, onRestoreLayout }) {
   // One line on purpose: the stop-everything wiring test reads this call to
   // prove the palette stops chats through the action a single chat already
   // uses. The two new names sit before `stopChat`, which stays last.
@@ -137,6 +142,16 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
     [sessions, archived],
   )
   const moved = useMemo(() => sinceLastLook(moveRows, seen), [moveRows, seen])
+
+  // The saved layouts, read once per palette like the seen map: this console's
+  // own shapes, on this computer. Which chat is current decides what a chat
+  // pane opens on restore, and the address is the only honest answer the
+  // palette has to "this chat" (the same reading the review row above uses).
+  const [savedLayouts, setSavedLayouts] = useState(() => loadLayouts())
+  const [armedLayout, setArmedLayout] = useState(null)
+  const [layoutNote, setLayoutNote] = useState(null)
+  const onScreen = typeof location === 'undefined' ? '' : location.hash.replace(/^#/, '')
+  const currentChat = (sessions ?? []).some((session) => session.id === onScreen) ? onScreen : null
 
   // Everything the palette can offer right now, as rows.
   const everything = useMemo(() => {
@@ -297,16 +312,70 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
           },
         ]
       : []
+    // Saving a shape needs a shape: one pane is just the window. Restoring one
+    // is offered while this console holds any, which is the only time the page
+    // could list anything.
+    const layoutRow = panes > 1
+      ? [
+          {
+            key: 'action:save-layout',
+            section: 'Actions',
+            name: 'Save this layout…',
+            icon: <FloppyDisk size={15} />,
+            run: { saveLayout: true },
+          },
+        ]
+      : []
+    const layoutsRow = savedLayouts.length
+      ? [
+          {
+            key: 'action:layouts',
+            section: 'Actions',
+            name: 'Layouts',
+            sub: `${savedLayouts.length} saved`,
+            icon: <SquaresFour size={15} />,
+            run: { layouts: true },
+          },
+        ]
+      : []
     return {
-      actions: [...stopRow, ...harnessRow, ...raceRow, ...sinceRow, ...review, ...jobRow, ...pages, ...actions],
+      actions: [...stopRow, ...harnessRow, ...raceRow, ...sinceRow, ...layoutRow, ...layoutsRow, ...review, ...jobRow, ...pages, ...actions],
       chats: chatRows,
       projectRows,
       machines,
       harnessRows,
     }
-  }, [kb, sessions, chats, archived, projects, devices, thisDevice, capabilities, machines, raceFree, moved])
+  }, [kb, sessions, chats, archived, projects, devices, thisDevice, capabilities, machines, raceFree, moved, panes, savedLayouts])
 
   const sections = useMemo(() => {
+    if (page === 'layouts') {
+      // One shape per row, its pane count beside it, and a second row that asks
+      // once before deleting it - the console's armed-row rule, in the row shape
+      // the palette has (one control per row, the words carry the danger).
+      const rows = savedLayouts.flatMap((entry) => {
+        const panesText = `${entry.panes} ${entry.panes === 1 ? 'pane' : 'panes'}`
+        const restore = {
+          key: `layout:${entry.id}`,
+          section: 'Layouts',
+          name: entry.name,
+          sub: panesText,
+          icon: <SquaresFour size={15} />,
+          run: { restoreLayout: entry },
+        }
+        const armed = rowIsArmed(armedLayout, entry.id)
+        const remove = {
+          key: `layout-del:${entry.id}`,
+          section: 'Layouts',
+          name: armed ? `Delete “${entry.name}” for good` : `Delete “${entry.name}”`,
+          sub: armed ? 'This cannot be undone' : null,
+          icon: <TrashSimple size={15} />,
+          run: armed ? { layoutDelete: entry.id } : { layoutArm: entry.id },
+        }
+        return [restore, remove]
+      })
+      const shown = query.trim() ? rankMatches(query, rows, (r) => r.name) : rows
+      return shown.length ? [{ label: 'Layouts', items: shown }] : []
+    }
     if (page === 'caught-up') {
       // The confirmation is the page: one sentence above, and the only row left
       // is the way out.
@@ -447,11 +516,14 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
       label,
       items: ranked.filter((r) => r.section === label).slice(0, SECTION_CAP),
     })).filter((s) => s.items.length)
-  }, [page, query, everything, recentChatIds, kb, stopPhase, moved, harnessStopId, harnessPhase])
+  }, [page, query, everything, recentChatIds, kb, stopPhase, moved, harnessStopId, harnessPhase, savedLayouts, armedLayout])
 
   const flat = sections.flatMap((s) => s.items)
 
   useEffect(() => setCursor(0), [query, page])
+  // A look at another list is a decision to keep every layout: the armed row
+  // never survives a page change or a new search.
+  useEffect(() => setArmedLayout(clearRow()), [page, query])
   useEffect(() => {
     listRef.current?.querySelector('.kb-item.cursor')?.scrollIntoView({ block: 'nearest' })
   }, [cursor])
@@ -501,6 +573,51 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
   const choose = (row) => {
     if (!row) return
     const r = row.run
+    if (r.saveLayout) {
+      // The name is asked in the family's dialog, not here: the palette's one
+      // field is a search, and a name typed into it would be a second kind of
+      // enter. The palette closes first so the dialog takes the keyboard.
+      onClose()
+      requestAnimationFrame(() => onSaveLayout?.())
+      return
+    }
+    if (r.layouts) {
+      setPage('layouts')
+      setQuery('')
+      setArmedLayout(clearRow())
+      setLayoutNote(null)
+      inputRef.current?.focus()
+      return
+    }
+    if (r.layoutArm) {
+      // The console's armed-row rule, in the row shape this list has: one row
+      // armed at a time, and the second press is the one that deletes.
+      setArmedLayout((current) => armRow(current, r.layoutArm))
+      setLayoutNote(null)
+      inputRef.current?.focus()
+      return
+    }
+    if (r.layoutDelete) {
+      const next = withoutLayout(savedLayouts, r.layoutDelete)
+      saveLayouts(next)
+      setSavedLayouts(next)
+      setArmedLayout(clearRow())
+      inputRef.current?.focus()
+      return
+    }
+    if (r.restoreLayout) {
+      // Nothing is applied until the whole shape fits: a window that cannot
+      // hold it says why instead of drawing half of a four-pane layout.
+      const plan = restoreShape(r.restoreLayout, { currentChat, capacity: paneCapacity })
+      if (!plan.ok) {
+        setLayoutNote(capacityLine(plan.refusal) || 'That layout cannot open in this window.')
+        inputRef.current?.focus()
+        return
+      }
+      onClose()
+      requestAnimationFrame(() => onRestoreLayout?.(plan))
+      return
+    }
     if (r.markAll) {
       // One pass, one write: exactly the chats the page above lists, each
       // recorded at its own activity, and the same storage the sidebar reads.
@@ -734,6 +851,15 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
           />
         </div>
         <div className="kb-list" id="kb-list" role="listbox" ref={listRef}>
+          {page === 'layouts' && layoutNote && (
+            // Why a shape cannot open here, said once above the list. Nothing
+            // was applied, and nothing was changed to fit.
+            <div className="kb-stop">
+              <p className="kb-stop-question" role="status">
+                {layoutNote}
+              </p>
+            </div>
+          )}
           {page === 'caught-up' && (
             // The answer to a command that asked nothing: one sentence, and the
             // way out under it.

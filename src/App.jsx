@@ -31,6 +31,8 @@ import CommandPalette from './CommandPalette.jsx'
 import ShortcutSheet from './ShortcutSheet.jsx'
 import ChangesModal from './ChangesModal.jsx'
 import RaceModal from './RaceModal.jsx'
+import SaveLayoutModal from './SaveLayoutModal.jsx'
+import RenameChatModal from './RenameChatModal.jsx'
 import ViewPopup from './ViewPopup.jsx'
 import { POPUP_VIEWS, onPopup } from './popups.js'
 import { KeyboardProvider, useKeyboard, useShortcut } from './keyboard.jsx'
@@ -129,8 +131,17 @@ function loadLayout() {
 const isChatView = (v) => !STATIC_VIEWS.includes(v)
 
 function Shell() {
-  const { sessions, chats, connection, ensureChat, cloud, watchChats, setChatArchived, retryDaemon } =
-    useConsole()
+  const {
+    sessions,
+    chats,
+    connection,
+    ensureChat,
+    cloud,
+    watchChats,
+    setChatArchived,
+    retryDaemon,
+    renameChat,
+  } = useConsole()
   // The sidebar's docked-vs-overlay shape is the viewport's, not a mount-time
   // guess: crossing 640px live swaps the layout (the alternative - reading
   // innerWidth once at mount - left the sidebar overlaid after narrowing).
@@ -202,6 +213,14 @@ function Shell() {
   // closes without losing them.
   const [browserOpen, setBrowserOpen] = useState(false)
   const toggleBrowser = () => setBrowserOpen((v) => !v)
+  // The chat whose name is being changed. Renaming lives here, not in a view,
+  // because two surfaces open the same dialog: the sidebar's row menu and the
+  // command palette's row. `renaming` is the record the dialog opened on;
+  // `renamed` is the one-beat overlay of names just saved (the provider
+  // returns the daemon's answer but does not fold it, so without it a renamed
+  // row would keep its old name until the next poll).
+  const [renaming, setRenaming] = useState(null)
+  const [renamed, setRenamed] = useState({})
 
   // Each mode has its own views; one restored from history that belongs to
   // the other mode opens New chat instead. Plugins and automations act on
@@ -382,6 +401,10 @@ function Shell() {
   // when that is a split pane and the target is a chat or New chat; every
   // other view (plugins, settings, ...) belongs to the primary pane.
   const focused = leafById(layout, layout.focus)
+  // The chat the focused pane is showing, when it is showing one. The palette's
+  // rename row is about "this chat", and the address cannot answer that: it
+  // names the primary pane's view, and a split can have its focus elsewhere.
+  const focusedChatId = focused?.view && isChatView(focused.view) ? focused.view : null
   const openInFocus = (id) => {
     if (focused?.view !== null && (id === 'new' || isChatView(id))) {
       const session = (sessions ?? []).find((s) => s.id === id)
@@ -392,6 +415,55 @@ function Shell() {
     setLayout((l) => focusLeaf(l, leaves(l.root).find((p) => p.view === null).id))
     openSession(id)
   }
+
+  // Open the rename dialog on one chat: the sidebar passes its row's id, and a
+  // palette row passes the focused pane's, which is the default here so the
+  // palette can call it with no argument. The title comes from the console's
+  // record so the field starts where the user expects.
+  const openRename = (id = focusedChatId) => {
+    if (!id) return
+    const record = chats[id]
+    const session = (sessions ?? []).find((s) => s.id === id)
+    setRenaming({
+      id,
+      title: record?.title ?? session?.title ?? 'A new task',
+      synced: Boolean(record?.executor ?? session?.executor),
+    })
+  }
+
+  // The console call the slash command makes, with one beat of optimism: the
+  // list shows the new name at once, and a failure takes it back before the
+  // dialog hears about it, so the dialog stays open with the reason.
+  const renameTo = async (id, next) => {
+    setRenamed((map) => ({ ...map, [id]: next }))
+    try {
+      await renameChat(id, next)
+    } catch (err) {
+      setRenamed((map) => {
+        const left = { ...map }
+        delete left[id]
+        return left
+      })
+      throw err
+    }
+  }
+
+  // The overlay has done its job once the console's own record carries the
+  // name, and it has to go then: kept longer, it would hide a later rename
+  // made on another device.
+  useEffect(() => {
+    if (Object.keys(renamed).length === 0) return
+    setRenamed((map) => {
+      const left = {}
+      let stale = false
+      for (const [id, name] of Object.entries(map)) {
+        const known = chats[id]?.title ?? (sessions ?? []).find((s) => s.id === id)?.title
+        if (known === name) stale = true
+        else left[id] = name
+      }
+      return stale ? left : map
+    })
+  }, [chats, sessions, renamed])
 
   // Open a chat in a new pane beside the focused one.
   const openBeside = (id, dir = 'row', before = false) => {
@@ -554,6 +626,9 @@ function Shell() {
   // The race modal: the palette's row opens it, and it hands back the chats it
   // created so the shell can lay them out in the panes it already owns.
   const [racing, setRacing] = useState(false)
+  // Saving the window's shape: the palette's row opens the dialog, and the
+  // dialog writes it through layouts.js into this console's own storage.
+  const [savingLayout, setSavingLayout] = useState(false)
   // The view open over the app, if any: settings, metrics or mobile.
   const [popup, setPopup] = useState(null)
   useEffect(() => onPopup((name) => setPopup(name)), [])
@@ -569,6 +644,18 @@ function Shell() {
     const needs = { machines: 'cloud' }[id]
     if (needs && mode !== needs) keepMode(needs)
     openInFocus(id)
+  }
+
+  // A saved shape arrived from the palette's Layouts page, already checked
+  // against this window's room and already resolved (a chat role is the chat
+  // current now). Setting the tree is the restore; the primary pane's view is
+  // navigation, so that is the one thing the shell still has to do.
+  const applySavedLayout = (plan) => {
+    setLayout(plan.layout)
+    if (!plan.primaryRole) return
+    if (plan.primaryRole === 'new') navigate('new')
+    else if (isChatView(plan.primaryRole)) openSession(plan.primaryRole)
+    else goView(plan.primaryRole)
   }
   // A new chat already in a project (the sidebar's + on a project, the
   // palette's project rows): the home screen with that project chosen and
@@ -654,10 +741,15 @@ function Shell() {
   ) : (
     <>
       {view === 'new' &&
-        (bootSeed && !sessionsAnswered ? (
+        (bootSeed && !sessionsAnswered && connection.state !== 'error' ? (
           // The boot hash names a chat the first session beat has not
           // answered for yet. The composer here would take the first sentence
           // of the day and drop it when the beat moves the view to the chat.
+          //
+          // It ends when the first read answers, or when the boot itself
+          // failed: a daemon that never answered would otherwise leave this
+          // sentence standing for good, over a daemon row that already says
+          // why. Nothing else ends it - a slow beat is still a beat coming.
           <div className="cv-none">Opening your chat...</div>
         ) : (
           <NewChat
@@ -818,6 +910,10 @@ function Shell() {
       onAddProject={addProject}
       onNewChatIn={newChatIn}
       onReveal={() => setSidebarOpen(true)}
+      // The row menu's Rename opens the dialog hosted below; the overlay is
+      // the name it shows until the console's own record catches up.
+      onRenameChat={openRename}
+      renamedTitles={renamed}
     />
   ) : null
 
@@ -948,6 +1044,10 @@ function Shell() {
               onOpenProject={newChatIn}
               onRace={() => setRacing(true)}
               raceFree={freePanes(layout)}
+              panes={paneCount(layout)}
+              paneCapacity={isMobile ? 1 : MAX_PANES}
+              onSaveLayout={() => setSavingLayout(true)}
+              onRestoreLayout={applySavedLayout}
               onOpenMachine={(id) => {
                 setOpenDevice({ id, nonce: Date.now() })
                 goView('machines')
@@ -961,7 +1061,24 @@ function Shell() {
               onStarted={startRace}
             />
           )}
+          {savingLayout && (
+            <SaveLayoutModal
+              layout={layout}
+              currentView={view}
+              onClose={() => setSavingLayout(false)}
+            />
+          )}
           {sheet && <ShortcutSheet onClose={() => setSheet(false)} />}
+          {/* Renaming, hosted above every surface that offers it: the sidebar
+              passes its row here, and the palette's row will too. */}
+          {renaming && (
+            <RenameChatModal
+              title={renaming.title}
+              synced={renaming.synced}
+              onClose={() => setRenaming(null)}
+              onRename={(next) => renameTo(renaming.id, next)}
+            />
+          )}
           {/* The review surface for the chat's reported edits. It opens
               itself when the palette asks for it and needs no state here. */}
           {chat && <ChangesModal chat={chat} />}
