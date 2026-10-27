@@ -172,7 +172,7 @@ function InstalledPlugins({ onUpdate }) {
               <div>
                 <div className="pn-name">{p.name}</div>
                 <div className="pn-detail">
-                  {p.available ? `Harness${p.version ? ` · ${p.version}` : ''}` : 'Harness · not installed on this computer'}
+                  {p.available ? `Harness${p.version ? ` · ${p.version}` : ''}` : 'Harness · not installed'}
                 </div>
               </div>
             </div>

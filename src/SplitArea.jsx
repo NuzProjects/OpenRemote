@@ -77,7 +77,7 @@ function SplitNode({ node, setLayout, renderNode }) {
               role="separator"
               aria-label="Resize the panes"
               aria-orientation={row ? 'vertical' : 'horizontal'}
-              title="Drag to resize. Double-click to even them out."
+              title="Drag to resize - double-click to even them out."
               onPointerDown={startDrag(i)}
               onDoubleClick={() => setLayout((l) => balanceSplit(l, node.id))}
             />

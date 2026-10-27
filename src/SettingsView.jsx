@@ -460,7 +460,7 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
           key: `models-${h.id}`,
           section: 'models',
           label: `Model endpoints for ${harnessName(h.id)}`,
-          detail: 'Custom model servers this harness can run through.',
+          detail: 'Model endpoints this harness can run through.',
           terms: ['endpoint', 'gateway', 'custom', 'model', 'relay', h.id],
         })),
     ]
@@ -1214,7 +1214,7 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
                     kb.resetAll()
                     setMoved(null)
                   }}
-                  title="Puts every key back to its default. Nothing else changes."
+                  title="Puts every key back to its default and touches nothing else."
                 >
                   Reset every shortcut
                 </button>
@@ -1588,7 +1588,7 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
                     <button
                       type="button"
                       className="pn-btn pn-btn--danger"
-                      title="Delete this chat from every device"
+                      title="Delete this chat here; other devices delete their copy when they next sync."
                       onClick={() => setDeleting(s)}
                     >
                       Delete

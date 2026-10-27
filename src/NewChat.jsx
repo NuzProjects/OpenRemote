@@ -1132,7 +1132,7 @@ export default function NewChat({
                     renderSubline={(item) =>
                       item.id === '' ? (
                         <span className="nc-item-sub">
-                          {defaultEndpoint ? 'The harness machine default' : "The harness's own provider"}
+                          {defaultEndpoint ? "This harness's own default" : "This harness's own provider"}
                         </span>
                       ) : null
                     }

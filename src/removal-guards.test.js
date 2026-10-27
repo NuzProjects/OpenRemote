@@ -82,7 +82,9 @@ test('Settings: signing out puts Cancel first and says what stays', () => {
 
 test('Settings: Reset every shortcut is one press and says what it clears', () => {
   assert.match(settings, />\s*Reset every shortcut\s*</)
-  assert.match(settings, /Puts every key back to its default\. Nothing else changes\./)
+  // The title is one sentence now: the old "Nothing else changes." was the
+  // second sentence in a tooltip slot that holds one.
+  assert.match(settings, /Puts every key back to its default and touches nothing else\./)
   // One press is right for a key: no armed row or modal around the reset.
   assert.doesNotMatch(settings, /confirmReset/)
 })

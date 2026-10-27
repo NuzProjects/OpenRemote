@@ -197,7 +197,8 @@ test('a capture refuses the keys that would only ever be typed into a box', () =
   assert.match(captureRefusal('Shift+A'), /no modifier|typed/)
   assert.match(captureRefusal('Backspace'), /no modifier|typed/)
   assert.match(captureRefusal(''), /not a key/)
-  assert.equal(captureRefusal(null), 'That is not a key OpenRemote can bind.')
+  // "bind" was the provider's word for it; a person types a key combination.
+  assert.equal(captureRefusal(null), 'That is not a key combination OpenRemote can use.')
 })
 
 test('a capture takes the keys the dispatcher delivers, Esc and the function keys included', () => {

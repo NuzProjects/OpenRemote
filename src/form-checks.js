@@ -19,7 +19,7 @@ export function checkBaseUrl(value) {
     const parsed = new URL(url)
     if (!parsed.hostname) return 'That URL names no host.'
   } catch {
-    return 'That is not a URL the daemon can read.'
+    return 'That address has no host: add one after http://, for example http://localhost:4000.'
   }
   return null
 }
@@ -44,7 +44,7 @@ export function checkSource(kind, value) {
   if (kind === 'git') {
     // A repo is a link or an owner/name on its host. A bare word is neither.
     if (LINK.test(source) || /^git@[^\s:]+:/.test(source) || /^[^\s/]+\/[^\s/]+$/.test(source)) return null
-    return 'That does not name a repo: a link to one, or owner/name as the marketplace host writes it.'
+    return 'That does not name a marketplace. Paste a link to it, or its owner and name as its host writes them.'
   }
   if (kind === 'archive') {
     if (LINK.test(source) || /\.(zip|tar\.gz|tgz)$/i.test(source)) return null

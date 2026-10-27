@@ -26,7 +26,10 @@ test('a request that never landed says the daemon was not reached, and what to d
 })
 
 test('the console repeats its own sentence instead of quoting it', () => {
-  assert.equal(errorCopy(new Error('The daemon did not answer in time')), 'The daemon did not answer in time. Try again.')
+  // The sentence changed because the console is what knows it dialled and got
+  // nothing back; "the daemon did not answer" borrowed the other mouth's
+  // subject, and the timeout was the one sentence here without a period.
+  assert.equal(errorCopy(new Error('The console got no answer in time.')), 'The console got no answer in time. Try again.')
   assert.equal(
     errorCopy(failed(504, 'SSE HTTP 504')),
     'The live stream to the daemon dropped. The console is reconnecting on its own.',

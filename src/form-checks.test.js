@@ -34,8 +34,10 @@ test('a repo is a link, an ssh address, or an owner/name, and a bare word is non
   ]) {
     assert.equal(checkSource('git', ok), null, ok)
   }
-  assert.match(checkSource('git', 'plugin'), /does not name a repo/)
-  assert.match(checkSource('git', 'two words'), /does not name a repo/)
+  // The sentence names the thing the person is choosing (a marketplace), not
+  // the developer's word for it (a repo).
+  assert.match(checkSource('git', 'plugin'), /does not name a marketplace/)
+  assert.match(checkSource('git', 'two words'), /does not name a marketplace/)
 })
 
 test('an archive is a link or an archive file, and nothing else', () => {

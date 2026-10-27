@@ -17,7 +17,7 @@
 // dismiss, the pane's own button) is what offers it, and a sentence that names
 // an action the view does not draw would be a second lie on top of the first.
 
-const TIMEOUT = 'The daemon did not answer in time'
+const TIMEOUT = 'The console got no answer in time.'
 
 export const UNREACHABLE = 'The console could not reach its daemon.'
 
@@ -44,7 +44,8 @@ export function errorCopy(err) {
   const status = typeof err?.status === 'number' ? err.status : null
   const said = typeof err?.message === 'string' ? err.message.trim() : ''
   // The console wrote this one itself, so it is repeated rather than quoted.
-  if (said.startsWith(TIMEOUT)) return `${TIMEOUT}. Try again.`
+  // TIMEOUT carries its own period now, so the sentence is not doubled.
+  if (said.startsWith(TIMEOUT)) return `${TIMEOUT} Try again.`
   // The stream's own close line: a status with no words around it.
   if (/^SSE HTTP \d+$/.test(said)) {
     return 'The live stream to the daemon dropped. The console is reconnecting on its own.'

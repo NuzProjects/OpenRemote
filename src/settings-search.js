@@ -42,7 +42,7 @@ const BLURBS = {
   daemon: 'The local process chats run through.',
   harnesses: 'What the daemon can drive on this machine.',
   'mcp-servers': 'Tools a session can call.',
-  models: 'Custom model endpoints on this computer.',
+  models: 'Custom model endpoints on this computer, which a chat can run through.',
   archived: 'Chats hidden on this computer.',
   'this-install': 'The build you are running and the first-run steps.',
 }

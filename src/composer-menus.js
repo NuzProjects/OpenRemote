@@ -17,7 +17,7 @@ export const OPENREMOTE_COMMANDS = [
   { name: 'stop', description: 'Stop the chat', chat: true },
   { name: 'resume', description: 'Resume a stopped chat', chat: true },
   { name: 'rename', arg: 'title', description: 'Rename the chat: /rename "New name"' },
-  { name: 'sync', description: 'Put the chat on Cloud - your other devices see it, it keeps running here', cloud: true },
+  { name: 'sync', description: 'Put the chat on Cloud - your other devices see it after their next sync, and it keeps running here', cloud: true },
   { name: 'cloud', description: 'Put the chat on Cloud (the same as /sync)', cloud: true },
 ]
 

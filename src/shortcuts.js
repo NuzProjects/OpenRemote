@@ -212,7 +212,7 @@ export function blocksWhileTyping(actionId) {
 /// rather than the character, because some of these keys (Delete, Tab, Home)
 /// are never typed at all: the field takes them and OpenRemote does not.
 export function captureRefusal(combo) {
-  if (!validCombo(combo)) return 'That is not a key OpenRemote can bind.'
+  if (!validCombo(combo)) return 'That is not a key combination OpenRemote can use.'
   if (firesWhileTyping(combo)) return null
   return 'A key with no modifier goes to the field you are typing in, not to OpenRemote, so it cannot be a shortcut. Add Ctrl, Alt or a function key.'
 }
