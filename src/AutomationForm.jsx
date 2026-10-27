@@ -11,7 +11,8 @@ import { findModel, modelDisplayName, prettyModelName } from './model-display.js
 import { modelMaker } from './model-maker.js'
 import { ModelMark } from './model-marks.jsx'
 import { projectName } from './projects.js'
-import { formDiffers } from './automation.js'
+import { formDiffers } from './form-dirty.js'
+import { carrySetup, droppedLine, restoreFromCatalog } from './harness-carry.js'
 import { jobSourceLine } from './chat-to-job.js'
 import './devices.css'
 import './automations.css'
@@ -86,28 +87,62 @@ export default function AutomationForm({ rule, onClose }) {
   const [managingEndpoints, setManagingEndpoints] = useState(false)
 
   const [models, setModels] = useState([])
+  // An unreachable daemon must not read as "this harness has no models".
+  const [modelsUnavailable, setModelsUnavailable] = useState(false)
+  // What the switch could not carry, said once in the form's own line.
+  const [carryNote, setCarryNote] = useState(null)
   // The harness the form opened with. A rule's model and permission word
   // belong to the rule, so the first run of this effect keeps them: only a
-  // switch the person makes clears them, and clearing them on mount would
-  // also mark an untouched prefilled rule dirty (the model and the word are
-  // in the dirty snapshot).
+  // switch the person makes asks harness-carry.js what can come along.
   const harnessAtOpen = useRef(harness)
+  // A model the switch dropped, held until the new catalog answers: a person
+  // who picked Opus should not lose it because the list was still in flight.
+  const pendingCarry = useRef(null)
+  const droppedAtSwitch = useRef([])
+  const carryHarnessName = useRef(null)
   useEffect(() => {
     let cancelled = false
+    setModelsUnavailable(false)
     if (harness !== harnessAtOpen.current) {
-      setModel(null)
-      // Permission words belong to the harness - a switch resets the
-      // choice, the new harness's own default holds.
-      setPermission(null)
+      const next = available.find((h) => h.id === harness) ?? null
+      const { kept, dropped } = carrySetup(
+        { model, permission },
+        { models: null, permissionModes: next?.permission_modes ?? [] },
+      )
+      setModel(kept.model)
+      setPermission(kept.permission)
+      pendingCarry.current = dropped.includes('model') ? model : null
+      droppedAtSwitch.current = dropped
+      carryHarnessName.current = next?.name ?? harness
+      setCarryNote(droppedLine(dropped, carryHarnessName.current))
       harnessAtOpen.current = harness
     }
     if (!harness) {
       setModels([])
       return
     }
-    modelsFor(harness).then((list) => {
-      if (!cancelled) setModels(list ?? [])
-    })
+    modelsFor(harness)
+      .then((list) => {
+        if (cancelled) return
+        setModels(list ?? [])
+        // The catalog arrived: a model the switch had to drop comes back if
+        // this harness carries the same row, and the note stops naming it.
+        const back = restoreFromCatalog(pendingCarry.current, list ?? [])
+        if (back) {
+          pendingCarry.current = null
+          setModel(back)
+          droppedAtSwitch.current = droppedAtSwitch.current.filter((key) => key !== 'model')
+          setCarryNote(droppedLine(droppedAtSwitch.current, carryHarnessName.current))
+        }
+      })
+      .catch(() => {
+        // An unreachable daemon must not look like "this harness has no
+        // models": the list stays empty and the picker says it did not load.
+        if (!cancelled) {
+          setModels([])
+          setModelsUnavailable(true)
+        }
+      })
     return () => {
       cancelled = true
     }
@@ -231,6 +266,9 @@ export default function AutomationForm({ rule, onClose }) {
             placeholder="Name the rule"
             spellCheck={false}
             aria-label="Rule name"
+            // The dialog would otherwise hand the keyboard to its own close
+            // button, and the first word a person types would go nowhere.
+            autoFocus
           />
         </label>
 
@@ -505,6 +543,11 @@ export default function AutomationForm({ rule, onClose }) {
               </div>
             )}
           </div>
+          {(carryNote || modelsUnavailable) && (
+            <p className="af-when-note" role="status">
+              {carryNote ?? 'The model list did not load: the harness may still be starting.'}
+            </p>
+          )}
           <div className="af-workspace">
             <span className="af-label">Project</span>
             <span className="af-workspace-row">

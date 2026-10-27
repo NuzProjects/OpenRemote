@@ -31,6 +31,8 @@ import {
 } from './presets.js'
 import { armRow, clearRow, rowIsArmed } from './row-confirm.js'
 import { projectName } from './projects.js'
+import { carrySetup, droppedLine, restoreFromCatalog } from './harness-carry.js'
+import { keepLine, keepSelection } from './composer-selection.js'
 import { clashes } from './plugins.js'
 import { useComposerMenus } from './useComposerMenus.jsx'
 import { mentionedChats, ownCommands, takeCommands } from './composer-menus.js'
@@ -164,13 +166,29 @@ export default function NewChat({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target, connection.state, projects])
 
-  // The mode switch starts the machine choice over. A chat in Local runs
-  // on this computer even when Cloud had the New chat aimed at a machine,
-  // and the harness list follows the machine - so the target, and the
-  // project that belongs to it, come back to here.
+  // The mode switch keeps what still means something where the person is
+  // going. A chat in Local runs on this computer, so a target machine cannot
+  // survive the trip back - but the project can, and a glance at Cloud must
+  // not cost either of them. What is dropped is named once, here, rather than
+  // vanishing from the row.
+  const [selectionNote, setSelectionNote] = useState(null)
   useEffect(() => {
-    setTarget(null)
-    setProjectId(null)
+    const { kept, dropped } = keepSelection(
+      { projectId, target },
+      {
+        mode,
+        machines: cloudMode ? machines : [],
+        // In Cloud the project list belongs to the target and is read after
+        // the switch: unknown, so the pick is kept and the row resolves.
+        projects: cloudMode ? null : projects,
+      },
+    )
+    setTarget(kept.target)
+    setProjectId(kept.projectId)
+    setSelectionNote(keepLine(dropped))
+    // Only a mode change runs this: the lists arriving later must not reset a
+    // choice the person has since made.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode])
 
   // A machine's own harnesses, fetched when a chat aims at it. The first
@@ -216,19 +234,52 @@ export default function NewChat({
   const needsSignIn = currentHarness && currentHarness.signed_in === false && !usingApiKey
 
   // The model slot: filled where the harness advertises, reserved
-  // (not rendered) where it doesn't. Fast mode follows the same rule -
-  // and both choices are per-harness, so switching resets them. The
-  // saved defaults preselect their own harness's slots.
+  // (not rendered) where it doesn't. Every one of these choices belongs to a
+  // harness (and its catalog), so a setup that changes - a different harness,
+  // a different machine - keeps what the new setup can actually carry and
+  // names the rest, once, in the composer's own line. A reconnect changes
+  // nothing about the setup, so it keeps everything.
+  const [carryNote, setCarryNote] = useState(null)
+  const setupAtMount = useRef({ harness: currentHarness?.id ?? null, target })
+  const pendingCarry = useRef(null)
+  const droppedAtSwitch = useRef([])
+  // The first run is not a switch: it is the moment the saved defaults become
+  // the preselect, and the harness may still be arriving then (null -> id is
+  // the capabilities landing, not the person choosing).
+  const firstRun = useRef(true)
   useEffect(() => {
     let cancelled = false
-    const defaults = loadDefaults()
-    setModel(currentHarness?.id === defaults.harness ? defaults.model : null)
+    const harnessId = currentHarness?.id ?? null
+    const before = setupAtMount.current
+    setupAtMount.current = { harness: harnessId, target }
+    const changed = before.harness !== harnessId || before.target !== target
+    if (firstRun.current || (before.harness == null && harnessId != null)) {
+      firstRun.current = false
+      const defaults = loadDefaults()
+      setModel(harnessId === defaults.harness ? defaults.model : null)
+      setPermission(null)
+    } else if (!changed) {
+      // Reconnect, or the same setup re-asked: nothing the person chose is
+      // invalid because a socket dropped. Only the catalogs are read again.
+    } else {
+      const { kept, dropped } = carrySetup(
+        { model, permission },
+        {
+          // A machine change keeps this harness's catalog: the same rows, read
+          // from the other machine. A harness change has no catalog yet.
+          models: before.harness === harnessId ? models : null,
+          permissionModes: currentHarness?.permission_modes ?? [],
+        },
+      )
+      const also = [...(fast ? ['fast'] : []), ...(endpointId ? ['endpoint'] : [])]
+      setModel(kept.model)
+      setPermission(kept.permission)
+      pendingCarry.current = dropped.includes('model') ? model : null
+      droppedAtSwitch.current = [...dropped, ...also]
+      setCarryNote(droppedLine(droppedAtSwitch.current, currentHarness?.name ?? harnessId))
+    }
     setEndpointId(null)
     setFast(false)
-    // Permission words belong to the harness (claude and grok share
-    // spelling, codex has its own) - a switch resets the choice, the
-    // saved default re-applies only where the new harness offers it.
-    setPermission(null)
     if (!currentHarness) {
       setModels([])
       setModelsPending(false)
@@ -239,6 +290,16 @@ export default function NewChat({
       if (!cancelled) {
         setModels(list ?? [])
         setModelsPending(false)
+        // The catalog is the real answer about the model: one the setup
+        // change had to drop comes back if this harness carries the same row,
+        // and one it no longer lists is let go with the note saying so.
+        const back = restoreFromCatalog(pendingCarry.current, list ?? [])
+        if (back && !pendingPreset.current) {
+          pendingCarry.current = null
+          setModel(back)
+          droppedAtSwitch.current = droppedAtSwitch.current.filter((key) => key !== 'model')
+          setCarryNote(droppedLine(droppedAtSwitch.current, currentHarness?.name ?? harnessId))
+        }
         // The opening preset, or one whose chip switched the harness, is
         // settled here: this is the first moment its model and effort can
         // be checked against what the harness actually offers today. One
@@ -278,6 +339,14 @@ export default function NewChat({
             setPresetNote(notes.join(' ') || null)
           }
         }
+      }
+    }).catch(() => {
+      // An unreachable daemon must not read as "this harness has no models":
+      // the slot stays empty and the line says the list did not load.
+      if (!cancelled) {
+        setModels([])
+        setModelsPending(false)
+        setCarryNote('The model list did not load: the harness may still be starting.')
       }
     })
     // The custom rows ride beside the catalog: the records, then what
@@ -857,9 +926,9 @@ export default function NewChat({
             </button>
           )}
         </div>
-        {presetNote && (
+        {(presetNote || carryNote || selectionNote) && (
           <p className="nc-preset-note" role="status">
-            {presetNote}
+            {presetNote ?? carryNote ?? selectionNote}
           </p>
         )}
         {menus.element}

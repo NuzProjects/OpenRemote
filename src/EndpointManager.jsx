@@ -13,6 +13,8 @@ import { useDialog } from './dialog-focus.js'
 import { harnessName } from './harness-names.js'
 import { armRow, clearRow, rowIsArmed } from './row-confirm.js'
 import { useArmedRow } from './use-armed-row.js'
+import { formDiffers } from './form-dirty.js'
+import { checkBaseUrl } from './endpoint-form.js'
 import './devices.css'
 import './panels.css'
 
@@ -38,7 +40,7 @@ function authLabel(kind) {
   return AUTH_KINDS.find((k) => k.id === kind)?.name ?? kind
 }
 
-export default function EndpointManager({ harness, deviceId = null, onChanged = null }) {
+export default function EndpointManager({ harness, deviceId = null, onChanged = null, onClose = null, closeGuard = null }) {
   const { api } = useConsole()
   const [endpoints, setEndpoints] = useState([])
   const [pending, setPending] = useState(true)
@@ -55,6 +57,40 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
   // of view or losing focus (use-armed-row.js).
   const [armed, setArmed] = useState(null)
   const armWatch = useArmedRow(armed, setArmed)
+  // The fields as they were when this editor opened, and the table's own
+  // close hint: the same dirty rule the rule editor uses (form-dirty.js), so a
+  // backdrop click or Esc cannot throw away a pasted key.
+  const opened = useRef(null)
+  const nameRef = useRef(null)
+  const [closeHint, setCloseHint] = useState(false)
+  const dirty = formDiffers(form, opened.current)
+  const urlProblem = form.baseUrl.trim() ? checkBaseUrl(form.baseUrl) : null
+
+  // The guarded close the modal asks (Esc, backdrop, X) and the one the table's
+  // own Cancel button uses. Without a modal (Settings renders this inline) the
+  // close is the editor closing itself.
+  const closeEditor = () => {
+    if (onClose) {
+      onClose()
+      return
+    }
+    setEditing(false)
+    setForm(emptyForm)
+    setError(null)
+    setCloseHint(false)
+  }
+
+  const requestClose = () => {
+    if (dirty) {
+      setCloseHint(true)
+      return
+    }
+    closeEditor()
+  }
+
+  // Published to the modal's dialog plumbing, so Esc and the backdrop follow
+  // the same rule as Cancel's neighbour instead of closing over a typed key.
+  if (closeGuard) closeGuard.current = requestClose
 
   const openPicker = (kind) => (e) => setPicker({ kind, x: e.clientX, y: e.clientY })
 
@@ -75,14 +111,18 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
   }, [load])
 
   const startAdd = () => {
-    setForm(emptyForm)
+    const next = { ...emptyForm }
+    setForm(next)
+    opened.current = { ...next }
+    setCloseHint(false)
     setEditing(true)
     setError(null)
     setArmed(clearRow())
+    requestAnimationFrame(() => nameRef.current?.focus())
   }
 
   const startEdit = (entry) => {
-    setForm({
+    const next = {
       id: entry.id,
       name: entry.name,
       baseUrl: entry.base_url,
@@ -92,13 +132,18 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
       key: '',
       enabled: entry.enabled,
       isDefault: entry.is_default,
-    })
+    }
+    setForm(next)
+    opened.current = { ...next }
+    setCloseHint(false)
     setEditing(true)
     setError(null)
     setArmed(clearRow())
+    requestAnimationFrame(() => nameRef.current?.focus())
   }
 
   const save = async () => {
+    if (saving || urlProblem) return
     setSaving(true)
     setError(null)
     try {
@@ -278,11 +323,15 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
           <label className="dv-host">
             Name
             <input
+              ref={nameRef}
               value={form.name}
               onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
               placeholder="Office gateway"
               spellCheck={false}
               autoComplete="off"
+              // The dialog would otherwise keep the keyboard on its own close
+              // button, so the first word typed here would go nowhere.
+              autoFocus
             />
           </label>
           <label className="dv-host">
@@ -293,8 +342,15 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
               placeholder="http://localhost:4000/v1"
               spellCheck={false}
               autoComplete="off"
+              aria-invalid={urlProblem ? 'true' : undefined}
+              aria-describedby={urlProblem ? 'ep-url-problem' : undefined}
             />
           </label>
+          {urlProblem && (
+            <p className="pn-note" id="ep-url-problem" role="alert">
+              {urlProblem}
+            </p>
+          )}
           <label className="dv-host">
             Model-list path override (optional)
             <input
@@ -373,13 +429,18 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
             The {harnessName(harness)} default - new chats run through it
           </label>
           {error && <p className="pn-note">{error}</p>}
+          {closeHint && dirty && (
+            <p className="pn-note" role="status">
+              This endpoint has unsaved changes. Cancel discards them.
+            </p>
+          )}
           <div className="pn-row">
             <div className="pn-actions">
               <button
                 type="button"
                 className="pn-btn on"
                 onClick={save}
-                disabled={saving || !form.name.trim() || !form.baseUrl.trim()}
+                disabled={saving || !form.name.trim() || !form.baseUrl.trim() || Boolean(urlProblem)}
               >
                 {saving ? 'Saving…' : form.id ? 'Save endpoint' : 'Add endpoint'}
               </button>
@@ -387,9 +448,7 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
                 type="button"
                 className="pn-btn"
                 onClick={() => {
-                  setEditing(false)
-                  setForm(emptyForm)
-                  setError(null)
+                  closeEditor()
                 }}
               >
                 Cancel
@@ -406,19 +465,20 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
 // The picker footer and Settings open the same manager in a modal: the
 // harness's rows, live from the machine that would run the chats. Esc closes
 // this dialog and nothing under it - the rule form that opened it keeps what
-// was written in it.
+// was written in it - unless the endpoint editor inside it has unsaved fields,
+// in which case the editor's own close hint answers the key instead.
 export function EndpointManagerModal({ harness, deviceId = null, where = null, onClose, onChanged = null }) {
   useBack(true, onClose)
   const panelRef = useRef(null)
-  // The dialog plumbing every modal in the family shares (dialog-focus.js):
-  // focus in, Tab kept inside, the app inert behind, focus back on the opener,
-  // and its own Esc layer.
-  useDialog(panelRef, onClose)
+  // The editor publishes its guarded close here, so Esc, the backdrop and the
+  // X all ask the same question the Cancel button's neighbour answers.
+  const closeEditor = useRef(onClose)
+  useDialog(panelRef, () => closeEditor.current())
   return (
     <div
       className="dv-modal-backdrop"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose()
+        if (e.target === e.currentTarget) closeEditor.current()
       }}
     >
       <div className="dv-modal dv-modal--form" ref={panelRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={`Models for ${harnessName(harness)}`}>
@@ -427,7 +487,7 @@ export function EndpointManagerModal({ harness, deviceId = null, where = null, o
             Models for {harnessName(harness)}
             {where ? <span className="pv"> · {where}</span> : ''}
           </h2>
-          <button className="dv-modal-close" onClick={onClose} title="Close">
+          <button className="dv-modal-close" onClick={() => closeEditor.current()} title="Close">
             <X size={14} weight="bold" />
           </button>
         </div>
@@ -436,7 +496,7 @@ export function EndpointManagerModal({ harness, deviceId = null, where = null, o
           OpenAI-compatible models API. New chats run through the default; a chat's own
           endpoint is its own choice.
         </p>
-        <EndpointManager harness={harness} deviceId={deviceId} onChanged={onChanged} />
+        <EndpointManager harness={harness} deviceId={deviceId} onChanged={onChanged} onClose={onClose} closeGuard={closeEditor} />
       </div>
     </div>
   )

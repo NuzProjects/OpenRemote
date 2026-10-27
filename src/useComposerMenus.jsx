@@ -216,10 +216,16 @@ export function useComposerMenus({
   // The caret, wherever the textarea reports it.
   const track = (e) => setCaret(e.target.selectionStart ?? 0)
 
+  // Closing the menu without moving the caret: the same dismissal Escape
+  // raises, so a click away leaves the word exactly as Esc would. Without it
+  // the list stayed on screen over a composer nobody was typing in, because
+  // the caret never moved and nothing recomputed the menu.
+  const dismiss = () => setDismissed(menuKey)
+
   const element =
     open && items.length > 0 ? (
       <ComposerMenu items={items} active={Math.min(active, items.length - 1)} onPick={pick} onHover={setActive} />
     ) : null
 
-  return { element, onKeyDown, track, open: Boolean(element) }
+  return { element, onKeyDown, track, dismiss, open: Boolean(element) }
 }
