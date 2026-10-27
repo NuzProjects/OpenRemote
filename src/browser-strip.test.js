@@ -4,10 +4,12 @@
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { readFileSync } from 'node:fs'
 import {
   CLOSED_CAP,
   NEW_TAB_WIDTH,
   OVERFLOW_WIDTH,
+  TAB_GAP,
   TAB_WIDTH,
   closeOthers,
   closeToRight,
@@ -56,8 +58,9 @@ test('close others keeps only the tab asked from, close to the right keeps the r
 })
 
 test('the strip draws whole tabs, reserves the overflow control, and never hides the active one', () => {
-  // Everything fits: no control, nothing hidden.
-  assert.deepEqual(stripPlan({ width: 5 * TAB_WIDTH + 4 * 2 + NEW_TAB_WIDTH, count: 5, active: 0 }), {
+  // Everything fits: no control, nothing hidden. A tab costs its width plus
+  // the gap after it, and the new-tab button is the last thing in the row.
+  assert.deepEqual(stripPlan({ width: 5 * (TAB_WIDTH + TAB_GAP) + NEW_TAB_WIDTH, count: 5, active: 0 }), {
     start: 0,
     shown: 5,
     hidden: 0,
@@ -66,7 +69,7 @@ test('the strip draws whole tabs, reserves the overflow control, and never hides
   const wide = stripPlan({ width: 6 * TAB_WIDTH, count: 10, active: 0 })
   assert.equal(wide.shown, 5)
   assert.equal(wide.hidden, 5)
-  assert.ok(TAB_WIDTH * wide.shown + 2 * (wide.shown - 1) + 2 + OVERFLOW_WIDTH <= 6 * TAB_WIDTH)
+  assert.ok((TAB_WIDTH + TAB_GAP) * wide.shown + NEW_TAB_WIDTH <= 6 * TAB_WIDTH)
   // The active tab is always inside the window, even when it is the last one.
   const atEnd = stripPlan({ width: TAB_WIDTH * 3, count: 10, active: 9 })
   assert.equal(atEnd.shown, 2, 'two tabs and the control fit in three tabs of room')
@@ -80,4 +83,39 @@ test('the strip draws whole tabs, reserves the overflow control, and never hides
   assert.equal(narrow.shown, 1)
   assert.equal(narrow.start, 3)
   assert.equal(narrow.hidden, 5)
+})
+
+// ---- the sheet's numbers, read out of the sheet ----
+//
+// The plan and the CSS cannot be allowed to drift: a constant no selector
+// honours draws tabs that are not there. This reads browser.css, so the only
+// way to change one of these widths is to change both files.
+
+const sheet = readFileSync(new URL('./browser.css', import.meta.url), 'utf8')
+
+const blockOf = (selector) => {
+  const at = sheet.indexOf(`${selector} {`)
+  assert.ok(at > 0, `${selector} is in the sheet`)
+  return sheet.slice(at, sheet.indexOf('}', at))
+}
+
+const px = (block, prop) => {
+  const match = new RegExp(`(?:^|\\n)\\s*${prop}:\\s*(\\d+)px`).exec(block)
+  assert.ok(match, `${prop} is a px number in that block`)
+  return Number(match[1])
+}
+
+test("the strip's numbers are the sheet's numbers", () => {
+  assert.equal(px(blockOf('.bw-tab'), 'width'), TAB_WIDTH, 'TAB_WIDTH and .bw-tab')
+  assert.equal(px(blockOf('.bw-tabs-scroll'), 'gap'), TAB_GAP, 'TAB_GAP and .bw-tabs-scroll')
+  assert.equal(px(blockOf('.bw-newtab'), 'width'), NEW_TAB_WIDTH, 'NEW_TAB_WIDTH and .bw-newtab')
+  assert.equal(
+    px(blockOf('.bw-tabsearch.is-more'), 'width'),
+    OVERFLOW_WIDTH,
+    'OVERFLOW_WIDTH and .bw-tabsearch.is-more',
+  )
+  // The element the ResizeObserver watches must not carry padding of its own:
+  // the plan treats its width as the space tabs occupy, and the strip's own
+  // padding lives on .bw-tabs, outside that element.
+  assert.doesNotMatch(blockOf('.bw-tabs-scroll'), /padding/)
 })

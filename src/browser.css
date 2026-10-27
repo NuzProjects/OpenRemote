@@ -502,8 +502,11 @@ html[data-reduce-motion] .bw-btn {
 
 /* The strip's overflow count: how many tabs sit behind the control. Small and
    quiet, and never the only cue - the control's own title says the same thing
-   in words. */
+   in words. The width is fixed so the count cannot resize the strip while the
+   strip is deciding what fits: 56px here is OVERFLOW_WIDTH in browser-tabs.js,
+   and browser-strip.test.js reads this block to keep them equal. */
 .bw-tabsearch.is-more {
+  width: 56px;
   gap: 4px;
   padding-right: 5px;
 }

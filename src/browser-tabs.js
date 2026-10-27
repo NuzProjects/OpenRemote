@@ -123,37 +123,52 @@ export function closeToRight(tabs, key) {
 // ---- how much of the strip fits ----
 //
 // A tab keeps its width and is never squeezed to a sliver: what does not fit
-// moves behind one overflow control, and the control's own width is reserved
-// before the count is decided so it is never the thing that pushes the last
-// tab out. These numbers are the CSS's own (.bw-tab width, .bw-tabs-scroll
-// gap, .bw-tabs-more width); a change there has to come here too.
+// moves behind one overflow control.
+//
+// These numbers are the sheet's numbers, named by the selector each one comes
+// from, because the plan and the CSS drifting apart is how a strip starts
+// drawing tabs that are not there. browser-strip.test.js reads browser.css and
+// asserts each constant equals the width it claims:
+//
+//   TAB_WIDTH          .bw-tab { width: 200px }
+//   TAB_GAP            .bw-tabs-scroll { gap: 2px }
+//   NEW_TAB_WIDTH      .bw-newtab { width: 28px }
+//   OVERFLOW_WIDTH     .bw-tabsearch.is-more { width: 56px }
+//
+// The overflow control sits beside the measured strip, not inside it, so its
+// width is not subtracted when the count is decided - it is named here only so
+// the sheet and this file agree about its size. The new-tab button is inside
+// the strip, so its width and the gap before it are reserved.
 
 export const TAB_WIDTH = 200
 export const TAB_GAP = 2
 export const OVERFLOW_WIDTH = 56
-/// The new-tab button sits at the end of the same strip, so its width is
-/// reserved with the tabs: without it the last tab could cover the button.
-export const NEW_TAB_WIDTH = 30
+export const NEW_TAB_WIDTH = 28
 
 /// Which tabs the strip draws: a window of `shown` tabs starting at `start`,
 /// always containing the active one, with `hidden` behind the control. An
 /// unmeasured strip (width 0, the first paint) shows everything.
-export function stripPlan({ width = 0, count = 0, active = 0, tabWidth = TAB_WIDTH, gap = TAB_GAP, control = OVERFLOW_WIDTH } = {}) {
+///
+/// A strip narrower than one tab plus the button (230px at these numbers)
+/// still answers one tab: the strip is a pane and nothing in it may shrink, so
+/// below that width the CSS clips the tab's right edge rather than pretending
+/// the tab is not there.
+export function stripPlan({ width = 0, count = 0, active = 0, tabWidth = TAB_WIDTH, gap = TAB_GAP } = {}) {
   if (count <= 0) return { start: 0, shown: 0, hidden: 0 }
   if (width <= 0) return { start: 0, shown: count, hidden: 0 }
-  const room = (n) => n * tabWidth + Math.max(0, n - 1) * gap + NEW_TAB_WIDTH
+  // Each tab is followed by a gap, and the new-tab button is the last thing in
+  // the row, so `n` tabs occupy `n` tab widths, `n` gaps and the button.
+  const room = (n) => n * (tabWidth + gap) + NEW_TAB_WIDTH
   let shown = 0
   if (room(count) <= width) {
     shown = count
   } else {
     for (let n = count - 1; n >= 1; n -= 1) {
-      if (room(n) + gap + control <= width) {
+      if (room(n) <= width) {
         shown = n
         break
       }
     }
-    // A strip too narrow for one tab and the control still shows one tab: the
-    // active page is the one thing that may never be hidden.
     shown = Math.max(1, shown)
   }
   const start = Math.min(Math.max(0, active - shown + 1), count - shown)
