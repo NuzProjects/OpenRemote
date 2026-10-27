@@ -5,7 +5,7 @@ import SplitGlyph from './SplitGlyph.jsx'
 import { HarnessMark } from './brand-marks.jsx'
 import { useHint, useKeyboard } from './keyboard.jsx'
 import { MIN_PANES, SAVED_LAYOUTS_NONE, loadLayouts, offerLayouts } from './layouts.js'
-import { paneChatId, paneHeader } from './pane-header.js'
+import { RECONNECTING, paneChatId, paneHeader } from './pane-header.js'
 import { projectFor } from './projects.js'
 import { useConsole } from './state/console.jsx'
 import {
@@ -125,13 +125,16 @@ function Pane({
   // What a person needs to tell this header from the one beside it: the chat
   // record's own project, harness and status, on top of the shell's label for
   // the pane. A pane holding no chat keeps the role's name.
-  const { chats, projects } = useConsole()
+  const { chats, projects, reconnecting } = useConsole()
   const chatId = paneChatId(node.view, currentChat)
   const chat = chatId ? (chats?.[chatId] ?? null) : null
   const head = paneHeader({
     label,
     chat,
     project: chat ? projectFor(projects ?? [], chat.workspace) : null,
+    // The console's mirror of the stream's retry, read per chat: a pane whose
+    // transcript stopped when the stream dropped says so here.
+    reconnecting: chatId ? Boolean(reconnecting?.[chatId]) : false,
   })
   const headTitle = primary ? head.title : `${head.title} - drag onto another pane's edge to move it`
   const hintRight = useHint('split-right')
@@ -266,6 +269,10 @@ function Pane({
             {head.chat && <span className={`dot dot--${head.status}`} aria-hidden="true" />}
             {head.chat && head.harness && <HarnessMark harness={head.harness} size={12} />}
             <span className="split-title">{head.title}</span>
+            {/* A word, not a dot: the dot still says the chat's status, and
+                the transport's retry is not a status the dot language grows.
+                The sidebar's row tooltip says the same word. */}
+            {head.reconnecting && <span className="split-reconnecting">{RECONNECTING}</span>}
             {head.project && <span className="split-project">{`· ${head.project}`}</span>}
           </span>
           <div className="split-actions">

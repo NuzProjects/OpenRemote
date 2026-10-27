@@ -125,6 +125,23 @@ export function ConsoleProvider({ children }) {
   // The chats on screen: each holds a live stream while it is watched, so
   // several panes can show running agents at once.
   const [watched, setWatched] = useState([])
+  // The chats whose stream is between attempts. The stream object owns the
+  // retry - its delay, its timer, its close - and this is the mirror the screen
+  // reads, so a pane header and a sidebar row can say "reconnecting" while a
+  // transcript waits instead of the chat's status's "running" being the only
+  // thing on screen. Set when a close schedules another attempt, cleared when
+  // the stream answers, when it is closed, and when it stops trying (a deleted
+  // session). A mirror, not a second truth: nothing here decides anything.
+  const [reconnecting, setReconnecting] = useState({})
+  const markReconnecting = useCallback((id, on) => {
+    setReconnecting((current) => {
+      if (on) return current[id] ? current : { ...current, [id]: true }
+      if (!current[id]) return current
+      const next = { ...current }
+      delete next[id]
+      return next
+    })
+  }, [])
   const [archived, setArchived] = useState(loadArchived)
   const streamsRef = useRef(new Map())
   const chatsRef = useRef({})
@@ -604,8 +621,10 @@ export function ConsoleProvider({ children }) {
     (id) => {
       const stream = { cancelled: false, stop: null, retry: null, retryDelay: 0 }
       const apply = (event) => {
-        // The wire is talking again: the next close starts the ladder over.
+        // The wire is talking again: the next close starts the ladder over,
+        // and the screen stops saying it is waiting for one.
         stream.retryDelay = 0
+        markReconnecting(id, false)
         // The fold waits for the frame: a replay hands over hundreds of events
         // in one tick, and the copy belongs to the frame, not each event.
         queueEvent(id, event)
@@ -620,12 +639,18 @@ export function ConsoleProvider({ children }) {
             // such session"): without this check the pane kept dialing
             // the dead id every 800ms forever. The pane lets go of the
             // chat on its own once the polled session list drops it.
-            if (sessionGone(err)) return
+            if (sessionGone(err)) {
+              // No further attempt comes: the row must not keep saying it does.
+              markReconnecting(id, false)
+              return
+            }
             // The daemon replays everything past the client's fold cursor.
             // The wait doubles on every close in a row, so a daemon that
             // keeps dying is not dialed twice a second forever, and a
             // stream that talked resets it.
             stream.retryDelay = nextRetryDelay(stream.retryDelay)
+            // The stream owns the wait; the screen is told it is happening.
+            markReconnecting(id, true)
             stream.retry = setTimeout(() => {
               if (!stream.cancelled) follow(chatsRef.current[id]?.foldedSeq ?? null)
             }, stream.retryDelay)
@@ -656,10 +681,13 @@ export function ConsoleProvider({ children }) {
         // chat is not watched any more, and the cursor still sits at the last
         // folded seq, so a later open asks for them again and folds them once.
         pendingRef.current.delete(id)
+        // A closed stream is not backing off, whatever it was doing: the row
+        // and the header stop saying so with it.
+        markReconnecting(id, false)
       }
       return stream
     },
-    [api, queueEvent],
+    [api, queueEvent, markReconnecting],
   )
 
   // A new connection (or none) drops every stream; the next effect reopens
@@ -1447,6 +1475,7 @@ export function ConsoleProvider({ children }) {
       projectsAnswered,
       devicesAnswered,
       chats,
+      reconnecting,
       watchChats,
       connect,
       disconnect,
@@ -1537,6 +1566,7 @@ export function ConsoleProvider({ children }) {
       projectsAnswered,
       devicesAnswered,
       chats,
+      reconnecting,
       watchChats,
       connect,
       disconnect,

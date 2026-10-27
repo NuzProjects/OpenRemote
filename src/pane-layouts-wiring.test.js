@@ -92,8 +92,8 @@ test('the word keeps the header row, and the stylesheet says so', () => {
 test('a chat pane header shows the chat, a role pane keeps the role name', () => {
   // The record comes from the console, the same source the sidebar reads.
   assert.match(area, /import \{ useConsole \} from '\.\/state\/console\.jsx'/)
-  assert.match(area, /import \{ paneChatId, paneHeader \} from '\.\/pane-header\.js'/)
-  assert.match(area, /const \{ chats, projects \} = useConsole\(\)/)
+  assert.match(area, /import \{ RECONNECTING, paneChatId, paneHeader \} from '\.\/pane-header\.js'/)
+  assert.match(area, /const \{ chats, projects, reconnecting \} = useConsole\(\)/)
   assert.match(area, /const chatId = paneChatId\(node\.view, currentChat\)/)
   assert.match(area, /const head = paneHeader\(\{/)
   assert.match(area, /projectFor\(projects \?\? \[\], chat\.workspace\)/)
@@ -113,4 +113,18 @@ test('the header wears the sidebar dot and the sidebar harness mark, one line', 
   assert.match(area, /\{head\.chat && <span className=\{`dot dot--/)
   assert.match(area, /\{head\.chat && head\.harness && <HarnessMark/)
   assert.match(area, /\{head\.project && <span className="split-project">/)
+})
+
+test('a pane whose stream is between attempts says reconnecting beside the title', () => {
+  // The console mirrors the stream's retry per chat; the header reads it, and
+  // the word sits beside the title. The dot is untouched: it still renders the
+  // chat's status, and the transport is not a status.
+  const area = source('SplitArea.jsx')
+  assert.match(area, /import \{ RECONNECTING, paneChatId, paneHeader \} from '\.\/pane-header\.js'/)
+  assert.match(area, /const \{ chats, projects, reconnecting \} = useConsole\(\)/)
+  assert.match(area, /reconnecting: chatId \? Boolean\(reconnecting\?\.\[chatId\]\) : false,/)
+  assert.match(area, /\{head\.reconnecting && <span className="split-reconnecting">\{RECONNECTING\}<\/span>\}/)
+  assert.match(area, /className=\{`dot dot--\$\{head\.status\}`\}/, 'the dot still speaks only for the status')
+  const css = source('split.css')
+  assert.match(css, /\.split-reconnecting \{[\s\S]{0,160}white-space: nowrap;/)
 })

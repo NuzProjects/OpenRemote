@@ -29,15 +29,23 @@ export function paneChatId(view, currentChat = null) {
 }
 
 /**
- * One pane header's parts: the title, and for a chat pane the project, the
- * harness and the status. `label` is the shell's label for the pane, used as
- * the title in every case; `chat` is the chat record, or null for a pane that
- * holds none; `project` is the registered project the chat ran in, when one
- * holds its folder.
+ * The word a pane header and a sidebar row share while a chat's stream is
+ * between attempts. A word, not a dot: the dot still says the chat's status,
+ * and the transport's retry is not a status the dot language should grow.
  */
-export function paneHeader({ label = '', chat = null, project = null } = {}) {
+export const RECONNECTING = 'reconnecting'
+
+/**
+ * One pane header's parts: the title, and for a chat pane the project, the
+ * harness, the status and whether its stream is between attempts. `label` is
+ * the shell's label for the pane, used as the title in every case; `chat` is
+ * the chat record, or null for a pane that holds none; `project` is the
+ * registered project the chat ran in, when one holds its folder;
+ * `reconnecting` is the console's mirror of the stream's retry.
+ */
+export function paneHeader({ label = '', chat = null, project = null, reconnecting = false } = {}) {
   if (!chat) {
-    return { chat: false, title: label, project: null, harness: null, status: null }
+    return { chat: false, title: label, project: null, harness: null, status: null, reconnecting: false }
   }
   return {
     chat: true,
@@ -46,5 +54,6 @@ export function paneHeader({ label = '', chat = null, project = null } = {}) {
     harness: typeof chat.harness === 'string' && chat.harness ? chat.harness : null,
     // The sidebar's own fallback for a chat with no live status.
     status: chat.status ?? 'idle',
+    reconnecting: reconnecting === true,
   }
 }

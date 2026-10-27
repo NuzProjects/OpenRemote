@@ -159,6 +159,16 @@
   opacity: 0.85;
 }
 
+/* The one word a header adds while a chat's stream is between attempts. Quiet
+   on purpose: it is a fact about the transport, not a failure, and the dot
+   beside the title keeps saying the chat's own status. */
+.split-reconnecting {
+  flex: none;
+  color: var(--text-3);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 /* A chat pane's header carries the chat's own name, so it takes the brighter
    ink a live sidebar row uses rather than the role's muted grey. */
 .split-label--chat {

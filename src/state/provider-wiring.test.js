@@ -71,3 +71,29 @@ test('a frame of stream events is folded once, against one copy', () => {
   assert.match(source, /cancelFrame\(frameRef\.current\)/)
   assert.match(source, /pendingRef\.current\.clear\(\)/)
 })
+test('the stream retry is mirrored for the screen and cleared three ways', () => {
+  // The stream object owns the retry - its delay and its timer - and the state
+  // is a mirror the views read. This pins the four moments: set when a close
+  // schedules another attempt, cleared when the stream answers, when it gives
+  // up (a deleted session), and when it is closed for good.
+  assert.match(source, /const \[reconnecting, setReconnecting\] = useState\(\{\}\)/)
+  const window = (needle, size = 800) => {
+    const at = source.indexOf(needle)
+    assert.ok(at >= 0, `${needle} is in console.jsx`)
+    return source.slice(at, at + size)
+  }
+  assert.match(window('const apply = (event) => {', 400), /markReconnecting\(id, false\)/, 'an answer clears it')
+  const onClose = window('onClose: (_cursor, err) => {', 1600)
+  assert.match(onClose, /markReconnecting\(id, true\)/, 'a scheduled retry is shown')
+  assert.match(onClose, /if \(sessionGone\(err\)\) \{[\s\S]{0,200}markReconnecting\(id, false\)/, 'a give-up is not shown as a retry')
+  assert.match(window('stream.close = () => {', 700), /markReconnecting\(id, false\)/, 'closing clears it')
+  // Exposed on the context value and its dependency list.
+  assert.match(source, /^\s+reconnecting,$/m)
+  // The mirror decides nothing: the stream still owns the ladder.
+  assert.match(source, /stream\.retryDelay = nextRetryDelay\(stream\.retryDelay\)/)
+  assert.match(source, /stream\.retry = setTimeout/)
+  // The setter keeps the state object when nothing changed, so an idle beat
+  // does not re-render every consumer of the context.
+  assert.match(source, /if \(on\) return current\[id\] \? current : \{ \.\.\.current, \[id\]: true \}/)
+  assert.match(source, /if \(!current\[id\]\) return current/)
+})

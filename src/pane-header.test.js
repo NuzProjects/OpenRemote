@@ -4,7 +4,7 @@
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { paneChatId, paneHeader } from './pane-header.js'
+import { RECONNECTING, paneChatId, paneHeader } from './pane-header.js'
 
 test('a leaf names its own chat, and the primary is told which chat is on screen', () => {
   // A split pane carries its own view.
@@ -30,6 +30,7 @@ test('a chat pane says its title, project, harness and status', () => {
     project: 'parser',
     harness: 'codex',
     status: 'running',
+    reconnecting: false,
   })
 })
 
@@ -54,9 +55,10 @@ test('a pane holding no chat keeps its role name and grows nothing', () => {
       project: null,
       harness: null,
       status: null,
+      reconnecting: false,
     })
   }
-  assert.deepEqual(paneHeader({}), { chat: false, title: '', project: null, harness: null, status: null })
+  assert.deepEqual(paneHeader({}), { chat: false, title: '', project: null, harness: null, status: null, reconnecting: false })
 })
 
 test('every status the console reports passes through untouched', () => {
@@ -66,4 +68,16 @@ test('every status the console reports passes through untouched', () => {
   for (const status of ['starting', 'running', 'waiting', 'idle', 'stopped', 'failed']) {
     assert.equal(paneHeader({ label: 'x', chat: { status } }).status, status)
   }
+})
+
+test('a chat whose stream is between attempts says so, and a page pane never does', () => {
+  const chat = { id: 'chat-7', title: 'A chat', status: 'running' }
+  // The word the header and the sidebar row share; the dot is untouched.
+  assert.equal(RECONNECTING, 'reconnecting')
+  assert.equal(paneHeader({ label: 'A chat', chat, reconnecting: true }).reconnecting, true)
+  assert.equal(paneHeader({ label: 'A chat', chat }).reconnecting, false)
+  // A pane holding no chat cannot be reconnecting: it has no stream.
+  assert.equal(paneHeader({ label: 'Plugins', reconnecting: true }).reconnecting, false)
+  // And only a true is a true: the console's map has no truthy stand-ins.
+  assert.equal(paneHeader({ label: 'A chat', chat, reconnecting: 'yes' }).reconnecting, false)
 })
