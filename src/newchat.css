@@ -61,7 +61,8 @@ html[data-reduce-motion] .newchat::before {
   grid-row: 1;
   align-self: end;
   margin: 0 0 28px;
-  font-size: 22px;
+  /* The contract's one 24px line: the New chat greeting. */
+  font-size: 24px;
   font-weight: 600;
   letter-spacing: -0.01em;
   color: var(--text-2);
@@ -359,45 +360,70 @@ html[data-reduce-motion] .newchat::before {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 2px;
-  margin: 0 0 8px;
-  min-height: 22px;
+  gap: 6px;
+  margin: 0 0 12px;
+  min-height: 30px;
 }
 
+/* A preset is a chip: mark, name, and the two controls it owns. The border and
+   the wash are what make it read as something you can press; before this it was
+   grey text at the size of a caption, which looked like leftover prose. */
 .nc-preset-wrap {
   display: inline-flex;
   align-items: center;
-  gap: 1px;
+  gap: 2px;
+  height: 30px;
+  padding: 0 5px 0 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.028);
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+.nc-preset-wrap:hover {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.055);
 }
 
 .nc-preset {
   appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   max-width: 220px;
-  padding: 3px 7px;
+  height: 100%;
+  padding: 0 2px 0 11px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 999px;
   background: none;
-  color: var(--text-3);
+  color: var(--text-2);
   font: inherit;
-  font-size: 12px;
+  font-size: 12.5px;
   line-height: 1.4;
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
   cursor: pointer;
 }
 
 .nc-preset:hover {
-  background: rgba(255, 255, 255, 0.05);
   color: var(--text-1);
 }
 
 .nc-preset.on {
+  color: var(--text-1);
+}
+
+/* The default setup is the one new chats open on, so its star says so at rest
+   rather than waiting to be hovered for. */
+.nc-preset.on + .nc-preset-star {
+  opacity: 1;
   color: var(--text-2);
 }
 
 .nc-preset:focus-visible {
-  outline: 1px solid rgba(255, 255, 255, 0.18);
+  outline: 1px solid rgba(255, 255, 255, 0.22);
   outline-offset: 1px;
 }
 
@@ -406,11 +432,22 @@ html[data-reduce-motion] .newchat::before {
   cursor: default;
 }
 
-/* The Save chip is the row's last child and the only way a first preset
-   comes to exist, so it stays visible at rest while the others are text. */
+/* Saving is the one chip that is not a saved thing yet: it is the row's growing
+   end, so it wears a dashed edge instead of the solid one. */
 .nc-preset-save {
+  height: 30px;
+  gap: 6px;
+  padding: 0 12px;
+  border: 1px dashed var(--line);
+  border-radius: 999px;
   color: var(--text-3);
-  font-style: italic;
+  font-style: normal;
+}
+
+.nc-preset-save:hover {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-1);
 }
 
 /* Naming in place: the chip's own footprint, with the wash held on so the
@@ -423,22 +460,29 @@ html[data-reduce-motion] .newchat::before {
 }
 
 /* Delete and default controls: hidden until the chip is reached for, by
-   pointer or by keyboard, so the row never shows a row of crosses. */
+   pointer or by keyboard, so the row never shows a row of crosses. Their
+   footprint is held either way, so the chip does not change width on hover. */
 .nc-preset-hover {
   appearance: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 16px;
-  height: 18px;
-  padding: 0 2px;
+  flex: none;
+  width: 19px;
+  height: 19px;
+  padding: 0;
   border: 0;
+  border-radius: 50%;
   background: none;
   color: var(--text-3);
   font: inherit;
   font-size: 11px;
   cursor: pointer;
   opacity: 0;
+  transition:
+    opacity 120ms ease,
+    color 120ms ease,
+    background 120ms ease;
 }
 
 .nc-preset-wrap:hover .nc-preset-hover,
@@ -448,6 +492,7 @@ html[data-reduce-motion] .newchat::before {
 }
 
 .nc-preset-hover:hover {
+  background: rgba(255, 255, 255, 0.09);
   color: var(--text-1);
 }
 

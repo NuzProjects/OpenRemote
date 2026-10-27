@@ -925,6 +925,9 @@ export default function NewChat({
                     {/* A preset carries the name the person gave it (and, in
                         the summary form, the project it was saved in), so it
                         blurs with their other content. */}
+                    {/* The mark says which harness the setup opens in, so a
+                        row of presets reads as setups rather than as names. */}
+                    <HarnessMark harness={preset.harness} size={12} />
                     <span className="pv">{chipLabel(preset)}</span>
                   </button>
                 )}
@@ -960,6 +963,7 @@ export default function NewChat({
               disabled={!currentHarness}
               title="Save the setup above as a preset"
             >
+              <Plus size={12} weight="bold" />
               Save this setup
             </button>
           )}

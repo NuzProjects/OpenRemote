@@ -63,12 +63,19 @@ test('a preset that cannot be honoured still applies what it can, and says why',
   assert.match(newchat, /<p className="nc-preset-note" role="status">/)
 })
 
-test('the row is ghost text: no fill and no border at rest, a wash on hover', () => {
-  const rule = css.slice(css.indexOf('.nc-preset {'), css.indexOf('.nc-preset:hover'))
-  assert.match(rule, /background: none/)
-  assert.match(rule, /border: 0/)
-  const hover = css.slice(css.indexOf('.nc-preset:hover'), css.indexOf('.nc-preset.on'))
-  assert.match(hover, /background: rgba\(255, 255, 255, 0\.05\)/)
+test('a preset is a chip with an edge at rest, and the mark that says its harness', () => {
+  // It used to be bare grey text at caption size, which read as leftover prose
+  // rather than as something you can press. The edge and the wash live on the
+  // wrapper, because the wrapper is the chip; the button inside carries the name.
+  const wrap = css.slice(css.indexOf('.nc-preset-wrap {'), css.indexOf('.nc-preset {'))
+  assert.match(wrap, /border: 1px solid var\(--line\)/)
+  assert.match(wrap, /border-radius: 999px/)
+  assert.match(wrap, /background: rgba\(255, 255, 255, 0\.028\)/)
+  const chip = css.slice(css.indexOf('.nc-preset {'), css.indexOf('.nc-preset:hover'))
+  assert.match(chip, /display: inline-flex/)
+  assert.match(chip, /gap: 7px/)
+  assert.doesNotMatch(chip, /background: rgba/, 'the wash belongs to the wrapper, not the name')
+  assert.match(newchat, /<HarnessMark harness=\{preset\.harness\} size=\{12\} \/>/)
 })
 
 // ---- saving a chat's setup as a preset ----
