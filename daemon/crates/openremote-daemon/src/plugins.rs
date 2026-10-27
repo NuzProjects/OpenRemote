@@ -41,6 +41,17 @@ const MAX_ENTRIES: usize = 20_000;
 /// Names a plugin cannot take: the routes' own words.
 const RESERVED_NAMES: &[&str] = &["stage"];
 
+/// The ids of the harnesses this program carries, which a plugin may never
+/// take: `plugin:name` namespacing and the plugin list would otherwise
+/// show two different things under one id.
+///
+/// The install path passes the ids the harness registry probed; a command
+/// plugin's update is re-read from another thread of the supervisor and
+/// reaches no registry, so the ids are stated here. They are stable by
+/// contract, and this list is the reason a copy that renames itself
+/// `claude` is refused on update as well as at install.
+const HARNESS_IDS: &[&str] = &["claude", "codex", "grok", "pi", "opencode", "agy"];
+
 #[derive(Debug, thiserror::Error)]
 pub enum PluginError {
     /// The plugin itself is wrong - its manifest, its name, its powers.
@@ -276,11 +287,17 @@ fn safe_segment(name: &str) -> bool {
 /// plugin-name gate, so a folder installed before that gate existed - or
 /// one a catalog once talked this daemon into creating - can still be
 /// removed, while nothing can reach outside the plugins folder.
+///
+/// Two shapes are refused on top of that: a name that ends in a dot, and
+/// one that surrounding whitespace makes differ from its trimmed form.
+/// Windows resolves `...`, `a.` and `a ` to `.`, `a` and `a`, so a segment
+/// of those shapes names a different folder than the record does, and a
+/// removal would then land on something the record never meant.
 fn one_segment(name: &str) -> bool {
     !name.is_empty()
-        && name != "."
-        && name != ".."
         && name.chars().count() <= 128
+        && name.trim() == name
+        && !name.ends_with('.')
         && !name.contains(['/', '\\', ':', '\0'])
 }
 
@@ -710,20 +727,96 @@ impl PluginHost {
         result
     }
 
+    /// Remove an installed plugin's folder, whatever its record says.
+    ///
+    /// The record names the folder, and a record written before the name
+    /// gate existed may carry anything, so removal is held to its own rule
+    /// rather than to the plugin-name gate: that keeps such a folder
+    /// removable while nothing reaches outside the plugins folder.
     pub fn uninstall(&self, marketplace: &str, name: &str) -> Result<(), PluginError> {
-        // The record names the folder, and a record written before the
-        // name gate existed may carry anything: it is removed as long as
-        // it is one segment inside the plugins folder.
-        if !one_segment(marketplace) || !one_segment(name) {
-            return Err(PluginError::Invalid(format!(
-                "'{marketplace}/{name}' is not a plugin folder"
-            )));
+        if one_segment(marketplace) {
+            if one_segment(name) {
+                return remove_plugin_folder(&self.data_dir, marketplace, name);
+            }
+            // Windows drops a trailing dot and a trailing space when it
+            // makes a folder, so there a record carrying either was
+            // installed under the trimmed name - `tidy.` is `tidy` on disk -
+            // and refusing it would strand a plugin the user can no longer
+            // remove anywhere. Everywhere else nothing was dropped at
+            // install time: `tidy.` is a folder of its own there, and `tidy`
+            // is a different plugin's folder in the same marketplace, so
+            // trimming would delete a folder the record never named.
+            let folder_name = installed_as(name, cfg!(windows));
+            if folder_name != name && !folder_name.is_empty() && one_segment(folder_name) {
+                return remove_plugin_folder(&self.data_dir, marketplace, folder_name);
+            }
         }
-        match std::fs::remove_dir_all(plugin_dir(&self.data_dir, marketplace, name)) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e.into()),
-        }
+        // The name is not one folder inside the plugins folder: it carries a
+        // separator, a `..`, a drive letter, leading whitespace, nothing but
+        // dots, or it is too long. Whether anything answers to it decides
+        // which of the two remaining answers is right.
+        let target = plugin_dir(&self.data_dir, marketplace, name);
+        unremovable(marketplace, name, &target, target.try_exists())
+    }
+}
+
+/// What to do about a record whose name is not one folder inside the plugins
+/// folder, given what the file system said about the folder the name would
+/// build.
+///
+/// Something there: refuse, because deleting it is not this daemon's call, and
+/// a path built from such a record is exactly what the name gate exists to
+/// stop. The message prints the path it will not touch, because deleting it
+/// falls to the person, and calls it this plugin's folder rather than "that
+/// folder": a name like `...` normalises to the marketplace folder itself on
+/// Windows, where "delete that folder" would read as "delete every plugin in
+/// here".
+///
+/// Nothing there: let the record go, which is how the plugin list gets rid of
+/// one of these.
+///
+/// A check that failed: refuse too. A folder this daemon cannot stat is not an
+/// absent folder, and dropping the record would leave it as an orphan nothing
+/// looks at again.
+fn unremovable(
+    marketplace: &str,
+    name: &str,
+    target: &Path,
+    checked: std::io::Result<bool>,
+) -> Result<(), PluginError> {
+    match checked {
+        Ok(true) => Err(PluginError::Invalid(format!(
+            "'{marketplace}/{name}' is not one folder inside the plugins folder - no separator, no '..', no leading space, no trailing dot, 128 characters at most. Its own folder would be {}, which OpenRemote will not delete: if that is this plugin's folder, delete it yourself, then remove the plugin again to drop its record",
+            target.display()
+        ))),
+        Ok(false) => Ok(()),
+        Err(e) => Err(PluginError::Source(format!(
+            "could not check whether this plugin's folder {} is still there ({e}), so OpenRemote will not remove the plugin: try again once it can be read",
+            target.display()
+        ))),
+    }
+}
+
+/// The name a record's folder was installed under. Windows drops trailing
+/// dots and trailing spaces when it creates a folder, so there `tidy.` was
+/// installed as `tidy`; every other system keeps them, so `tidy.` is the
+/// folder's own name and `tidy` belongs to a different plugin. Taking the
+/// system as an argument keeps the difference testable from either side.
+fn installed_as(name: &str, windows: bool) -> &str {
+    if windows {
+        name.trim_end_matches(['.', ' '])
+    } else {
+        name
+    }
+}
+
+/// One plugin's folder, removed. A folder that is not there was already
+/// removed.
+fn remove_plugin_folder(data_dir: &Path, marketplace: &str, name: &str) -> Result<(), PluginError> {
+    match std::fs::remove_dir_all(plugin_dir(data_dir, marketplace, name)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -743,8 +836,16 @@ pub(crate) fn swap_in(plugins_root: &Path, from: &Path, target: &Path) -> Result
             // The old copy is in .trash and nothing ever looks in there
             // again: a failed rename (a running chat holds the folder on
             // Windows) would leave the plugin gone while the store still
-            // lists it as installed and on. Put it back.
-            let _ = std::fs::rename(&trash, target);
+            // lists it as installed and on. Put it back, and when even
+            // that fails, say where the copy is: the next start empties
+            // .trash, so a silent failure here would lose it for good
+            // while reporting only the first error.
+            if let Err(back) = std::fs::rename(&trash, target) {
+                return Err(PluginError::Source(format!(
+                    "could not replace it ({e}) and could not put the old copy back ({back}); it is in {}, copy it out before the next start",
+                    trash.display()
+                )));
+            }
             return Err(e.into());
         }
         let _ = std::fs::remove_dir_all(&trash);
@@ -943,9 +1044,25 @@ pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// The argument list git is started with: the neutral settings first, then
+/// the call's own words. Kept apart from the spawn so that "every call is
+/// neutral" is a thing a test can see without starting git.
+fn git_argv(args: &[&str]) -> Vec<String> {
+    GIT_NEUTRAL
+        .iter()
+        .chain(args.iter())
+        .map(|a| (*a).to_string())
+        .collect()
+}
+
 async fn git(dir: &Path, args: &[&str]) -> Result<String, PluginError> {
+    // Every git call this daemon makes is one step of fetching a plugin,
+    // and none of them should be shaped by the machine's git
+    // configuration: the neutral arguments go first, before the
+    // subcommand.
+    let all = git_argv(args);
     let output = tokio::process::Command::new("git")
-        .args(args)
+        .args(&all)
         .current_dir(dir)
         .stdin(std::process::Stdio::null())
         // git asks for nothing: a private repo it has no stored
@@ -987,6 +1104,19 @@ pub fn is_commit_id(sha: &str) -> bool {
 fn not_an_option(word: &str) -> bool {
     !word.starts_with('-')
 }
+
+/// `git` arguments that make it deaf to the machine's own configuration
+/// for the two settings that would otherwise change what a plugin fetch
+/// does: a repository's `.gitmodules` must stay inert (whether checkout
+/// recurses into submodules is `submodule.recurse`, which a user may have
+/// turned on), and a `ext::` URL must never reach an external program
+/// (git's own escape hatch, off by default and therefore worth stating).
+const GIT_NEUTRAL: &[&str] = &[
+    "-c",
+    "submodule.recurse=false",
+    "-c",
+    "protocol.ext.allow=never",
+];
 
 /// Fetch one commit of a repository at depth one - the pinned `sha`, else
 /// the `reference` (a branch or tag), else the default branch - with only
@@ -1216,6 +1346,18 @@ async fn npm_fetch(
     Ok(resolved)
 }
 
+/// The digest a package download is checked against, as npm states it.
+///
+/// A package install's registry is named by the marketplace entry, so the
+/// digest and the file it describes can come from the same document: what
+/// this check proves is that the bytes arrived as that registry described
+/// them, which against the real npm registry is a transport substitution
+/// and nothing more. Where the entry names its own registry, the digest
+/// buys nothing an attacker who chose that registry did not already
+/// control, and it is not meant to - taking plugins from a third-party
+/// catalog is trusting that catalog. What it does close is the silent
+/// skip: an algorithm this program cannot check, or no digest at all, is
+/// a refusal, not a pass.
 enum Integrity {
     /// `sha512-<base64>` (the registry's `dist.integrity`).
     Sri(String),
@@ -1459,17 +1601,20 @@ pub async fn rerun_command(
         std::fs::copy(target.join(&manifest), fresh.join(&manifest))?;
     }
     // The folder the user approved was a statement about what the plugin
-    // may do. A command's output can change afterwards, so the new copy is
-    // read here and a power the record does not carry is not swapped in
-    // live: it waits for an install from Plugins, where the review shows
-    // it. A copy that cannot be read as a plugin is refused for the same
+    // may do and who it is. A command's output can change afterwards, so
+    // the new copy is read here, by the same gate an install passes (its
+    // own name included: taking a harness id is refused whatever the
+    // folder is called), and a power the record does not carry is not
+    // swapped in live: it waits for an install from Plugins, where the
+    // review shows it. A copy that would not pass is refused for the same
     // reason - the last copy stays, and the note says what happened.
-    let new_powers = match read_manifest(&fresh, &[]) {
+    let harness_ids: Vec<String> = HARNESS_IDS.iter().map(|id| id.to_string()).collect();
+    let new_powers = match read_manifest(&fresh, &harness_ids) {
         Ok(manifest) => manifest.powers,
         Err(e) => {
             let _ = std::fs::remove_dir_all(&fresh);
             return Err(PluginError::Invalid(format!(
-                "its new copy cannot be read as a plugin ({e}) - install it from Plugins to review it"
+                "its new copy is not something this OpenRemote would install ({e}) - install it from Plugins to review it"
             )));
         }
     };
@@ -1502,11 +1647,78 @@ fn power_word(power: PluginPower) -> &'static str {
     }
 }
 
+/// The entry fields whose value is a path (or a list of paths) into the
+/// plugin folder: Claude reads each one as that kind of part.
+const ENTRY_PATH_COMPONENTS: &[&str] = &["commands", "agents", "skills", "outputStyles", "themes"];
+
+/// Every component path a catalog entry names, checked against the plugin
+/// folder before it is written into the plugin's Claude manifest.
+///
+/// A component path decides what Claude reads once the plugin is
+/// installed, and the entry is network-fetched JSON, so a catalog could
+/// otherwise point a plugin at any folder on this machine - `"skills":
+/// ["../../.."]` - and have its contents arrive in chats as the plugin's
+/// own parts. The rule is the same one every other folder inside a plugin
+/// passes: relative, forward slashes, no `..`.
+fn entry_paths_inside(entry: &Value) -> Result<(), PluginError> {
+    let Some(fields) = entry.as_object() else {
+        return Ok(());
+    };
+    let who = fields
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("the marketplace entry");
+    for component in ENTRY_PATH_COMPONENTS {
+        let Some(value) = fields.get(*component) else {
+            continue;
+        };
+        let paths = match value {
+            Value::String(_) | Value::Array(_) => as_list(Some(value)),
+            // Neither a path nor a list of them is not a shape Claude
+            // reads, and skipping it would let an entry carry a value
+            // nothing looked at.
+            _ => {
+                return Err(PluginError::Invalid(format!(
+                    "{who}'s {component} is neither a path nor a list of paths - refusing it"
+                )));
+            }
+        };
+        for path in paths {
+            let Some(path) = path.as_str() else {
+                continue;
+            };
+            if !relative_inside(path) {
+                // Say which rule the path breaks: a backslash path is
+                // inside the plugin folder and still not the shape a
+                // plugin folder uses, so calling it "outside" would be
+                // false.
+                let why = if path.split(['/', '\\']).any(|part| part == "..") {
+                    "which is outside the plugin folder"
+                } else if path.starts_with('/') || path.contains(':') {
+                    "which is an absolute path, outside the plugin folder"
+                } else if path.contains('\\') {
+                    "which is a backslash path, and a plugin folder names its parts with forward slashes"
+                } else {
+                    "which is not a path inside the plugin folder"
+                };
+                return Err(PluginError::Invalid(format!(
+                    "{who}'s {component} names '{path}', {why} - refusing it"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The marketplace entry's part in the plugin's Claude manifest, as Claude
 /// Code itself applies it: with no plugin.json the entry is the manifest;
 /// with one, a strict entry appends its components (hooks replace per
 /// event) and a non-strict entry that lists components is a conflict.
 pub fn apply_entry(root: &Path, entry: &Value) -> Result<(), PluginError> {
+    // Checked before anything is written, and on both branches below: an
+    // entry becomes the manifest itself when the folder has none, so the
+    // same fields can arrive that way round.
+    entry_paths_inside(entry)?;
     const COMPONENTS: &[&str] = &[
         "commands",
         "agents",
@@ -1830,6 +2042,119 @@ mod tests {
     }
 
     #[test]
+    fn an_entry_cannot_aim_claude_at_a_folder_outside_the_plugin() {
+        let dir = folder(&[("local-ai/SKILL.md", "# local ai")]);
+        // Every component that is a path, as a list and as a bare string.
+        for component in ["commands", "agents", "skills", "outputStyles", "themes"] {
+            for value in [json!(["../../../secret-skills"]), json!("/etc/skills")] {
+                let mut entry = serde_json::Map::new();
+                entry.insert("name".into(), json!("climber"));
+                entry.insert(component.to_string(), value);
+                let err = apply_entry(dir.path(), &Value::Object(entry))
+                    .unwrap_err()
+                    .to_string();
+                assert!(
+                    err.contains("outside the plugin folder"),
+                    "{component}: {err}"
+                );
+                // The refusal says which plugin asked.
+                assert!(err.contains("climber"), "{component}: {err}");
+            }
+        }
+        // Nothing was written for any of them.
+        assert!(
+            !dir.path()
+                .join(".claude-plugin")
+                .join("plugin.json")
+                .exists()
+        );
+        // A path inside the plugin still rides, on the branch where the
+        // entry is the manifest itself.
+        apply_entry(
+            dir.path(),
+            &json!({"name": "climber", "skills": ["./local-ai"]}),
+        )
+        .unwrap();
+        assert_eq!(plugin_json(dir.path())["skills"], json!(["./local-ai"]));
+    }
+
+    #[test]
+    fn an_entry_appended_to_an_existing_manifest_is_checked_too() {
+        // The other way an entry's components reach a Claude manifest: the
+        // plugin ships `.claude-plugin/plugin.json` and a strict entry
+        // appends its own components to it. The check is the first
+        // statement of `apply_entry`, so this branch inherits it: this
+        // test is what fails if a later change moves the check inside one
+        // branch, since the write branch would then be the only one
+        // covered.
+        let dir = folder(&[("local-ai/SKILL.md", "# local ai")]);
+        let manifest = dir.path().join(".claude-plugin");
+        std::fs::create_dir_all(&manifest).unwrap();
+        std::fs::write(
+            manifest.join("plugin.json"),
+            json!({"name": "shipped", "strict": true, "skills": ["./local-ai"]}).to_string(),
+        )
+        .unwrap();
+        let before = std::fs::read_to_string(manifest.join("plugin.json")).unwrap();
+        let err = apply_entry(
+            dir.path(),
+            &json!({"name": "appended", "strict": true, "skills": ["../../.."]}),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("outside the plugin folder"), "{err}");
+        assert!(err.contains("appended"), "{err}");
+        // The shipped manifest is what it was: nothing was appended.
+        assert_eq!(
+            std::fs::read_to_string(manifest.join("plugin.json")).unwrap(),
+            before
+        );
+        // A path inside the plugin still appends, so the branch works when
+        // the entry is honest.
+        apply_entry(
+            dir.path(),
+            &json!({"name": "appended", "strict": true, "skills": ["more"]}),
+        )
+        .unwrap();
+        assert_eq!(
+            plugin_json(dir.path())["skills"],
+            json!(["./local-ai", "more"])
+        );
+    }
+
+    #[test]
+    fn a_component_that_is_neither_a_path_nor_a_list_is_refused() {
+        let dir = folder(&[("local-ai/SKILL.md", "# local ai")]);
+        let err = apply_entry(dir.path(), &json!({"name": "odd", "skills": 7}))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("neither a path nor a list"), "{err}");
+        // Nothing was written.
+        assert!(
+            !dir.path()
+                .join(".claude-plugin")
+                .join("plugin.json")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn a_backslash_path_is_refused_as_the_shape_it_is() {
+        let dir = folder(&[("local-ai/SKILL.md", "# local ai")]);
+        // A Windows-style path is inside the plugin folder on Windows, and
+        // still not the shape a plugin manifest uses: the refusal says
+        // that rather than claiming the path is outside.
+        let err = apply_entry(
+            dir.path(),
+            &json!({"name": "backslashed", "skills": ["local-ai\\nested"]}),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("backslash path"), "{err}");
+        assert!(!err.contains("outside the plugin folder"), "{err}");
+    }
+
+    #[test]
     fn with_no_plugin_json_the_marketplace_entry_is_the_manifest() {
         let dir = folder(&[("local-ai/SKILL.md", "# local ai")]);
         let entry = json!({
@@ -2012,6 +2337,23 @@ mod tests {
     }
 
     #[test]
+    fn a_trailing_dot_names_the_trimmed_folder_on_windows_only() {
+        // The rule that decides whether removal may look at a trimmed name,
+        // checked from both sides on any machine: Windows dropped the dot
+        // when it made the folder, nothing else did.
+        assert_eq!(installed_as("tidy.", true), "tidy");
+        assert_eq!(installed_as("tidy ", true), "tidy");
+        assert_eq!(installed_as("tidy.", false), "tidy.");
+        assert_eq!(installed_as("tidy ", false), "tidy ");
+        // A dot or a space inside the name is part of it everywhere, and a
+        // name with nothing to drop is itself.
+        assert_eq!(installed_as("my.plugin", true), "my.plugin");
+        assert_eq!(installed_as("My Plugin", true), "My Plugin");
+        assert_eq!(installed_as("tidy", true), "tidy");
+        assert_eq!(installed_as("...", true), "");
+    }
+
+    #[test]
     fn removal_takes_one_segment_inside_the_plugins_folder_and_no_more() {
         let data = tempfile::tempdir().unwrap();
         let host = PluginHost::new(data.path());
@@ -2022,24 +2364,137 @@ mod tests {
         std::fs::create_dir_all(&odd).unwrap();
         host.uninstall("Old.Market", "My Plugin").unwrap();
         assert!(!odd.exists());
-        // Anything that would reach outside the plugins folder is refused,
-        // and the folder it named is untouched.
+        // A record carrying a trailing dot or space is a Windows shape: Win32
+        // drops both when it creates the folder, so `tidy.` was installed as
+        // `tidy` and removing `tidy` is removing what the record means, the
+        // user's only way to be rid of the plugin. Windows makes one folder
+        // of the two names, so this is asserted on Windows only: elsewhere
+        // nothing was dropped at install time, `tidy.` is a folder of its
+        // own, and `tidy` belongs to a different plugin in the same
+        // marketplace, which the trimmed delete would have taken with it.
+        let decoy = data.path().join("plugins/official/tidy");
+        std::fs::create_dir_all(decoy.join("skills")).unwrap();
+        std::fs::write(decoy.join("keep.txt"), "another plugin").unwrap();
+        if cfg!(windows) {
+            host.uninstall("official", "tidy.").unwrap();
+            assert!(!decoy.exists(), "the trimmed folder was left behind");
+        } else {
+            // Its own folder is there and so is the decoy: the record is
+            // refused, and neither folder is touched.
+            let own = data.path().join("plugins/official/tidy.");
+            std::fs::create_dir_all(own.join("skills")).unwrap();
+            let err = host.uninstall("official", "tidy.").unwrap_err().to_string();
+            assert!(
+                err.contains("is not one folder inside the plugins folder"),
+                "{err}"
+            );
+            assert!(own.exists(), "the record's own folder was deleted");
+            assert_eq!(
+                std::fs::read_to_string(decoy.join("keep.txt")).unwrap(),
+                "another plugin"
+            );
+            // A trailing space with no folder of its own removes nothing and
+            // says so, and the decoy is still there afterwards.
+            host.uninstall("official", "tidy ").unwrap();
+            assert_eq!(
+                std::fs::read_to_string(decoy.join("keep.txt")).unwrap(),
+                "another plugin"
+            );
+        }
+        // A record naming a folder that is not there removes nothing, and
+        // reports nothing to remove, so the list can drop the record.
+        let nested = data.path().join("plugins/official/x/keep.txt");
+        std::fs::create_dir_all(nested.parent().unwrap()).unwrap();
+        std::fs::write(&nested, "keep").unwrap();
+        for (marketplace, name) in [("official", "x/y"), ("official", "x\\y"), ("..", "tidy")] {
+            host.uninstall(marketplace, name).unwrap();
+        }
+        assert_eq!(std::fs::read_to_string(&nested).unwrap(), "keep");
+        // A name that does resolve to something, and is not one folder
+        // inside the plugins folder, is refused: nothing of it is deleted,
+        // and the refusal says why in the user's terms, printing the path it
+        // will not touch.
         std::fs::create_dir_all(data.path().join("keep")).unwrap();
         std::fs::write(data.path().join("keep/me.txt"), "keep").unwrap();
+        // `...` is a folder of its own on Linux and the marketplace folder
+        // itself on Windows; either way it resolves to something.
+        std::fs::create_dir_all(data.path().join("plugins/official").join("...")).unwrap();
         for (marketplace, name) in [
             ("official", "../../keep"),
             ("official", ".."),
-            ("official", "x/y"),
-            ("official", "x\\y"),
-            ("..", "tidy"),
+            ("official", "..."),
+            ("official", "."),
         ] {
             let err = host.uninstall(marketplace, name).unwrap_err().to_string();
-            assert!(err.contains("is not a plugin folder"), "{name}: {err}");
+            assert!(
+                err.contains("is not one folder inside the plugins folder"),
+                "{name:?}: {err}"
+            );
+            // The instruction lands on one folder, named by its path, and
+            // says it is this plugin's own: a name like `...` resolves to the
+            // marketplace folder itself on Windows, where "delete that
+            // folder" would read as "delete every plugin in here".
+            assert!(
+                err.contains("if that is this plugin's folder, delete it yourself"),
+                "{name:?}: {err}"
+            );
+            assert!(
+                err.contains(&name_path(data.path(), name)),
+                "{name:?}: {err}"
+            );
+            // It no longer claims the name is not a plugin folder.
+            assert!(!err.contains("is not a plugin folder"), "{name:?}: {err}");
         }
+        // A folder that cannot be stat-ed is not an absent one: it keeps the
+        // record and says the check failed. Provoking a real stat error is not
+        // portable - Windows truncates a name at a NUL byte and reports no
+        // such folder, which would read as "nothing there" - so that arm is
+        // checked where it is pure, below.
         assert_eq!(
             std::fs::read_to_string(data.path().join("keep/me.txt")).unwrap(),
             "keep"
         );
+    }
+
+    #[test]
+    fn a_folder_that_cannot_be_checked_keeps_the_record() {
+        let target = Path::new("plugins").join("official").join("..");
+        for kind in [
+            std::io::ErrorKind::PermissionDenied,
+            std::io::ErrorKind::InvalidFilename,
+        ] {
+            let said = unremovable("official", "..", &target, Err(std::io::Error::from(kind)))
+                .unwrap_err()
+                .to_string();
+            // It says the check failed, not that the folder is gone, and it
+            // names the folder so the person can look.
+            assert!(
+                said.contains("could not check whether this plugin's folder"),
+                "{kind:?}: {said}"
+            );
+            assert!(
+                said.contains(&target.display().to_string()),
+                "{kind:?}: {said}"
+            );
+            assert!(!said.contains("is not one folder"), "{kind:?}: {said}");
+        }
+        // Nothing there: the record may go.
+        unremovable("official", "x/y", &target, Ok(false)).unwrap();
+        // Something there: refused, with the path and the qualification.
+        let said = unremovable("official", "...", &target, Ok(true))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            said.contains("if that is this plugin's folder, delete it yourself"),
+            "{said}"
+        );
+        assert!(said.contains(&target.display().to_string()), "{said}");
+    }
+
+    /// The path a refusal prints for a record name, spelled the way a temp
+    /// directory spells it: only used to check the message carries it.
+    fn name_path(data_dir: &Path, name: &str) -> String {
+        plugin_dir(data_dir, "official", name).display().to_string()
     }
 
     #[test]
@@ -2132,6 +2587,64 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn a_command_plugins_copy_cannot_take_a_harness_id() {
+        let data = tempfile::tempdir().unwrap();
+        let data_dir = data.path();
+        let installed = data_dir.join("plugins/generated/gen");
+        std::fs::create_dir_all(installed.join("skills/a")).unwrap();
+        std::fs::write(installed.join("skills/a/SKILL.md"), "# a").unwrap();
+        std::fs::write(
+            installed.join("openremote.json"),
+            r#"{"api": 1, "name": "gen", "runtime": "content"}"#,
+        )
+        .unwrap();
+        // The command's output now calls itself `claude`, a harness id:
+        // an install of the same folder would be refused for it, and an
+        // update must not slip it in as the plugin the chats already have.
+        let printed = tempfile::tempdir().unwrap();
+        let folder = printed.path().join("gen");
+        std::fs::create_dir_all(folder.join("skills/a")).unwrap();
+        std::fs::write(folder.join("skills/a/SKILL.md"), "# a changed").unwrap();
+        std::fs::write(
+            folder.join("openremote.json"),
+            r#"{"api": 1, "name": "claude", "runtime": "content"}"#,
+        )
+        .unwrap();
+        let record = InstalledPlugin {
+            name: "gen".into(),
+            marketplace: "generated".into(),
+            resolved: None,
+            command: Some(ApprovedCommand {
+                command: format!("echo {}", folder.display()),
+                timeout_secs: 30,
+            }),
+            version: None,
+            description: None,
+            runtime: PluginRuntime::Content,
+            powers: Vec::new(),
+            source: PluginSource::Marketplace {
+                marketplace: "generated".into(),
+                plugin: "gen".into(),
+                from: "a command".into(),
+            },
+            scope: openremote_core::PluginScope::Machine,
+            enabled: true,
+            installed_at: 0,
+            updated_at: 0,
+        };
+        let err = rerun_command(data_dir, &record)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("taken by OpenRemote itself"), "{err}");
+        // The approved copy is still the one on disk.
+        assert_eq!(
+            std::fs::read_to_string(installed.join("skills/a/SKILL.md")).unwrap(),
+            "# a"
+        );
+    }
+
     #[test]
     fn a_pinned_commit_is_a_hex_commit_id() {
         assert!(is_commit_id("a7ee8a3"));
@@ -2144,6 +2657,32 @@ mod tests {
         assert!(!is_commit_id("--upload-pack=C:/Windows/System32/calc.exe"));
         assert!(!is_commit_id("-a7ee8a3"));
         assert!(!is_commit_id(""));
+    }
+
+    #[test]
+    fn every_git_call_is_shaped_by_the_neutral_settings_first() {
+        // What this proves is the wiring - the settings are prepended to
+        // every call's own words - and not that git honours them. Showing
+        // that needs a repository with a submodule and a machine gitconfig
+        // saying `submodule.recurse=true`, which is machine state a test
+        // here is not allowed to write: see the removal note in the report.
+        let argv = git_argv(&["fetch", "--depth", "1", "origin", "main"]);
+        let neutral: Vec<String> = GIT_NEUTRAL.iter().map(|a| (*a).to_string()).collect();
+        // Settings, then the call: never the other way round, since git
+        // reads `-c` only before the subcommand.
+        assert_eq!(&argv[..neutral.len()], &neutral[..]);
+        assert_eq!(
+            &argv[neutral.len()..],
+            ["fetch", "--depth", "1", "origin", "main"]
+        );
+        // Both settings that would otherwise shape a plugin fetch: a
+        // `.gitmodules` must stay inert, and `ext::` must not reach a
+        // program.
+        assert_eq!(GIT_NEUTRAL.len() % 2, 0, "each setting is a -c and a key");
+        assert!(argv.iter().any(|a| a == "submodule.recurse=false"));
+        assert!(argv.iter().any(|a| a == "protocol.ext.allow=never"));
+        // A call with no words of its own still carries them.
+        assert_eq!(git_argv(&[]), neutral);
     }
 
     #[tokio::test]
