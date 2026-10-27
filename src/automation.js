@@ -104,3 +104,92 @@ export function ruleSearchHint(total) {
   return (total ?? 0) >= RULE_SEARCH_HINT_FROM ? 'Search rules' : ''
 }
 
+// ---- when no rule can run ----
+//
+// A rule fires on a machine whose agent is online, and GET /machines is the
+// only source of that fact (the account's device list answers a different
+// question: who may drive this computer from elsewhere, not who runs a rule
+// here, so it is deliberately not mixed in - saying "your rules cannot run"
+// because no *device* is a machine would be a lie while the daemon would
+// happily fire a rule whose machine is this computer).
+//
+// What the daemon's list can actually say, read from this tree:
+//
+//   * this computer's row is created `online` on every daemon start and no
+//     code path ever changes it (openremote-core/src/store.rs,
+//     `ensure_this_machine`);
+//   * a machine added by hand is created `waiting`, and nothing in this tree
+//     flips it to `online` - the rule engine skips it until its agent checks
+//     in (supervisor.rs: "hasn't checked in - the rule waits");
+//   * `offline` is defined in the machine model but no code path writes it.
+//
+// So the row is silent in normal operation: this computer is always on. The
+// one state a person can really meet is a list of machines that have not
+// checked in yet, and that is the sentence worth writing. A list that has not
+// answered is silence too (unknown is not empty, signed out or not), and a
+// list with no rows at all cannot happen here, so it invents nothing.
+//
+// The rules list stays exactly as it was under this line: a saved rule is not
+// broken because its machine is asleep, and every rule stays readable and
+// editable while the line is up.
+
+/** How every sentence below starts: what a rule waits for. */
+const MACHINE_FIRST = 'A rule runs on a machine.'
+
+/** The list has rows whose status is not one this console knows. */
+export const MACHINE_UNKNOWN = `${MACHINE_FIRST} None is online right now, so open Machines to see them.`
+
+/** Signed out, and no machine answers: signing in is the way to have one. */
+export const MACHINE_SIGNED_OUT = `${MACHINE_FIRST} This computer is not signed in, so sign in to use one, or to make this computer one.`
+
+/** The machine's own name, or a plain stand-in when the row carries none. */
+const machineName = (machine) =>
+  typeof machine?.name === 'string' && machine.name.trim() ? machine.name.trim() : 'A machine'
+
+/**
+ * The line above the rules list, or null when a machine is on (and while the
+ * list has not answered, and when it answered with no machines at all).
+ *
+ * `machines` is the daemon's own list, one `{ name, status }` per machine;
+ * `answered` is whether that list has answered at least once. The action
+ * names the surface that changes it: 'machines' for the view whose self row
+ * makes this computer a machine, 'account' for the sign-in door.
+ */
+export function machineNotice({ answered = false, machines = [], signedIn = false } = {}) {
+  const list = (Array.isArray(machines) ? machines : []).filter((m) => m && typeof m === 'object')
+  // A machine is on: nothing to say, whatever else the list holds.
+  if (list.some((m) => m.status === 'online')) return null
+  // The list has not answered: an empty list right now is silence, not a fact.
+  if (!answered) return null
+  // No rows at all cannot happen on a running daemon (it always lists this
+  // computer); a line for it would be a sentence for a state nobody meets.
+  if (list.length === 0) return null
+  const action = signedIn ? 'machines' : 'account'
+  if (!signedIn) return { text: MACHINE_SIGNED_OUT, action }
+  const waiting = list.filter((m) => m.status === 'waiting')
+  if (waiting.length > 0) {
+    const first = machineName(waiting[0])
+    const others = waiting.length - 1
+    return {
+      text:
+        others === 0
+          ? `${MACHINE_FIRST} ${first} has not come online yet, so open Machines when its agent is running.`
+          : `${MACHINE_FIRST} ${first} and ${others} other ${others === 1 ? 'machine has' : 'machines have'} not come online yet, so open Machines when one of them is on.`,
+      action,
+    }
+  }
+  const offline = list.filter((m) => m.status === 'offline')
+  if (offline.length > 0) {
+    const first = machineName(offline[0])
+    const others = offline.length - 1
+    return {
+      text:
+        others === 0
+          ? `${MACHINE_FIRST} ${first} is offline right now, so open Machines to see it and start its agent.`
+          : `${MACHINE_FIRST} ${first} and ${others} other ${others === 1 ? 'machine is' : 'machines are'} offline right now, so open Machines to see them.`,
+      action,
+    }
+  }
+  return { text: MACHINE_UNKNOWN, action }
+}
+

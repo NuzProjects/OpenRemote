@@ -64,3 +64,25 @@ test('the field and the count have styles of their own, motion covered twice', (
   assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{\s*\.am-search-input \{/)
   assert.match(css, /html\[data-reduce-motion\] \.am-search-input \{/)
 })
+
+test('the no-machine line sits above the list and never gates it', () => {
+  const view = source('AutomationsView.jsx')
+  const css = source('automations.css')
+  // The rule is automation.js's; the view only renders what it says.
+  assert.match(view, /const machineRow = machineNotice\(\{/)
+  assert.match(view, /answered: machinesAnswered,/)
+  assert.match(view, /signedIn: signedIn\(cloud\),/)
+  // It is above the list, and the list itself is not conditional on it.
+  const machineAt = view.indexOf('className="am-machine"')
+  const listAt = view.indexOf('className="am-list"')
+  assert.ok(machineAt > 0 && listAt > machineAt, 'the line is above the rules')
+  assert.doesNotMatch(view, /\{machineRow && \(\s*<div className="am-list"/)
+  assert.match(view, /\{shown\.map\(\(rule\) => \{/)
+  // One action, pointing at the control that changes it - the same view ids
+  // the palette and the shell already navigate by.
+  assert.match(view, /kb\.run\(machineRow\.action === 'account' \? 'view-account' : 'view-machines'\)/)
+  // Its own quiet row, in the list's own column.
+  for (const rule of ['.am-machine', '.am-machine-text', '.am-machine-act']) {
+    assert.match(css, new RegExp(rule.replace('.', '\\.')), `${rule} is styled`)
+  }
+})

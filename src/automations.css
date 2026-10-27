@@ -663,3 +663,51 @@ html[data-reduce-motion] .am-search-input {
     width: calc(100% - 32px);
   }
 }
+
+/* When no machine is online the list cannot fire, and the view says so once,
+   above the rules: the same 1px line and the same two text tiers as every
+   other quiet row here, no fill and no new colour. The button is the row's
+   one action - it points at Machines (the self row that makes this computer
+   a machine) or at the account when signing in is what would bring one. The
+   rules below stay exactly as they were. */
+.am-machine {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: min(640px, 100%);
+  margin-top: 14px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.am-machine-text {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+
+.am-machine-act {
+  flex: none;
+  padding: 3px 10px;
+  border: 1px solid rgba(220, 162, 75, 0.45);
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  cursor: default;
+}
+
+.am-machine-act:hover {
+  background: var(--bg-hover);
+}
+
+@media (max-width: 639px) {
+  .am-machine {
+    flex-wrap: wrap;
+  }
+}

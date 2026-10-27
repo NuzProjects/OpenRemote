@@ -5,9 +5,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  MACHINE_SIGNED_OUT,
+  MACHINE_UNKNOWN,
   RULE_EMPTY_NONE,
   RULE_SEARCH_HINT_FROM,
   formDiffers,
+  machineNotice,
   matchesRule,
   queryWords,
   ruleCountLine,
@@ -154,4 +157,89 @@ test('the hint appears when the list is long enough to need one', () => {
   assert.equal(RULE_SEARCH_HINT_FROM, 6)
   for (const total of [6, 12, 40]) assert.equal(ruleSearchHint(total), 'Search rules')
   assert.equal(ruleSearchHint(undefined), '')
+})
+
+// ---- when no machine can run a rule ----
+
+const machine = (name, status) => ({ name, status })
+
+test('a machine that is on says nothing, whatever else the list holds', () => {
+  assert.equal(machineNotice({ answered: true, machines: [machine('here', 'online')], signedIn: true }), null)
+  assert.equal(
+    machineNotice({ answered: true, machines: [machine('build-box', 'waiting'), machine('here', 'online')], signedIn: false }),
+    null,
+  )
+})
+
+test('a list that has not answered is unknown, not empty, signed out or not', () => {
+  // The state this rule exists to keep honest: a console with no machine list
+  // yet must not be told it has no machine, and signing out does not change
+  // what the daemon knows.
+  assert.equal(machineNotice({ answered: false, machines: [], signedIn: true }), null)
+  assert.equal(machineNotice({ answered: false, machines: [], signedIn: false }), null)
+  assert.equal(machineNotice({ answered: false, machines: [machine('build-box', 'waiting')], signedIn: true }), null)
+  assert.equal(machineNotice({}), null)
+})
+
+test('a list with no rows says nothing: a running daemon always lists this computer', () => {
+  // The absent-machine case cannot happen on a running daemon (store.rs
+  // ensures this computer's row on every start), so there is no sentence for
+  // it - inventing one would describe a state nobody meets.
+  assert.equal(machineNotice({ answered: true, machines: [], signedIn: true }), null)
+  assert.equal(machineNotice({ answered: true, machines: [], signedIn: false }), null)
+})
+
+test('the machine that has not come online is named, because there is one', () => {
+  const one = machineNotice({ answered: true, machines: [machine('build-box', 'waiting')], signedIn: true })
+  assert.equal(
+    one.text,
+    'A rule runs on a machine. build-box has not come online yet, so open Machines when its agent is running.',
+  )
+  assert.equal(one.action, 'machines')
+  // More than one waiting machine: the first is named, the rest are counted.
+  const two = machineNotice({
+    answered: true,
+    machines: [machine('build-box', 'waiting'), machine('mac-mini', 'waiting')],
+    signedIn: true,
+  })
+  assert.match(two.text, /build-box and 1 other machine has not come online yet/)
+  // A row with no name still produces a sentence, never "undefined".
+  const nameless = machineNotice({ answered: true, machines: [{ status: 'waiting' }], signedIn: true })
+  assert.match(nameless.text, /A machine has not come online yet/)
+})
+
+test('the machine that answered before and is off now is named too', () => {
+  const row = machineNotice({ answered: true, machines: [machine('build-box', 'offline')], signedIn: true })
+  assert.match(row.text, /build-box is offline right now/)
+  assert.equal(row.action, 'machines')
+  // A status this console does not know is still a row, and still no machine.
+  assert.equal(
+    machineNotice({ answered: true, machines: [machine('odd-box', 'paused')], signedIn: true }).text,
+    MACHINE_UNKNOWN,
+  )
+})
+
+test('signed out, the action is the sign-in door, not a machine row it cannot use', () => {
+  const row = machineNotice({ answered: true, machines: [machine('build-box', 'waiting')], signedIn: false })
+  assert.equal(row.text, MACHINE_SIGNED_OUT)
+  assert.equal(row.action, 'account')
+})
+
+test('the line is calm: what a rule waits for first, no exclamation, no em dash', () => {
+  const cases = [
+    [machine('build-box', 'waiting')],
+    [machine('build-box', 'offline')],
+    [machine('odd-box', 'paused')],
+    [machine('build-box', 'waiting'), machine('mac-mini', 'waiting')],
+  ]
+  for (const signedIn of [true, false]) {
+    for (const machines of cases) {
+      const row = machineNotice({ answered: true, machines, signedIn })
+      assert.ok(row.text.startsWith('A rule runs on a machine.'), 'the trigger is said first')
+      assert.ok(!row.text.includes('!'), row.text)
+      assert.ok(!row.text.includes('\u2014'), row.text)
+      assert.ok(!/undefined/.test(row.text), row.text)
+      assert.ok(['machines', 'account'].includes(row.action))
+    }
+  }
 })

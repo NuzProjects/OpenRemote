@@ -29,6 +29,8 @@ import {
   whenSentence,
 } from './automation.js'
 import { onJobRequest, takeJobRequest } from './chat-to-job.js'
+import { useKeyboard } from './keyboard.jsx'
+import { signedIn } from './cloud.js'
 import { parsePill } from './pill.js'
 import { projectName } from './projects.js'
 import { armRow, clearRow, rowIsArmed } from './row-confirm.js'
@@ -38,6 +40,7 @@ import './automations.css'
 import './pill.css'
 import { pickable } from './harness-manager.js'
 import { ranLabel } from './ran-label.js'
+import { errorCopy } from './error-copy.js'
 
 export default function AutomationsView({ onOpenChat }) {
   const {
@@ -45,13 +48,16 @@ export default function AutomationsView({ onOpenChat }) {
     automations,
     automationsAnswered,
     capabilities,
+    cloud,
     machines,
+    machinesAnswered,
     projects,
     saveAutomation,
     removeAutomation,
     enableAutomation,
     runAutomation,
   } = useConsole()
+  const kb = useKeyboard()
   const [editing, setEditing] = useState(null) // null | {} (new) | rule
   const [busyId, setBusyId] = useState(null)
   const [error, setError] = useState(null)
@@ -90,6 +96,15 @@ export default function AutomationsView({ onOpenChat }) {
     (capabilities?.harnesses ?? []).filter(pickable).map((h) => h.id),
   )
   const machineName = (id) => (machines ?? []).find((m) => m.machine.id === id)?.machine.name ?? id
+  // Whether any rule could fire at all, in the words automation.js owns. It
+  // sits above the list and never gates it: a saved rule is not broken
+  // because its machine is asleep, and every rule stays readable and
+  // editable under this line.
+  const machineRow = machineNotice({
+    answered: machinesAnswered,
+    machines: (machines ?? []).map((m) => ({ name: m.machine?.name, status: m.machine?.status })),
+    signedIn: signedIn(cloud),
+  })
   // One online machine is the honest local state - hostname chips and the
   // check-in note return when a second machine is actually online.
   const oneMachine = (machines ?? []).filter((m) => m.machine.status === 'online').length <= 1
@@ -116,7 +131,7 @@ export default function AutomationsView({ onOpenChat }) {
     try {
       return await action(...args)
     } catch (err) {
-      setError(err.message ?? String(err))
+      setError(errorCopy(err))
       return null
     } finally {
       setBusyId(null)
@@ -273,6 +288,24 @@ export default function AutomationsView({ onOpenChat }) {
           {filtering && shown.length > 0 && (
             <p className="am-count">{ruleCountLine(shown.length, rules.length)}</p>
           )}
+        </div>
+      )}
+
+      {/* No machine is on, so nothing in this list can fire right now. One
+          line above the rules, and one control that changes it: the same
+          Machines self row that makes this computer a machine, or the account
+          when signing in is what would give this console a machine at all.
+          The list below is untouched - read and edit every rule. */}
+      {machineRow && (
+        <div className="am-machine" role="status">
+          <p className="am-machine-text">{machineRow.text}</p>
+          <button
+            type="button"
+            className="am-machine-act"
+            onClick={() => kb.run(machineRow.action === 'account' ? 'view-account' : 'view-machines')}
+          >
+            {machineRow.action === 'account' ? 'Sign in' : 'Open Machines'}
+          </button>
         </div>
       )}
 
