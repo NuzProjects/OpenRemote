@@ -202,7 +202,7 @@ export default function PairingSection() {
           <QrCard url={live.url} />
           <div className="qr-side">
             <p className="qr-wait">
-              <span className="qr-dot" />
+              <span className="dot dot--waiting" />
               Waiting for a phone
             </p>
             <p className="qr-clock">{remainingLabel(live.expires_at, now)}</p>
@@ -220,7 +220,7 @@ export default function PairingSection() {
       )}
 
       {error && <p className="qr-error">{error}</p>}
-      {notice && !error && <p className="qr-error">{notice}</p>}
+      {notice && !error && <p className="qr-notice">{notice}</p>}
 
       {phones !== null && phones.length > 0 && (
         <ul className="qr-phones">

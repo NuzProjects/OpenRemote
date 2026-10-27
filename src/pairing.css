@@ -23,7 +23,7 @@
   width: fit-content;
   max-width: 100%;
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: var(--radius);
   background: rgba(255, 255, 255, 0.02);
 }
 
@@ -31,7 +31,7 @@
   display: block;
   width: 208px;
   height: 208px;
-  border-radius: 8px;
+  border-radius: var(--radius);
   background: #ffffff;
   /* A code is read by a camera: no shadow, no filter, no smoothing. */
   image-rendering: pixelated;
@@ -55,13 +55,9 @@
   font-size: 12.5px;
 }
 
-.qr-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent);
-  animation: qr-breathe 2.4s ease-in-out infinite;
-}
+/* The dot is the console's shared status language, not a local copy: a
+   waiting state is amber and still, and the breathing green is reserved for
+   something that is actually running. `.dot--waiting` says both. */
 
 .qr-clock {
   margin: 0;
@@ -82,7 +78,7 @@
   max-width: 260px;
   color: var(--text-2);
   font-family: 'Geist Mono', 'Cascadia Mono', monospace;
-  font-size: 11.5px;
+  font-size: 12.5px;
   line-height: 1.5;
   word-break: break-all;
   user-select: all;
@@ -96,7 +92,17 @@
 .qr-error {
   margin: 12px 0 0;
   max-width: 62ch;
-  color: #e08a8a;
+  color: var(--red, #f87171);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* What the daemon has to say about the pairing port: a caution to read, not
+   a failure. The error red is for things that did not work. */
+.qr-notice {
+  margin: 12px 0 0;
+  max-width: 62ch;
+  color: var(--text-2);
   font-size: 12.5px;
   line-height: 1.5;
 }
@@ -117,7 +123,7 @@
   gap: 10px;
   padding: 9px 12px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius);
 }
 
 .qr-phone-icon {
@@ -134,28 +140,6 @@
   margin-right: auto;
   color: var(--text-3);
   font-size: 12px;
-}
-
-@keyframes qr-breathe {
-  0%,
-  100% {
-    opacity: 0.35;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .qr-dot {
-    animation: none;
-    opacity: 1;
-  }
-}
-
-html[data-reduce-motion] .qr-dot {
-  animation: none;
-  opacity: 1;
 }
 
 @media (max-width: 720px) {
