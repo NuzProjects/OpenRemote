@@ -83,6 +83,13 @@ pub fn centred(size: (f64, f64), work: Rect) -> (f64, f64) {
     )
 }
 
+/// Whether a window's geometry is worth remembering. A maximized window's
+/// size and place are the screen's, not a choice: storing them would make the
+/// next launch open at screen size and lose the resting size the user picked.
+pub(crate) fn resting(maximized: bool) -> bool {
+    !maximized
+}
+
 /// The size and position the window should open at.
 ///
 /// `saved` is what the user left, `want` is the configured size for a first
@@ -157,9 +164,9 @@ pub fn open(app: &AppHandle) {
 
 /// Remember where the window is, at most every `SAVE_EVERY`.
 pub fn remember(window: &Window) {
-    // A maximized window's geometry is the screen's, not a choice. Keeping
-    // the last resting size means un-maximising next launch gives it back.
-    if window.is_maximized().unwrap_or(false) {
+    // The same rule as the write below, checked before the debounce so a
+    // maximized window does not spend the slot either.
+    if !resting(window.is_maximized().unwrap_or(false)) {
         return;
     }
     {
@@ -179,6 +186,12 @@ pub fn save_now(window: &Window) {
 }
 
 fn save(window: &Window) {
+    // The last writer of a session is this one (via `save_now` on close), so
+    // the guard belongs on the write itself as well: closing while maximized
+    // must not store the screen's size as the resting size.
+    if !resting(window.is_maximized().unwrap_or(false)) {
+        return;
+    }
     let app = window.app_handle();
     let Ok(scale) = window.scale_factor() else {
         return;
@@ -238,7 +251,7 @@ fn screens(app: &AppHandle) -> Option<(Vec<Rect>, Rect)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{centred, fit, lands_on, place, Rect};
+    use super::{centred, fit, lands_on, place, resting, Rect};
 
     const MIN: (f64, f64) = (1024.0, 640.0);
 
@@ -335,5 +348,14 @@ mod tests {
         let (size, pos) = place(None, (1440.0, 900.0), MIN, &[screen], screen);
         assert_eq!(size, (1366.0, 728.0));
         assert_eq!(pos, (0.0, 0.0));
+    }
+
+    /// Both write paths (the debounced one and the close path) ask this, so
+    /// the rule has one home. The window itself cannot be built in a unit
+    /// test; what is pinned here is the answer, not the call.
+    #[test]
+    fn a_maximized_window_never_becomes_the_resting_size() {
+        assert!(resting(false));
+        assert!(!resting(true));
     }
 }

@@ -36,11 +36,19 @@ const RESPAWN_WAIT_MAX: Duration = Duration::from_secs(30);
 /// restart, which would kill it.
 const READY_DEADLINE: Duration = Duration::from_secs(90);
 
-/// How long a restart waits for the old daemon to end itself after its
-/// stdin is closed. The daemon stops every harness child it started on the
-/// way out, and that sweep is bounded per child, so this only has to
-/// outlast a slow machine. A daemon still there after it is wedged.
-const GRACEFUL_STOP_WAIT: Duration = Duration::from_secs(5);
+/// How long a restart waits for the old daemon to end itself after its stdin
+/// is closed.
+///
+/// It must stay above the daemon's own drain bound, `STOP_DRAIN_BOUND` in
+/// `openremote-daemon`'s supervisor (ten seconds): a shorter wait kills a
+/// daemon that is still sweeping, which is the orphan this whole path exists
+/// to prevent. Twelve is that bound plus two seconds of scheduling slack.
+///
+/// That bound is per harness and the sweep is sequential, so a machine with
+/// several slow chats can legitimately take longer than one bound; the cap
+/// only ever costs a wedged daemon a slower restart, and the unit test below
+/// pins it against the daemon's constant for exactly that reason.
+const GRACEFUL_STOP_WAIT: Duration = Duration::from_secs(12);
 
 /// The most of the daemon's own words that is kept for a diagnosis: forty
 /// lines, and no more than 8 KiB of them.
@@ -113,10 +121,24 @@ async fn daemon_restart(
 
 /// Stop a daemon by pid, for the case the graceful path could not.
 ///
-/// On Windows the filter names the image as well as the pid: if the system
-/// handed that pid to another process while a restart waited, the new owner
-/// is not ours to kill. No console window is created; the shell is a GUI
-/// process and would only flash one.
+/// The pid is the only handle left: dropping the child was what closed its
+/// stdin, and the plugin's child cannot be both kept and closed. A pid can be
+/// reused, so ownership is checked as close to the signal as the platform
+/// allows:
+///
+/// - Windows: one call. `taskkill` takes the pid and the image name as filters
+///   in the same invocation, so the image name *is* the ownership check inside
+///   the kill: a reused pid is only hit if its new owner is also another
+///   `openremote-daemon.exe`.
+/// - Linux: `/proc/<pid>/comm` is read, and only a name that starts with
+///   `openremote-daem` (the kernel truncates the name at fifteen characters)
+///   is signalled. The check and the kill are two syscalls, so the window is
+///   narrowed to the microseconds between them rather than closed.
+/// - macOS: no `/proc`, so a plain pid kill goes out; the window there is
+///   narrowed by nothing, which is the one place it is still open.
+///
+/// No console window is created; the shell is a GUI process and would only
+/// flash one.
 fn stop_by_pid(pid: u32) {
     let pid = pid.to_string();
     #[cfg(windows)]
@@ -135,7 +157,18 @@ fn stop_by_pid(pid: u32) {
             .creation_flags(CREATE_NO_WINDOW)
             .status();
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        let named = std::fs::read_to_string(format!("/proc/{pid}/comm"))
+            .map(|comm| comm.trim_start().starts_with("openremote-daem"))
+            .unwrap_or(false);
+        if named {
+            let _ = std::process::Command::new("kill")
+                .args(["-9", &pid])
+                .status();
+        }
+    }
+    #[cfg(all(unix, not(target_os = "linux")))]
     {
         let _ = std::process::Command::new("kill")
             .args(["-9", &pid])
@@ -607,5 +640,40 @@ fn read_daemon_token_at(dir: &str) -> Option<String> {
         None
     } else {
         Some(token)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GRACEFUL_STOP_WAIT;
+    use std::time::Duration;
+
+    /// The daemon's drain bound lives in another workspace and cannot be
+    /// imported here, so it is read from its source. The two numbers only make
+    /// sense together - the shell waits for the daemon to stop, the daemon
+    /// bounds how long that stop takes - and moving either without the other
+    /// turns this red instead of silently orphaning harnesses.
+    fn daemon_drain_bound() -> Duration {
+        let source = include_str!("../../daemon/crates/openremote-daemon/src/supervisor.rs");
+        let line = source
+            .lines()
+            .find(|line| line.contains("STOP_DRAIN_BOUND:"))
+            .expect("the daemon's STOP_DRAIN_BOUND");
+        let secs = line
+            .split("from_secs(")
+            .nth(1)
+            .and_then(|rest| rest.split(')').next())
+            .and_then(|n| n.trim().parse::<u64>().ok())
+            .expect("STOP_DRAIN_BOUND is written in whole seconds");
+        Duration::from_secs(secs)
+    }
+
+    #[test]
+    fn the_graceful_wait_outlasts_the_daemons_drain_bound() {
+        let bound = daemon_drain_bound();
+        assert!(
+            GRACEFUL_STOP_WAIT > bound,
+            "the shell waits {GRACEFUL_STOP_WAIT:?} for a daemon whose sweep may take {bound:?}"
+        );
     }
 }
