@@ -2484,9 +2484,14 @@ mod tests {
     #[test]
     fn a_folder_that_cannot_be_checked_keeps_the_record() {
         let target = Path::new("plugins").join("official").join("..");
+        // Two kinds rather than one, because the arm does not look at the kind
+        // and should say the same thing for every reason the check can fail.
+        // Both are stable on the workspace's minimum Rust; `InvalidFilename`
+        // reads better for the NUL byte the test above sends, but it is still
+        // unstable there, so the minimum-version job could not build the tree.
         for kind in [
             std::io::ErrorKind::PermissionDenied,
-            std::io::ErrorKind::InvalidFilename,
+            std::io::ErrorKind::InvalidInput,
         ] {
             let said = unremovable("official", "..", &target, Err(std::io::Error::from(kind)))
                 .unwrap_err()
