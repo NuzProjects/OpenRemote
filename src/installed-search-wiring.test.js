@@ -60,3 +60,15 @@ test('the toolbar has its own row in the sheet, and adds no second field style',
   const fields = css.match(/\.pg-search-input \{/g) ?? []
   assert.equal(fields.length, 1, 'one search-input rule for both tabs')
 })
+
+test('the install door and the panel behind it use the same words', () => {
+  // The header names what the dialog is, and the dialog is titled the same:
+  // its three sources are its own tabs, not a list in the button.
+  assert.match(view, />\s*Install a plugin\s*</)
+  assert.doesNotMatch(view, /Install from a file or link/)
+  const modal = source('InstallPluginModal.jsx')
+  assert.match(modal, /: 'Install a plugin'/)
+  for (const label of ['Folder', 'Git repo', 'Archive']) {
+    assert.match(modal, new RegExp(`label: '${label}'`), `the dialog names its ${label} source`)
+  }
+})

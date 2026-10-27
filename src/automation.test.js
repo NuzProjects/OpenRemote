@@ -143,8 +143,8 @@ test('the count line says how much of the list is on screen', () => {
 })
 
 test('the empty answers are two different sentences', () => {
-  // Nothing to filter: the list's own invitation, unchanged.
-  assert.equal(RULE_EMPTY_NONE, 'No rules yet. Write one.')
+  // Nothing to filter: the list's own invitation, in the form button's words.
+  assert.equal(RULE_EMPTY_NONE, 'No rules yet. Create one.')
   assert.equal(ruleEmptyLine(''), RULE_EMPTY_NONE)
   assert.equal(ruleEmptyLine('   '), RULE_EMPTY_NONE)
   // A query that found nothing names the query, in the console's own quotes.

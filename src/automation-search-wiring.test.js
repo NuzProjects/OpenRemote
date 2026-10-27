@@ -54,6 +54,20 @@ test('the count line appears while filtering, and the empty answers stay apart',
   assert.match(view, /ruleEmptyLine\(query\)/)
 })
 
+test('one noun and one verb: the door, the empty list and the form agree', () => {
+  const view = source('AutomationsView.jsx')
+  // The door says "New rule", the console's own "New <thing>" shape.
+  assert.match(view, />\s*New rule\s*</)
+  assert.doesNotMatch(view, /New automation/)
+  // The empty list borrows the verb the form's button uses, and the noun both
+  // of them use is the contract's.
+  assert.match(source('automation.js'), /RULE_EMPTY_NONE = 'No rules yet\. Create one\.'/)
+  assert.match(source('AutomationForm.jsx'), /'Save rule' : 'Create rule'/)
+  // The draft card and the search speak it too.
+  assert.match(view, /CREATE RULE/)
+  assert.match(view, /aria-label="Search rules"/)
+})
+
 test('the field and the count have styles of their own, motion covered twice', () => {
   const css = source('automations.css')
   for (const rule of ['.am-toolbar', '.am-search', '.am-search-input', '.am-search-clear', '.am-count']) {

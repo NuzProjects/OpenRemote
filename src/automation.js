@@ -34,8 +34,10 @@ export { formDiffers } from './form-dirty.js'
 // A rule's switch is not a word: a disabled rule is still a rule in the list,
 // and searching for its name finds it whatever its state.
 
-/** The only line the list shows when there is nothing to filter yet. */
-export const RULE_EMPTY_NONE = 'No rules yet. Write one.'
+/** The only line the list shows when there is nothing to filter yet. The noun
+ *  is the contract's ("rule"), and the verb is the one the form's button uses
+ *  ("Create rule"), so the empty list and the button that fills it agree. */
+export const RULE_EMPTY_NONE = 'No rules yet. Create one.'
 
 // The count at which the list gets its search field, and so its hint: the
 // field and the placeholder arrive together. Six is a chosen number, not a

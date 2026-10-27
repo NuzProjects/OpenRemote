@@ -268,8 +268,11 @@ export default function AutomationsView({ onOpenChat }) {
               : 'Loading the rules…'}
           </p>
         </div>
+        {/* One noun for the thing (the contract's "rule") and one verb for
+            making it ("Create rule", the words on the form's own button), so
+            the door and what it opens agree. */}
         <button type="button" className="dv-act" onClick={() => setEditing({})}>
-          New automation
+          New rule
         </button>
       </header>
 

@@ -75,8 +75,11 @@ export default function PluginsView() {
             The harnesses OpenRemote drives, and what you add to it. Each one is on this computer.
           </p>
         </div>
+        {/* The dialog's own title, so the door and the panel agree: the dialog
+            behind this button takes a folder, a git repo or an archive, and
+            naming all three here would list what its tabs already say. */}
         <button type="button" className="dv-act" onClick={() => setInstalling({ entry: null })}>
-          Install from a file or link
+          Install a plugin
         </button>
       </header>
 
