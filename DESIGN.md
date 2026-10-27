@@ -52,6 +52,8 @@ spacing.
 - **Canvas `#0A0C0F` / sidebar `#0F1216`:** two dark steps only. The sidebar
   and frameless titlebar share `--bg-side`; the main canvas is `--bg-app`.
   Hover and active states are white-alpha tints (4.5% / 7%), not new colors.
+  A third step, 3%, belongs to the unread row (see the sidebar): always below
+  hover, so a mark never competes with the row's own states.
 - **Text tiers:** `#E8EBEF` primary, `#9AA3AE` secondary, `#5F6873` muted -
   cool greys, not warm.
 - **Amber `#DCA24B` is the one accent:** primary buttons (send), waiting
@@ -82,13 +84,26 @@ spacing.
   rendered only while it holds something: the chats whose harness is waiting
   on a person, oldest wait first, with the count in its head, and no header at
   all when nothing waits. A waiting chat appears here rather than in the lists
-  below. Then Projects (every registered project, each with collapse caret
+  below, and its row carries what the harness is asking under the title: one
+  11px muted line, the decision's own first line, cut at the last whole word
+  inside 56 characters and marked with an ellipsis, because the whole question
+  is only ever read in the chat. The line summarises and never answers - the
+  sidebar offers no approve, deny or dismiss anywhere, since a decision is
+  answered where its options and what an approval wants to run are on screen
+  together. Then Projects (every registered project, each with collapse caret
   and count, the `+` in the section head, unregister on hover, which asks once
   before it acts; a project's chats grouped under it, and a project with none
   keeping its row with a zero and one line saying it has no chats yet) and the
   flat Chats list (every chat that belongs to no project), each row led by
   its harness's brand mark with the status dot at the row's right edge; the
   footer is an icon row - Account, Mobile, Metrics, Settings - spaced evenly.
+  A chat that moved after it was last read lifts one white-alpha step (3%):
+  no colour, no count, nothing in the status column, and no change to its
+  order - lists never sort by what is unread, so nothing jumps under the
+  pointer. Opening the chat while the window is actually being looked at
+  (visible and focused) clears the mark; a chat left open in a background
+  window stays unread. A list head - a project, the Chats section - lifts one
+  text tier while anything inside it is unread.
   The Mobile tile is the phones' status without words: green tile + black
   glyph while one is reachable, a hollow corner dot while away, quiet when
   there is none.
@@ -150,15 +165,86 @@ spacing.
   the only affordance) - the film filled them as pills; the founder
   overrode that the day it shipped (2026-10-08): the pickers read as
   text, not buttons in boxes. The workspace/machine rows under the box
-  share the same ghost. The floating chat composer publishes its
-  measured height (`--cv-clear`) so the transcript's bottom padding keeps
-  the last message above it, never under it.
+  share the same ghost. New chat's presets ride that language: a row of
+  ghost chips at the top of the box, one per saved setup, ending in the chip
+  that saves the current one under a name already filled in for the person
+  to keep or retype ("Opus high, this repo"). At most one preset is the
+  default, and New chat opens on it. A preset records what was true when it
+  was saved, so applying one keeps only the model, effort and approval word
+  the harness still offers, applies the rest, and says what it could not
+  bring in one calm line rather than failing. A chip's delete control asks
+  once, by the same two-step as every destructive row. The floating chat
+  composer publishes its measured height (`--cv-clear`) so the transcript's
+  bottom padding keeps the last message above it, never under it.
 - **Send button:** 30px radius-8 rounded square; amber (`--accent`) with a
   white arrow when ready, transparent with a muted arrow when empty. The
   press pulses - a scale dip to 0.8 and an amber glow bloom - the one
   recurring primary action, rewarded.
 - **PickerMenu:** the one dropdown engine - opens at the cursor, searches,
   optional groups, keyboard-navigated, viewport-clamped.
+- **Command palette (`Ctrl+K`):** the one search over everything the console
+  can do - actions, chats, views, projects, machines - grouped and ranked,
+  each row with its key on the right; an empty query shows recent chats and
+  suggestions. It is where actions live, in two shapes: a row opens a page
+  inside the palette (a question first, its answers as rows, Esc to step back
+  out - the footer says which), or it hands off to the surface that owns the
+  action. The pages are Switch model, Set effort, Set permission, Stop all
+  running chats, Stop one harness's chats and Since your last look; the
+  hand-offs are Changes in this chat (the review), Race a prompt across
+  harnesses (the race) and Turn this chat into a recurring job (the rule
+  editor, already filled). A row that would lie is not rendered: the changes
+  row appears only while the chat on screen has file changes to read, the
+  stop rows only while something runs, since-last-look only while something
+  moved.
+- **Stop everything:** a palette page, one command that ends every running
+  chat. It asks with the number ("Stop 3 chats?"), names them oldest first -
+  four, then "and N more" - and puts the safe answer first ("Keep them
+  running" above "Stop them"), so the Enter of muscle memory keeps the work.
+  While the stops land it says "Stopping 3."; then it settles what actually
+  happened, in sentences: stopped, on another computer so it kept running,
+  already gone, did not answer. A chat on another device is named and
+  skipped, never failed. Its sibling page, Stop one harness's chats, picks
+  the harness first (only that harness's chats running here are offered,
+  and the page says so: "Only chats running on this computer can stop; the
+  rest keep running."), then asks "Stop 2 chats in Claude?" and settles the same
+  way; with nothing left running it says so instead of asking.
+- **Race:** one prompt into two to four harnesses at once, one per pane, the
+  same prompt verbatim for each. It refuses before a chat is created:
+  fewer than two harnesses installed, fewer than two chosen, more than four
+  chosen, not enough free panes (naming the ones that would not fit), or an
+  empty prompt.
+- **Since your last look:** a palette page over the unread marks - the chats
+  that moved after they were last read, newest activity first, headed in
+  words ("Two chats moved while you were away."). Each row says what
+  happened last in the statuses' own words (the last turn finished, waiting
+  on an answer, the last turn failed) and when it happened; nothing is
+  ranked by importance, because nothing here can know it. A chat with no
+  activity stamp is never listed, and the page is not offered when nothing
+  moved. It reads and clears nothing.
+- **Changes review ("Changes in this chat"):** every file a harness reported
+  changing in this chat, folded by path from the transcript's own tool items,
+  one side-by-side diff per file, a long report saying how many rows it
+  shows. It is what the harness reported, and says so where it is empty: not
+  a git diff - nothing here stages, commits or reverts - and not everything a
+  turn did, because a harness that edits from a shell command or a script
+  reports no file list at all. Where this window does not hold the chat's
+  transcript it says that rather than pretending the chat changed nothing.
+- **The daemon notice row:** one thin row above the main area, two tones
+  only - a daemon that answered and then stopped ("The daemon stopped
+  answering") and one that never answered ("The console is not connected to
+  the daemon"). Each quotes the connection's own words when it has them,
+  capped to one line at a word boundary, and offers a restart only where
+  this build can start the daemon. It never speaks for a signed-out account
+  (the Cloud door and views say that themselves), and it stands down where
+  the view already prints the same news.
+- **View boundary:** a view that throws while drawing itself leaves the rest
+  of the window intact - sidebar, titlebar and other panes keep working - and
+  answers inside its own pane with a still panel (one hairline box, no
+  motion, nothing that asks to be watched): one plain sentence naming the
+  kind of failure, the error's own line and first frame in mono, and Try
+  again once. No retry is offered when the failure is deterministic (a
+  hook-order or property-access error fails the same way on every try), and
+  no panel claims the app is broken: the pane failed, not the window.
 - **Settings search:** one field above the tabs; searches every setting's
   label, keywords and description across sections. Results name their
   section, and choosing one opens that tab and marks the matching row.
@@ -171,9 +257,17 @@ spacing.
 - **Modals:** one family (Esc / backdrop / X close): device, plugin, about,
   confirm, and the thirteen overlays `src/esc-layer-wiring.test.js` lists
   (counted as the files in its `MODALS` array). Panels, not surprise
-  shapes. The onboarding panel is not one of them: it is a full-screen
-  view with no backdrop and no X, one step at a time, each step with its
-  own button out.
+  shapes. The keyboard is part of the definition, not a bonus: focus moves
+  in when a dialog opens (unless a field already took it on purpose), Tab
+  stays inside it, everything behind it is `inert` for both the tab order
+  and a screen reader (with a Tab loop as the fallback for a WebView without
+  the attribute - the titlebar's own window controls stay live, since a
+  dialog may own the app and never the window), Esc closes one layer at a
+  time through the shared stack, and the key goes back to the control that
+  opened the dialog. One hook (`dialog-focus.js`) carries all of it, so a
+  dialog that paints a backdrop and nothing else is not one. The onboarding
+  panel is not one of them: it is a full-screen view with no backdrop and no
+  X, one step at a time, each step with its own button out.
 - **Context ring:** a 20px SVG donut of context-window usage (2px stroke,
   round cap, track `rgba(255,255,255,0.12)`), in the composer foot left of
   the send button, hover card with used/remaining/auto-compact rows.
@@ -224,10 +318,16 @@ spacing.
   row, the raw id shows verbatim in a tooltip: never hidden, never
   re-cased, never parsed by the console.
 - **No dead UI, ever:** controls that do nothing yet are not rendered.
-- **Model selection is a reserved dock slot** until a harness advertises
-  models through the daemon.
+- **Model selection renders where a harness advertises a catalog** through the
+  daemon and stays a reserved slot where it does not: the picker shows the
+  harness's own model names, led by each maker's mark, and the effort picker
+  follows the chosen model's own tiers. The slot is never invented empty.
 - **First run is a setup wizard** - connect, pick, start; one plain action
-  per step.
+  per step. When no agent is installed, the pick step offers the installer
+  right there ("No agent is installed on this computer yet. Install one and
+  it appears in the harness picker.") instead of ending the wizard over a
+  composer that cannot send, and the last step says which agents are ready,
+  which are not signed in, and how to add one whenever the person is ready.
 - **Mobile is first-class:** the same visual language adapts to phone width,
   not a squeezed desktop.
 - **Process:** build slowly; overthink single elements; review at real
@@ -403,10 +503,15 @@ from the film's own components:
 ## Checking this contract
 
 Most of this page can be checked without opening the app: `npm test` runs
-the console's rule tests (279 of them the last time this line was checked,
+the console's rule tests (610 of them the last time this line was checked,
 and the run prints the live count) and a handful
 of wiring tests read the source text for the parts only a browser could
-show, such as the modal family and the waiting screen's doors. Colour,
+show, such as the modal family and the waiting screen's doors. The rules
+behind the newer surfaces sit in their own modules for that reason - the
+palette's pages, the stop question and its sentences, since-last-look, the
+waiting line and its cut, the unread marks, presets and their repair, the
+daemon notice row, the view boundary, race - so each is tested as rules
+rather than as a screenshot. Colour,
 type and motion are not testable that way, so a change to them is checked
 by eye at both motion settings (`prefers-reduced-motion` and the in-app
 toggle) before it counts as done.
