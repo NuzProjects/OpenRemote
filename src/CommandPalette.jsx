@@ -700,10 +700,25 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
     }
     const all = [...everything.actions, ...everything.chats, ...everything.projectRows, ...everything.machines, ...everything.ruleRows, ...tabRows]
     const ranked = rankMatches(query, all, (r) => r.name)
-    return SECTION_ORDER.map((label) => ({
-      label,
-      items: ranked.filter((r) => r.section === label).slice(0, SECTION_CAP),
-    })).filter((s) => s.items.length)
+    return SECTION_ORDER.map((label) => {
+      const forSection = ranked.filter((r) => r.section === label)
+      const items = forSection.slice(0, SECTION_CAP)
+      // A capped group says so in its own last row: with fifty chats or ten
+      // rules, the ninth match used to be dropped in silence and the field
+      // looked broken rather than narrow. The row carries no action - it is a
+      // fact, not a link - so Enter on it does nothing.
+      if (forSection.length > SECTION_CAP) {
+        const rest = forSection.length - SECTION_CAP
+        items.push({
+          key: `more:${label}`,
+          section: label,
+          name: `and ${rest} more`,
+          sub: 'Refine the search to narrow it',
+          run: null,
+        })
+      }
+      return { label, items }
+    }).filter((s) => s.items.length)
   }, [page, query, everything, tabRows, recentChatIds, kb, stopPhase, moved, harnessStopId, harnessPhase, savedLayouts, armedLayout])
 
   const flat = sections.flatMap((s) => s.items)
@@ -760,6 +775,9 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
 
   const choose = (row) => {
     if (!row) return
+    // A row with no action is a fact, not a control: the "and N more" row a
+    // capped group ends with. Enter on it must do nothing rather than throw.
+    if (!row.run) return
     const r = row.run
     if (r.tab) {
       // The strip's own switch: the store's active tab is what every surface

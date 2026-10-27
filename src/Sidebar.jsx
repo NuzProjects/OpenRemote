@@ -39,6 +39,7 @@ import { HarnessMark } from './brand-marks.jsx'
 import ContextMenu from './ContextMenu.jsx'
 import DeleteChatModal from './DeleteChatModal.jsx'
 import { shownTitle } from './rename-chat.js'
+import { RECONNECTING } from './pane-header.js'
 import { canCopyChat, chatMarkdown, copiedLine } from './chat-markdown.js'
 import { errorCopy } from './error-copy.js'
 import { usePrivacyMode } from './privacy.js'
@@ -57,6 +58,34 @@ const COPY_NOTE_MS = 4000
 // memo on every render of a sidebar with no rename in flight.
 const NO_TITLES = {}
 
+// Which projects the person has folded away. The sidebar's own view state,
+// stored on this computer beside the seen map: folding a project is a
+// preference about a place, not something the daemon should carry. Ids are the
+// key, so a renamed project stays folded; the map is pruned against the
+// projects the daemon answers, so an id that no longer exists is forgotten
+// instead of folding a future project that happens to reuse it.
+const COLLAPSED_KEY = 'openremote-collapsed-projects'
+
+function loadCollapsed() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? '{}')
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const out = {}
+    for (const [id, value] of Object.entries(parsed)) if (value === true) out[id] = true
+    return out
+  } catch {
+    return {}
+  }
+}
+
+function storeCollapsed(map) {
+  try {
+    localStorage.setItem(COLLAPSED_KEY, JSON.stringify(map))
+  } catch {
+    /* storage unavailable: the arrangement lasts this run */
+  }
+}
+
 export default function Sidebar({
   open,
   active,
@@ -73,10 +102,10 @@ export default function Sidebar({
   onRenameChat = null,
   renamedTitles = NO_TITLES,
 }) {
-  const { connection, sessions, chats, devices, thisDevice, projects, projectsAnswered, sessionsAnswered, removeProject, archived, setChatArchived, deleteChat, api } = useConsole()
+  const { connection, sessions, chats, devices, thisDevice, projects, projectsAnswered, sessionsAnswered, removeProject, archived, setChatArchived, deleteChat, api, reconnecting } = useConsole()
   const privacy = usePrivacyMode()
   const [query, setQuery] = useState('')
-  const [collapsed, setCollapsed] = useState({})
+  const [collapsed, setCollapsed] = useState(loadCollapsed)
   // The project waiting on a "unregister?" answer. The sidebar's trash sits
   // two pixels from the project's new-chat button, and unregistering has no
   // undo, so the first press arms the row and the second acts. row-confirm.js
@@ -250,17 +279,58 @@ export default function Sidebar({
   const waitingIn = useMemo(() => waitingProjects(needs.chats, folders), [needs, folders])
 
   const toggleProject = (id) => {
-    setCollapsed((c) => ({ ...c, [id]: !c[id] }))
+    setCollapsed((c) => {
+      const next = { ...c }
+      if (next[id]) delete next[id]
+      else next[id] = true
+      storeCollapsed(next)
+      return next
+    })
   }
+
+  // A search opens the projects it matches, whatever the person had folded
+  // away: the grouped rows only draw while a project is open, so a folded
+  // project would hide the one matching chat from the field the person is
+  // typing in, and the search would look broken rather than narrow. The fold
+  // comes back as soon as the query is cleared, because the stored map is
+  // untouched by this.
+  const openedBySearch = useMemo(() => {
+    const ids = new Set()
+    const q = query.trim().toLowerCase()
+    if (!q) return ids
+    for (const { project, items } of grouped.projects) {
+      if (items.length > 0 || projectName(project).toLowerCase().includes(q)) ids.add(project.id)
+    }
+    return ids
+  }, [grouped, query])
+
+  // A project is folded only when the person folded it and no search is
+  // showing something inside it.
+  const folded = (id) => !!collapsed[id] && !openedBySearch.has(id)
+
+  // The projects the daemon no longer lists are forgotten, so their ids cannot
+  // fold a different project that takes the same id later.
+  useEffect(() => {
+    const known = new Set((projects ?? []).map((p) => p.id))
+    setCollapsed((current) => {
+      const ids = Object.keys(current)
+      if (!ids.length) return current
+      const kept = {}
+      for (const id of ids) if (known.has(id)) kept[id] = true
+      if (Object.keys(kept).length === ids.length) return current
+      storeCollapsed(kept)
+      return kept
+    })
+  }, [projects])
 
   // The keyboard's walk through the list goes in the order it reads: the
   // chats that need the user first (they are at the top of the list), then
-  // each open project's chats, then the flat Chats list. A collapsed
-  // project's chats are skipped, like the eye skips them.
+  // each open project's chats, then the flat Chats list. A folded project's
+  // chats are skipped, like the eye skips them - unless a search has opened it.
   const searchRef = useRef(null)
   const order = [
     ...needs.chats,
-    ...grouped.projects.flatMap(({ project, items }) => (collapsed[project.id] ? [] : items)),
+    ...grouped.projects.flatMap(({ project, items }) => (folded(project.id) ? [] : items)),
     ...grouped.flat,
   ].map((row) => row.id)
   const step = (pick) => () => {
@@ -548,6 +618,10 @@ export default function Sidebar({
         // not a colour and not a number. The status column keeps its own
         // language, so "not read" and "waiting" cannot be mistaken.
         data-unread={unread.has(row.id) ? 'true' : undefined}
+        // The row's tooltip while its stream is between attempts: the same
+        // word the pane header shows, so a transcript that stopped is not read
+        // as an agent still thinking. No dot, no status change.
+        title={reconnecting?.[row.id] ? `${row.title} - ${RECONNECTING}` : undefined}
         // The list's single Tab stop lives on one row (see rovingRow); the
         // arrows walk the whole list from wherever focus is, Home and End go
         // to the ends, and Enter is the button's own.
@@ -762,7 +836,7 @@ export default function Sidebar({
           </p>
         )}
         {grouped.projects.map(({ project, items }) => {
-          const isCollapsed = !!collapsed[project.id]
+          const isCollapsed = folded(project.id)
           // One reader of a project's name: projects.js owns the rule (and
           // answers "project" for a project whose folders are gone, where the
           // inline split this replaced would have thrown).

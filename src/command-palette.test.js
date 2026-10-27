@@ -101,3 +101,13 @@ test('the browser group is wired to the store the strip already uses', () => {
   const store = source('browser-store.js')
   assert.match(store, /export function browserMounted\(\) \{\s*return Boolean\(reopenHandler\)/)
 })
+test('a capped group says how many rows it did not show', () => {
+  // Fifty chats or ten rules used to lose the ninth match in silence; the
+  // palette looked broken rather than narrow. The last row is the fact, not a
+  // link, and Enter on it does nothing.
+  assert.ok(palette.includes('const rest = forSection.length - SECTION_CAP'))
+  assert.ok(palette.includes('name: `and ${rest} more`'))
+  assert.ok(palette.includes("sub: 'Refine the search to narrow it'"))
+  assert.ok(palette.includes('run: null,'))
+  assert.ok(palette.includes('if (!row.run) return'), 'the fact row cannot be chosen')
+})

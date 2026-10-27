@@ -166,3 +166,46 @@ test('a row menu keeps the items it opened with', () => {
   assert.match(source, /items=\{menu\.items\}/, 'the menu draws the rows it was given')
   assert.doesNotMatch(source, /menuItems\(menu\.row\)/, 'the open menu never rebuilds its rows')
 })
+test('a search opens the projects it matches, whatever the person folded', () => {
+  // The grouped rows only draw while a project is open, so a folded project
+  // would hide the one matching chat from the field the person is typing in.
+  assert.ok(
+    source.includes('const openedBySearch = useMemo(() => {'),
+    'the search decides which projects to open',
+  )
+  assert.ok(source.includes('if (items.length > 0 || projectName(project).toLowerCase().includes(q)) ids.add(project.id)'))
+  assert.ok(
+    source.includes('const folded = (id) => !!collapsed[id] && !openedBySearch.has(id)'),
+    'one rule for folded, used by the head and the keyboard order',
+  )
+  assert.ok(
+    source.includes('grouped.projects.flatMap(({ project, items }) => (folded(project.id) ? [] : items))'),
+    'the arrows walk into a project the search opened',
+  )
+  assert.equal(
+    (source.match(/folded\(project\.id\)/g) ?? []).length,
+    2,
+    'the head and the order both ask the same question',
+  )
+})
+
+test('the folded projects are remembered, and stale ids are forgotten', () => {
+  assert.ok(source.includes("const COLLAPSED_KEY = 'openremote-collapsed-projects'"))
+  assert.ok(source.includes('const [collapsed, setCollapsed] = useState(loadCollapsed)'))
+  assert.ok(
+    source.includes('if (next[id]) delete next[id]'),
+    'a project that was folded open is dropped from the stored map, not stored as false',
+  )
+  assert.ok(source.includes('storeCollapsed(next)'), 'and the change is written at the press')
+  // A stale id cannot fold a project that takes it later.
+  assert.ok(source.includes('for (const id of ids) if (known.has(id)) kept[id] = true'))
+  assert.ok(source.includes('storeCollapsed(kept)'))
+})
+test('a row whose stream is between attempts says reconnecting in its tooltip', () => {
+  // The same word the pane header uses, from the one constant, read off the
+  // console's per-chat mirror. No dot and no status change: a stopped
+  // transcript must not read as an agent still thinking.
+  assert.match(source, /import \{ RECONNECTING \} from '\.\/pane-header\.js'/)
+  assert.match(source, /reconnecting \} = useConsole\(\)/)
+  assert.match(source, /title=\{reconnecting\?\.\[row\.id\] \? `\$\{row\.title\} - \$\{RECONNECTING\}` : undefined\}/)
+})
