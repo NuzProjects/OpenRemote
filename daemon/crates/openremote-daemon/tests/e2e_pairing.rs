@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use openremote_core::Store;
 use openremote_daemon::app::{App, AppOptions};
-use openremote_daemon::pairing::{CODE_TTL_MS, PairingHost};
+use openremote_daemon::pairing::{CODE_TTL_MS, ExchangeBody, PairingHost};
 use openremote_daemon::registry::HarnessRegistry;
 use openremote_daemon::supervisor::Supervisor;
 use serde_json::Value;
@@ -924,19 +924,46 @@ async fn the_production_bind_puts_a_real_network_address_in_the_payload() {
     );
 }
 
-/// A loopback address nothing is holding, from the range the suites keep for
-/// "a port I can name". Binding first is the only way to know it is free, and
-/// the range sits below the block Windows hands out, so no other test's port
-/// zero can take it.
-async fn free_loopback_addr() -> SocketAddr {
-    for port in 41011..41021u16 {
+/// Loopback addresses nothing is holding, from `base` upwards. Binding first
+/// is the only way to know a port is free, and holding them all at once is the
+/// only way to know they differ.
+///
+/// Each caller passes its own `base` because two tests of this file run at the
+/// same time and none of them can hold a port between the probe and the bind
+/// that follows: a shared slab would let one test take the port the other just
+/// proved free. The bases sit well below the block Windows hands out, so a
+/// plain port zero elsewhere cannot take one in that window either, and they
+/// stay clear of the range `nothing_listens_until_a_code_is_live` owns.
+async fn free_loopback_addrs(base: u16, count: usize) -> Vec<SocketAddr> {
+    let mut held = Vec::new();
+    let mut found = Vec::new();
+    for port in base..base + 10 {
+        if found.len() == count {
+            break;
+        }
         let addr: SocketAddr = format!("127.0.0.1:{port}").parse().expect("loopback");
         if let Ok(listener) = tokio::net::TcpListener::bind(addr).await {
-            drop(listener);
-            return addr;
+            held.push(listener);
+            found.push(addr);
         }
     }
-    panic!("no free loopback port in 41011..41021");
+    assert_eq!(found.len(), count, "not enough free loopback ports");
+    drop(held);
+    found
+}
+
+/// A phone on this host's list, without HTTP: mint a code and trade it, which
+/// is what the page does. Answers the phone's id.
+async fn pair_a_phone_on(host: &Arc<PairingHost>) -> String {
+    let mint = host.mint().await.expect("mint");
+    let (token, phone) = host
+        .exchange(&ExchangeBody {
+            code: mint.code.clone(),
+            name: Some("Pixel".into()),
+        })
+        .expect("exchange");
+    assert!(!token.is_empty(), "a pairing hands out a token");
+    phone.id
 }
 
 /// A phone on the list, made the way the panel makes one: show a code, then
@@ -1005,7 +1032,7 @@ async fn a_moved_address_tells_the_panel_the_phones_must_pair_again() {
     // The same folder, a different address: the phone is still on the list
     // (nothing destroys a record behind the person's back) and the panel says
     // why it cannot reach us.
-    let moved = reopen_at(&data_dir, free_loopback_addr().await);
+    let moved = reopen_at(&data_dir, free_loopback_addrs(41111, 1).await[0]);
     moved.restore().await;
     assert_eq!(moved.phones().len(), 1, "the record is kept");
     let notice = moved.notice().expect("a notice about the moved address");
@@ -1085,4 +1112,105 @@ async fn a_revoke_racing_a_mint_never_leaves_a_code_on_a_closed_socket() {
         )
         .await;
     }
+}
+
+#[tokio::test]
+async fn two_phones_at_two_addresses_are_counted_one_at_a_time() {
+    // The address belongs to the phone and not to the folder. A move that
+    // strands one of two phones has to name the one that is stranded: "the
+    // phones below cannot reach it" would leave the person guessing which row
+    // to remove, and removing the wrong one is the click that matters.
+    let dir = tempfile::tempdir().expect("temp data dir");
+    let data_dir = dir.path().to_path_buf();
+    let addrs = free_loopback_addrs(41121, 3).await;
+
+    // Pairing one phone at the first address, then reading the folder at a
+    // second, is the commute: one phone is behind.
+    let first = reopen_at(&data_dir, addrs[0]);
+    pair_a_phone_on(&first).await;
+    let second = reopen_at(&data_dir, addrs[1]);
+    second.restore().await;
+    let one = second.notice().expect("the move strands the first phone");
+    assert!(one.contains("one of the phones below"), "{one}");
+
+    // A second phone pairs here, at the address this machine has now: the
+    // count is still exactly one, and the sentence still names one.
+    pair_a_phone_on(&second).await;
+    let still_one = second.notice().expect("the first phone is still behind");
+    assert!(still_one.contains("one of the phones below"), "{still_one}");
+
+    // A third address strands both, and the sentence says two rather than
+    // one, so the count is per phone and not per folder.
+    let third = reopen_at(&data_dir, addrs[2]);
+    third.restore().await;
+    let both = third.notice().expect("both phones are behind now");
+    assert!(both.contains("2 of the phones below"), "{both}");
+
+    // A phone paired here, at the address this machine has now, is the healthy
+    // row. Removing the two stranded phones takes the sentence with them while
+    // that row stays: the warning is about those phones, not about the panel
+    // having lost track, and nothing stores "where this machine was" that
+    // would have to be cleared afterwards.
+    let behind: Vec<String> = third.phones().iter().map(|p| p.id.clone()).collect();
+    let healthy = pair_a_phone_on(&third).await;
+    for id in &behind {
+        third.revoke(id).await.expect("revoke a stranded phone");
+    }
+    assert_eq!(third.notice(), None, "the stranded phones are gone");
+    let left = third.phones();
+    assert_eq!(left.len(), 1, "the healthy phone is still paired");
+    assert_eq!(left[0].id, healthy);
+}
+
+#[test]
+fn a_laptop_back_on_the_same_network_needs_no_re_pair() {
+    // The commonest real case is a commute and not a move: pawn at home, be
+    // behind at the office, come home. The warning has to clear itself when
+    // the machine binds the address the phone stored again, because there is
+    // no flag anywhere that would have to be unset.
+    //
+    // A restart here is a real one: the daemon's socket dies with the runtime
+    // that owns it. That is also why the phases do not share a runtime - two
+    // listeners cannot hold one port, so the same address can only be bound
+    // again after the first socket is gone.
+    let dir = tempfile::tempdir().expect("temp data dir");
+    let data_dir = dir.path().to_path_buf();
+    let runtime = || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime")
+    };
+
+    let home = runtime();
+    let addrs = home.block_on(free_loopback_addrs(41131, 2));
+    home.block_on(async {
+        let host = reopen_at(&data_dir, addrs[0]);
+        pair_a_phone_on(&host).await;
+    });
+    drop(home);
+
+    // The office: same folder, a different address, one phone behind.
+    let office = runtime();
+    let stranded = office
+        .block_on(async {
+            let host = reopen_at(&data_dir, addrs[1]);
+            host.restore().await;
+            host.notice()
+        })
+        .expect("the office strands the phone");
+    assert!(stranded.contains("one of the phones below"), "{stranded}");
+    drop(office);
+
+    // Home again: the address the phone stored, and nothing to say.
+    let back = runtime();
+    let notice = back.block_on(async {
+        let host = reopen_at(&data_dir, addrs[0]);
+        host.restore().await;
+        host.notice()
+    });
+    assert_eq!(
+        notice, None,
+        "back on the same network the warning goes away on its own"
+    );
 }

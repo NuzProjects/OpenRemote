@@ -69,10 +69,6 @@ struct Inner {
     code: Option<LiveCode>,
     failures: u32,
     phones: Vec<Phone>,
-    /// The `ip:port` the phones on the list were paired at, as the file
-    /// remembers it. A phone stores its token against that origin, so this is
-    /// the only way to tell that the machine has moved and left them behind.
-    paired_addr: Option<String>,
     listener: Option<Running>,
     /// A sentence for the console about the listener itself, when the daemon
     /// failed to open it at boot with a phone already paired. The console has
@@ -102,6 +98,11 @@ pub struct Phone {
     pub name: String,
     digest: String,
     pub paired_at: i64,
+    /// The `ip:port` this phone stored its token against. The phone keeps that
+    /// origin, so this is how the panel can tell which phone a network change
+    /// left behind. `None` for a phone paired before the field existed: we
+    /// cannot prove it is stranded, so it is not counted as one.
+    addr: Option<String>,
 }
 
 /// How the LAN listener binds: the machine's network in production, an exact
@@ -185,7 +186,7 @@ impl PairingHost {
 
     fn build(app: Arc<App>, bind: Bind, code_ttl_ms: i64) -> Arc<Self> {
         let phones_path = app.data_dir.join("paired-phones.json");
-        let (phones, paired_addr) = read_phones(&phones_path);
+        let phones = read_phones(&phones_path);
         Arc::new(Self {
             app,
             listener_lock: tokio::sync::Mutex::new(()),
@@ -193,7 +194,6 @@ impl PairingHost {
                 code: None,
                 failures: 0,
                 phones,
-                paired_addr,
                 listener: None,
                 notice: None,
             }),
@@ -226,13 +226,19 @@ impl PairingHost {
     /// The sentence the console should show about the listener, if any.
     ///
     /// Two different truths share it. A boot-time bind failure is kept as it
-    /// was set. The other is worked out here rather than stored: a phone
-    /// stores its token against the origin it was paired at, so when this
-    /// machine binds somewhere else (a different network, a different port)
-    /// the phone is silently dead while the panel still says "paired". Saying
-    /// so is the difference between the person knowing to pair again and
-    /// blaming their Wi-Fi, so it is computed from the same numbers the
-    /// socket reports, not cached where a mint could clear it.
+    /// was set. The other is worked out here rather than stored, per phone: a
+    /// phone stores its token against the origin it was paired at, so when
+    /// this machine binds somewhere else (a different network, a different
+    /// port) that phone is silently dead while the panel still says "paired".
+    /// Saying so is the difference between the person knowing to pair again
+    /// and blaming their Wi-Fi.
+    ///
+    /// Computing it, and comparing against the address the socket reports
+    /// right now, is also what makes the sentence go away by itself: on the
+    /// commute back to the network the phones were paired on, the addresses
+    /// match again and nothing is stranded, with no re-pair and no stored
+    /// state to go stale. Nothing is cached, so a mint cannot clear a warning
+    /// that is still true either.
     pub fn notice(&self) -> Option<String> {
         let mut inner = self.inner();
         if inner
@@ -245,18 +251,25 @@ impl PairingHost {
         if let Some(bind) = inner.notice.clone() {
             return Some(bind);
         }
-        let paired_at = inner.paired_addr.clone()?;
-        if inner.phones.is_empty() {
-            return None;
+        let live = inner.listener.as_ref()?.addr.to_string();
+        let stranded = inner
+            .phones
+            .iter()
+            .filter(|phone| phone.addr.as_deref().is_some_and(|at| at != live))
+            .count();
+        match stranded {
+            0 => None,
+            // Singular reads as a sentence; a count in the plural arm names
+            // exactly how many phones are dead, so the person is not left
+            // wondering which of the rows to remove.
+            1 => Some(
+                "This computer's network address changed since one of the phones below was paired, so that phone cannot reach it any more. Remove it and pair it again."
+                    .to_string(),
+            ),
+            n => Some(format!(
+                "This computer's network address changed since {n} of the phones below were paired, so they cannot reach it any more. Remove those phones and pair them again."
+            )),
         }
-        let running = inner.listener.as_ref()?;
-        if paired_at == running.addr.to_string() {
-            return None;
-        }
-        Some(
-            "This computer's network address changed since the phones below were paired, so they cannot reach it any more. Remove each phone and pair it again."
-                .to_string(),
-        )
     }
 
     /// The data folder this host keeps its digests in.
@@ -402,9 +415,11 @@ impl PairingHost {
                 return Err(RevokeError::Unknown);
             };
             let removed = inner.phones.remove(index);
+            // The phones that stay keep their own addresses, so removing the
+            // last stranded phone is what takes the warning off the panel:
+            // nothing here records a separate idea of where this machine was.
             let stored = StoredFile {
                 version: FILE_VERSION,
-                address: inner.paired_addr.clone(),
                 phones: inner.phones.iter().map(StoredPhone::from).collect(),
             };
             if let Err(err) = write_phones(&self.phones_path, &stored) {
@@ -466,20 +481,19 @@ impl PairingHost {
             name,
             digest: digest(&token),
             paired_at: now,
+            // Remember the origin this phone just stored its token against:
+            // the socket it used is the one it will dial again, and the only
+            // way to notice later that this machine answers somewhere else.
+            addr: inner
+                .listener
+                .as_ref()
+                .map(|running| running.addr.to_string()),
         };
         inner.code = None;
         inner.failures = 0;
         inner.phones.push(phone.clone());
-        // Remember the origin this phone just stored its token against: the
-        // socket it used is the one it will dial again, and the only way to
-        // notice later that this machine answers somewhere else.
-        inner.paired_addr = inner
-            .listener
-            .as_ref()
-            .map(|running| running.addr.to_string());
         let stored = StoredFile {
             version: FILE_VERSION,
-            address: inner.paired_addr.clone(),
             phones: inner.phones.iter().map(StoredPhone::from).collect(),
         };
         // Written under the lock: it is a few hundred bytes, and the
@@ -871,18 +885,12 @@ async fn home(State(host): State<Arc<PairingHost>>, request: Request) -> Respons
 #[derive(Serialize, Deserialize)]
 struct StoredFile {
     version: u32,
-    /// Where this machine was bound when the phones on this list last paired.
-    /// Absent in files written before the field existed; `default` keeps those
-    /// readable, and a missing value simply means no address warning rather
-    /// than a file this process refuses.
-    #[serde(default)]
-    address: Option<String>,
     phones: Vec<StoredPhone>,
 }
 
 /// The file format this process writes. Bumped only when an older daemon
-/// would misread a newer file; `address` is additive and serde's default
-/// makes it readable by both directions.
+/// would misread a newer file; the per-phone address is additive and serde's
+/// default keeps a file written by either side readable by the other.
 const FILE_VERSION: u32 = 1;
 
 #[derive(Serialize, Deserialize)]
@@ -891,6 +899,11 @@ struct StoredPhone {
     name: String,
     digest: String,
     paired_at: i64,
+    /// The origin this phone stored its token against. Absent in files written
+    /// before the field existed: such a phone is not known to be stranded, so
+    /// it is not counted in the warning rather than being guessed at.
+    #[serde(default)]
+    address: Option<String>,
 }
 
 impl From<&Phone> for StoredPhone {
@@ -900,6 +913,7 @@ impl From<&Phone> for StoredPhone {
             name: phone.name.clone(),
             digest: phone.digest.clone(),
             paired_at: phone.paired_at,
+            address: phone.addr.clone(),
         }
     }
 }
@@ -911,34 +925,31 @@ impl From<StoredPhone> for Phone {
             name: stored.name,
             digest: stored.digest,
             paired_at: stored.paired_at,
+            addr: stored.address,
         }
     }
 }
 
-/// The phones file, read once at start, with the address the phones on it
-/// were paired at. A file this process wrote and cannot read is a damaged
-/// file, not a reason to refuse to serve: start empty and say so on stderr.
-/// Re-pairing is one scan.
-fn read_phones(path: &Path) -> (Vec<Phone>, Option<String>) {
+/// The phones file, read once at start. A file this process wrote and cannot
+/// read is a damaged file, not a reason to refuse to serve: start empty and
+/// say so on stderr. Re-pairing is one scan.
+fn read_phones(path: &Path) -> Vec<Phone> {
     let raw = match std::fs::read(path) {
         Ok(raw) => raw,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return (Vec::new(), None),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
         Err(err) => {
             eprintln!("openremote-daemon: can't read {}: {err}", path.display());
-            return (Vec::new(), None);
+            return Vec::new();
         }
     };
     match serde_json::from_slice::<StoredFile>(&raw) {
-        Ok(file) => (
-            file.phones.into_iter().map(Phone::from).collect(),
-            file.address,
-        ),
+        Ok(file) => file.phones.into_iter().map(Phone::from).collect(),
         Err(err) => {
             eprintln!(
                 "openremote-daemon: {} is not a phones file ({err}); starting with no paired phones",
                 path.display()
             );
-            (Vec::new(), None)
+            Vec::new()
         }
     }
 }
