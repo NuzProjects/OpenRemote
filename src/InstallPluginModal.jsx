@@ -11,6 +11,7 @@ import { useConsole } from './state/console.jsx'
 import { canPickFolder, pickFile, pickFolder } from './pick-folder.js'
 import { CLAUDE_PART_LABEL, POWER_LABEL, RUNTIME_LABEL, entrySource, installFailedNote, sourceRequest } from './plugins.js'
 import { checkSource } from './form-checks.js'
+import { errorCopy } from './error-copy.js'
 import { useDialog } from './dialog-focus.js'
 import './devices.css'
 import './plugins.css'
@@ -75,7 +76,7 @@ export default function InstallPluginModal({ onClose, entry = null }) {
         setStaged(reply.result)
       }
     } catch (err) {
-      setError(err.message ?? String(err))
+      setError(errorCopy(err))
     } finally {
       setBusy(false)
     }
@@ -101,7 +102,7 @@ export default function InstallPluginModal({ onClose, entry = null }) {
       // more. Its value is still in state, so that is one press.
       setStaged(null)
       setBusy(false)
-      setError(installFailedNote(err.message ?? String(err)))
+      setError(installFailedNote(errorCopy(err)))
     }
   }
 

@@ -374,7 +374,7 @@ export default function AutomationsView({ onOpenChat }) {
                       }}
                       title="The rule and its schedule go, and there is no undo"
                     >
-                      Remove it
+                      Remove it and its schedule
                     </button>
                   ) : (
                     <button

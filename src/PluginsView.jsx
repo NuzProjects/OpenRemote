@@ -25,6 +25,7 @@ import {
   sourceLabel,
 } from './plugins.js'
 import { useArmedRow } from './use-armed-row.js'
+import { errorCopy } from './error-copy.js'
 import './devices.css'
 import './panels.css'
 import './plugins.css'
@@ -146,7 +147,7 @@ function InstalledPlugins({ onUpdate }) {
     try {
       await action()
     } catch (err) {
-      setError(err.message ?? String(err))
+      setError(errorCopy(err))
     }
   }
 
