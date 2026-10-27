@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createServer } from 'node:net'
-import { DaemonApi, parseCursor, parseSseFrame, sessionGone } from './daemon.js'
+import {
+  DaemonApi,
+  KEEP_ALIVE_MS,
+  STREAM_IDLE_MS,
+  nextRetryDelay,
+  parseCursor,
+  parseSseFrame,
+  sessionGone,
+} from './daemon.js'
 
 // ---- the resume cursor ----
 
@@ -178,6 +186,107 @@ test('a garbage stored cursor is a deliberate full replay: no after param', asyn
 test('a valid stored cursor rides the url', async () => {
   const { url } = await collect('id: 10\ndata: {"seq":10,"type":"a"}\n\n', { after: '9' })
   assert.ok(url.includes('after=9'))
+})
+
+// ---- a stream that stops talking ----
+
+// A body the test drives byte by byte: `step` gets the controller and
+// decides what arrives, and whether the stream ever closes.
+function stubStream(step) {
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async () =>
+    new Response(new ReadableStream({ start: (controller) => step(controller) }), { status: 200 })
+  return () => {
+    globalThis.fetch = realFetch
+  }
+}
+
+// Settle with a fallback if the promise has not settled in time, so a
+// reader with no deadline fails an assertion instead of hanging the suite.
+function within(promise, ms, fallback) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ])
+}
+
+test('a stream that goes quiet after an event closes on the idle deadline', async () => {
+  // The half-open socket: one frame arrives, then nothing, ever. The daemon
+  // writes a keep-alive every 15 s, so silence past two of them means the
+  // connection is not quiet, it is gone - and without a deadline the reader
+  // waits forever while the chat sits frozen mid-turn.
+  const restore = stubStream((controller) => {
+    controller.enqueue(new TextEncoder().encode('id: 1\ndata: {"seq":1,"type":"a"}\n\n'))
+  })
+  try {
+    const api = new DaemonApi('http://daemon', 'token')
+    const closed = await within(
+      new Promise((resolve) => {
+        api.events('s1', {
+          idleMs: 30,
+          onEvent: () => {},
+          onClose: (cursor, err) => resolve({ cursor, err }),
+        })
+      }),
+      400,
+      { cursor: 'never closed', err: null },
+    )
+    assert.equal(closed.cursor, 1)
+    assert.equal(closed.err?.idle, true, 'an idle close says why, so the caller can re-dial')
+  } finally {
+    restore()
+  }
+})
+
+test('a stream that keeps sending keep-alives is never declared idle', async () => {
+  // The keep-alive is the daemon saying the wire is alive. A reader that
+  // watched for events instead of bytes would re-dial every deadline here.
+  let ticks = 0
+  const restore = stubStream((controller) => {
+    const timer = setInterval(() => {
+      if (ticks++ < 5) {
+        controller.enqueue(new TextEncoder().encode(': keep-alive\n\n'))
+      } else {
+        clearInterval(timer)
+        controller.close()
+      }
+    }, 10)
+  })
+  try {
+    const api = new DaemonApi('http://daemon', 'token')
+    const closed = await within(
+      new Promise((resolve) => {
+        api.events('s1', {
+          idleMs: 40,
+          onEvent: () => {},
+          onClose: (cursor, err) => resolve({ cursor, err }),
+        })
+      }),
+      500,
+      { cursor: 'never closed', err: null },
+    )
+    assert.equal(closed.cursor, null, 'a keep-alive folds nothing')
+    assert.equal(closed.err, undefined, 'the wire was alive, so no idle close')
+  } finally {
+    restore()
+  }
+})
+
+test('the idle deadline is two missed keep-alives and a margin', () => {
+  assert.equal(KEEP_ALIVE_MS, 15000)
+  assert.ok(STREAM_IDLE_MS > 2 * KEEP_ALIVE_MS)
+  assert.ok(STREAM_IDLE_MS < 4 * KEEP_ALIVE_MS)
+})
+
+test('the re-dial wait backs off from 800 ms to a cap instead of a flat beat', () => {
+  assert.equal(nextRetryDelay(undefined), 800)
+  assert.equal(nextRetryDelay(0), 800)
+  assert.equal(nextRetryDelay(800), 1600)
+  assert.equal(nextRetryDelay(1600), 3200)
+  assert.equal(nextRetryDelay(3200), 5000)
+  // The cap holds however long the daemon stays down.
+  assert.equal(nextRetryDelay(5000), 5000)
+  assert.equal(nextRetryDelay(nextRetryDelay(5000)), 5000)
 })
 
 // ---- a session that is no longer there ----

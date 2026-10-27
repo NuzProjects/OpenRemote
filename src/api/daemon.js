@@ -81,6 +81,28 @@ export function sessionGone(err) {
   return err?.status === 404
 }
 
+// How long a live stream may carry nothing. The daemon writes a keep-alive
+// comment every 15 s, so two missed keep-alives is a half-open socket: the
+// reader waits on a body that will never speak again, the chat sits frozen
+// mid-turn, and the poll meanwhile answers from memory that the session is
+// not running. Any chunk counts, a keep-alive included - the point is that
+// the wire is alive, not that it carried an event.
+export const KEEP_ALIVE_MS = 15000
+export const STREAM_IDLE_MS = KEEP_ALIVE_MS * 2 + 5000
+
+// The re-dial interval after a close: quick at first, because a daemon that
+// is restarting comes back in a second or two, then doubling to a cap so a
+// machine that is asleep or a daemon that keeps dying is not dialed twice a
+// second for as long as the chat stays watched. Takes the delay handed out
+// last; 0 or absent means the stream just talked, so the ladder restarts.
+export const RETRY_BASE_MS = 800
+export const RETRY_CAP_MS = 5000
+
+export function nextRetryDelay(previous) {
+  if (previous == null || !(previous > 0)) return RETRY_BASE_MS
+  return Math.min(previous * 2, RETRY_CAP_MS)
+}
+
 export function loadConnection() {
   try {
     return { url: localStorage.getItem(URL_KEY), token: localStorage.getItem(TOKEN_KEY) }
@@ -740,13 +762,35 @@ export class DaemonApi {
   // that completed: a stream that dies between a frame's `id:` line and its
   // data must not claim that seq, or the resume steps over an event the
   // console never folded and it is lost for good. Returns a stop function.
-  events(id, { after = null, onEvent, onClose }) {
+  events(id, { after = null, onEvent, onClose, idleMs = STREAM_IDLE_MS }) {
     const controller = new AbortController()
     const run = async () => {
       // A garbage cursor is deliberately absent: one clean full replay
       // rather than a resume that can never find its position.
       let cursor = parseCursor(after)
       let skipped = 0
+      // The watchdog. Every chunk restarts it and nothing else does: silence
+      // past the deadline is a half-open socket, and waiting on a body that
+      // will never speak again is the frozen chat. The wait is raced here
+      // rather than only aborted, because only a real fetch ties the
+      // response body to the signal - the read itself must end either way.
+      let quiet = null
+      const readOrQuiet = async (reader) => {
+        const deadline = new Promise((_, reject) => {
+          quiet = setTimeout(() => {
+            const error = new Error('the event stream went quiet')
+            error.idle = true
+            controller.abort()
+            reject(error)
+          }, idleMs)
+        })
+        try {
+          return await Promise.race([reader.read(), deadline])
+        } finally {
+          clearTimeout(quiet)
+        }
+      }
+      let reader = null
       try {
         const query = cursor == null ? '' : `?after=${cursor}`
         const response = await fetch(`${this.url}${this.prefix}/sessions/${id}/events${query}`, {
@@ -763,7 +807,7 @@ export class DaemonApi {
           error.status = response.status
           throw error
         }
-        const reader = response.body.getReader()
+        reader = response.body.getReader()
         const decoder = new TextDecoder()
         let buffer = ''
         // The frame being read, its lines joined. SSE ends a frame with a
@@ -796,7 +840,7 @@ export class DaemonApi {
           // An id with no data behind it is not a frame: the cursor stays.
         }
         while (true) {
-          const { done, value } = await reader.read()
+          const { done, value } = await readOrQuiet(reader)
           if (done) break
           buffer += decoder.decode(value, { stream: true })
           let index
@@ -813,10 +857,20 @@ export class DaemonApi {
         }
         onClose?.(cursor)
       } catch (err) {
-        // An aborted stop is not a close. Anything else reports the last
-        // cursor, and the error itself rides along as the second argument
-        // so the caller can stop retrying when the session is gone.
-        if (err?.name !== 'AbortError') onClose?.(cursor, err)
+        if (err?.idle) {
+          // The watchdog's own close: the caller must see it, or the chat
+          // never re-dials and never says anything again.
+          reader?.cancel?.().catch(() => {})
+          onClose?.(cursor, err)
+        } else if (err?.name !== 'AbortError') {
+          // Anything that is not this handle's stop reports the last
+          // cursor, and the error itself rides along as the second
+          // argument so the caller can stop retrying when the session is
+          // gone.
+          onClose?.(cursor, err)
+        }
+      } finally {
+        clearTimeout(quiet)
       }
     }
     run()
