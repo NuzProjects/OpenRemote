@@ -26,7 +26,7 @@ import {
 import { useConsole } from './state/console.jsx'
 import { chatStatus } from './state/reducer.js'
 import { attentionTitle, needsYou } from './needs-you.js'
-import { sections } from './projects.js'
+import { projectIndex, sections, unreadProjects } from './projects.js'
 import { activeSessions } from './archive.js'
 import { deviceName, isPhone, sessionsForMode } from './cloud.js'
 import { isMobile } from './platform.js'
@@ -213,12 +213,19 @@ export default function Sidebar({
     const waiting = new Set(needs.chats.map((c) => c.id))
     return visible.filter((c) => !waiting.has(c.id))
   }, [visible, needs])
-  const grouped = useMemo(() => sections(projects, rest), [projects, rest])
+  // Built once per projects change, not per row per beat: the grouping used
+  // to scan every project's folders for every chat, which is chats x projects
+  // x folders on every beat.
+  const folders = useMemo(() => projectIndex(projects), [projects])
+  const grouped = useMemo(() => sections(projects, rest, folders), [projects, rest, folders])
 
   // The ids that should carry the quiet mark. Ordering never consults it:
   // the sorts above keep the order they had, so nothing jumps under the
   // pointer when a mark appears or clears.
   const unread = useMemo(() => unreadIds(seen, rows), [seen, rows])
+  // Which project groups hold an unread chat: one pass over the rows, where a
+  // count per group re-walked every group.
+  const unreadIn = useMemo(() => unreadProjects(rows, unread, folders), [rows, unread, folders])
 
   const toggleProject = (id) => {
     setCollapsed((c) => ({ ...c, [id]: !c[id] }))
@@ -665,7 +672,7 @@ export default function Sidebar({
                 className="project-head"
                 // Something inside is unread: the list says so quietly, one
                 // text tier up, and never with a count.
-                data-unread={listHasUnread(items, unread) ? 'true' : undefined}
+                data-unread={unreadIn.has(project.id) ? 'true' : undefined}
                 onClick={() => toggleProject(project.id)}
                 aria-expanded={!isCollapsed}
               >

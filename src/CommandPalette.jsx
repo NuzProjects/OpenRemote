@@ -169,6 +169,34 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
   const currentChat = (sessions ?? []).some((session) => session.id === onScreen) ? onScreen : null
 
   // Everything the palette can offer right now, as rows.
+  // The only two rows that read a chat's timeline. Their content changes only
+  // when their own answer does - which chat is on screen, whether it has file
+  // changes, whether it has items - so a token growing a timeline re-checks
+  // two booleans here instead of rebuilding every row in the list.
+  const chatActions = useMemo(() => {
+    const onScreen = typeof location === 'undefined' ? '' : location.hash.replace(/^#/, '')
+    const reviewChat = chats?.[onScreen] ?? null
+    const markdownChat = focusedChatId ? chats?.[focusedChatId] ?? null : null
+    return {
+      onScreen,
+      reviewChat,
+      markdownChat,
+      key: [
+        onScreen,
+        focusedChatId ?? '',
+        reviewChat && hasFileChanges(reviewChat.timeline) ? 'changes' : '',
+        markdownChat && (markdownChat.timeline ?? []).length > 0 ? 'items' : '',
+        reviewChat?.id ?? '',
+        markdownChat?.id ?? '',
+      ].join('|'),
+    }
+  }, [chats, focusedChatId])
+  // Row identity across beats: the memo above runs on every token, the rows it
+  // produces are reused while its key is unchanged.
+  const chatActionsRef = useRef({ key: null, onScreen: '', reviewChat: null, markdownChat: null })
+  if (chatActionsRef.current.key !== chatActions.key) chatActionsRef.current = chatActions
+  const { onScreen, reviewChat, markdownChat } = chatActionsRef.current
+
   const everything = useMemo(() => {
     const keys = (id) => comboLabel(kb.bindings[id], isMac)
     const actions = ACTIONS.filter((a) => a.id !== 'palette' && kb.available(a.id)).map((a) => ({
@@ -191,8 +219,6 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
     // only honest answer to "this chat". A review of a chat the user cannot
     // see would be a lie, so the row appears only when the address names a
     // chat this window holds and that chat has file changes to read.
-    const onScreen = typeof location === 'undefined' ? '' : location.hash.replace(/^#/, '')
-    const reviewChat = chats?.[onScreen] ?? null
     const review = reviewChat && hasFileChanges(reviewChat.timeline)
       ? [
           {
@@ -211,7 +237,6 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
     // would paste it somewhere believing it was the chat on screen. The shell
     // owns the focused pane and passes its chat in, the same seam the rename
     // row uses.
-    const markdownChat = focusedChatId ? chats?.[focusedChatId] ?? null : null
     const markdown = markdownChat && (markdownChat.timeline ?? []).length > 0
       ? [
           {
@@ -436,7 +461,7 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
       machines,
       harnessRows,
     }
-  }, [kb, sessions, chats, archived, projects, devices, thisDevice, capabilities, machines, raceFree, moved, panes, savedLayouts, focusedChatId, onRenameChat])
+  }, [kb, sessions, archived, projects, devices, thisDevice, capabilities, machines, raceFree, moved, panes, savedLayouts, onScreen, reviewChat, markdownChat, hasFileChanges, focusedChatId, onRenameChat])
 
   const sections = useMemo(() => {
     if (page === 'layouts') {

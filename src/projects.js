@@ -30,12 +30,41 @@ export function projectFor(projects, workspace) {
  * from the list until a chat exists in it reads as an action the app dropped.
  * The caller draws the zero and says the project has no chats yet.
  */
-export function sections(projects, rows) {
+/// Where each project's folders point, built once per `projects` change.
+/// The sidebar groups on every beat, and a scan of every project per row made
+/// that cost chats x projects x folders: the wrong way round for a list that
+/// grows. First project wins, the same rule `projectFor` has.
+export function projectIndex(projects) {
+  const byFolder = new Map()
+  for (const project of projects ?? []) {
+    for (const folder of project.folders ?? []) {
+      if (!byFolder.has(folder)) byFolder.set(folder, project)
+    }
+  }
+  return byFolder
+}
+
+/// The projects that hold an unread chat, in one pass over `rows`. Counting
+/// after grouping re-walked every group, which is the same quadratic in a
+/// different place.
+export function unreadProjects(rows, unread, index) {
+  const hot = new Set()
+  if (!unread || unread.size === 0) return hot
+  for (const row of rows ?? []) {
+    if (!unread.has(row.id)) continue
+    const project = index?.get(row.workspace) ?? null
+    if (project) hot.add(project.id)
+  }
+  return hot
+}
+
+export function sections(projects, rows, index = null) {
   const byProject = new Map((projects ?? []).map((p) => [p.id, { project: p, items: [] }]))
+  const byFolder = index ?? projectIndex(projects)
   const flat = []
   for (const row of rows ?? []) {
-    const project = projectFor(projects, row.workspace)
-    if (project) byProject.get(project.id).items.push(row)
+    const project = byFolder.get(row.workspace) ?? null
+    if (project && byProject.has(project.id)) byProject.get(project.id).items.push(row)
     else flat.push(row)
   }
   return {
