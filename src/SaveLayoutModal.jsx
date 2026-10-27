@@ -18,7 +18,11 @@ import './contextmenu.css'
 import './save-layout.css'
 import { errorCopy } from './error-copy.js'
 
-export default function SaveLayoutModal({ layout, currentView, onClose, onSaved }) {
+// `onSaved` is optional: the shell that hosts this dialog only needs the save
+// to land in storage, and the modal already answers with its own refusal. A
+// missing one is a decision, so it has a default rather than a silent
+// undefined (the shell's prop check reads these declarations).
+export default function SaveLayoutModal({ layout, currentView, onClose, onSaved = null }) {
   const { sessions } = useConsole()
   const panelRef = useRef(null)
   const [name, setName] = useState('')

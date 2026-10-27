@@ -81,7 +81,12 @@ const MAX_RESULTS = 24
 const checkedAt = (at) =>
   new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
-export default function SettingsView({ onReplay, onOpenChat, onClose, onManualConnect = null }) {
+// `onClose` is optional: the window instance (opened over the app) has a close
+// control and passes one, the pane instance does not and hides it. Saying so
+// with a default keeps the shell's prop check honest - it reads these
+// declarations, and a required-looking prop that is never passed is how a
+// call site goes unchecked.
+export default function SettingsView({ onReplay, onOpenChat, onClose = null, onManualConnect = null }) {
   const privacy = usePrivacyMode()
   const {
     connection,
