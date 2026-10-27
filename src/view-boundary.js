@@ -9,6 +9,10 @@
 /// outside that state (a race, a clock, a value read once) and it cannot
 /// rescue anything else. A second identical failure is the loop this limit
 /// exists to refuse.
+///
+/// The count is per boundary instance, and the boundary is keyed by the view
+/// it holds (App.jsx, renderPane), so navigating away and back starts it from
+/// zero: one view gets one retry, and a fresh view is a fresh question.
 export const RETRY_LIMIT = 1
 
 /// Errors React raises for a tree it cannot render at all. Re-rendering
@@ -21,6 +25,12 @@ const DETERMINISTIC = [
   /Too many re-renders/,
   /Maximum update depth exceeded/,
   /is not a function/,
+  // The property-access family, the commonest crash there is: a render that
+  // reads a field of undefined or null fails the same way on every try. Both
+  // spellings are here (the field may sit inside the sentence in older
+  // engines), and the message is all a thrown TypeError carries.
+  /Cannot read propert(?:y|ies) (?:'[^']*' )?of (?:undefined|null)/,
+  /(?:undefined|null) is not an object/,
 ]
 
 /// What was thrown, as one line for the mono block: the error's name and

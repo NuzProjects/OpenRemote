@@ -27,10 +27,12 @@ export function isWaiting(liveStatus, polledStatus) {
 /// `updatedAt` is the wait that has been starving longest. Ties break by id so
 /// the order never depends on how the poll happened to order its list.
 ///
-/// A copy of a chat that runs on another device is left out: its status is the
-/// last thing that device said, so it can read `waiting` long after the
-/// question was answered there, and sending the user across to it on that
-/// evidence would be a guess.
+/// A row whose device is away (`offline`) is left out: its status is the last
+/// thing that device said, and a person here cannot reach the chat to answer
+/// it either way. A waiting chat that runs on another device which is still
+/// reachable stays in: its harness is holding a question open right now, and
+/// answering it from this console works, because the console forwards the
+/// answer to the device running the chat.
 export function needsYou(rows) {
   const chats = (rows ?? [])
     .filter((row) => row && !row.offline && isWaiting(row.liveStatus, row.polledStatus))
@@ -46,8 +48,9 @@ export function needsYou(rows) {
 ///
 /// The console's own title is left exactly as it was while the window is being
 /// looked at, and while nothing is waiting. Only a window that cannot be
-/// looked at wears the count, prefixed, because a title is read from the end
-/// when it is cut short.
+/// looked at wears the count, and it goes first, because a title that is cut
+/// short keeps its beginning: the count is the part that survives, and the
+/// console's name may be the part that goes.
 export function attentionTitle(base, count, visible) {
   const title = String(base ?? '')
   if (visible || !(count > 0)) return title

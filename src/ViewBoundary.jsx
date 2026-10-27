@@ -12,6 +12,7 @@
 
 import { Component } from 'react'
 import { failureNotice } from './view-boundary.js'
+import './view-boundary.css'
 
 // The least the app can say if the panel itself cannot be drawn. No detail
 // and no actions: this line is the end of the recovery path, and the rest

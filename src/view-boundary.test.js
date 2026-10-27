@@ -14,7 +14,33 @@ test('an error keeps its own words and the component frame that names where it t
   assert.equal(notice.detail.message, "TypeError: Cannot read properties of undefined (reading 'map')")
   assert.equal(notice.detail.frame, 'at ChatView (http://localhost:5175/src/ChatView.jsx:412:9)')
   assert.equal(notice.cause, 'Something this view expected to find was not there.')
-  assert.equal(notice.retry, true, 'a TypeError from a render may be a race, so a retry is offered')
+  assert.equal(
+    notice.retry,
+    false,
+    'reading a field of undefined fails the same way on every try, so the panel does not offer one',
+  )
+})
+
+test('the property-access family is not worth retrying, whichever way it is worded', () => {
+  const shapes = [
+    "Cannot read properties of undefined (reading 'map')",
+    "Cannot read property 'map' of undefined",
+    "Cannot read properties of null (reading 'length')",
+    "undefined is not an object (evaluating 'rows.map')",
+    "null is not an object (evaluating 'state.id')",
+  ]
+  for (const message of shapes) {
+    const notice = failureNotice({ error: new TypeError(message) })
+    assert.equal(notice.retry, false, `no retry for: ${message}`)
+    assert.equal(notice.detail.message, `TypeError: ${message}`, 'and the words still reach the panel')
+  }
+})
+
+test('an error that is not one of the deterministic shapes still offers one retry', () => {
+  // Something outside the rendered state (a race, a clock, a value read once)
+  // can pass on a second render, so the panel keeps the way to try.
+  const notice = failureNotice({ error: new Error('the response was not a list') })
+  assert.equal(notice.retry, true)
 })
 
 test('the cause line names the kind of failure rather than repeating the message', () => {

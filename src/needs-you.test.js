@@ -68,6 +68,19 @@ test('a copy whose device is away is left out', () => {
   assert.equal(needs.count, 1)
 })
 
+test('a waiting chat on another device that is still reachable stays in', () => {
+  // Its harness is holding a question open right now, and the console
+  // forwards the answer to the device running the chat, so a person here can
+  // settle it. Only a row whose device is away is dropped.
+  const rows = [
+    row('remote', null, 'waiting', 1000, { offline: false, executor: 'dev-box' }),
+    row('here', null, 'waiting', 2000),
+  ]
+  const needs = needsYou(rows)
+  assert.deepEqual(needs.chats.map((c) => c.id), ['remote', 'here'], 'oldest wait first, both of them')
+  assert.equal(needs.count, 2)
+})
+
 test('nothing waiting is an empty list, not a header', () => {
   assert.deepEqual(needsYou([]), { chats: [], count: 0 })
   assert.deepEqual(needsYou(undefined), { chats: [], count: 0 })
