@@ -69,6 +69,10 @@ struct Inner {
     code: Option<LiveCode>,
     failures: u32,
     phones: Vec<Phone>,
+    /// The `ip:port` the phones on the list were paired at, as the file
+    /// remembers it. A phone stores its token against that origin, so this is
+    /// the only way to tell that the machine has moved and left them behind.
+    paired_addr: Option<String>,
     listener: Option<Running>,
     /// A sentence for the console about the listener itself, when the daemon
     /// failed to open it at boot with a phone already paired. The console has
@@ -181,7 +185,7 @@ impl PairingHost {
 
     fn build(app: Arc<App>, bind: Bind, code_ttl_ms: i64) -> Arc<Self> {
         let phones_path = app.data_dir.join("paired-phones.json");
-        let phones = read_phones(&phones_path);
+        let (phones, paired_addr) = read_phones(&phones_path);
         Arc::new(Self {
             app,
             listener_lock: tokio::sync::Mutex::new(()),
@@ -189,6 +193,7 @@ impl PairingHost {
                 code: None,
                 failures: 0,
                 phones,
+                paired_addr,
                 listener: None,
                 notice: None,
             }),
@@ -207,17 +212,51 @@ impl PairingHost {
         }
         // Not fatal: a paired phone keeps its record and the panel says what
         // went wrong, so the person can show a code again to retry the bind.
-        if let Err(err) = self.ensure_listener().await {
-            eprintln!("openremote-daemon: pairing listener is not up ({err:?})");
-            self.inner().notice = Some(
-                "This computer could not open the pairing port, so a paired phone cannot reach it right now. Showing a code tries again.".to_string(),
-            );
+        match self.ensure_listener().await {
+            Ok(_) => self.inner().notice = None,
+            Err(err) => {
+                eprintln!("openremote-daemon: pairing listener is not up ({err:?})");
+                self.inner().notice = Some(
+                    "This computer could not open the pairing port, so a paired phone cannot reach it right now. Showing a code tries again.".to_string(),
+                );
+            }
         }
     }
 
     /// The sentence the console should show about the listener, if any.
+    ///
+    /// Two different truths share it. A boot-time bind failure is kept as it
+    /// was set. The other is worked out here rather than stored: a phone
+    /// stores its token against the origin it was paired at, so when this
+    /// machine binds somewhere else (a different network, a different port)
+    /// the phone is silently dead while the panel still says "paired". Saying
+    /// so is the difference between the person knowing to pair again and
+    /// blaming their Wi-Fi, so it is computed from the same numbers the
+    /// socket reports, not cached where a mint could clear it.
     pub fn notice(&self) -> Option<String> {
-        self.inner().notice.clone()
+        let mut inner = self.inner();
+        if inner
+            .listener
+            .as_ref()
+            .is_some_and(|running| running.task.is_finished())
+        {
+            inner.listener = None;
+        }
+        if let Some(bind) = inner.notice.clone() {
+            return Some(bind);
+        }
+        let paired_at = inner.paired_addr.clone()?;
+        if inner.phones.is_empty() {
+            return None;
+        }
+        let running = inner.listener.as_ref()?;
+        if paired_at == running.addr.to_string() {
+            return None;
+        }
+        Some(
+            "This computer's network address changed since the phones below were paired, so they cannot reach it any more. Remove each phone and pair it again."
+                .to_string(),
+        )
     }
 
     /// The data folder this host keeps its digests in.
@@ -240,26 +279,45 @@ impl PairingHost {
         // behind an error the user is looking at: a code nobody can see is a
         // credential nobody is watching, so a failed mint takes the old one
         // down with it.
-        let addr = match self.ensure_listener().await {
-            Ok(addr) => addr,
+        //
+        // The bind and the code go in under one hold of `listener_lock`:
+        // between them is the only moment in this file where the socket is up
+        // with nothing behind it, and a revoke arriving there used to close
+        // the socket and still let this return a QR for it.
+        let bound = {
+            let Some(want) = self.advertised_ip() else {
+                return Err(MintError::NoNetwork);
+            };
+            let _guard = self.listener_lock.lock().await;
+            match self.ensure_listener_locked(want).await {
+                Err(err) => Err(err),
+                Ok(addr) => {
+                    let code = new_code();
+                    let expires_at = openremote_core::now_ms() + self.code_ttl_ms;
+                    {
+                        let mut inner = self.inner();
+                        inner.code = Some(LiveCode {
+                            value: code.clone(),
+                            expires_at,
+                        });
+                        inner.failures = 0;
+                        // The listener answered this time, so the boot-time
+                        // complaint is no longer true.
+                        inner.notice = None;
+                    }
+                    Ok((addr, code, expires_at))
+                }
+            }
+        };
+        let (addr, code, expires_at) = match bound {
+            Ok(bound) => bound,
             Err(err) => {
+                // Dropped the lock above, so the socket can be closed with
+                // nobody waiting on it.
                 self.cancel().await;
                 return Err(err);
             }
         };
-        let code = new_code();
-        let expires_at = openremote_core::now_ms() + self.code_ttl_ms;
-        {
-            let mut inner = self.inner();
-            inner.code = Some(LiveCode {
-                value: code.clone(),
-                expires_at,
-            });
-            inner.failures = 0;
-            // The listener answered this time, so the boot-time complaint is
-            // no longer true.
-            inner.notice = None;
-        }
         // The code rides in the fragment: it is never sent to the server in
         // a request line, so no log and no proxy ever holds it.
         let url = format!("http://{addr}/#{code}");
@@ -337,7 +395,7 @@ impl PairingHost {
     /// and a write that failed puts it back and reports `NotSaved`. Revoking
     /// is the one path where telling the user it worked when it did not
     /// leaves a phone that comes back after the next restart.
-    pub fn revoke(&self, id: &str) -> Result<Vec<PhoneView>, RevokeError> {
+    pub async fn revoke(self: &Arc<Self>, id: &str) -> Result<Vec<PhoneView>, RevokeError> {
         let idle = {
             let mut inner = self.inner();
             let Some(index) = inner.phones.iter().position(|phone| phone.id == id) else {
@@ -345,7 +403,8 @@ impl PairingHost {
             };
             let removed = inner.phones.remove(index);
             let stored = StoredFile {
-                version: 1,
+                version: FILE_VERSION,
+                address: inner.paired_addr.clone(),
                 phones: inner.phones.iter().map(StoredPhone::from).collect(),
             };
             if let Err(err) = write_phones(&self.phones_path, &stored) {
@@ -359,11 +418,10 @@ impl PairingHost {
             inner.phones.is_empty() && inner.code.is_none()
         };
         if idle {
-            // Dropping the task closes the socket. Not awaited: revoke is a
-            // plain console call, and the next mint brings it back.
-            if let Some(running) = self.inner().listener.take() {
-                running.task.abort();
-            }
+            // Not awaited by any caller's lock: dropping the task closes the
+            // socket. The lock is what makes this safe against a mint that is
+            // binding right now.
+            self.stop_listener().await;
         }
         Ok(self.phones())
     }
@@ -384,13 +442,9 @@ impl PairingHost {
             inner.code = None;
             inner.failures = 0;
             // A code that ran out is the same situation as a cancel: with no
-            // phone paired, nothing has a reason to keep listening.
-            let idle = inner.phones.is_empty();
-            if idle {
-                if let Some(running) = inner.listener.take() {
-                    running.task.abort();
-                }
-            }
+            // phone paired, nothing has a reason to keep listening. The close
+            // itself belongs to the caller, which is async and can wait for
+            // the listener lock; exchange runs inside one hold of `inner`.
             return Err(ExchangeError::Expired);
         }
         if !openremote_core::same_secret(&body.code, &live.value) {
@@ -399,15 +453,10 @@ impl PairingHost {
                 // The guesses are the attack: burn the code rather than let
                 // the same one keep answering. The socket goes with it when
                 // no phone is paired, so burning a code cannot leave the
-                // listener up with nothing behind it for the rest of the TTL.
+                // listener up with nothing behind it for the rest of the TTL
+                // (the caller closes it, as above).
                 inner.code = None;
                 inner.failures = 0;
-                let idle = inner.phones.is_empty();
-                if idle {
-                    if let Some(running) = inner.listener.take() {
-                        running.task.abort();
-                    }
-                }
             }
             return Err(ExchangeError::Invalid);
         }
@@ -421,8 +470,16 @@ impl PairingHost {
         inner.code = None;
         inner.failures = 0;
         inner.phones.push(phone.clone());
+        // Remember the origin this phone just stored its token against: the
+        // socket it used is the one it will dial again, and the only way to
+        // notice later that this machine answers somewhere else.
+        inner.paired_addr = inner
+            .listener
+            .as_ref()
+            .map(|running| running.addr.to_string());
         let stored = StoredFile {
-            version: 1,
+            version: FILE_VERSION,
+            address: inner.paired_addr.clone(),
             phones: inner.phones.iter().map(StoredPhone::from).collect(),
         };
         // Written under the lock: it is a few hundred bytes, and the
@@ -435,12 +492,6 @@ impl PairingHost {
                 self.phones_path.display()
             );
             inner.phones.pop();
-            let idle = inner.phones.is_empty();
-            if idle {
-                if let Some(running) = inner.listener.take() {
-                    running.task.abort();
-                }
-            }
             return Err(ExchangeError::NotSaved);
         }
         Ok((token, phone))
@@ -486,6 +537,18 @@ impl PairingHost {
             return Err(MintError::NoNetwork);
         };
         let _guard = self.listener_lock.lock().await;
+        self.ensure_listener_locked(want).await
+    }
+
+    /// The body of `ensure_listener`, for a caller that already holds
+    /// `listener_lock`. Mint holds it from the bind through installing the
+    /// code, so a revoke or a burnt code cannot close the socket in the
+    /// microseconds between the two and leave the person looking at a QR code
+    /// for a port that is already shut.
+    async fn ensure_listener_locked(
+        self: &Arc<Self>,
+        want: Ipv4Addr,
+    ) -> Result<SocketAddr, MintError> {
         if let Some(addr) = self.live_addr() {
             if addr.ip() == IpAddr::V4(want) {
                 return Ok(addr);
@@ -532,8 +595,22 @@ impl PairingHost {
         Ok(addr)
     }
 
+    /// Closes the LAN listener unless something still needs it. Everything
+    /// that can end a code or a pairing calls this, and it re-checks after
+    /// taking the lock: a mint that won the race holds `listener_lock` and
+    /// installs its code before releasing it, so whoever gets the lock second
+    /// finds a live code and leaves the socket where it is. Without that
+    /// second look, a revoke landing just after a mint would abort the socket
+    /// the fresh QR just named.
     async fn stop_listener(&self) {
         let _guard = self.listener_lock.lock().await;
+        let needed = {
+            let inner = self.inner();
+            inner.code.is_some() || !inner.phones.is_empty()
+        };
+        if needed {
+            return;
+        }
         if let Some(running) = self.inner().listener.take() {
             running.task.abort();
         }
@@ -661,7 +738,7 @@ async fn phones(State(host): State<Arc<PairingHost>>) -> Response {
 }
 
 async fn revoke(State(host): State<Arc<PairingHost>>, AxumPath(id): AxumPath<String>) -> Response {
-    match host.revoke(&id) {
+    match host.revoke(&id).await {
         Ok(phones) => Json(json!({ "phones": phones, "notice": host.notice() })).into_response(),
         Err(RevokeError::Unknown) => (
             StatusCode::NOT_FOUND,
@@ -701,7 +778,13 @@ async fn page() -> Response {
 }
 
 async fn pair(State(host): State<Arc<PairingHost>>, Json(body): Json<ExchangeBody>) -> Response {
-    match host.exchange(&body) {
+    let outcome = host.exchange(&body);
+    // Every outcome can be the last thing that needed the socket: a good
+    // exchange pairs the phone, and a bad one may have burnt or expired the
+    // code. Closing under the lock is the caller's job because exchange runs
+    // inside one hold of `inner` and the close has to wait for a mint.
+    host.stop_listener().await;
+    match outcome {
         Ok((token, phone)) => Json(json!({
             "token": token,
             "phone": { "id": phone.id, "name": phone.name },
@@ -788,8 +871,19 @@ async fn home(State(host): State<Arc<PairingHost>>, request: Request) -> Respons
 #[derive(Serialize, Deserialize)]
 struct StoredFile {
     version: u32,
+    /// Where this machine was bound when the phones on this list last paired.
+    /// Absent in files written before the field existed; `default` keeps those
+    /// readable, and a missing value simply means no address warning rather
+    /// than a file this process refuses.
+    #[serde(default)]
+    address: Option<String>,
     phones: Vec<StoredPhone>,
 }
+
+/// The file format this process writes. Bumped only when an older daemon
+/// would misread a newer file; `address` is additive and serde's default
+/// makes it readable by both directions.
+const FILE_VERSION: u32 = 1;
 
 #[derive(Serialize, Deserialize)]
 struct StoredPhone {
@@ -821,26 +915,30 @@ impl From<StoredPhone> for Phone {
     }
 }
 
-/// The phones file, read once at start. A file this process wrote and cannot
-/// read is a damaged file, not a reason to refuse to serve: start empty and
-/// say so on stderr. Re-pairing is one scan.
-fn read_phones(path: &Path) -> Vec<Phone> {
+/// The phones file, read once at start, with the address the phones on it
+/// were paired at. A file this process wrote and cannot read is a damaged
+/// file, not a reason to refuse to serve: start empty and say so on stderr.
+/// Re-pairing is one scan.
+fn read_phones(path: &Path) -> (Vec<Phone>, Option<String>) {
     let raw = match std::fs::read(path) {
         Ok(raw) => raw,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return (Vec::new(), None),
         Err(err) => {
             eprintln!("openremote-daemon: can't read {}: {err}", path.display());
-            return Vec::new();
+            return (Vec::new(), None);
         }
     };
     match serde_json::from_slice::<StoredFile>(&raw) {
-        Ok(file) => file.phones.into_iter().map(Phone::from).collect(),
+        Ok(file) => (
+            file.phones.into_iter().map(Phone::from).collect(),
+            file.address,
+        ),
         Err(err) => {
             eprintln!(
                 "openremote-daemon: {} is not a phones file ({err}); starting with no paired phones",
                 path.display()
             );
-            Vec::new()
+            (Vec::new(), None)
         }
     }
 }
@@ -895,14 +993,25 @@ fn digest(token: &str) -> String {
         .collect()
 }
 
-/// The phone's own name for itself, bounded and stripped of control
-/// characters: it comes from a device we do not control and is drawn on the
-/// desktop.
+/// The phone's own name for itself, bounded and stripped of every character
+/// that draws as nothing: it comes from a device we do not control and is
+/// drawn on the desktop, in the one list whose Remove button is the whole of
+/// the removal story.
+///
+/// Control characters are the obvious half. The other half is the format
+/// category, and the reason it matters is a row of that list: a name of
+/// `Pixel` followed by U+202E right-to-left override renders the rest of the
+/// line backwards, so a device that got a code can name itself after a phone
+/// the person thinks they already removed and put its own Remove click on the
+/// wrong row. Zero-width joiners and a stray BOM are the quieter version.
+///
+/// Stripped, not replaced, and before the length cap, so a name of forty
+/// invisibles plus a word keeps the word instead of becoming punctuation.
 fn clean_name(raw: Option<&str>) -> String {
     let name: String = raw
         .unwrap_or_default()
         .chars()
-        .filter(|c| !c.is_control())
+        .filter(|c| !is_invisible(*c))
         .take(40)
         .collect();
     let name = name.trim();
@@ -911,6 +1020,41 @@ fn clean_name(raw: Option<&str>) -> String {
     } else {
         name.to_string()
     }
+}
+
+/// Characters that draw as nothing, or that reorder what is drawn after them:
+/// the Cc and Cf general categories.
+///
+/// `char::is_control` is exactly Cc. Cf has no `std` predicate and no lookup
+/// here, so it is spelled as its ranges; the console's `phoneName` strips the
+/// same ranges, so a name cannot look like two different things on the two
+/// surfaces that draw it. A character added to Cf by a future Unicode version
+/// is missing from both until this list is extended, which is why the list is
+/// one place and not two.
+fn is_invisible(c: char) -> bool {
+    c.is_control()
+        || matches!(c,
+            '\u{00AD}'                  // soft hyphen
+            | '\u{0600}'..='\u{0605}'   // Arabic number signs
+            | '\u{061C}'                // Arabic letter mark
+            | '\u{06DD}'                // Arabic end of ayah
+            | '\u{070F}'                // Syriac abbreviation mark
+            | '\u{0890}'..='\u{0891}'   // Arabic pound and piastre marks
+            | '\u{08E2}'                // Arabic disputed end of ayah
+            | '\u{180E}'                // Mongolian vowel separator
+            | '\u{200B}'..='\u{200F}'   // zero widths, LRM, RLM
+            | '\u{202A}'..='\u{202E}'   // embeddings and overrides, RLO
+            | '\u{2060}'..='\u{2064}'   // word joiner, invisible operators
+            | '\u{2066}'..='\u{206F}'   // isolates, deprecated format controls
+            | '\u{FEFF}'                // byte order mark
+            | '\u{FFF9}'..='\u{FFFB}'   // interlinear annotation marks
+            | '\u{110BD}' | '\u{110CD}' // Kaithi number signs
+            | '\u{13430}'..='\u{1343F}' // Egyptian hieroglyph format controls
+            | '\u{1BCA0}'..='\u{1BCA3}' // shorthand format controls
+            | '\u{1D173}'..='\u{1D17A}' // musical symbol format controls
+            | '\u{E0001}'               // language tag
+            | '\u{E0020}'..='\u{E007F}' // tag characters
+        )
 }
 
 /// This machine's address on its network. `std` cannot enumerate interfaces,
@@ -1019,5 +1163,48 @@ mod tests {
         assert_eq!(clean_name(Some("iPhone\n")), "iPhone");
         assert_eq!(clean_name(Some("Pi\u{7}xel")), "Pixel");
         assert_eq!(clean_name(Some(&"x".repeat(200))).len(), 40);
+    }
+
+    #[test]
+    fn a_phone_name_cannot_carry_a_direction_override() {
+        // The real characters, written out: this is what a device that got a
+        // code actually sends, and what a person would see reorder the list.
+        // The right-to-left override, its isolate and its embedding forms,
+        // the zero widths, and a byte order mark.
+        assert_eq!(clean_name(Some("Pixel\u{202E}")), "Pixel", "RLO");
+        for (c, what) in [
+            ('\u{202A}', "LRE"),
+            ('\u{202B}', "RLE"),
+            ('\u{202C}', "PDF"),
+            ('\u{202D}', "LRO"),
+            ('\u{202E}', "RLO"),
+            ('\u{2066}', "LRI"),
+            ('\u{2067}', "RLI"),
+            ('\u{2068}', "FSI"),
+            ('\u{2069}', "PDI"),
+            ('\u{200B}', "zero width space"),
+            ('\u{200C}', "zero width non-joiner"),
+            ('\u{200D}', "zero width joiner"),
+            ('\u{200E}', "left-to-right mark"),
+            ('\u{200F}', "right-to-left mark"),
+            ('\u{FEFF}', "byte order mark"),
+            ('\u{00AD}', "soft hyphen"),
+        ] {
+            let name = clean_name(Some(&format!("Pix{c}el")));
+            assert_eq!(name, "Pixel", "{what} survived the filter");
+        }
+        // A name that is nothing but invisibles is not an empty row in the
+        // list: it takes the fallback.
+        assert_eq!(clean_name(Some("\u{202E}\u{200B}\u{FEFF}")), "Phone");
+        // The cap counts what is left, so padding a short name with
+        // invisibles cannot push the visible part out.
+        assert_eq!(
+            clean_name(Some(&format!("Pixel{}", "\u{200B}".repeat(80)))),
+            "Pixel"
+        );
+        // Names that are simply not English survive untouched, and no
+        // character inside them is one this filter has any business removing.
+        assert_eq!(clean_name(Some("Büro Pixel")), "Büro Pixel");
+        assert_eq!(clean_name(Some("电话 Pixel")), "电话 Pixel");
     }
 }
