@@ -125,8 +125,12 @@ test('an armed row ends when it leaves the viewport or loses focus', () => {
   assert.match(hook, /new IntersectionObserver\(/)
   assert.match(hook, /!entry\.isIntersecting/)
   assert.match(hook, /armAfter\(current, armedRef\.current, \{ visible: false \}\)/)
-  // Focus leaving ends it too.
-  assert.match(hook, /armAfter\(current, armed, \{ focused: false \}\)/)
+  // Focus leaving ends it too, and the id is read at event time here as well:
+  // a stale blur must not disarm the row armed a moment later.
+  assert.match(hook, /armAfter\(current, armedRef\.current, \{ focused: false \}\)/)
+  // The armed control takes the keyboard when it replaces the trash, so the
+  // keyboard path is not dropped back to the start of the document.
+  assert.match(hook, /el\.focus\?\.\(\{ preventScroll: true \}\)/)
   // The observer is taken down on unmount and when another row arms, so no
   // stale observer can disarm a row the user is now looking at.
   assert.match(hook, /\.disconnect\?\.\(\)/)

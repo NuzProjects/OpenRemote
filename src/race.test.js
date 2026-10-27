@@ -10,6 +10,7 @@ import {
   raceLayout,
   racePlan,
   racePrompts,
+  raceRetry,
 } from './race.js'
 
 // What the daemon's capabilities list looks like, trimmed to the fields the
@@ -177,4 +178,43 @@ test('free panes are what the cap leaves, counting a pane the race can fill', ()
   const refused = raceLayout(full, ['d', 'e'])
   assert.equal(refused.layout, full, 'past the cap the layout is handed back untouched')
   assert.equal(refused.primary, null)
+})
+
+test('a failed race retries only the harnesses that produced no chat', () => {
+  // Three picked, the first two made chats, the third failed: retrying must
+  // race only the third, in its place, never the two whose panes are already
+  // on screen.
+  assert.deepEqual(raceRetry(['claude', 'codex', 'grok'], ['claude', 'codex']), ['grok'])
+  assert.deepEqual(
+    raceRetry(['claude', 'codex', 'grok'], []),
+    ['claude', 'codex', 'grok'],
+    'nothing created: the whole selection comes back, so a failure before the first chat retries everything',
+  )
+  assert.deepEqual(
+    raceRetry(['grok', 'claude'], ['claude']),
+    ['grok'],
+    'picking order is kept, not sorted',
+  )
+  assert.deepEqual(raceRetry([], ['claude']), [])
+  assert.deepEqual(raceRetry(undefined, ['claude']), [])
+})
+
+test('a retry left with one harness is refused, so Start cannot fire over it', () => {
+  // The case the bug report named: two picked, one opened, one failed. The
+  // filter leaves one, and a race of one is a chat, so the same rules that
+  // disable Start for a single pick disable it here.
+  const left = raceRetry(['claude', 'codex'], ['claude'])
+  assert.deepEqual(left, ['codex'])
+  const plan = racePlan({ offerable: OFFERED, chosen: left, free: 4, prompt: 'which is right?' })
+  assert.equal(plan.canStart, false)
+  assert.equal(plan.refusal.code, 'too-few')
+  // And with two left it is a race again, which is the point of filtering.
+  const two = racePlan({
+    offerable: OFFERED,
+    chosen: raceRetry(['claude', 'codex', 'grok'], ['claude']),
+    free: 4,
+    prompt: 'which is right?',
+  })
+  assert.equal(two.canStart, true)
+  assert.deepEqual(two.chosen, ['codex', 'grok'])
 })

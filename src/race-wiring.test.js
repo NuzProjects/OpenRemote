@@ -41,3 +41,27 @@ test('the modal cannot be started twice, and closes through the family hook', ()
   assert.ok(modal.includes('useBack(!busy, onClose)'), 'Escape cannot abandon a start in flight')
   assert.ok(modal.includes('role="status"'), 'the creating sentence is announced')
 })
+
+test('a partial failure leaves only the harnesses that did not start switched on', () => {
+  // Start must not be live over panes that are already open: the retry races
+  // the harnesses that produced no chat, through the rule in race.js, so the
+  // ones that worked cannot be raced twice.
+  assert.ok(modal.includes('raceRetry(current, raced)'), 'the filter is the module\'s rule')
+  assert.ok(modal.includes('raced.push(call.harness)'), 'and it is fed the harnesses that opened')
+  assert.ok(
+    modal.includes('setChosen((current) => raceRetry(current, raced))'),
+    'a retry therefore starts from what is missing, not from the whole pick',
+  )
+  assert.ok(modal.includes('setBusy(false)'), 'the modal is usable again after the failure')
+})
+
+test('the failure sentence says the opened chats are behind the dialog', () => {
+  assert.ok(
+    modal.includes('behind this dialog'),
+    'a person is told where the chats that opened are, so closing the dialog shows them',
+  )
+  assert.ok(
+    modal.includes('stay switched on'),
+    'and that the harnesses that did not start are still selected for the retry',
+  )
+})

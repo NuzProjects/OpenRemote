@@ -86,6 +86,20 @@ export function racePrompts(harnesses, prompt) {
   return (harnesses ?? []).map((harness) => ({ harness, text }))
 }
 
+/// What is left to race after a start that failed part of the way.
+///
+/// A harness whose chat was created has a pane on screen already: racing it
+/// again would make a second chat for the same question and leave two panes
+/// saying the same thing. So the retry keeps only the harnesses that produced
+/// nothing - the one that failed and the ones never reached - in the order they
+/// were picked. With nothing created the whole selection comes back unchanged,
+/// so a failure before the first chat retries everything. A selection that
+/// falls below two is refused by racePlan itself: a race of one is a chat.
+export function raceRetry(chosen, started) {
+  const done = new Set(started ?? [])
+  return (chosen ?? []).filter((harness) => !done.has(harness))
+}
+
 /// The deepest split that holds every race pane, so the plan can even out the
 /// race's own row without touching the sizes of panes that were already there.
 function deepestSplitHolding(node, views) {

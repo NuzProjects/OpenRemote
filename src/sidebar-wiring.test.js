@@ -48,6 +48,10 @@ test('the confirm is the same spot, and Escape keeps the project', () => {
   assert.ok(handler.includes('Escape'), 'Escape disarms')
   assert.ok(handler.includes('clearRow()'), 'and clears through the shared rule')
   assert.ok(handler.includes('removeProject(project.id)'), 'the second press acts')
+  // The confirm takes the keyboard when it replaces the trash, so the keyboard
+  // path lands on it rather than at the start of the document. The panes' armed
+  // rows do the same through use-armed-row's callback ref.
+  assert.ok(handler.includes('autoFocus'), 'the confirm is focused where it appears')
 })
 
 test('a registered project with no chats keeps its row and says so', () => {

@@ -21,11 +21,20 @@ export function useArmedRow(armed, setArmed) {
   // fresh function on every render makes React detach and re-attach the ref,
   // which would tear down and rebuild the observer on every re-render of an
   // armed row (a beat, a keystroke) for no change in what is watched.
+  //
+  // It also takes the keyboard when the armed control mounts. The first press
+  // replaces the trash with "Remove it" in place, and the element that had the
+  // focus is gone with the old button: without this, a keyboard user lands back
+  // at the start of the document instead of on the control they just called
+  // for. The sidebar's Unregister and the layout dialog's confirm do the same
+  // with autoFocus; this is the hook's version of it.
   const buttonRef = useCallback(
     (el) => {
       watching.current?.disconnect?.()
       watching.current = null
-      if (!el || typeof IntersectionObserver === 'undefined') return
+      if (!el) return
+      el.focus?.({ preventScroll: true })
+      if (typeof IntersectionObserver === 'undefined') return
       const observer = new IntersectionObserver((entries) => {
         if (!entries.some((entry) => !entry.isIntersecting)) return
         setArmed((current) => armAfter(current, armedRef.current, { visible: false }))
@@ -44,7 +53,9 @@ export function useArmedRow(armed, setArmed) {
     [],
   )
 
-  const onBlur = () => setArmed((current) => armAfter(current, armed, { focused: false }))
+  // The id is read at event time here too: a blur whose handler was captured
+  // for a row armed a beat ago must not disarm the row that is armed now.
+  const onBlur = () => setArmed((current) => armAfter(current, armedRef.current, { focused: false }))
 
   return { buttonRef, onBlur }
 }

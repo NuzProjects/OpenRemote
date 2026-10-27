@@ -15,7 +15,7 @@ import { useBack } from './use-back.js'
 import { useDialog } from './dialog-focus.js'
 import { HarnessMark } from './brand-marks.jsx'
 import Toggle from './Toggle.jsx'
-import { RACE_MAX, racePlan, racePrompts } from './race.js'
+import { RACE_MAX, racePlan, racePrompts, raceRetry } from './race.js'
 import './devices.css'
 import './panels.css'
 import './contextmenu.css'
@@ -89,6 +89,10 @@ export default function RaceModal({ free, onClose, onStarted }) {
     setFailure(null)
     const calls = racePrompts(plan.chosen, prompt)
     const started = []
+    // The harnesses that produced a chat in this run, in order. A retry must
+    // not race one of them again: its pane is already on screen, and a second
+    // chat for the same question would leave two panes saying the same thing.
+    const raced = []
     let stoppedAt = null
     for (const call of calls) {
       let id = null
@@ -98,6 +102,7 @@ export default function RaceModal({ free, onClose, onStarted }) {
         // screen with nothing in it.
         id = await createChat('', workspace, call.harness, null, false, null, null, {})
         started.push(id)
+        raced.push(call.harness)
         await sendPrompt(id, call.text)
       } catch (err) {
         stoppedAt = { harness: call.harness, message: errorCopy(err) }
@@ -106,12 +111,22 @@ export default function RaceModal({ free, onClose, onStarted }) {
     }
     if (started.length > 0) onStarted(started)
     if (stoppedAt) {
-      // The chats that did start are on screen; this one never did. Saying so
-      // here, with the count, is the only way the shortfall is not silent.
+      // Nothing half-starts and nothing is lost: the chats that did open are on
+      // screen behind this dialog, and what is still switched on is exactly
+      // what did not start, so Start again races only the missing ones (a race
+      // of one is refused by the rules, and the toggles say so). Clearing
+      // instead would leave Start live over panes the person already has, and
+      // pressing it would make a second chat for every harness that worked.
+      const name = plan.offerable.find((h) => h.id === stoppedAt.harness)?.name ?? stoppedAt.harness
+      const opened =
+        started.length === 0
+          ? 'Nothing else opened, and every harness stays switched on.'
+          : started.length === 1
+            ? 'The one chat that opened is behind this dialog, and only the harnesses that did not start stay switched on.'
+            : `The ${started.length} chats that opened are behind this dialog, and only the harnesses that did not start stay switched on.`
+      setChosen((current) => raceRetry(current, raced))
       setBusy(false)
-      setFailure(
-        `${plan.offerable.find((h) => h.id === stoppedAt.harness)?.name ?? stoppedAt.harness} could not start: ${stoppedAt.message} (${started.length} of ${calls.length} chats opened)`,
-      )
+      setFailure(`${name} could not start: ${stoppedAt.message}. ${opened}`)
       return
     }
     setBusy(false)
