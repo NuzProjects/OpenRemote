@@ -12,6 +12,9 @@
 // not - a preset that cannot be honoured in full still applies what it can.
 
 import { loadStoredPresets, saveStoredPresets } from './settings.js'
+import { harnessName } from './harness-names.js'
+import { prettyModelName } from './model-display.js'
+import { projectName } from './projects.js'
 
 // Enough chips for a person to keep their few ways of working, few enough
 // that the row stays a row.
@@ -233,4 +236,159 @@ export function settlePreset(preset, world = {}) {
     },
     notes,
   }
+}
+
+// ---- saving a chat's setup as a preset ----
+//
+// A chat knows the same six choices a preset holds, and the person who just
+// ran one should not have to rebuild it in New chat. The carry rule is the one
+// above read backwards: what a preset can honestly hold is what the chat can
+// honestly carry, and a field the chat cannot supply is left unset rather than
+// guessed.
+//
+//   harness   the chat's harness, when it is installed on this computer
+//   model     the model the chat ran, in the spelling the chat reports it in:
+//             a preset is a record of what was true, and settlePreset repairs
+//             a model the harness no longer lists when it is applied
+//   effort    the chat's effort, and only alongside a model - an effort tier
+//             belongs to the model it was picked on
+//   permission the chat's own approval word, only while the harness still
+//             offers it (otherwise the harness default is the honest answer)
+//   project   the registered project whose folder the chat ran in, and only
+//             when the chat ran here: a project on another computer is not a
+//             project on this one
+//   fast      only where the harness has a fast mode at all
+//
+// A chat whose harness is not installed here cannot become a preset either:
+// the preset would name a harness no chat on this computer could start on.
+
+/** Why a chat cannot become a preset, in one plain sentence each. */
+export const PRESET_REFUSALS = {
+  'no-chat': 'No chat is on screen to take a setup from.',
+  'no-harness': 'That chat has no harness, so there is no setup to save.',
+  'not-installed': 'Its harness is not installed on this computer, so a setup could not start a chat here.',
+  full: `This computer already keeps ${PRESET_LIMIT} setups; delete one to save another.`,
+}
+
+/**
+ * What a chat yields for a preset: `{ offer, reason, preset, suggestedName,
+ * carried, leftOut }`. `preset` is a stored row with the suggested name
+ * already in it; the dialog lets the person change that name before it is
+ * written. `carried` names the fields the chat supplied, `leftOut` the ones it
+ * could not, so a caller never has to read the chat's fields by hand.
+ *
+ * `world` is plain data:
+ *   harnesses   this computer's capability rows ({ id, name, available,
+ *               permission_modes, fast_supported })
+ *   projects    the registered projects on this computer ({ id, folders })
+ *   thisDevice  this computer's device id, for "did the chat run here"
+ *   labels      optional display labels for the suggested name
+ */
+export function presetFromChat(chat, world = {}) {
+  if (!chat) return refusedPlan('no-chat')
+  const harnessId = text(chat.harness)
+  if (!harnessId) return refusedPlan('no-harness')
+  const row = (world.harnesses ?? []).find((h) => h && h.id === harnessId) ?? null
+  if (!row || row.available !== true) return refusedPlan('not-installed')
+
+  const model = text(chat.model)
+  // No model, no effort: an effort tier only means something on a model.
+  const effort = model ? text(chat.effort) : null
+  const word = text(chat.permissionMode)
+  const permission = word && (row.permission_modes ?? []).includes(word) ? word : null
+  const ranHere = !chat.executor || chat.executor === world.thisDevice
+  const workspace = text(chat.workspace)
+  const project =
+    ranHere && workspace
+      ? (world.projects ?? []).find((p) => (p.folders ?? []).includes(workspace)) ?? null
+      : null
+  const fast = row.fast_supported === true && chat.fast === true
+
+  const labels = world.labels ?? {}
+  const suggestedName = suggestedPresetName({
+    modelLabel: labels.modelLabel ?? (model ? prettyModelName(model) : null),
+    harnessLabel: labels.harnessLabel ?? row.name ?? harnessName(harnessId),
+    effort,
+    projectLabel: labels.projectLabel ?? (project ? projectName(project) : null),
+  })
+  const preset = normalizePreset({
+    id: newPresetId(),
+    name: suggestedName,
+    harness: harnessId,
+    model,
+    effort,
+    permission,
+    projectId: project?.id ?? null,
+    fast,
+    default: false,
+  })
+  // Which of the six the preset ends up holding, and which it does without:
+  // the caller can say what was carried without inspecting the chat itself.
+  // `fast` is carried whenever the harness has a fast mode at all, because the
+  // chat's boolean is then a real answer (off is an answer); a harness with no
+  // fast mode leaves the slot out.
+  const carried = ['harness', 'model', 'effort', 'permission', 'project'].filter((field) =>
+    Boolean(preset?.[field === 'project' ? 'projectId' : field]),
+  )
+  if (row.fast_supported === true) carried.push('fast')
+  const leftOut = ['harness', 'model', 'effort', 'permission', 'project', 'fast'].filter(
+    (field) => !carried.includes(field),
+  )
+  return { offer: true, reason: null, preset, suggestedName, carried, leftOut }
+}
+
+function refusedPlan(reason) {
+  return { offer: false, reason, preset: null, suggestedName: null, carried: [], leftOut: [] }
+}
+
+// Whoever is showing the chips can hear about a save the moment it lands, so
+// a setup saved from a chat appears without reloading the app. New chat reads
+// the stored list when it mounts; this is for a row that is already on screen.
+const listeners = new Set()
+
+/** Follow saved-list changes. Returns the undo. */
+export function onPresetsChanged(fn) {
+  listeners.add(fn)
+  return () => listeners.delete(fn)
+}
+
+/**
+ * Append one preset to this computer's list, through the same storage every
+ * preset goes through. Returns `{ preset, presets, error }`: an `error` is one
+ * of PRESET_REFUSALS' sentences and means nothing was written.
+ *
+ * The name prompt hands its row here, so the name a person typed is the one
+ * stored (repaired to the chip's limit). The cap is applied by the repair
+ * rules on write, which keep the first rows and drop the rest: a thirteenth
+ * save would vanish silently, so it is refused here instead, with the number
+ * said.
+ */
+export function savePreset(preset) {
+  const clean = normalizePreset(preset)
+  if (!clean) {
+    return { preset: null, presets: loadPresets(), error: PRESET_REFUSALS['no-harness'] }
+  }
+  const existing = loadPresets()
+  if (existing.length >= PRESET_LIMIT) {
+    return { preset: null, presets: existing, error: PRESET_REFUSALS.full }
+  }
+  const presets = storePresets([...existing, clean])
+  for (const fn of listeners) fn(presets)
+  return { preset: clean, presets, error: null }
+}
+
+/**
+ * Save a chat's setup as a new preset: the carry rule, then the storage. A
+ * chat that cannot become a preset is refused with its own sentence.
+ */
+export function saveChatPreset(chat, world = {}) {
+  const plan = presetFromChat(chat, world)
+  if (!plan.offer) {
+    return {
+      preset: null,
+      presets: null,
+      error: PRESET_REFUSALS[plan.reason] ?? 'That setup could not be saved.',
+    }
+  }
+  return savePreset(plan.preset)
 }

@@ -70,3 +70,47 @@ test('the row is ghost text: no fill and no border at rest, a wash on hover', ()
   const hover = css.slice(css.indexOf('.nc-preset:hover'), css.indexOf('.nc-preset.on'))
   assert.match(hover, /background: rgba\(255, 255, 255, 0\.05\)/)
 })
+
+// ---- saving a chat's setup as a preset ----
+//
+// The entry point is a palette row on the chat on screen; CommandPalette.jsx is
+// held by the rename lift tonight, so the row is described in the report rather
+// than pinned here. What is pinned is the surface the row opens and the rules
+// it saves through.
+
+const modal = source('PresetNameModal.jsx')
+
+test('the name prompt is a member of the modal family, with the family ways out', () => {
+  assert.match(modal, /className="dv-modal-backdrop"/)
+  assert.match(modal, /className="dv-modal"/)
+  assert.match(modal, /className="dv-modal-head"/)
+  assert.match(modal, /className="dv-modal-title"/)
+  assert.match(modal, /className="dv-modal-close"/)
+  assert.match(modal, /role="dialog"/)
+  assert.match(modal, /aria-modal="true"/)
+  assert.match(modal, /e\.target === e\.currentTarget/)
+  assert.match(modal, /onClick=\{onClose\}/)
+  assert.match(modal, /useDialog\(panelRef, onClose\)/)
+  assert.match(modal, /useBack\(true, onClose\)/)
+})
+
+test('it asks for a name the way the rename dialog does', () => {
+  // The same field, the same rules, the suggested name prefilled and selected.
+  assert.match(modal, /import \{ MAX_NAME, renameState \} from '\.\/rename-chat\.js'/)
+  assert.match(modal, /const verdict = renameState\(null, text\)/)
+  assert.match(modal, /useState\(preset\?\.name \?\? ''\)/)
+  assert.match(modal, /input\.focus\(\)\s*input\.select\(\)/)
+  assert.match(modal, /if \(e\.key !== 'Enter'\) return/)
+  assert.match(modal, /disabled=\{busy \|\| verdict\.state === 'empty'\}/)
+  // The field cannot take a name the chip could not show.
+  assert.match(modal, /maxLength=\{Math\.min\(NAME_LIMIT, MAX_NAME\)\}/)
+  // And it says what is being saved, in the chip's own words.
+  assert.match(modal, /presetSummary\(preset\)/)
+})
+
+test('a refused save keeps the dialog open with its sentence', () => {
+  assert.match(modal, /if \(result\?\.error\) \{\s*setError\(result\.error\)/)
+  assert.match(modal, /\{error && <p className="cv-error-line">\{error\}<\/p>\}/)
+  // Only an accepted save closes it.
+  assert.match(modal, /onClose\(\)\s*\}\s*catch/)
+})

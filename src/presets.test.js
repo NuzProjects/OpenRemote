@@ -17,16 +17,22 @@ globalThis.localStorage = {
 
 const {
   NAME_LIMIT,
+  PRESET_LIMIT,
+  PRESET_REFUSALS,
   defaultPreset,
   loadPresets,
   markDefault,
   newPresetId,
   normalizePreset,
   normalizePresets,
+  onPresetsChanged,
+  presetFromChat,
   presetFromState,
   presetSummary,
   removePreset,
   replacePreset,
+  saveChatPreset,
+  savePreset,
   settlePreset,
   storePresets,
   suggestedPresetName,
@@ -226,4 +232,185 @@ test('nothing to settle settles to nothing', () => {
 
 test('new ids do not collide', () => {
   assert.notEqual(newPresetId(), newPresetId())
+})
+
+// ---- a chat's setup as a preset ----
+
+// A chat record as the console holds it (state/reducer.js): the six choices a
+// preset also holds, the folder it ran in, and the device that ran it.
+const chatOf = (over = {}) => ({
+  id: 's1',
+  harness: 'claude',
+  model: 'opus',
+  effort: 'high',
+  permissionMode: 'acceptEdits',
+  workspace: 'C:\\work\\this repo',
+  fast: false,
+  executor: null,
+  ...over,
+})
+
+const CHAT_WORLD = {
+  harnesses: [
+    {
+      id: 'claude',
+      name: 'Claude Code',
+      available: true,
+      permission_modes: ['default', 'acceptEdits'],
+      fast_supported: true,
+    },
+  ],
+  projects: [{ id: 'proj-1', folders: ['C:\\work\\this repo'] }],
+  thisDevice: 'me',
+}
+
+test('a chat carries the six choices a preset holds', () => {
+  const plan = presetFromChat(chatOf({ fast: true }), CHAT_WORLD)
+  assert.equal(plan.offer, true)
+  assert.equal(plan.reason, null)
+  assert.deepEqual(plan.carried, ['harness', 'model', 'effort', 'permission', 'project', 'fast'])
+  assert.deepEqual(plan.leftOut, [])
+  assert.equal(plan.preset.harness, 'claude')
+  assert.equal(plan.preset.model, 'opus')
+  assert.equal(plan.preset.effort, 'high')
+  assert.equal(plan.preset.permission, 'acceptEdits')
+  assert.equal(plan.preset.projectId, 'proj-1')
+  assert.equal(plan.preset.fast, true)
+  assert.equal(plan.preset.default, false)
+  // The row is named as it will be shown, before the person renames it.
+  assert.equal(plan.preset.name, plan.suggestedName)
+})
+
+test('the suggested name is the setup described, in the console own words', () => {
+  const plan = presetFromChat(chatOf(), CHAT_WORLD)
+  assert.equal(plan.suggestedName, 'opus high, this repo')
+  // A caller that knows the display label passes it and the name uses it.
+  const labelled = presetFromChat(chatOf(), { ...CHAT_WORLD, labels: { modelLabel: 'Opus 5.5' } })
+  assert.equal(labelled.suggestedName, 'Opus 5.5 high, this repo')
+  // No model: the harness names the setup, and the effort goes with the model.
+  const bare = presetFromChat(chatOf({ model: null, effort: null, permissionMode: null }), CHAT_WORLD)
+  assert.equal(bare.suggestedName, 'Claude Code, this repo')
+  // No project either: no trailing comma and nothing invented for the place.
+  const nowhere = presetFromChat(chatOf({ workspace: null, model: null, effort: null }), CHAT_WORLD)
+  assert.equal(nowhere.suggestedName, 'Claude Code')
+})
+
+test('a field the chat cannot supply is left unset rather than guessed', () => {
+  // No model: the effort goes too, because a tier belongs to its model.
+  const noModel = presetFromChat(chatOf({ model: null, effort: 'high' }), CHAT_WORLD)
+  assert.equal(noModel.preset.model, null)
+  assert.equal(noModel.preset.effort, null)
+  assert.deepEqual(noModel.leftOut, ['model', 'effort'])
+  assert.deepEqual(noModel.carried, ['harness', 'permission', 'project', 'fast'], 'the rest still carries')
+
+  // No workspace, or one no project holds: no project id, never the nearest.
+  const noFolder = presetFromChat(chatOf({ workspace: null }), CHAT_WORLD)
+  assert.equal(noFolder.preset.projectId, null)
+  const strayFolder = presetFromChat(chatOf({ workspace: 'C:\\elsewhere' }), CHAT_WORLD)
+  assert.equal(strayFolder.preset.projectId, null)
+  assert.equal(strayFolder.preset.model, 'opus', 'the rest still carries')
+
+  // An approval word the harness has dropped is not carried.
+  const droppedWord = presetFromChat(chatOf({ permissionMode: 'anOldWord' }), CHAT_WORLD)
+  assert.equal(droppedWord.preset.permission, null)
+
+  // Fast only where the harness has a fast mode at all.
+  const noFast = presetFromChat(chatOf({ fast: true }), {
+    ...CHAT_WORLD,
+    harnesses: [{ ...CHAT_WORLD.harnesses[0], fast_supported: false }],
+  })
+  assert.equal(noFast.preset.fast, false)
+})
+
+test('a project is carried only for a chat that ran on this computer', () => {
+  const here = presetFromChat(chatOf({ executor: 'me' }), CHAT_WORLD)
+  assert.equal(here.preset.projectId, 'proj-1')
+  // The same folder on another computer is that computer's project, not one of
+  // ours, so the preset is saved without a workspace rather than with a
+  // project id that means nothing here.
+  const there = presetFromChat(chatOf({ executor: 'box' }), CHAT_WORLD)
+  assert.equal(there.preset.projectId, null)
+  assert.equal(there.offer, true, 'the chat still becomes a preset')
+  assert.equal(there.preset.model, 'opus')
+})
+
+test('a chat that cannot become a preset is refused with a plain sentence', () => {
+  const cases = [
+    [null, 'no-chat'],
+    [chatOf({ harness: null }), 'no-harness'],
+    [chatOf({ harness: '' }), 'no-harness'],
+    [chatOf({ harness: 'grok' }), 'not-installed'],
+    [
+      chatOf(),
+      'not-installed',
+      { ...CHAT_WORLD, harnesses: [{ ...CHAT_WORLD.harnesses[0], available: false }] },
+    ],
+  ]
+  for (const [chat, reason, world = CHAT_WORLD] of cases) {
+    const plan = presetFromChat(chat, world)
+    assert.equal(plan.offer, false, `${reason} is not offered`)
+    assert.equal(plan.reason, reason)
+    assert.equal(plan.preset, null)
+    assert.equal(plan.suggestedName, null)
+    assert.match(PRESET_REFUSALS[reason], /\.$/, 'the sentence ends like a sentence')
+  }
+  // A harness switched off in Plugins is still installed: the switch is the
+  // fix, and the preset can be saved for when it is on again.
+  const off = presetFromChat(chatOf(), {
+    ...CHAT_WORLD,
+    harnesses: [{ ...CHAT_WORLD.harnesses[0], enabled: false }],
+  })
+  assert.equal(off.offer, true)
+})
+
+test('saving writes the row through the same storage every preset uses, and says so', () => {
+  store.clear()
+  const seen = []
+  const undo = onPresetsChanged((list) => seen.push(list))
+  const { preset, presets, error } = saveChatPreset(chatOf(), CHAT_WORLD)
+  assert.equal(error, null)
+  assert.equal(presets.length, 1)
+  assert.equal(preset.harness, 'claude')
+  // The stored list is the truth, not just the returned value.
+  assert.deepEqual(loadPresets().map((p) => p.id), [preset.id])
+  assert.equal(seen.length, 1, 'the chips on screen hear about it')
+  assert.equal(seen[0][0].id, preset.id)
+  undo()
+  saveChatPreset(chatOf({ model: 'sonnet' }), CHAT_WORLD)
+  assert.equal(seen.length, 1, 'an unsubscribed listener hears nothing')
+  assert.equal(loadPresets().length, 2)
+})
+
+test('a refused save writes nothing, and a full list says its number', () => {
+  store.clear()
+  const refused = saveChatPreset(null, CHAT_WORLD)
+  assert.equal(refused.error, PRESET_REFUSALS['no-chat'])
+  assert.equal(loadPresets().length, 0)
+
+  // Fill the shelf: the twelfth fits, the thirteenth is refused rather than
+  // silently dropped by the repair rules.
+  const rows = Array.from({ length: PRESET_LIMIT }, (_, i) => chip({ id: `p-${i}`, name: `Setup ${i}` }))
+  storePresets(rows)
+  const full = saveChatPreset(chatOf(), CHAT_WORLD)
+  assert.equal(full.error, PRESET_REFUSALS.full)
+  assert.match(full.error, new RegExp(`${PRESET_LIMIT} setups`))
+  assert.equal(loadPresets().length, PRESET_LIMIT)
+  assert.equal(loadPresets().some((p) => p.id === 'p-0'), true, 'nothing was dropped for the new row')
+})
+
+test('the name a person types is the name stored, repaired to the chip limit', () => {
+  store.clear()
+  const plan = presetFromChat(chatOf(), CHAT_WORLD)
+  const saved = savePreset({ ...plan.preset, name: '  Mornings  ' })
+  assert.equal(saved.error, null)
+  assert.equal(saved.preset.name, 'Mornings')
+  assert.equal(loadPresets()[0].name, 'Mornings')
+  // Past the chip's limit the stored name is cut, not wrapped.
+  store.clear()
+  savePreset({ ...plan.preset, name: 'x'.repeat(NAME_LIMIT + 20) })
+  assert.equal(loadPresets()[0].name.length, NAME_LIMIT)
+  // A row with no harness cannot be a preset, whoever hands it over.
+  const bad = savePreset({ name: 'Nowhere', harness: '' })
+  assert.equal(bad.error, PRESET_REFUSALS['no-harness'])
+  assert.equal(loadPresets().length, 1, 'nothing was written for it')
 })
