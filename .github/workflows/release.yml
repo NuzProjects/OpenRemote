@@ -4,15 +4,22 @@ name: Release
 # APK, and publishes them as a GitHub Release. A manual run (Actions >
 # Release > Run workflow) builds everything the same way and publishes
 # nothing: the installers land as the run's own downloadable files, the
-# way to check a build (the macOS one included) before a tag. The desktop jobs stage the
-# daemon sidecar first - src-tauri/binaries/ is gitignored, `npm run
-# daemon` regenerates it - then tauri build produces the msi, nsis and
-# Linux bundles. The desktop bundles are unsigned on purpose; the release
-# notes say so. The Android APK is signed with the release key held as
-# repo secrets, and the job fails unless the signature verifies. The
-# release job preflights the tag against the manifests, the notes file
-# and the previous release's Android versionCode before building
-# anything.
+# way to check a build (the macOS one included) before a tag.
+#
+# Nothing is published until every platform has succeeded. Each platform
+# job builds and uploads its own artifacts to the run; the `publish` job
+# runs only after all four and is the only step that touches a release.
+# A failing platform therefore leaves no new release behind - on a tag,
+# `releases/latest` does not move; on the nightly, the previous night's
+# complete build stays in place rather than being replaced by a partial
+# one. The desktop jobs stage the daemon sidecar first -
+# src-tauri/binaries/ is gitignored, `npm run daemon` regenerates it -
+# then tauri build produces the msi, nsis and Linux bundles. The desktop
+# bundles are unsigned on purpose; the release notes say so. The Android
+# APK is signed with the release key held as repo secrets, and the job
+# fails unless the signature verifies. The tag preflight (versions, notes,
+# the Android versionCode floor, the tag on the default branch) still runs
+# first, in the Windows job, before any toolchain is fetched.
 #
 # Two channels share this one pipeline:
 #
@@ -24,30 +31,34 @@ name: Release
 # - Nightly: the scheduled run. It builds whatever is on the default
 #   branch and replaces the rolling `nightly` release, which is marked
 #   prerelease on purpose - a nightly must never become `latest`, or the
-#   stable download URLs would move to a test build. The
-#   release is deleted and recreated each night so its download URLs stay
-#   fixed (.../releases/download/nightly/OpenRemote-Setup-x64.exe) while
-#   the binaries follow main. The previous nightly's commit is written
-#   into the new notes, so the channel still reads as a history. Because
-#   last night's release goes before this one is built, a night that
-#   fails leaves the channel empty rather than serving a half-updated
-#   build; re-running the scheduled run publishes it. Nothing in this
-#   path touches the stable channel.
+#   stable download URLs would move to a test build. The publish job
+#   deletes and recreates it once every platform has built, so its
+#   download URLs stay fixed
+#   (.../releases/download/nightly/OpenRemote-Setup-x64.exe) while the
+#   binaries follow main. The previous nightly's commit is written into
+#   the new notes, so the channel still reads as a history. A night that
+#   fails leaves the previous night's release up, complete, rather than
+#   serving a partial build; re-running its failed jobs publishes the new
+#   one. Nothing in this path touches the stable channel.
 #
-# Every published release also carries version-free names beside the
-# versioned assets (OpenRemote-Setup-x64.exe, -x64.msi, -x86_64.AppImage,
+# Every published release carries version-free names beside the versioned
+# assets (OpenRemote-Setup-x64.exe, -x64.msi, -x86_64.AppImage,
 # -amd64.deb, -universal.dmg, -universal.apk). A channel URL therefore
 # never carries a version, and a version bump never edits a download link.
+# The publish job refuses to finish a release that is missing any of the
+# six, so a platform that silently changed its artifact name fails the run
+# instead of shipping a page with a dead download link.
 #
 # Supply chain: every action below is pinned to a full commit SHA with the
 # release that SHA stands for in a trailing comment, and the Rust toolchain
 # to a fixed version rather than `stable`. A tag build holds
 # `contents: write` and the Android signing key, so neither a re-pointed
 # action tag nor a fresh stable release may change what a release compiles
-# or publishes. Bump a pin deliberately: resolve the tag to its commit,
-# then edit the SHA and its comment together. An annotated tag takes two
-# requests, because the ref endpoint returns the tag object rather than a
-# commit:
+# or publishes. Artifacts move between jobs through `gh run download`
+# rather than another action, so there is no extra pin to audit. Bump a
+# pin deliberately: resolve the tag to its commit, then edit the SHA and
+# its comment together. An annotated tag takes two requests, because the
+# ref endpoint returns the tag object rather than a commit:
 #   /repos/<owner>/<repo>/git/ref/tags/<tag>    -> object.sha, object.type
 #   /repos/<owner>/<repo>/git/tags/<object.sha> -> object.sha (the commit)
 # Swatinem/rust-cache ships annotated tags, so the second request is not
@@ -86,15 +97,13 @@ jobs:
           # The preflight below compares this tag against the previous
           # v* tag's tauri.conf.json (the versionCode check), so the
           # job needs the tags and their history, not just this tag's
-          # single commit. The nightly notes read the previous nightly
-          # tag out of the same history.
+          # single commit.
           fetch-depth: 0
       # One name for the release everywhere below: the pushed tag, or
       # `nightly` for the nightly channel (a scheduled run has no tag -
-      # GITHUB_REF_NAME would be the branch name). Publishing is
-      # `steps.ch.outputs.tag == 'nightly' || event != workflow_dispatch`
-      # below: a manual run stays a build-only run unless it asked for
-      # the nightly.
+      # GITHUB_REF_NAME would be the branch name). Publishing is decided
+      # by the `publish` job's own condition: a manual run never reaches
+      # it, and a tag or a night does once every platform has built.
       - name: channel
         id: ch
         run: |
@@ -110,54 +119,6 @@ jobs:
         with:
           node-version: lts/*
           cache: npm
-      # Before anything is built: last night's release goes, tonight's
-      # takes its place. The tag is deleted with it (--cleanup-tag), so
-      # the release below recreates `nightly` at this run's commit; the
-      # commit is captured first, for the notes.
-      - name: clear the rolling nightly
-        if: steps.ch.outputs.tag == 'nightly'
-        run: |
-          set -euo pipefail
-          if git rev-parse -q --verify "nightly^{commit}" > /dev/null; then
-            git rev-parse --short "nightly^{commit}" > .nightly-previous
-            echo "PREVIOUS_NIGHTLY=$(cat .nightly-previous)" >> "$GITHUB_ENV"
-          fi
-          # A real failure here must fail the run: carrying on would
-          # upload tonight's binaries over last night's release page.
-          if gh release view nightly > /dev/null 2>&1; then
-            gh release delete nightly --yes --cleanup-tag
-          fi
-        env:
-          GH_TOKEN: ${{ github.token }}
-      - name: nightly notes
-        if: steps.ch.outputs.tag == 'nightly'
-        run: |
-          set -euo pipefail
-          SHA="$(git rev-parse --short HEAD)"
-          {
-            echo "# OpenRemote nightly - $(date -u +%Y-%m-%d)"
-            echo
-            echo "Built from \`${GITHUB_REF_NAME}\` at \`${SHA}\` on $(date -u +'%Y-%m-%d %H:%M UTC')."
-            echo
-            echo "This is the automated nightly channel: unsigned test builds, replaced every night,"
-            echo "at URLs that never change - \`https://github.com/${GITHUB_REPOSITORY}/releases/download/nightly/OpenRemote-Setup-x64.exe\`,"
-            echo "and the same name for the msi, the AppImage, the deb, the dmg and the apk."
-            echo "The stable channel is \`releases/latest\`. Nightlies report the stable version in-app"
-            echo "(the build is not version-stamped yet) - this page's commit is the identity."
-            echo
-            if [ -n "${PREVIOUS_NIGHTLY:-}" ] && git cat-file -e "${PREVIOUS_NIGHTLY}^{commit}" 2>/dev/null; then
-              echo "## Since the last nightly (\`${PREVIOUS_NIGHTLY}\`)"
-            else
-              echo "## Recent commits"
-            fi
-            echo
-            if [ -n "${PREVIOUS_NIGHTLY:-}" ] && git cat-file -e "${PREVIOUS_NIGHTLY}^{commit}" 2>/dev/null; then
-              git log --oneline --no-decorate -n 60 "${PREVIOUS_NIGHTLY}..HEAD"
-            else
-              git log --oneline --no-decorate -n 25 HEAD
-            fi
-          } > nightly-notes.md
-          cat nightly-notes.md
       # Fail fast on paperwork that does not add up, before any build
       # toolchain or dependency is fetched: the tag must equal the
       # version in every manifest that carries it (a mismatch ships
@@ -166,10 +127,14 @@ jobs:
       # only after the full build), and the Android versionCode must
       # strictly exceed the previous release's - Android refuses an
       # update install otherwise, and the only way on is uninstalling
-      # the app, which wipes its private data. A nightly has no version
-      # of its own to check and no notes file to require (its notes are
-      # generated above); the notices and the versionCode floor are
-      # checked below for both channels.
+      # the app, which wipes its private data.
+      #
+      # This step runs for tags only. A nightly carries no version of its
+      # own and its APK reuses the stable versionCode, so there is nothing
+      # here to check for it: its notes are generated in the publish job
+      # when the release is made. The notices file it ships is the same
+      # one every build embeds, and the platform jobs fail on it if it is
+      # missing (the Linux job hashes it, the bundle resources name it).
       - name: preflight (versions, notes, versionCode)
         if: github.event_name == 'push'
         run: |
@@ -275,11 +240,6 @@ jobs:
           esac
         env:
           GH_TOKEN: ${{ github.token }}
-      # The nightly keeps the same applicationId and versionCode as the
-      # stable APK, so the two install over each other in either
-      # direction (same signature, same code). The versionCode floor
-      # still holds for stable tags, where the next release must
-      # strictly exceed the tag before it - see the preflight above.
       # Fixed at 1.99.1 rather than `stable` (every job here, and ci.yml,
       # does the same): a moving stable would let a re-pushed tag compile
       # with a different rustc than the build it replaces, and with it a
@@ -293,17 +253,19 @@ jobs:
           workspaces: |
             daemon
             src-tauri
-      # A re-pushed tag whose release already carries THIS version's
-      # desktop bundles skips the rebuild; the bundles are already
-      # there. The gate matches the exact asset names this tag's
-      # version implies, not an asset count: any other mix of assets
-      # (a partial upload, a release created with only its notes) runs
-      # the Windows build, so a re-pushed tag never leaves a release
-      # missing the msi or the nsis. The nightly never skips: its
-      # release was just deleted, and its assets must follow main.
+      # Nothing is published before the publish job, so a tag that already
+      # has a release can only be one this version built earlier: every
+      # platform skips its build when the release already carries that
+      # platform's asset, and the publish job then finds it complete and
+      # does nothing. The gate matches the exact asset names this tag's
+      # version implies, not an asset count: any other mix runs the build,
+      # so a re-pushed tag never leaves a release missing the msi or the
+      # nsis. The nightly always builds: last night's release is still up
+      # (the publish job replaces it only after every platform succeeds),
+      # so the gate must not mistake it for this night's.
       - name: a rebuild, or a re-run
         id: build
-        if: github.event_name != 'workflow_dispatch'
+        if: github.event_name != 'workflow_dispatch' && steps.ch.outputs.tag != 'nightly'
         run: |
           set -euo pipefail
           ver="${TAG#v}"
@@ -329,48 +291,27 @@ jobs:
         if: steps.build.outputs.skip != '1'
       # Tauri embeds the version in the artifact names
       # (OpenRemote_0.1.0_x64_en-US.msi, OpenRemote_0.1.0_x64-setup.exe),
-      # so the globs stay version-proof.
-      # Create on the first run; a tag that already has a release (a
-      # re-pushed tag) uploads over the existing assets instead. A skipped
-      # rebuild has nothing new to upload. Each bundle is uploaded twice:
-      # under its versioned name and under the channel's version-free one,
-      # so `/releases/latest/download/OpenRemote-Setup-x64.exe` (stable)
-      # and `/releases/download/nightly/OpenRemote-Setup-x64.exe`
-      # (nightly) never change with a version bump.
-      - name: publish the Windows installers
-        if: (steps.ch.outputs.tag == 'nightly' || github.event_name != 'workflow_dispatch') && steps.build.outputs.skip != '1'
+      # so the globs stay version-proof. Each bundle is staged twice: under
+      # its versioned name and under the channel's version-free one, so
+      # `/releases/latest/download/OpenRemote-Setup-x64.exe` (stable) and
+      # `/releases/download/nightly/OpenRemote-Setup-x64.exe` (nightly)
+      # never change with a version bump. They ride to the publish job as
+      # this run's artifacts, and only that job creates a release.
+      - name: stage the Windows installers
+        if: steps.build.outputs.skip != '1'
         run: |
           set -euo pipefail
           cp src-tauri/target/release/bundle/nsis/*.exe OpenRemote-Setup-x64.exe
           cp src-tauri/target/release/bundle/msi/*.msi OpenRemote-Setup-x64.msi
-          assets=(
-            src-tauri/target/release/bundle/msi/*.msi
-            src-tauri/target/release/bundle/nsis/*.exe
-            OpenRemote-Setup-x64.msi
-            OpenRemote-Setup-x64.exe
-          )
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" --clobber "${assets[@]}"
-          elif [ "$TAG" = "nightly" ]; then
-            gh release create nightly "${assets[@]}" \
-              --target "$GITHUB_SHA" \
-              --prerelease \
-              --title "OpenRemote nightly - $(date -u +%Y-%m-%d)" \
-              --notes-file nightly-notes.md
-          else
-            gh release create "$TAG" "${assets[@]}" \
-              --title "OpenRemote ${TAG#v}" \
-              --notes-file "release-notes/${TAG}.md"
-          fi
-        env:
-          GH_TOKEN: ${{ github.token }}
-      - if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: steps.build.outputs.skip != '1'
         with:
           name: windows-installers
           path: |
             src-tauri/target/release/bundle/msi/*.msi
             src-tauri/target/release/bundle/nsis/*.exe
+            OpenRemote-Setup-x64.msi
+            OpenRemote-Setup-x64.exe
 
   linux:
     needs: release
@@ -427,44 +368,40 @@ jobs:
       # flag picks the Linux ones for this runner.
       - run: npx tauri build --bundles appimage,deb
       # The version-free names ride beside the versioned ones, the way
-      # the Windows job uploads them.
-      - name: publish the Linux installers
-        if: steps.ch.outputs.tag == 'nightly' || github.event_name != 'workflow_dispatch'
+      # the Windows job stages them.
+      - name: stage the Linux installers
         run: |
           set -euo pipefail
           cp src-tauri/target/release/bundle/appimage/*.AppImage OpenRemote-x86_64.AppImage
           cp src-tauri/target/release/bundle/deb/*.deb OpenRemote-amd64.deb
-          gh release upload "$TAG" --clobber \
-            src-tauri/target/release/bundle/appimage/*.AppImage \
-            src-tauri/target/release/bundle/deb/*.deb \
-            OpenRemote-x86_64.AppImage \
-            OpenRemote-amd64.deb
-        env:
-          GH_TOKEN: ${{ github.token }}
       # The machine installer's download: the daemon alone, named as
       # install.sh expects, with the checksum file it verifies against.
-      # The plain triple's artifacts are the sidecar's; the glibc-pinned
-      # build lands under its own target dir. The notices ride beside
-      # the binary - the daemon also embeds them, but the release page
-      # and a plain download carry the readable file.
+      #
+      # `cargo zigbuild --target x86_64-unknown-linux-gnu.2.28` writes its
+      # output to the *unsuffixed* target directory, the same one the
+      # native sidecar build above wrote: the glibc suffix lives in the
+      # linker configuration, not in the path. This step therefore runs
+      # after `sync-daemon.mjs`, so the copy below is the pinned build of
+      # the code this run just built, not the native one.
+      #
+      # The notices ride beside the binary - the daemon also embeds them,
+      # but the release page and a plain download carry the readable file.
       - name: the daemon asset
         run: |
           set -euo pipefail
           ( cd daemon && cargo zigbuild -p openremote-daemon --locked --release --target x86_64-unknown-linux-gnu.2.28 )
           cp daemon/target/x86_64-unknown-linux-gnu/release/openremote-daemon openremote-daemon-linux-x86_64
           sha256sum openremote-daemon-linux-x86_64 THIRD-PARTY_NOTICES.md > SHA256SUMS
-      - if: steps.ch.outputs.tag == 'nightly' || github.event_name != 'workflow_dispatch'
-        run: gh release upload "$TAG" openremote-daemon-linux-x86_64 THIRD-PARTY_NOTICES.md SHA256SUMS --clobber
-        env:
-          GH_TOKEN: ${{ github.token }}
-      - if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: linux-installers
           path: |
             src-tauri/target/release/bundle/appimage/*.AppImage
             src-tauri/target/release/bundle/deb/*.deb
+            OpenRemote-x86_64.AppImage
+            OpenRemote-amd64.deb
             openremote-daemon-linux-x86_64
+            THIRD-PARTY_NOTICES.md
             SHA256SUMS
 
   android:
@@ -532,14 +469,14 @@ jobs:
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "sdk.dir=$ANDROID_HOME" > src-tauri/gen/android/local.properties
       # A re-pushed tag whose release already carries THIS version's APK
-      # skips the rebuild; the APK is already there. The gate matches the
-      # exact name this tag's version implies (the upload step
-      # below names the file the same way), not just any APK - a
-      # re-pushed tag must not keep a previous commit's build. The
-      # nightly never skips: its release was just deleted.
+      # skips the rebuild - the same gate the other jobs use. The gate
+      # matches the exact name this tag's version implies (the staging
+      # step below names the file the same way), not just any APK - a
+      # re-pushed tag must not keep a previous commit's build. The nightly
+      # always builds, for the same reason the Windows job does.
       - name: a rebuild, or a re-run
         id: build
-        if: github.event_name != 'workflow_dispatch'
+        if: github.event_name != 'workflow_dispatch' && steps.ch.outputs.tag != 'nightly'
         run: |
           set -euo pipefail
           assets="$(gh release view "$TAG" --json assets --jq '.assets[].name' 2>/dev/null || true)"
@@ -569,7 +506,7 @@ jobs:
       # the APK does not verify, and the log carries the signer cert.
       # AGP signs in the assemble when the release signing config is
       # wired; the -unsigned sibling is the intermediate.
-      - name: verify the signature
+      - name: verify the signature and stage the APK
         if: steps.build.outputs.skip != '1'
         run: |
           set -euo pipefail
@@ -580,16 +517,13 @@ jobs:
           "$APKSIGNER" verify --verbose --print-certs "$APK" | head -n 12
           cp "$APK" "OpenRemote_${TAG#v}_universal.apk"
           cp "$APK" OpenRemote-universal.apk
-      - name: publish the APK
-        if: (steps.ch.outputs.tag == 'nightly' || github.event_name != 'workflow_dispatch') && steps.build.outputs.skip != '1'
-        run: gh release upload "$TAG" "OpenRemote_${TAG#v}_universal.apk" OpenRemote-universal.apk --clobber
-        env:
-          GH_TOKEN: ${{ github.token }}
-      - if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: steps.build.outputs.skip != '1'
         with:
           name: android-apk
-          path: OpenRemote_*_universal.apk
+          path: |
+            OpenRemote_*_universal.apk
+            OpenRemote-universal.apk
 
   macos:
     # One universal .dmg for Apple silicon and Intel. The daemon is built
@@ -631,7 +565,7 @@ jobs:
       # never skips.
       - name: a rebuild, or a re-run
         id: build
-        if: github.event_name != 'workflow_dispatch'
+        if: github.event_name != 'workflow_dispatch' && steps.ch.outputs.tag != 'nightly'
         run: |
           set -euo pipefail
           assets="$(gh release view "$TAG" --json assets --jq '.assets[].name' 2>/dev/null || true)"
@@ -681,16 +615,157 @@ jobs:
           grep -q 'Signature=adhoc' codesign.txt
           codesign --verify --deep --strict "$APP"
           ls -la "$DMG"
-          echo "DMG=$DMG" >> "$GITHUB_ENV"
-      - if: (steps.ch.outputs.tag == 'nightly' || github.event_name != 'workflow_dispatch') && steps.build.outputs.skip != '1'
-        run: |
-          set -euo pipefail
           cp "$DMG" OpenRemote-universal.dmg
-          gh release upload "$TAG" "$DMG" OpenRemote-universal.dmg --clobber
-        env:
-          GH_TOKEN: ${{ github.token }}
-      - if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: steps.build.outputs.skip != '1'
         with:
           name: macos-dmg
-          path: ${{ env.DMG }}
+          path: |
+            src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+            OpenRemote-universal.dmg
+
+  # The only job that touches a release. It runs after every platform has
+  # succeeded, so a failure anywhere above leaves no new release behind: a
+  # stable tag does not move `releases/latest`, and a nightly keeps last
+  # night's complete release instead of replacing it with a partial one.
+  # A manual run never reaches it (build-only). Re-running the failed
+  # platform in the same run finishes the release, because the successful
+  # platforms' artifacts are still on that run.
+  publish:
+    needs: [release, linux, android, macos]
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    # `actions: read` is what lets `gh run download` pull this run's own
+    # artifacts; the token needs nothing else here beyond the release write
+    # the workflow already declares.
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # The notes file, and for the nightly the previous nightly tag's
+          # commit for the "since" section.
+          fetch-depth: 0
+      - name: channel
+        id: ch
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event.inputs.channel }}" = "nightly" ]; then
+            echo "tag=nightly" >> "$GITHUB_OUTPUT"
+            echo "TAG=nightly" >> "$GITHUB_ENV"
+          else
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+            echo "TAG=$GITHUB_REF_NAME" >> "$GITHUB_ENV"
+          fi
+      - name: fetch this run's artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          for name in windows-installers linux-installers android-apk macos-dmg; do
+            # A re-pushed tag whose release is already complete skips every
+            # platform build, so a missing artifact is not a failure here;
+            # the completeness check below is what decides.
+            gh run download "$GITHUB_RUN_ID" -n "$name" -D assets || echo "no $name artifact from this run"
+          done
+          ls -la assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: nightly notes
+        if: steps.ch.outputs.tag == 'nightly'
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse --short HEAD)"
+          {
+            echo "# OpenRemote nightly - $(date -u +%Y-%m-%d)"
+            echo
+            echo "Built from \`${GITHUB_REF_NAME}\` at \`${SHA}\` on $(date -u +'%Y-%m-%d %H:%M UTC')."
+            echo
+            echo "This is the automated nightly channel: unsigned test builds, replaced every night,"
+            echo "at URLs that never change - \`https://github.com/${GITHUB_REPOSITORY}/releases/download/nightly/OpenRemote-Setup-x64.exe\`,"
+            echo "and the same name for the msi, the AppImage, the deb, the dmg and the apk."
+            echo "The stable channel is \`releases/latest\`. Nightlies report the stable version in-app"
+            echo "(the build is not version-stamped yet) - this page's commit is the identity."
+            echo
+            if git rev-parse -q --verify "nightly^{commit}" > /dev/null; then
+              PREVIOUS_NIGHTLY="$(git rev-parse --short "nightly^{commit}")"
+              echo "## Since the last nightly (\`${PREVIOUS_NIGHTLY}\`)"
+            else
+              echo "## Recent commits"
+            fi
+            echo
+            if [ -n "${PREVIOUS_NIGHTLY:-}" ] && git cat-file -e "${PREVIOUS_NIGHTLY}^{commit}" 2>/dev/null; then
+              git log --oneline --no-decorate -n 60 "${PREVIOUS_NIGHTLY}..HEAD"
+            else
+              git log --oneline --no-decorate -n 25 HEAD
+            fi
+          } > nightly-notes.md
+          cat nightly-notes.md
+      - name: publish the release
+        run: |
+          set -euo pipefail
+          NAMES=(
+            OpenRemote-Setup-x64.exe
+            OpenRemote-Setup-x64.msi
+            OpenRemote-x86_64.AppImage
+            OpenRemote-amd64.deb
+            OpenRemote-universal.dmg
+            OpenRemote-universal.apk
+          )
+          assets=()
+          while IFS= read -r file; do
+            assets+=("$file")
+          done < <(find assets -maxdepth 1 -type f \
+            \( -name '*.msi' -o -name '*.exe' -o -name '*.AppImage' -o -name '*.deb' \
+               -o -name '*.dmg' -o -name '*.apk' -o -name 'openremote-daemon-linux-x86_64' \
+               -o -name 'THIRD-PARTY_NOTICES.md' -o -name 'SHA256SUMS' \) | sort)
+
+          # A re-pushed tag whose release is already complete: every
+          # platform skipped, so this run has no artifacts to add and the
+          # release is left exactly as it is.
+          if [ "${#assets[@]}" -eq 0 ] && [ "$TAG" != "nightly" ] && gh release view "$TAG" > /dev/null 2>&1; then
+            echo "publish: ${TAG} already has a complete release; nothing to publish"
+            exit 0
+          fi
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "publish: no artifacts were built in this run; refusing to publish an empty release" >&2
+            exit 1
+          fi
+
+          # A nightly replaces the rolling release only now, with every
+          # platform built. Its tag moves to this run's commit.
+          if [ "$TAG" = "nightly" ]; then
+            if gh release view nightly > /dev/null 2>&1; then
+              gh release delete nightly --yes --cleanup-tag
+            fi
+            gh release create nightly "${assets[@]}" \
+              --target "$GITHUB_SHA" \
+              --prerelease \
+              --title "OpenRemote nightly - $(date -u +%Y-%m-%d)" \
+              --notes-file nightly-notes.md
+          elif gh release view "$TAG" > /dev/null 2>&1; then
+            # A re-pushed tag with a partial release: the platforms whose
+            # asset was missing rebuilt, and their files join the release.
+            gh release upload "$TAG" --clobber "${assets[@]}"
+          else
+            # The first publish for this tag. Every platform built, so a
+            # missing name below means a build that produced something else.
+            gh release create "$TAG" "${assets[@]}" \
+              --title "OpenRemote ${TAG#v}" \
+              --notes-file "release-notes/${TAG}.md"
+          fi
+
+          # The release must carry all six channel names, or a download
+          # link is dead the moment the release page is live.
+          published="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+          missing=()
+          for name in "${NAMES[@]}"; do
+            grep -qxF "$name" <<< "$published" || missing+=("$name")
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "publish: ${TAG} is missing ${missing[*]}" >&2
+            exit 1
+          fi
+          echo "publish: ${TAG} carries every channel name"
+        env:
+          GH_TOKEN: ${{ github.token }}
