@@ -242,10 +242,12 @@ async fn unenroll() -> ExitCode {
     // A registry that has already removed this device is the outcome this
     // command exists to reach, not a failure.
     let registry_error = match (cloud.device_credential(), cloud.device_id()) {
-        (Some(credential), Some(id)) => match cloud.registry().delete(&credential, &id.to_string()).await {
-            Ok(()) | Err(openremote_cloud::registry::RegistryError::Revoked) => None,
-            Err(e) => Some(e.to_string()),
-        },
+        (Some(credential), Some(id)) => {
+            match cloud.registry().delete(&credential, &id.to_string()).await {
+                Ok(()) | Err(openremote_cloud::registry::RegistryError::Revoked) => None,
+                Err(e) => Some(e.to_string()),
+            }
+        }
         _ => None,
     };
     let local_error = cloud.signout().await.err().map(|e| e.to_string());

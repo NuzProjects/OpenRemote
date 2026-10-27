@@ -131,8 +131,8 @@ spacing.
   there is none.
 - **Settings is a window over the app:** a sidebar with a settings search
   and one tab per section, grouped General (New tasks, Appearance, Startup,
-  Keyboard), System (Cloud, Daemon, Harnesses, MCP servers), Chats (Archived
-  chats), and About (This install). Only the selected section fills the
+  Keyboard), System (Cloud, Daemon, Harnesses, MCP servers, Models), Chats
+  (Archived chats), and About (This install). Only the selected section fills the
   right pane, its rows in hairline groups rather than floating cards. Phone
   width stacks the search and a horizontal tab strip above the pane.
 - **Main canvas:** one view at a time; views are flat lists/cards, not
@@ -291,6 +291,8 @@ spacing.
   with the close, and a new tab page leaves nothing to reopen. A tab's own menu
   closes it, closes the others, or closes everything to its right; all three
   work in strip order, so a window resize never changes what a command does.
+  The command palette lists the open tabs in its Browser group, and reopens a
+  closed one from a row.
 - **Text fields:** right-clicking a field opens the console's own menu - Cut,
   Copy, Paste, Select all - because the engine's default menu is off for the
   whole app. A field never has two menus, and the words on the one it has are
@@ -338,7 +340,7 @@ spacing.
   label, keywords and description across sections. Results name their
   section, and choosing one opens that tab and marks the matching row.
 - **Keyboard filter:** the Keyboard tab carries its own filter beside a
-  Reset all action; an action answers by name, group, or current key
+  Reset every shortcut action; an action answers by name, group, or current key
   ("Ctrl+N"), and the row being rebound stays visible while it is captured.
 - **Switches (`tg-switch`):** real toggles for settings - 30x18 with a
   sliding knob, amber when on; green stays reserved for running/ok. On/Off
@@ -491,8 +493,8 @@ Every screen the design specifies, backed by the real daemon:
   installed and signed in remotely through the same installer chain and
   sign-in relay. Add a machine mints a one-time Linux install command and
   notices the arrival; Remove is asked twice and says what it deletes.
-- **Plugins** - the installed list carries its own field once the list is long
-  enough to scan: it matches the words a row prints, narrows without
+- **Plugins** - the installed list carries its own field whenever it holds
+  anything: it matches the words a row prints, narrows without
   reordering, keeps its count line while a query is on, and Escape clears it
   before leaving it, the same door as the rules list. MCP installs written by hand; the needs-key lifecycle
   (keys never cross the API); the ride-along through each harness's own MCP wire (claude `--mcp-config`
@@ -547,7 +549,8 @@ moreweb relays ciphertext and never stores a chat.
 - **A chat on another device:** prompts, stop, resume and answers travel
   to it. When they can't, the composer says why (offline, not a machine,
   signed out, gone) and offers "Make it a machine" where that is the fix.
-  Synced chats can be deleted everywhere, asked twice.
+  Synced chats can be deleted, asked twice, and every other device deletes
+  its copy the next time it syncs.
 - **Notices:** a thin row above the main area for a device that joined the
   account ("Not you?" - any sign-in adds one), and for this computer made
   a machine from elsewhere (Undo). Shown once each.
@@ -561,8 +564,8 @@ moreweb relays ciphertext and never stores a chat.
   signed in, asked first ("tool output included"); the chat then syncs
   like one made in Cloud, running where it is.
 
-Deferred: the updater and its badge, auto-update, the Linux AppImage
-build, signed releases, machine installers beyond Linux, moving a chat
+Deferred: the updater and its badge, auto-update, signed releases, machine
+installers beyond Linux, moving a chat
 between machines and switching
 its harness mid-chat (one hand-over mechanism), the connector triggers
 (pipeline/errors/review/release), the agent behind the pill, claude's
@@ -605,7 +608,7 @@ from the film's own components:
 ## Checking this contract
 
 Most of this page can be checked without opening the app: `npm test` runs
-the console's rule tests (910 of them the last time this line was checked,
+the console's rule tests (912 of them the last time this line was checked,
 and the run prints the live count) and a handful
 of wiring tests read the source text for the parts only a browser could
 show, such as the modal family and the waiting screen's doors. The rules

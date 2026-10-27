@@ -33,10 +33,14 @@ the project's own map.
   console side is `src/pairing.js`, `src/qr.js` and
   `src/PairingSection.jsx`; the design note is
   `docs/superpowers/specs/2026-10-26-qr-pairing-design.md`.
-- `scripts/` - design instrumentation (fps, latency, clearance),
-  `dev-app.mjs` (the dev shell under its own bundle identity), plus
-  `check-tab-acl.mjs`, the capability-scope guard CI runs. Run bare it
-  prints `tab acl ok: 2 capability file(s)` and exits 0, or exits 1 and
+- `scripts/` - design instrumentation (fps, latency, clearance), `dev-app.mjs`
+  (the dev shell under its own bundle identity), `smoke.mjs` (the one gate that
+  reads the running console's real DOM: it drives the dev app over its DevTools
+  port and fails on a window that renders nothing, with
+  `npm run tauri:dev` running in another terminal), plus `check-tab-acl.mjs`,
+  the capability-scope guard CI runs. Run bare it prints
+  `tab acl ok: 2 capability file(s), every non-phone one scoped to the main
+  webview, every declared command (27) granted` and exits 0, or exits 1 and
   names the capability that widened; `--self-test` checks the check itself,
   and `--root` points it at another tree. Not build tooling; the one build
   script is `sync-daemon.mjs`.
@@ -51,6 +55,7 @@ the project's own map.
 npm install
 npm test               # console tests (node --test)
 node scripts/check-tab-acl.mjs   # the tab capability scope (bare; --self-test, --root)
+node scripts/smoke.mjs           # the running console's DOM (npm run tauri:dev first)
 npm run dev            # browser only (port 5175)
 npm run tauri:dev      # desktop shell, under the dev bundle identity
 npx tauri dev          # the same build without that identity (see below)
@@ -90,28 +95,23 @@ cargo fmt --all --check        # CI runs this and the lint; both are red here
 ```
 
 Neither of those two gates passes in this tree, and neither failure is in
-the shell. `cargo fmt --all --check` reports eight files across four crates
-(`openremote-core/src/model.rs`, `openremote-core/src/store.rs`,
-`openremote-daemon/src/app.rs`, `openremote-daemon/src/http.rs`,
-`openremote-daemon/src/registry.rs`, `openremote-grok/src/config.rs`,
-`openremote-opencode/src/driver.rs`, `openremote-opencode/src/resolve.rs`,
-counted as the distinct paths among its `Diff in` lines, one line per hunk,
-so the lines outnumber the files), and `cargo clippy --all-targets --locked
--- -D warnings` stops on three lints
-(`openremote-daemon/src/http.rs:376`, `openremote-daemon/src/http.rs:614`,
-`openremote-daemon/src/supervisor.rs:1215`), which the run prints as five
-`error:` lines: those three and the two `could not compile` lines after
-them. `cargo fmt --check` inside `src-tauri` alone is green, because the
-shell's own files are formatted; `--all` also formats this crate's path
-dependencies under `../daemon`, which is why both workspaces report the
-same eight.
+the shell. `cargo fmt --all --check` reports one hunk, in
+`daemon/crates/openremote-daemon/src/main.rs:242` (the `match` in
+`unenroll`), and it is in the committed tree rather than local dirt: the
+last commit to touch that file is "daemon: a delete finishes, and the retry
+has a beat behind it". `cargo clippy --all-targets --locked -- -D warnings`
+stops on three lints (`openremote-daemon/src/http.rs:376`, unneeded cloning
+of iterator items; `openremote-daemon/src/http.rs:624`, unneeded late
+initialization; `openremote-daemon/src/supervisor.rs:1215`, a function with
+9 arguments where 7 is the limit), which the run prints as five `error:`
+lines: those three and the two `could not compile` lines after them.
+`cargo fmt --check` inside `src-tauri` alone is green, because the shell's
+own files are formatted.
 
-The format failure is not local dirt: `cargo fmt --all --check` fails on a
-clean checkout too, at the pushed main (`c17bb60`) and at the branch head
-(`097e0c3`), with 42 hunks in the same eight files on both. The repair is
-one `cargo fmt` across the daemon workspace once the work in those files has
-landed; all eight are among the files in flux on this tree, so reformatting
-them first would rewrite someone's in-flight edits.
+The format failure came in with last night's daemon work rather than with an
+older spread: the unenroll change landed in a shape rustfmt wants to rewrap,
+so the repair is one `cargo fmt` inside `daemon` once that file's work has
+settled, not a reformat of the workspace.
 
 ## The sidecar, and its two copies
 
@@ -232,11 +232,12 @@ an old process is still alive; find it before re-running).
 ## Checking this file
 
 Four commands check what this page claims, and a reader can run all of them
-from the repo root: `npm test` (prints a count; 610 the last time this line
+from the repo root: `npm test` (prints a count; 912 the last time this line
 was checked, and the run is the truth rather than this number), `node
-scripts/check-tab-acl.mjs` (says `tab acl ok: 2 capability file(s)`), `cd
-daemon && cargo fmt --all --check` (lists the eight files named under
-Commands), and `cd daemon && cargo clippy --all-targets --locked -- -D
+scripts/check-tab-acl.mjs` (says `tab acl ok: 2 capability file(s), every
+non-phone one scoped to the main webview, every declared command (27)
+granted`), `cd daemon && cargo fmt --all --check` (lists the one file named
+under Commands), and `cd daemon && cargo clippy --all-targets --locked -- -D
 warnings` (lists the three lints). The route and tier claims in "Cloud's
 trust model" are counted from `PEER_ROUTES` in
 `daemon/crates/openremote-daemon/src/http.rs`, the peer paths are driven in
