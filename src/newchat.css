@@ -339,3 +339,115 @@ html[data-reduce-motion] .newchat::before {
     font-size: 20px;
   }
 }
+
+/* Saved setups above the composer: ghost text, no fill, no border. The
+   hover wash is the only affordance, so the row stays quiet text until it
+   is reached for; a filled pill row would read as a different control
+   family than the pickers under the composer. */
+.nc-presets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  margin: 0 0 8px;
+  min-height: 22px;
+}
+
+.nc-preset-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.nc-preset {
+  appearance: none;
+  max-width: 220px;
+  padding: 3px 7px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-3);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.nc-preset:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-1);
+}
+
+.nc-preset.on {
+  color: var(--text-2);
+}
+
+.nc-preset:focus-visible {
+  outline: 1px solid rgba(255, 255, 255, 0.18);
+  outline-offset: 1px;
+}
+
+.nc-preset:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* The Save chip is the row's last child and the only way a first preset
+   comes to exist, so it stays visible at rest while the others are text. */
+.nc-preset-save {
+  color: var(--text-3);
+  font-style: italic;
+}
+
+/* Naming in place: the chip's own footprint, with the wash held on so the
+   field reads as editable. */
+.nc-preset-input {
+  min-width: 140px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-1);
+  cursor: text;
+}
+
+/* Delete and default controls: hidden until the chip is reached for, by
+   pointer or by keyboard, so the row never shows a row of crosses. */
+.nc-preset-hover {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 18px;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  color: var(--text-3);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.nc-preset-wrap:hover .nc-preset-hover,
+.nc-preset-wrap:focus-within .nc-preset-hover,
+.nc-preset-hover:focus-visible {
+  opacity: 1;
+}
+
+.nc-preset-hover:hover {
+  color: var(--text-1);
+}
+
+/* The armed delete asks once: the word is the second, deliberate press. */
+.nc-preset-x.armed {
+  color: var(--accent);
+}
+
+.nc-preset-note {
+  margin: 0 0 8px;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.45;
+}

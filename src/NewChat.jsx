@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowRight, ArrowUp, House, FolderOpen, Lightning, Plus } from '@phosphor-icons/react'
+import { ArrowRight, ArrowUp, House, FolderOpen, Lightning, Plus, Star, X } from '@phosphor-icons/react'
 import PickerMenu from './PickerMenu.jsx'
 import { usePrivacyMode } from './privacy.js'
 import { useHint, useModelSwitches, usePaletteSource, useShortcut } from './keyboard.jsx'
@@ -16,6 +16,20 @@ import { modelMaker } from './model-maker.js'
 import { ModelMark } from './model-marks.jsx'
 import { SIGNIN_HARNESSES, pickable } from './harness-manager.js'
 import { loadDefaults } from './defaults.js'
+import {
+  NAME_LIMIT,
+  defaultPreset,
+  loadPresets,
+  markDefault,
+  presetFromState,
+  presetSummary,
+  removePreset,
+  replacePreset,
+  settlePreset,
+  storePresets,
+  suggestedPresetName,
+} from './presets.js'
+import { armRow, clearRow, rowIsArmed } from './row-confirm.js'
 import { projectName } from './projects.js'
 import { clashes } from './plugins.js'
 import { useComposerMenus } from './useComposerMenus.jsx'
@@ -60,6 +74,22 @@ export default function NewChat({
   const targetItem = machines.find((m) => m.id === target) ?? null
   const targetOffline = Boolean(target && targetItem && !targetItem.online)
   const [defaults] = useState(() => loadDefaults())
+  // The setups this person saved, and the one New chat opens on. Both are
+  // read once, at mount: they are local storage reads, and a preset that
+  // changes under the cursor between two renders would be a surprise.
+  const [presets, setPresets] = useState(() => loadPresets())
+  const [openingPreset] = useState(() => defaultPreset(loadPresets()))
+  // The preset waiting for a harness switch to finish: its slots can only
+  // be settled once the new harness has answered with its model list.
+  const pendingPreset = useRef(openingPreset ?? null)
+  // One calm sentence about what a preset could not bring with it.
+  const [presetNote, setPresetNote] = useState(null)
+  // The chip being renamed in place: { id: 'new' | preset id, draft }.
+  // 'new' is the Save chip before it becomes a preset.
+  const [presetEditing, setPresetEditing] = useState(null)
+  // The chip whose delete control is armed: one row at a time, and the
+  // same helper the plugins and MCP panes use.
+  const [armedPreset, setArmedPreset] = useState(null)
   const [text, setText] = useState('')
   // The project the chat runs in: one of the registered projects, or
   // null - a chat that belongs to no project and runs in the home folder.
@@ -67,7 +97,7 @@ export default function NewChat({
   const [picker, setPicker] = useState(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
-  const [harness, setHarness] = useState(() => loadDefaults().harness)
+  const [harness, setHarness] = useState(() => openingPreset?.harness ?? loadDefaults().harness)
   const [model, setModel] = useState(null)
   const [models, setModels] = useState([])
   const [modelsPending, setModelsPending] = useState(true)
@@ -209,6 +239,45 @@ export default function NewChat({
       if (!cancelled) {
         setModels(list ?? [])
         setModelsPending(false)
+        // The opening preset, or one whose chip switched the harness, is
+        // settled here: this is the first moment its model and effort can
+        // be checked against what the harness actually offers today. One
+        // shot either way - a preset that waited for a harness that is not
+        // on this computer must not fire later on a manual switch.
+        const waiting = pendingPreset.current
+        if (waiting) {
+          pendingPreset.current = null
+          const harnessIds = ((target ? targetCaps : capabilities)?.harnesses ?? [])
+            .filter(pickable)
+            .map((h) => h.id)
+          if (waiting.harness === currentHarness.id) {
+            const { slots, notes } = settlePreset(waiting, {
+              harnesses: harnessIds,
+              models: list ?? [],
+              permissions: currentHarness.permission_modes ?? [],
+              projects: targetProjects.map((p) => p.id),
+              labels: presetLabels(waiting),
+            })
+            setModel(slots.model)
+            setEffort(slots.effort)
+            setPermission(slots.permission)
+            setFast(slots.fast && currentHarness.fast_supported === true)
+            if (slots.projectId) setProjectId(slots.projectId)
+            setPresetNote(notes.join(' ') || null)
+          } else {
+            // Its harness is not the one running now: the project still
+            // travels, and the note says why the rest did not.
+            const { slots, notes } = settlePreset(waiting, {
+              harnesses: harnessIds,
+              models: [],
+              permissions: [],
+              projects: targetProjects.map((p) => p.id),
+              labels: presetLabels(waiting),
+            })
+            if (slots.projectId) setProjectId(slots.projectId)
+            setPresetNote(notes.join(' ') || null)
+          }
+        }
       }
     })
     // The custom rows ride beside the catalog: the records, then what
@@ -287,6 +356,160 @@ export default function NewChat({
   const chosenPermission = permissionWords.some((w) => w.w === savedPermission) ? savedPermission : null
     ? savedPermission
     : null
+
+  // ---- presets ----
+  // A preset records another moment, so it names its own harness, model and
+  // project rather than the ones on screen: the labels it speaks in have to
+  // come from its own fields, not from the current selection.
+  const presetLabels = (preset) => {
+    const row = preset.projectId ? targetProjects.find((p) => p.id === preset.projectId) ?? null : null
+    return {
+      harnessLabel: harnessName(preset.harness),
+      modelLabel: preset.model ? prettyModelName(preset.model) : null,
+      effortLabel: preset.effort,
+      permissionLabel: preset.permission,
+      projectLabel: row ? projectName(row) : null,
+      currentHarnessLabel: currentHarness ? harnessName(currentHarness.id) : null,
+    }
+  }
+  const chipLabel = (preset) => {
+    if (preset.name) return preset.name
+    const labels = presetLabels(preset)
+    return suggestedPresetName({
+      modelLabel: labels.modelLabel,
+      harnessLabel: labels.harnessLabel,
+      effort: preset.effort,
+      projectLabel: labels.projectLabel,
+    })
+  }
+  // What the Save chip would name this setup right now: what it is, in the
+  // words the pickers above show ("Opus high, this repo").
+  const suggestedForNow = () => {
+    const row = targetProjects.find((p) => p.id === projectId) ?? null
+    return suggestedPresetName({
+      modelLabel: model ? (shownModelName ?? prettyModelName(model)) : null,
+      harnessLabel: currentHarness ? harnessName(currentHarness.id) : null,
+      effort: chosenEffort,
+      projectLabel: row ? projectName(row) : null,
+    })
+  }
+  const applyPreset = (preset) => {
+    if (!preset) return
+    setArmedPreset(clearRow())
+    const harnessThere = available.some((h) => h.id === preset.harness)
+    if (!harnessThere) {
+      // The harness is gone, so its model, effort and approval word have
+      // nothing to attach to. The project still travels, and the note says
+      // what stayed behind - never a silent partial apply.
+      const { slots, notes } = settlePreset(preset, {
+        harnesses: available.map((h) => h.id),
+        models: [],
+        permissions: [],
+        projects: targetProjects.map((p) => p.id),
+        labels: presetLabels(preset),
+      })
+      if (slots.projectId) setProjectId(slots.projectId)
+      setPresetNote(notes.join(' ') || null)
+      return
+    }
+    if (currentHarness && preset.harness !== currentHarness.id) {
+      // A harness switch resets every slot below this line, so the preset
+      // waits for the new harness's model list and settles in that effect.
+      pendingPreset.current = preset
+      setPresetNote(null)
+      setHarness(preset.harness)
+      return
+    }
+    const { slots, notes } = settlePreset(preset, {
+      harnesses: available.map((h) => h.id),
+      models,
+      permissions: permissionWords,
+      projects: targetProjects.map((p) => p.id),
+      labels: presetLabels(preset),
+    })
+    setModel(slots.model)
+    setEffort(slots.effort)
+    setPermission(slots.permission)
+    setFast(slots.fast && currentHarness?.fast_supported === true)
+    if (slots.projectId) setProjectId(slots.projectId)
+    setPresetNote(notes.join(' ') || null)
+  }
+  // Naming a preset is one step, in place: the Save chip becomes an input
+  // prefilled with what the setup is, and Enter keeps it. The ref holds the
+  // editing value so Enter and the blur it causes cannot both commit and
+  // save the same setup twice.
+  const presetEditingRef = useRef(null)
+  presetEditingRef.current = presetEditing
+  const beginSave = () => {
+    setArmedPreset(clearRow())
+    setPresetEditing({ id: 'new', draft: suggestedForNow() })
+  }
+  const beginRename = (preset) => {
+    setPresetEditing({ id: preset.id, draft: chipLabel(preset) })
+  }
+  const commitPresetName = () => {
+    const editing = presetEditingRef.current
+    if (!editing) return
+    presetEditingRef.current = null
+    setPresetEditing(null)
+    const draft = editing.draft.trim().slice(0, NAME_LIMIT)
+    if (!draft) return
+    if (editing.id === 'new') {
+      const preset = presetFromState({
+        name: draft,
+        harness: currentHarness?.id,
+        model,
+        effort: chosenEffort,
+        permission: chosenPermission,
+        projectId,
+        fast,
+      })
+      if (!preset) return
+      setPresets(storePresets([...presets, preset]))
+      return
+    }
+    const row = presets.find((p) => p.id === editing.id)
+    if (!row) return
+    setPresets(storePresets(replacePreset(presets, { ...row, name: draft })))
+  }
+  const cancelPresetName = () => {
+    presetEditingRef.current = null
+    setPresetEditing(null)
+  }
+  const deletePreset = (id) => {
+    setArmedPreset(clearRow())
+    setPresets(storePresets(removePreset(presets, id)))
+  }
+  const toggleDefaultPreset = (id) => {
+    setArmedPreset(clearRow())
+    const already = presets.find((p) => p.id === id)?.default === true
+    setPresets(storePresets(markDefault(presets, already ? null : id)))
+  }
+  const presetKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      e.stopPropagation()
+      commitPresetName()
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      e.stopPropagation()
+      cancelPresetName()
+    }
+  }
+  const presetNameInput = (editing) => (
+    <input
+      className="nc-preset nc-preset-input"
+      value={editing.draft}
+      onChange={(e) => setPresetEditing({ id: editing.id, draft: e.target.value })}
+      onKeyDown={presetKeyDown}
+      onBlur={commitPresetName}
+      aria-label="Name this setup"
+      maxLength={NAME_LIMIT}
+      spellCheck={false}
+      autoComplete="off"
+      autoFocus
+    />
+  )
   // The model the chat runs from its first breath: the user's pick, else
   // the catalog's default where the harness's config names none. The
   // daemon resolves the config case itself at create (pairing grok's
@@ -576,10 +799,77 @@ export default function NewChat({
         </div>
       ))}
       <div className={`nc-box${needsSignIn || usingApiKey ? ' nc-box--auth' : ''}`} ref={boxRef}>
+        {/* Saved setups, above the composer. Ghost text, no fill and no
+            border: the hover wash is the only affordance, so the row reads
+            as text until it is reached for. Every control is a real button
+            (or an input while naming), so the row is Tab-reachable. */}
+        <div className="nc-presets" role="group" aria-label="Saved setups">
+          {presets.map((preset) => {
+            const armed = rowIsArmed(armedPreset, preset.id)
+            return (
+              <span className="nc-preset-wrap" key={preset.id}>
+                {presetEditing?.id === preset.id ? (
+                  presetNameInput(presetEditing)
+                ) : (
+                  <button
+                    type="button"
+                    className={`nc-preset${preset.default ? ' on' : ''}`}
+                    title={`${presetSummary(preset, presetLabels(preset))}. Double-click to rename.`}
+                    onClick={() => applyPreset(preset)}
+                    onDoubleClick={() => beginRename(preset)}
+                  >
+                    {chipLabel(preset)}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="nc-preset-hover nc-preset-star"
+                  aria-pressed={preset.default === true}
+                  aria-label={preset.default ? 'New chats open on this setup' : 'Open new chats with this setup'}
+                  title={preset.default ? 'New chats open on this setup' : 'Open new chats with this setup'}
+                  onClick={() => toggleDefaultPreset(preset.id)}
+                >
+                  <Star size={11} weight={preset.default ? 'fill' : 'regular'} />
+                </button>
+                <button
+                  type="button"
+                  className={`nc-preset-hover nc-preset-x${armed ? ' armed' : ''}`}
+                  aria-label={armed ? 'Press again to delete this setup' : 'Delete this setup'}
+                  title={armed ? 'Press again to delete this setup' : 'Delete this setup'}
+                  onClick={() => (armed ? deletePreset(preset.id) : setArmedPreset((curr) => armRow(curr, preset.id)))}
+                >
+                  {armed ? 'Delete?' : <X size={11} weight="bold" />}
+                </button>
+              </span>
+            )
+          })}
+          {presetEditing?.id === 'new' ? (
+            presetNameInput(presetEditing)
+          ) : (
+            <button
+              type="button"
+              className="nc-preset nc-preset-save"
+              onClick={beginSave}
+              disabled={!currentHarness}
+              title="Save the setup above as a preset"
+            >
+              Save this setup
+            </button>
+          )}
+        </div>
+        {presetNote && (
+          <p className="nc-preset-note" role="status">
+            {presetNote}
+          </p>
+        )}
         {menus.element}
         <textarea
           value={text}
           onFocus={takeInserter}
+          // Leaving the composer closes the / or @ list: a click somewhere
+          // else in the window never moves the caret, so the caret's word
+          // alone could not retire it and the menu hung over an unfocused box.
+          onBlur={menus.dismiss}
           onChange={(e) => {
             setText(e.target.value)
             menus.track(e)

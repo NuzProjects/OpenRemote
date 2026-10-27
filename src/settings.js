@@ -5,6 +5,12 @@
 
 const PREFS_KEY = 'openremote-prefs'
 const RECENTS_KEY = 'openremote-recent-workspaces'
+// New chat presets: a list the person edits (saves, renames, deletes),
+// which is why it gets its own key like the recents rather than a field in
+// the prefs envelope. The prefs are read before the first paint and
+// whitelisted field by field; a list of records has no business in that
+// path, and one damaged preset must never take the boot with it.
+const PRESETS_KEY = 'openremote-presets'
 // Superseded by PREFS_KEY's reduce_motion; read only, for the migration.
 const OLD_REDUCE_KEY = 'openremote-reduce-motion'
 
@@ -98,6 +104,20 @@ export function hashWriteReady({ sessionsLoaded = false, seedConsumed = false } 
   return sessionsLoaded || seedConsumed
 }
 
+/// Two spellings of one folder. A trailing separator is the same folder on
+/// every platform, and a Windows path is case-insensitive besides. A POSIX
+/// path is not, so case is folded only when either side looks like Windows -
+/// otherwise `~/Work` and `~/work` would collapse into one entry and a
+/// recent folder would disappear.
+export function samePath(a, b) {
+  const trim = (value) => String(value ?? '').replace(/[\\/]+$/, '')
+  const left = trim(a)
+  const right = trim(b)
+  const windows = (value) => /^[a-zA-Z]:/.test(value) || value.includes('\\')
+  if (windows(left) || windows(right)) return left.toLowerCase() === right.toLowerCase()
+  return left === right
+}
+
 // Recently used workspace folders - one shared parse instead of a copy
 // per view. Capped and deduped on write, most recent first.
 export function loadRecentWorkspaces() {
@@ -110,11 +130,32 @@ export function loadRecentWorkspaces() {
 }
 
 export function pushRecentWorkspace(path) {
-  const list = [path, ...loadRecentWorkspaces().filter((p) => p !== path)].slice(0, 8)
+  const list = [path, ...loadRecentWorkspaces().filter((p) => !samePath(p, path))].slice(0, 8)
   try {
     localStorage.setItem(RECENTS_KEY, JSON.stringify(list))
   } catch {
     /* storage unavailable */
   }
   return list
+}
+
+// New chat presets, stored as the list the person sees. This layer only
+// guarantees the shape of the container - an array of objects - and never
+// reads inside a row: what a preset means is presets.js's rule, so a
+// damaged row is dropped there rather than silently reinterpreted here.
+export function loadStoredPresets() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PRESETS_KEY) ?? '[]')
+    return Array.isArray(raw) ? raw.filter((row) => row && typeof row === 'object' && !Array.isArray(row)) : []
+  } catch {
+    return []
+  }
+}
+
+export function saveStoredPresets(rows) {
+  try {
+    localStorage.setItem(PRESETS_KEY, JSON.stringify(Array.isArray(rows) ? rows : []))
+  } catch {
+    /* storage unavailable: the session keeps what it has in memory */
+  }
 }

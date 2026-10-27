@@ -21,6 +21,7 @@ const {
   hashWriteReady,
   loadRecentWorkspaces,
   pushRecentWorkspace,
+  samePath,
 } = await import('./settings.js')
 
 const stubDoc = () => {
@@ -177,6 +178,28 @@ test('pushRecentWorkspace dedupes, fronts, and caps at eight', () => {
   for (let i = 0; i < 10; i++) pushRecentWorkspace(`extra-${i}`)
   assert.equal(loadRecentWorkspaces().length, 8)
   assert.equal(loadRecentWorkspaces()[0], 'extra-9')
+})
+
+test('two spellings of one folder are one recent', () => {
+  localStorage.clear()
+  pushRecentWorkspace('C:\\work')
+  pushRecentWorkspace('c:\\work\\')
+  assert.deepEqual(
+    loadRecentWorkspaces(),
+    ['c:\\work\\'],
+    'the folder appears once, under the spelling used last',
+  )
+  // A POSIX path is case-sensitive, so these two really are two folders.
+  pushRecentWorkspace('~/Work')
+  pushRecentWorkspace('~/work')
+  assert.equal(loadRecentWorkspaces().length, 3)
+})
+
+test('samePath folds a trailing separator and Windows case, nothing else', () => {
+  assert.equal(samePath('C:\\work\\', 'c:\\work'), true)
+  assert.equal(samePath('/home/me/proj/', '/home/me/proj'), true)
+  assert.equal(samePath('~/Work', '~/work'), false, 'POSIX case is a different folder')
+  assert.equal(samePath('a', 'b'), false)
 })
 
 test('a storage that refuses to answer leaves the defaults, before first paint', () => {
