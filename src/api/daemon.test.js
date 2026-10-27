@@ -107,6 +107,16 @@ test('a malformed frame that ends the stream still advances the cursor past it',
   assert.equal(cursor, 2)
 })
 
+test('a stream that dies between a frame id and its data does not claim that seq', async () => {
+  // The daemon writes the id first, so a connection that drops right after
+  // it hands the reader a seq with no event behind it. Reporting that seq
+  // would resume past an event the console never folded, and nothing would
+  // replay it.
+  const { seen, cursor } = await collect('id: 1\ndata: {"seq":1,"type":"a"}\n\nid: 2\n')
+  assert.deepEqual(seen.map((event) => event.type), ['a'])
+  assert.equal(cursor, 1)
+})
+
 test('a run of malformed frames is noted on the first and again at the tenth', async () => {
   let frames = ''
   for (let seq = 1; seq <= 10; seq += 1) frames += `id: ${seq}\ndata: {oops\n\n`

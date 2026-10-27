@@ -719,13 +719,18 @@ export class DaemonApi {
   // event; the reader keeps going until the connection drops, then reports
   // the last cursor through `onClose(cursor, err)` so the caller can resume
   // with `after` - or stop retrying when `err` carries the daemon's own
-  // "no such session" (see sessionGone). Returns a stop function.
+  // "no such session" (see sessionGone). The cursor names the last frame
+  // that completed: a stream that dies between a frame's `id:` line and its
+  // data must not claim that seq, or the resume steps over an event the
+  // console never folded and it is lost for good. Returns a stop function.
   events(id, { after = null, onEvent, onClose }) {
     const controller = new AbortController()
     const run = async () => {
       // A garbage cursor is deliberately absent: one clean full replay
       // rather than a resume that can never find its position.
       let cursor = parseCursor(after)
+      // The id line of the frame being read, kept only so a frame whose
+      // data arrived and was rejected can still step past its own seq.
       let lastId = cursor
       let skipped = 0
       try {
@@ -777,12 +782,12 @@ export class DaemonApi {
             }
           }
         }
-        onClose?.(lastId)
+        onClose?.(cursor)
       } catch (err) {
         // An aborted stop is not a close. Anything else reports the last
         // cursor, and the error itself rides along as the second argument
         // so the caller can stop retrying when the session is gone.
-        if (err?.name !== 'AbortError') onClose?.(lastId ?? cursor, err)
+        if (err?.name !== 'AbortError') onClose?.(cursor, err)
       }
     }
     run()
