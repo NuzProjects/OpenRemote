@@ -58,6 +58,12 @@ export default function InstallPluginModal({ onClose, entry = null }) {
 
   const read = async (source) => {
     if (!source) return
+    // One read at a time, for the same reason close() refuses while busy: the
+    // stage belongs to the call that started it. A second Enter while the first
+    // is out would stage a second copy and leave the first one's id lost, so
+    // the guard lives here, where the key path and the button both arrive,
+    // rather than only on the button.
+    if (busy) return
     setBusy(true)
     setError(null)
     try {

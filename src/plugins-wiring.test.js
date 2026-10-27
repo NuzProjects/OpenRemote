@@ -11,6 +11,15 @@ import { readFileSync } from 'node:fs'
 
 const source = (file) => readFileSync(new URL(`./${file}`, import.meta.url), 'utf8')
 
+test('the read path refuses a second press while one is already running', () => {
+  const modal = source('InstallPluginModal.jsx')
+  // The button is disabled while busy, but Enter on the source field reaches
+  // read() without passing it. The guard is in read() itself, so the key path
+  // and the button obey the same rule; the comment between the two guards says
+  // why, so the window the pattern allows covers it.
+  assert.match(modal, /const read = async \(source\) => \{\s*\n\s*if \(!source\) return[\s\S]{0,400}?if \(busy\) return/)
+})
+
 test('a dialog that is installing refuses to close, and says why', () => {
   const modal = source('InstallPluginModal.jsx')
   // Esc, the backdrop and the X all call close(); the guard is inside it.

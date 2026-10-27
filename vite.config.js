@@ -17,7 +17,27 @@ export default defineConfig({
     port: 5175,
     strictPort: true,
     watch: {
-      ignored: ['**/src-tauri/**', '**/daemon/**'],
+      ignored: [
+        '**/src-tauri/**',
+        '**/daemon/**',
+        // An editor that saves atomically writes the new file into a
+        // `.name.hash.tmpdir` directory beside the original and renames it
+        // into place. The watcher sees the temporary name appear and can lose
+        // the race with the rename, which it reports as EBUSY on a path that no
+        // longer exists - and Vite treats a watcher error as fatal, so the dev
+        // server exits under a window that stays open and looks hung. The
+        // temporary directory is never worth watching: only the file it becomes
+        // matters, and that write is seen after the rename.
+        '**/.*.tmpdir/**',
+      ],
+      // fs.watch on Windows reports a rename over a file being read as EBUSY,
+      // and Vite treats a watcher error as fatal: the dev server exits and the
+      // window keeps its last frame, which reads as a hang. Polling does not
+      // use the platform watcher at all, so a save can never take the server
+      // down; 400 ms is the upper bound on how stale a hot update can be, and
+      // the tree being watched is one source folder.
+      usePolling: true,
+      interval: 400,
     },
   },
 })
