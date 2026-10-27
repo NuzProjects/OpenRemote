@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowRight,
+  BookmarkSimple,
   ChartBar,
   Check,
   ClockCounterClockwise,
@@ -22,6 +23,7 @@ import {
   Keyboard,
   Lightning,
   MagnifyingGlass,
+  PencilSimple,
   PuzzlePiece,
   Repeat,
   SquaresFour,
@@ -37,6 +39,8 @@ import { activeSessions } from './archive.js'
 import { hasFileChanges } from './changes.js'
 import { planJob, requestJob } from './chat-to-job.js'
 import { openChanges } from './ChangesModal.jsx'
+import PresetNameModal from './PresetNameModal.jsx'
+import { presetFromChat, savePreset } from './presets.js'
 import {
   elsewhereAside,
   namedChats,
@@ -92,7 +96,7 @@ const PAGE_TITLES = { since: 'Since your last look', 'caught-up': 'Since your la
 
 const projectLabel = (p) => p.folders[0].split(/[\\/]/).filter(Boolean).pop()
 
-export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onOpenProject, onOpenMachine, onRace, raceFree, panes = 1, paneCapacity = 4, onSaveLayout, onRestoreLayout }) {
+export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onOpenProject, onOpenMachine, onRace, raceFree, panes = 1, paneCapacity = 4, onSaveLayout, onRestoreLayout, onRenameChat = null, focusedChatId = null }) {
   // One line on purpose: the stop-everything wiring test reads this call to
   // prove the palette stops chats through the action a single chat already
   // uses. The two new names sit before `stopChat`, which stays last.
@@ -114,6 +118,10 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
   const [harnessPlan, setHarnessPlan] = useState(null)
   const [harnessPhase, setHarnessPhase] = useState(null)
   const [harnessResult, setHarnessResult] = useState(null)
+  // The preset being named. It lives here, not in the shell, because the modal
+  // is drawn over this list and the list stays open underneath it (see the
+  // savePreset arm in choose).
+  const [namingPreset, setNamingPreset] = useState(null)
   const listRef = useRef(null)
   const inputRef = useRef(null)
   const panelRef = useRef(null)
@@ -338,14 +346,54 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
           },
         ]
       : []
+    // Renaming the chat the focused pane is showing. Deliberately not
+    // `reviewChat` above: that one reads the address, which names the primary
+    // pane's view, and a split can have its focus on a different chat - a row
+    // built from the address would rename one chat while the user is looking
+    // at another, which is the one way a rename can lie. The shell owns the
+    // focused pane and passes its chat in; the shell hosts the dialog too, so
+    // the row only asks for it.
+    const renameRow =
+      focusedChatId && onRenameChat
+        ? [
+            {
+              key: 'action:rename-chat',
+              section: 'Actions',
+              name: 'Rename chat',
+              sub: chats?.[focusedChatId]?.title ?? 'This chat',
+              icon: <PencilSimple size={15} />,
+              run: { renameChat: focusedChatId },
+            },
+          ]
+        : []
+    // Saving this chat's setup as a New chat preset. The plan carries what the
+    // preset would hold and refuses with a reason when the chat cannot become
+    // one, so the row appears only where pressing it would mean something.
+    const presetPlan = presetFromChat(reviewChat, {
+      harnesses: capabilities?.harnesses ?? [],
+      projects: projects ?? [],
+      thisDevice,
+    })
+    const presetRow = presetPlan.offer
+      ? [
+          {
+            key: 'action:save-preset',
+            section: 'Actions',
+            name: 'Save this setup as a preset',
+            sub: presetPlan.suggestedName,
+            icon: <BookmarkSimple size={15} />,
+            run: { savePreset: presetPlan.preset },
+          },
+        ]
+      : []
     return {
-      actions: [...stopRow, ...harnessRow, ...raceRow, ...sinceRow, ...layoutRow, ...layoutsRow, ...review, ...jobRow, ...pages, ...actions],
+      actions: [...stopRow, ...harnessRow, ...raceRow, ...sinceRow, ...layoutRow, ...layoutsRow, ...renameRow, ...presetRow, ...review, ...jobRow, ...pages, ...actions],
       chats: chatRows,
       projectRows,
       machines,
       harnessRows,
     }
-  }, [kb, sessions, chats, archived, projects, devices, thisDevice, capabilities, machines, raceFree, moved, panes, savedLayouts])
+  }, [kb, sessions, chats, archived, projects, devices, thisDevice, capabilities, machines, raceFree, moved, panes, savedLayouts, focusedChatId, onRenameChat])
 
   const sections = useMemo(() => {
     if (page === 'layouts') {
@@ -742,6 +790,14 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
       onClose()
       return
     }
+    if (r.savePreset) {
+      // The naming dialog is drawn over this list, and its state lives here,
+      // so the palette has to stay mounted underneath it: closing first would
+      // take the dialog with it. The modal family's backdrop (z-index 100)
+      // sits above the palette's own (40), so this one stacks correctly.
+      setNamingPreset(r.savePreset)
+      return
+    }
     onClose()
     // After the palette is gone, so focus and anchors land on the app. The
     // rule editor lives in the Automations view, so the draft is staged for
@@ -758,6 +814,10 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
       } else if (r.chat) onOpenChat(r.chat)
       else if (r.project) onOpenProject(r.project)
       else if (r.machine) onOpenMachine(r.machine)
+      // The rename dialog belongs to the shell (it hosts it above every
+      // surface that offers renaming), so the palette closes first and then
+      // asks, the same shape as the arms above.
+      else if (r.renameChat) onRenameChat?.(r.renameChat)
     })
   }
 
@@ -989,6 +1049,16 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
           </span>
         </div>
       </div>
+      {/* Drawn over the palette (its backdrop is z-index 100 against this
+          one's 40), which is why the naming state lives in this component:
+          the row below sets it without closing the list. */}
+      {namingPreset && (
+        <PresetNameModal
+          preset={namingPreset}
+          onSave={(name) => savePreset({ ...namingPreset, name })}
+          onClose={() => setNamingPreset(null)}
+        />
+      )}
     </div>
   )
 }
