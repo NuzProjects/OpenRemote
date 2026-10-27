@@ -204,6 +204,17 @@ export function blocksWhileTyping(actionId) {
   return Boolean(action?.navigates)
 }
 
+/// Why a rebind capture must not take `combo`, or null when it may. A key with
+/// no Ctrl, Alt or function modifier never reaches the dispatcher while a text
+/// field has focus, so storing one would draw a key on this page that never
+/// runs where the user writes. Esc and the function keys are the exceptions
+/// the dispatcher already delivers while typing.
+export function captureRefusal(combo) {
+  if (!validCombo(combo)) return 'That is not a key OpenRemote can bind.'
+  if (firesWhileTyping(combo)) return null
+  return 'A key with no modifier is typed into the message box rather than run, so it cannot be a shortcut. Add Ctrl, Alt or a function key.'
+}
+
 // The user's changes to the default map: { actionId: combo | null }, null
 // meaning deliberately unbound. Unknown actions and malformed combos are
 // dropped, never trusted.
@@ -217,9 +228,30 @@ export function loadOverrides() {
   const out = {}
   if (raw && typeof raw === 'object') {
     for (const [id, combo] of Object.entries(raw)) {
-      if (!ACTION_IDS.has(id)) continue
+      // An id this build no longer knows is kept, not dropped: it is the
+      // user's saved key, and the settings page shows it as a row that can be
+      // cleared rather than making it vanish on the next launch.
       if (combo === null || validCombo(combo)) out[id] = combo
     }
+  }
+  return out
+}
+
+/// The saved bindings whose action this build no longer has. The settings page
+/// shows them as one row; nothing else reads them (`effectiveBindings` walks
+/// the catalog, so an unknown id can never take a key).
+export function staleOverrides(overrides) {
+  return Object.entries(overrides ?? {})
+    .filter(([id]) => !ACTION_IDS.has(id))
+    .map(([id, combo]) => ({ id, combo }))
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+}
+
+/// Forget the saved bindings whose action is gone, and nothing else.
+export function clearStaleOverrides(overrides) {
+  const out = {}
+  for (const [id, combo] of Object.entries(overrides ?? {})) {
+    if (ACTION_IDS.has(id)) out[id] = combo
   }
   return out
 }

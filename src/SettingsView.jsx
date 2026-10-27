@@ -53,7 +53,7 @@ import './panels.css'
 import './settings.css'
 import './keyboard.css'
 import { useKeyboard, isMac } from './keyboard.jsx'
-import { ACTIONS, GROUPS, comboFromEvent, comboLabel, isOverridden } from './shortcuts.js'
+import { ACTIONS, GROUPS, captureRefusal, comboFromEvent, comboLabel, isOverridden } from './shortcuts.js'
 
 // The harnesses whose own login command the daemon can relay - the
 // Sign-in action renders only there (no dead UI elsewhere).
@@ -114,6 +114,9 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
   const kb = useKeyboard()
   const [capturing, setCapturing] = useState(null)
   const [moved, setMoved] = useState(null)
+  // Why the last key pressed in the capture was refused, shown under the row
+  // that is waiting for keys. Cleared when the capture ends or a key is taken.
+  const [refused, setRefused] = useState(null)
 
   // While an action waits for its keys, every keystroke is the binding:
   // Esc cancels, Backspace or Delete clears the key, a lone modifier
@@ -126,17 +129,29 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
       e.stopPropagation()
       const bare = !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey
       if (e.key === 'Escape' && bare) {
+        setRefused(null)
         setCapturing(null)
         return
       }
       if ((e.key === 'Backspace' || e.key === 'Delete') && bare) {
         kb.unbind(capturing)
         setMoved(null)
+        setRefused(null)
         setCapturing(null)
         return
       }
       const combo = comboFromEvent(e, isMac)
       if (!combo) return
+      // A key the dispatcher would never deliver while the user types is not
+      // a binding this page may store: it would draw a key that never runs
+      // where the message is written. The capture stays open so the next
+      // keypress can be the one that works.
+      const refusal = captureRefusal(combo)
+      if (refusal) {
+        setRefused(refusal)
+        return
+      }
+      setRefused(null)
       const displaced = kb.rebind(capturing, combo)
       setMoved(
         displaced.length
@@ -145,7 +160,10 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
       )
       setCapturing(null)
     }
-    const onDown = () => setCapturing(null)
+    const onDown = () => {
+      setRefused(null)
+      setCapturing(null)
+    }
     window.addEventListener('keydown', onKey, true)
     window.addEventListener('mousedown', onDown, true)
     return () => {
@@ -1131,6 +1149,7 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
                       <div>
                         <div className="pn-name">{a.label}</div>
                         {moved?.id === a.id && <div className="pn-detail">Moved from {moved.from}.</div>}
+                        {refused && capturing === a.id && <div className="pn-detail">{refused}</div>}
                       </div>
                       <div className="pn-actions">
                         {isOverridden(kb.overrides, a.id) && (
@@ -1165,6 +1184,29 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
                   ))}
                 </div>
               ))
+            )}
+            {kb.staleBindings?.length > 0 && (
+              // A saved key whose action this build no longer has. The action
+              // is gone, so the row names no action: it shows the key and a
+              // way to forget it, which is all that can honestly be said.
+              <div className="pn-list pn-list--tight kb-set">
+                <div className="kb-group-label">Saved</div>
+                <div className="pn-row" data-stg="keyboard-stale">
+                  <div>
+                    <div className="pn-name">Saved shortcut for an action this build no longer has</div>
+                    <div className="pn-detail">
+                      {kb.staleBindings
+                        .map((b) => (b.combo ? comboLabel(b.combo, isMac) : 'no key'))
+                        .join(', ')}
+                    </div>
+                  </div>
+                  <div className="pn-actions">
+                    <button type="button" className="pn-btn" onClick={() => kb.clearStale()}>
+                      Clear
+                    </button>
+                  </div>
+                </div>
+              </div>
             )}
           </section>
         )}

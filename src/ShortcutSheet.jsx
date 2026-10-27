@@ -50,6 +50,10 @@ export default function ShortcutSheet({ onClose }) {
           {kb.bindings.palette ? ` (${comboLabel(kb.bindings.palette, isMac)})` : ''}. Change any key in
           Settings, under Keyboard.
         </p>
+        <p className="kb-sheet-foot">
+          Actions that leave the chat (New chat, Archive, Close pane, and the view switches) wait until
+          the caret leaves the message box, so a half-written message is never lost.
+        </p>
       </div>
     </div>
   )
