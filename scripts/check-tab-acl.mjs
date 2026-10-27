@@ -33,16 +33,28 @@
 // the shell's declaration, not the call sites), or that the Rust side of a
 // command does what its name promises.
 //
-// Usage: node scripts/check-tab-acl.mjs [--root <dir>]
+// Usage: node scripts/check-tab-acl.mjs [--root <dir>] [--self-test]
 //
-// `--root` points the check at a copy of the tree instead of this one, so its
-// verdict on a tree that is about to break can be seen before it does.
-import { readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+// `--root` exists so the check can be pointed at a copy of the tree and its
+// exit code watched; the self-test below does that rather than trusting that
+// a function returning failures would have printed them.
+import { spawnSync } from 'node:child_process'
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-// Rooted at this file, not at the working directory: `--root` runs the same
-// check against a copy of the tree, and a path it reads has to be the copy's.
+// Rooted at this file, not at the working directory: the self-test runs the
+// same check against a copy of the tree, and a path it changes has to be the
+// copy's path.
 const repo = fileURLToPath(new URL('..', import.meta.url))
 const CAPS = 'src-tauri/capabilities'
 const CONF = 'src-tauri/tauri.conf.json'
@@ -198,6 +210,106 @@ function checkAt(root) {
   return { failures, names, commands, granted, missing }
 }
 
+// Proof that the completeness check can fail, run against a copy of the tree
+// so a mistake here cannot leave the real files changed: the copy passes as it
+// stands, adding a declared command with no grant turns it red, and dropping a
+// grant that every capability carried turns it red. The `open_url` assertion is
+// the union rule made executable: that permission lives in the phone's file
+// alone, and the copy still passes.
+function selfTest() {
+  const scratch = mkdtempSync(join(tmpdir(), 'openremote-acl-'))
+  const files = [BUILD, CONF, join(CAPS, console_capability), join(CAPS, 'mobile.json')]
+  const bodies = new Map()
+
+  for (const file of files) {
+    bodies.set(file, readFileSync(join(repo, file), 'utf8'))
+    const path = join(scratch, file)
+    mkdirSync(dirname(path), { recursive: true })
+    copyFileSync(join(repo, file), path)
+  }
+
+  const reset = () => {
+    for (const [file, body] of bodies) writeFileSync(join(scratch, file), body)
+  }
+  // The same script, as a process, against the copy: the exit code is the
+  // thing every gate reads, so the exit code is the thing proved here.
+  const runOn = (root) =>
+    spawnSync(process.execPath, [fileURLToPath(import.meta.url), '--root', root], { stdio: 'ignore' })
+  const results = []
+  const expect = (what, condition, detail) => results.push({ what, ok: Boolean(condition), detail })
+
+  const clean = checkAt(scratch)
+  expect('the copy of the tree passes', clean.failures.length === 0, clean.failures.join('; '))
+  const grantsOpenUrl = files
+    .filter((file) => file.endsWith('.json'))
+    .filter((file) => bodies.get(file).includes('"allow-open-url"'))
+  expect(
+    'the union, not one file: a command granted by the phone file alone still counts',
+    grantsOpenUrl.length === 1 && clean.missing.length === 0,
+    `granted by ${JSON.stringify(grantsOpenUrl)}`,
+  )
+
+  reset()
+  writeFileSync(
+    join(scratch, BUILD),
+    bodies
+      .get(BUILD)
+      .replace('const COMMANDS: &[&str] = &[', 'const COMMANDS: &[&str] = &[\n    "ghost_command",'),
+  )
+  const declaredOnly = checkAt(scratch)
+  expect(
+    'a declared command granted nowhere turns it red',
+    declaredOnly.missing.length === 1 &&
+      declaredOnly.missing[0] === 'ghost_command' &&
+      declaredOnly.failures.some((line) => line.includes('allow-ghost-command')),
+    declaredOnly.failures.join('; '),
+  )
+
+  reset()
+  for (const file of [join(CAPS, console_capability), join(CAPS, 'mobile.json')]) {
+    const cap = JSON.parse(bodies.get(file))
+    cap.permissions = cap.permissions.filter((permission) => permission !== 'allow-daemon-info')
+    writeFileSync(join(scratch, file), `${JSON.stringify(cap, null, 2)}\n`)
+  }
+  const everyGrantGone = checkAt(scratch)
+  expect(
+    'a command whose grant is removed from every capability turns it red',
+    everyGrantGone.missing.includes('daemon_info') &&
+      everyGrantGone.failures.some((line) => line.includes('allow-daemon-info')),
+    everyGrantGone.failures.join('; '),
+  )
+
+  reset()
+  const cleanExit = runOn(scratch)
+  expect('a clean copy exits 0', cleanExit.status === 0, `exit ${cleanExit.status}`)
+
+  writeFileSync(
+    join(scratch, BUILD),
+    bodies
+      .get(BUILD)
+      .replace('const COMMANDS: &[&str] = &[', 'const COMMANDS: &[&str] = &[\n    "ghost_command",'),
+  )
+  const redExit = runOn(scratch)
+  expect('a copy with an ungranted command exits non-zero', redExit.status !== 0, `exit ${redExit.status}`)
+
+  reset()
+  rmSync(scratch, { recursive: true, force: true })
+
+  for (const { what, ok, detail } of results) {
+    if (ok) console.log(`  ok   ${what}`)
+    else console.error(`  FAIL ${what}${detail ? `: ${detail}` : ''}`)
+  }
+  const failed = results.filter((result) => !result.ok).length
+  if (failed > 0) {
+    console.error(`self-test: ${failed} of ${results.length} expectation(s) failed`)
+    process.exit(1)
+  }
+  console.log(`self-test ok: ${results.length} expectations, the completeness check fails when it should`)
+}
+
+if (process.argv.includes('--self-test')) {
+  selfTest()
+} else {
   const at = process.argv.indexOf('--root')
   const root = at === -1 ? repo : process.argv[at + 1]
   if (root === undefined) {
@@ -213,3 +325,4 @@ function checkAt(root) {
   console.log(
     `tab acl ok: ${names.length} capability file(s), every non-phone one scoped to the main webview, every declared command (${commands.length}) granted`,
   )
+}
