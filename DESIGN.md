@@ -141,6 +141,24 @@ spacing.
   - Four panes is the most. Every split action disables and says so at the
     cap, and a chat dropped on an edge at the cap opens in that pane
     instead of doing nothing.
+  - Named layouts save the window's shape, not its occupants. A layout stores
+    the split tree with its sizes and, per pane, a role - "chat" (whichever
+    chat is current), "new" (a New chat composer), or one of the console's
+    static view names - and never a chat id, because a chat is renamed or
+    deleted by tomorrow and a layout should not restore a hole. The primary
+    pane is recorded as the primary rather than assumed to be the first: "Split
+    left" and "Split up" put a pane in front of it, and a shape that trusted
+    reading order would come back with every role shifted. Saving refuses what
+    cannot come back as it was: fewer than two panes, more than four, a static
+    page parked in a side pane, or a view with no role. Restoring applies the
+    shape and drops a role this build no longer knows. The saved list is a
+    console preference that never leaves this computer, and the live window
+    remembers itself across a reload the same way: the stored shape is
+    validated before it is drawn, a phone never restores one, and a pane whose
+    chat is gone becomes a New chat rather than pointing at nothing. Both
+    halves are reached from the command palette, which saves the current
+    shape and restores a saved one; saving opens the family's own dialog with
+    one field for the name.
   - A phone has no panes: one view, no headers.
 
 ## Components
@@ -168,7 +186,9 @@ spacing.
   share the same ghost. New chat's presets ride that language: a row of
   ghost chips at the top of the box, one per saved setup, ending in the chip
   that saves the current one under a name already filled in for the person
-  to keep or retype ("Opus high, this repo"). At most one preset is the
+  to keep or retype ("Opus high, this repo"). Saving is one press, not a
+  dialog: the chip settles into the new preset in place. At most one preset is
+  the
   default, and New chat opens on it. A preset records what was true when it
   was saved, so applying one keeps only the model, effort and approval word
   the harness still offers, applies the rest, and says what it could not
@@ -236,7 +256,14 @@ spacing.
   capped to one line at a word boundary, and offers a restart only where
   this build can start the daemon. It never speaks for a signed-out account
   (the Cloud door and views say that themselves), and it stands down where
-  the view already prints the same news.
+  the view already prints the same news. Every failure line in the console
+  follows one rule: it says what failed and what a person can do; a refusal is
+  quoted as the daemon's own words ("The daemon refused this: ..."), a status
+  number appears only inside a sentence ("The daemon answered 500 and gave no
+  reason for it."), never as a bare code; nothing says "something went wrong",
+  nothing promises an action that is not beside it, and a cause the console
+  does not know says so instead of inventing one. `src/error-copy.js` is the
+  one place those sentences are chosen.
 - **View boundary:** a view that throws while drawing itself leaves the rest
   of the window intact - sidebar, titlebar and other panes keep working - and
   answers inside its own pane with a still panel (one hairline box, no
@@ -268,7 +295,14 @@ spacing.
   dialog may own the app and never the window), Esc closes one layer at a
   time through the shared stack, and the key goes back to the control that
   opened the dialog. One hook (`dialog-focus.js`) carries all of it, so a
-  dialog that paints a backdrop and nothing else is not one. The onboarding
+  dialog that paints a backdrop and nothing else is not one. The rename dialog
+  is hosted by the shell, not by a view, because two doors open the same one:
+  the sidebar's row menu and the command palette's row. It is one field with
+  the current name selected; it saves through the daemon's own rename, and a
+  refusal keeps it open with the daemon's words quoted rather than closing
+  over a failure. The row shows the saved name at once, for as long as it takes
+  the console's own record to carry it, then follows the daemon's title
+  wherever it goes, including a rename made on another device. The onboarding
   panel is not one of them: it is a full-screen view with no backdrop and no
   X, one step at a time, each step with its own button out.
 - **Context ring:** a 20px SVG donut of context-window usage (2px stroke,
@@ -395,7 +429,10 @@ Every screen the design specifies, backed by the real daemon:
   installed and signed in remotely through the same installer chain and
   sign-in relay. Add a machine mints a one-time Linux install command and
   notices the arrival; Remove is asked twice and says what it deletes.
-- **Plugins** - MCP installs written by hand; the needs-key lifecycle
+- **Plugins** - the installed list carries its own field once the list is long
+  enough to scan: it matches the words a row prints, narrows without
+  reordering, keeps its count line while a query is on, and Escape clears it
+  before leaving it, the same door as the rules list. MCP installs written by hand; the needs-key lifecycle
   (keys never cross the API); the ride-along through each harness's own MCP wire (claude `--mcp-config`
   JSON string, codex `thread/start` config keyPaths).
 - **Automations** - rules with real sources only (a schedule on the
@@ -506,13 +543,14 @@ from the film's own components:
 ## Checking this contract
 
 Most of this page can be checked without opening the app: `npm test` runs
-the console's rule tests (610 of them the last time this line was checked,
+the console's rule tests (768 of them the last time this line was checked,
 and the run prints the live count) and a handful
 of wiring tests read the source text for the parts only a browser could
 show, such as the modal family and the waiting screen's doors. The rules
 behind the newer surfaces sit in their own modules for that reason - the
 palette's pages, the stop question and its sentences, since-last-look, the
-waiting line and its cut, the unread marks, presets and their repair, the
+waiting line and its cut, the unread marks, presets and their repair, named
+layouts and their refusals, the rename rules, the error copy, the
 daemon notice row, the view boundary, race - so each is tested as rules
 rather than as a screenshot. Colour,
 type and motion are not testable that way, so a change to them is checked
