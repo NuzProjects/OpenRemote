@@ -22,6 +22,7 @@ import {
   CONNECTOR_KINDS,
   RULE_EMPTY_NONE,
   RULE_SEARCH_HINT_FROM,
+  machineNotice,
   ruleCountLine,
   ruleEmptyLine,
   ruleSearchHint,

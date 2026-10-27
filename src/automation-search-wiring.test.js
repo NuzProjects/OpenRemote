@@ -68,7 +68,11 @@ test('the field and the count have styles of their own, motion covered twice', (
 test('the no-machine line sits above the list and never gates it', () => {
   const view = source('AutomationsView.jsx')
   const css = source('automations.css')
-  // The rule is automation.js's; the view only renders what it says.
+  // The rule is automation.js's; the view only renders what it says. The
+  // import is part of that: a call site without one is a ReferenceError that
+  // the source tests would otherwise never see, and it crashed this view
+  // once. Every module the call needs is named here.
+  assert.match(view, /import \{[\s\S]{0,400}machineNotice,/)
   assert.match(view, /const machineRow = machineNotice\(\{/)
   assert.match(view, /answered: machinesAnswered,/)
   assert.match(view, /signedIn: signedIn\(cloud\),/)

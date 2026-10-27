@@ -229,3 +229,28 @@ test('a stored binding for a removed action survives the load and is listed as s
   assert.deepEqual(clearStaleOverrides({}), {})
   assert.deepEqual(staleOverrides({}), [])
 })
+
+// ---- the catalog and the window stay in step ----
+
+test('every action in the catalog is wired to the window', async () => {
+  // A key that fires nothing is worse than no key: the cheat sheet and the
+  // settings list would advertise it, and a person would press it. The
+  // dispatcher lives in the views, so the check reads them. Model switches are
+  // the one generated family: their ids come from useModelSwitches, so the
+  // source cannot name them one by one.
+  const { readdirSync, readFileSync } = await import('node:fs')
+  const dir = new URL('./', import.meta.url)
+  const files = readdirSync(dir).filter((name) => name.endsWith('.jsx'))
+  const sources = files.map((name) => readFileSync(new URL(name, dir), 'utf8'))
+  const wired = new Set()
+  for (const text of sources) {
+    for (const match of text.matchAll(/useShortcut\(\s*'([a-z0-9-]+)'/g)) wired.add(match[1])
+  }
+  const missing = ACTIONS.filter((a) => !wired.has(a.id) && !/^model-\d+$/.test(a.id)).map((a) => a.id)
+  assert.deepEqual(missing, [], `actions a key cannot reach: ${missing.join(', ')}`)
+  // And the generated family has its one wire, in the views that own pickers.
+  assert.ok(
+    sources.some((text) => text.includes('useModelSwitches(')),
+    'the model switches keep their generated wire',
+  )
+})
