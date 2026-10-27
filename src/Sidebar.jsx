@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Archive,
   ArrowDown,
@@ -23,6 +23,8 @@ import {
   X,
 } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
+import { chatStatus } from './state/reducer.js'
+import { attentionTitle, needsYou } from './needs-you.js'
 import { sections } from './projects.js'
 import { activeSessions } from './archive.js'
 import { deviceName, isPhone, sessionsForMode } from './cloud.js'
@@ -49,10 +51,16 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
     return sessionsForMode(activeSessions(sessions, archived), mode, thisDevice).map((session) => {
       const elsewhere = session.executor && session.executor !== thisDevice
       const device = elsewhere ? (devices ?? []).find((d) => d.id === session.executor) : null
+      // A chat on screen has a live status from its own stream; every chat has
+      // the poll's. They are kept apart because the dot shows the live one and
+      // the waiting rule needs to know which it is reading (needs-you.js).
+      const liveStatus = chats[session.id]?.status ?? null
       return {
         id: session.id,
         title: chats[session.id]?.title ?? session.title ?? 'A new task',
-        status: chats[session.id]?.status ?? 'idle',
+        status: liveStatus ?? 'idle',
+        liveStatus,
+        polledStatus: chatStatus(session.status),
         harness: session.harness,
         workspace: session.workspace ?? null,
         updatedAt: session.updated_at ?? 0,
@@ -71,19 +79,33 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
     return sorted.filter((c) => c.title.toLowerCase().includes(q))
   }, [rows, query])
 
+  // The chats that are blocked on a person, oldest wait first. This group
+  // ignores the search field on purpose: a search narrows the lists below, and
+  // a chat whose harness is starving should not be hidden by a query typed for
+  // something else.
+  const needs = useMemo(() => needsYou(rows), [rows])
+
   // The two sections: registered projects with their chats, then the flat
-  // Chats list - every chat that belongs to no project.
-  const grouped = useMemo(() => sections(projects, visible), [projects, visible])
+  // Chats list - every chat that belongs to no project. A waiting chat is in
+  // the group above instead, so no chat reads twice and each project's count
+  // matches the rows under it.
+  const rest = useMemo(() => {
+    const waiting = new Set(needs.chats.map((c) => c.id))
+    return visible.filter((c) => !waiting.has(c.id))
+  }, [visible, needs])
+  const grouped = useMemo(() => sections(projects, rest), [projects, rest])
 
   const toggleProject = (id) => {
     setCollapsed((c) => ({ ...c, [id]: !c[id] }))
   }
 
-  // The keyboard's walk through the list goes in the order it reads:
+  // The keyboard's walk through the list goes in the order it reads: the
+  // chats that need the user first (they are at the top of the list), then
   // each open project's chats, then the flat Chats list. A collapsed
   // project's chats are skipped, like the eye skips them.
   const searchRef = useRef(null)
   const order = [
+    ...needs.chats,
     ...grouped.projects.flatMap(({ project, items }) => (collapsed[project.id] ? [] : items)),
     ...grouped.flat,
   ].map((row) => row.id)
@@ -106,6 +128,35 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   })
   const hintNew = useHint('new-chat')
   const hintSearch = useHint('search-chats')
+
+  // Attention without a toast: while the window cannot be looked at, the
+  // document title carries how many chats are waiting. Looking at the window
+  // again, or a waiting list that emptied, gives the console's own title back.
+  // A background window still shows its title, so this is the quietest place
+  // to put a count that is not a dialog. The desktop shell's real window
+  // title and a taskbar flash are shell commands, which the console cannot
+  // reach from here.
+  const [watched, setWatched] = useState(true)
+  const baseTitle = useRef('')
+  useEffect(() => {
+    baseTitle.current = document.title
+    const read = () => setWatched(!document.hidden && document.hasFocus())
+    read()
+    window.addEventListener('focus', read)
+    window.addEventListener('blur', read)
+    document.addEventListener('visibilitychange', read)
+    return () => {
+      window.removeEventListener('focus', read)
+      window.removeEventListener('blur', read)
+      document.removeEventListener('visibilitychange', read)
+    }
+  }, [])
+  useEffect(() => {
+    document.title = attentionTitle(baseTitle.current, needs.count, watched)
+    return () => {
+      document.title = attentionTitle(baseTitle.current, 0, true)
+    }
+  }, [needs.count, watched])
 
   const archive = (id) => {
     setChatArchived(id, true)
@@ -300,6 +351,20 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
       </div>
 
       <nav className="sb-list" aria-label="Projects and chats">
+        {/* The one group that exists only while it has something in it: a
+            chat whose harness is blocked on an answer is starving, and it
+            should not be hunted for in a long list. Same row, same mark, same
+            amber dot - the status word is what puts it here. */}
+        {needs.count > 0 && (
+          <section className="sb-needs" aria-label="Needs you">
+            <div className="section-title sb-needs-head">
+              Needs you
+              <span className="sb-needs-count">{needs.count}</span>
+            </div>
+            {needs.chats.map((row) => chatRow({ ...row, status: 'waiting' }))}
+          </section>
+        )}
+
         <div className="section-title sb-projects-head">
           Projects
           {/* The one way a folder becomes a project - the same flow the

@@ -23,6 +23,7 @@ import { hashWriteReady } from './settings.js'
 import { Archive, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Copy, X } from '@phosphor-icons/react'
 import { pushBack, useBack } from './use-back.js'
 import SplitArea from './SplitArea.jsx'
+import ViewBoundary from './ViewBoundary.jsx'
 import ContextMenu from './ContextMenu.jsx'
 import CommandPalette from './CommandPalette.jsx'
 import ShortcutSheet from './ShortcutSheet.jsx'
@@ -529,7 +530,7 @@ function Shell() {
 
   // What the primary pane shows: the view the app's navigation points at.
   // Until this device is in an account, home is the sign-in door. Every
-  // other view still opens — a QR connection does not sign in, and
+  // other view still opens - a QR connection does not sign in, and
   // Machines, chats, and the rest carry their own empty state.
   const primaryContent = (
     view === 'settings' ? (
@@ -588,7 +589,7 @@ function Shell() {
 
   // A split pane holds a chat or a New chat composer; the same chats and
   // composers serve Local and Cloud, so one window mixes both.
-  const renderPane = (leaf) => {
+  const paneContent = (leaf) => {
     if (leaf.view === null) return primaryContent
     if (leaf.view === 'new') {
       return (
@@ -607,12 +608,33 @@ function Shell() {
     )
   }
 
+  // Every pane's view is drawn behind a boundary, so a view that throws
+  // takes only itself down: the pane answers with a panel that says what
+  // happened, while the sidebar, the titlebar and the other panes go on
+  // working. The key is the view this pane shows, so navigating away and
+  // back hands the next view a boundary with no failure in it; without
+  // that, a panel would outlive the view it was about.
+  const renderPane = (leaf) => (
+    <ViewBoundary
+      key={leaf.view ?? view}
+      onNewChat={() => {
+        if (leaf.view === null) {
+          navigate('new')
+          return
+        }
+        setLayout((l) => focusLeaf(setLeafView(l, leaf.id, 'new'), leaf.id))
+      }}
+    >
+      {paneContent(leaf)}
+    </ViewBoundary>
+  )
+
   const sheetRef = useRef(null)
   const frameRef = useRef(null)
   const ignoreBackdropClick = useRef(false)
 
   // A left-to-right drag on the page opens the drawer. It does not have
-  // to start on the screen edge — that strip is where the system back
+  // to start on the screen edge - that strip is where the system back
   // gesture lives, and a finger is rarely perfectly horizontal.
   function beginDrawerDrag(event) {
     if (event.button != null && event.button !== 0) return
@@ -702,8 +724,8 @@ function Shell() {
       ref={frameRef}
       className={`app-frame${isMobile ? ' is-mobile' : ''}${isMobile && sidebarOpen ? ' drawer-open' : ''}`}
     >
-      {/* On a phone the sidebar stays put. The sheet — bar and page
-          together — slides right to reveal it. */}
+      {/* On a phone the sidebar stays put. The sheet - bar and page
+          together - slides right to reveal it. */}
       {isMobile && sidebar}
       <div
         className="app-sheet"
