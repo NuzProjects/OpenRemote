@@ -86,6 +86,16 @@
   box-shadow: 0 0 34px rgba(220, 162, 75, 0.45);
 }
 
+/* A restart is one press. While it is in flight the button says so and
+   stops looking like it would take another: the shell is closing the old
+   daemon's stdin and waiting for it to stop what it started. */
+.ds-cta:disabled {
+  cursor: default;
+  filter: none;
+  opacity: 0.6;
+  box-shadow: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .ds-cta {
     transition: none;

@@ -1,7 +1,14 @@
+import { useEffect, useState } from 'react'
 import { useConsole } from './state/console.jsx'
 import { daemonStatus } from './daemon-status.js'
 import { isMobile } from './platform.js'
 import './daemon-status.css'
+
+// How long the button says "Restarting..." after a press. A restart closes
+// the old daemon's stdin and waits for it to stop the harnesses it started,
+// which is seconds by design; a second press in that window only restarts a
+// daemon that is already restarting.
+const RETRY_BUSY_MS = 5000
 
 // The screen the app shows while it has no daemon: what happened, when the
 // shell has a reason to give, and one button that starts it again. It is
@@ -13,6 +20,22 @@ import './daemon-status.css'
 export default function DaemonStatus({ onManualConnect = null }) {
   const { daemon, retryDaemon } = useConsole()
   const status = daemonStatus(daemon)
+  const [retrying, setRetrying] = useState(false)
+
+  // A press is the only acknowledgement a person gets: the panel keeps the
+  // same words while the shell works, and without this the button would take
+  // another press and start a second restart on top of the first.
+  useEffect(() => {
+    if (!retrying) return undefined
+    const timer = setTimeout(() => setRetrying(false), RETRY_BUSY_MS)
+    return () => clearTimeout(timer)
+  }, [retrying])
+
+  const retryNow = () => {
+    if (retrying) return
+    setRetrying(true)
+    retryDaemon()
+  }
 
   return (
     <div className="ds">
@@ -21,8 +44,8 @@ export default function DaemonStatus({ onManualConnect = null }) {
         {status.detail && <p className="ds-detail">{status.detail}</p>}
         <p className="ds-note">{status.note}</p>
         {status.action === 'try-now' && (
-          <button className="ds-cta" onClick={retryDaemon}>
-            Try now
+          <button className="ds-cta" onClick={retryNow} disabled={retrying}>
+            {retrying ? 'Restarting...' : 'Try now'}
           </button>
         )}
         {onManualConnect && !isMobile && (

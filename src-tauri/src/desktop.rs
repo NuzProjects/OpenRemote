@@ -13,7 +13,7 @@ use tauri::{Emitter, Manager, State, WindowEvent};
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 
-use crate::{browser, tray, DaemonFailure, DaemonFailureKind, DaemonInfo, DaemonState};
+use crate::{browser, geometry, tray, DaemonFailure, DaemonFailureKind, DaemonInfo, DaemonState};
 
 const DAEMON_NAME: &str = "openremote-daemon";
 
@@ -190,6 +190,11 @@ pub fn run() {
             browser::browser_reveal
         ])
         .setup(|app| {
+            // Before the first paint: fit the window to the screen it is on
+            // and put it back where the user left it. The configured size is
+            // larger than some laptop screens, and the part that would fall
+            // off is the titlebar's own close button.
+            geometry::open(app.handle());
             // A dev build gives the console's webview a debugging port
             // (main.rs). The window exists by now, so the variable has done
             // its job; dropping it keeps the port off the browser's own
@@ -205,15 +210,21 @@ pub fn run() {
             spawn_daemon(app.handle().clone());
             Ok(())
         })
-        // With the tray on, closing the window hides it: the daemon keeps
-        // serving this computer's synced chats and the user's other devices.
-        .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "main" && tray::keeps_running(window.app_handle()) {
+        // Where the window is, after the user moves or resizes it. The close
+        // path writes regardless: a drag that ends in a quit is still a
+        // choice worth keeping.
+        .on_window_event(|window, event| match event {
+            WindowEvent::CloseRequested { api, .. } if window.label() == "main" => {
+                geometry::save_now(window);
+                if tray::keeps_running(window.app_handle()) {
                     api.prevent_close();
                     let _ = window.hide();
                 }
             }
+            WindowEvent::Moved(_) | WindowEvent::Resized(_) if window.label() == "main" => {
+                geometry::remember(window);
+            }
+            _ => {}
         })
         .run(tauri::generate_context!())
         .expect("error while running OpenRemote");

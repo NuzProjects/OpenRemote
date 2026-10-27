@@ -11,6 +11,10 @@ use tauri::State;
 mod browser;
 #[cfg(desktop)]
 mod desktop;
+// Where the window opens and what it remembers. Desktop only: a phone has no
+// free-floating window.
+#[cfg(desktop)]
+mod geometry;
 #[cfg(target_os = "android")]
 mod mobile;
 // The rule for the sign-in's in-app browser. Only the phone app opens pages,
