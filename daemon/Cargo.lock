@@ -365,7 +365,7 @@ dependencies = [
 
 [[package]]
 name = "fake-cloud"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "axum",
  "base64",
@@ -407,7 +407,7 @@ checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
 
 [[package]]
 name = "fixture-agent"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "serde_json",
 ]
@@ -765,7 +765,7 @@ checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
 name = "openremote-agy"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "openremote-core",
  "openremote-harness",
@@ -776,7 +776,7 @@ dependencies = [
 
 [[package]]
 name = "openremote-claude"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "openremote-core",
  "openremote-harness",
@@ -788,7 +788,7 @@ dependencies = [
 
 [[package]]
 name = "openremote-cloud"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "base64",
  "bytes",
@@ -813,7 +813,7 @@ dependencies = [
 
 [[package]]
 name = "openremote-codex"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "openremote-core",
  "openremote-harness",
@@ -825,7 +825,7 @@ dependencies = [
 
 [[package]]
 name = "openremote-core"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -835,7 +835,7 @@ dependencies = [
 
 [[package]]
 name = "openremote-daemon"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "axum",
  "base64",
@@ -871,7 +871,7 @@ dependencies = [
 
 [[package]]
 name = "openremote-grok"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "openremote-core",
  "openremote-harness",
@@ -883,7 +883,7 @@ dependencies = [
 
 [[package]]
 name = "openremote-harness"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "openremote-core",
  "serde",
@@ -894,7 +894,7 @@ dependencies = [
 
 [[package]]
 name = "openremote-opencode"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "openremote-core",
  "openremote-harness",
@@ -906,7 +906,7 @@ dependencies = [
 
 [[package]]
 name = "openremote-pi"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "openremote-core",
  "openremote-harness",
