@@ -1,0 +1,48 @@
+/* The rename dialog's one field. It borrows the modal family's shell
+   (panels.css) and looks like the other single-line fields in the app
+   (plugins.css .pg-add-input) instead of inventing a second field style. */
+
+.rn-input {
+  width: 100%;
+  box-sizing: border-box;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-app);
+  color: var(--text-1);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 120ms ease;
+}
+
+.rn-input:focus {
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+.rn-input[aria-invalid='true'] {
+  border-color: var(--red, #f87171);
+}
+
+.rn-note {
+  margin: 8px 0 0;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.rn-note.is-bad {
+  color: var(--red, #f87171);
+}
+
+/* The one positive button in the family: the panel's other modals are
+   destructive, so there is no shared modifier for this yet. */
+.rn-primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.rn-primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
