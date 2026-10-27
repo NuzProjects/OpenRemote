@@ -3,7 +3,7 @@
 // the open chat (resuming from its cursor across reconnects).
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { DaemonApi, clearConnection, loadConnection, saveConnection, sessionGone } from '../api/daemon.js'
+import { DaemonApi, clearConnection, loadConnection, nextRetryDelay, saveConnection, sessionGone } from '../api/daemon.js'
 import { chatFromSession, foldEvent, mergeSessionIntoChat, vanishedChatIds } from './reducer.js'
 import { isMobile, openExternal } from '../platform.js'
 import { loadArchived, saveArchived, withArchived } from '../archive.js'
@@ -374,9 +374,11 @@ export function ConsoleProvider({ children }) {
   // folded yet, then follow it live, reconnecting from its cursor.
   const openStream = useCallback(
     (id) => {
-      const stream = { cancelled: false, stop: null, retry: null, cursor: null }
+      const stream = { cancelled: false, stop: null, retry: null, cursor: null, retryDelay: 0 }
       const apply = (event) => {
         stream.cursor = event.seq
+        // The wire is talking again: the next close starts the ladder over.
+        stream.retryDelay = 0
         setChats((current) => {
           const chat = current[id]
           if (!chat) return current
@@ -394,10 +396,14 @@ export function ConsoleProvider({ children }) {
             // the dead id every 800ms forever. The pane lets go of the
             // chat on its own once the polled session list drops it.
             if (sessionGone(err)) return
-            // The daemon replays anything missed from the cursor.
+            // The daemon replays anything missed from the cursor. The
+            // wait doubles on every close in a row, so a daemon that
+            // keeps dying is not dialed twice a second forever, and a
+            // stream that talked resets it.
+            stream.retryDelay = nextRetryDelay(stream.retryDelay)
             stream.retry = setTimeout(() => {
               if (!stream.cancelled) follow(stream.cursor ?? chatsRef.current[id]?.foldedSeq ?? null)
-            }, 800)
+            }, stream.retryDelay)
           },
         })
       }

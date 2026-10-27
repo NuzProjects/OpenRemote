@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createServer } from 'node:net'
-import { DaemonApi, parseCursor, parseSseLine, sessionGone } from './daemon.js'
+import {
+  DaemonApi,
+  KEEP_ALIVE_MS,
+  STREAM_IDLE_MS,
+  nextRetryDelay,
+  parseCursor,
+  parseSseFrame,
+  sessionGone,
+} from './daemon.js'
 
 // ---- the resume cursor ----
 
@@ -20,18 +28,37 @@ test('a cursor counts only as a non-negative integer', () => {
   assert.equal(parseCursor(NaN), null)
 })
 
-// ---- one SSE line ----
+// ---- one SSE frame ----
 
-test('an id line carries the frame seq, a data line its event', () => {
-  assert.deepEqual(parseSseLine('id: 7'), { seq: 7 })
-  assert.deepEqual(parseSseLine('id: 0'), { seq: 0 })
-  assert.deepEqual(parseSseLine('data: {"seq":7,"type":"a"}'), { event: { seq: 7, type: 'a' } })
-  assert.deepEqual(parseSseLine('data: {not json'), { malformed: true })
+test('a frame carries its seq on an id line and its event on data lines', () => {
+  assert.deepEqual(parseSseFrame('id: 7'), { seq: 7 })
+  assert.deepEqual(parseSseFrame('id: 0'), { seq: 0 })
+  assert.deepEqual(parseSseFrame('data: {"seq":7,"type":"a"}'), {
+    seq: null,
+    event: { seq: 7, type: 'a' },
+  })
+  assert.deepEqual(parseSseFrame('data: {not json'), { seq: null, malformed: true })
+  // Multi-line data is one JSON value the protocol splits across lines, and
+  // the space after the colon is optional. A sender that does either is not
+  // a sender the console may ignore.
+  assert.deepEqual(parseSseFrame('id: 3\ndata: {"seq":3,\ndata: "type":"split"}'), {
+    seq: 3,
+    event: { seq: 3, type: 'split' },
+  })
+  assert.deepEqual(parseSseFrame('id:3\ndata:{"seq":3,"type":"tight"}'), {
+    seq: 3,
+    event: { seq: 3, type: 'tight' },
+  })
+  // A carriage return is part of the line ending, not the payload.
+  assert.deepEqual(parseSseFrame('id: 4\r\ndata: {"seq":4,"type":"crlf"}\r'), {
+    seq: 4,
+    event: { seq: 4, type: 'crlf' },
+  })
   // Separators, keep-alive comments, and an id that is not a number are
   // nothing the reader can use.
-  assert.equal(parseSseLine(''), null)
-  assert.equal(parseSseLine(': keep-alive'), null)
-  assert.equal(parseSseLine('id: soon'), null)
+  assert.equal(parseSseFrame(''), null)
+  assert.equal(parseSseFrame(': keep-alive'), null)
+  assert.equal(parseSseFrame('id: soon'), null)
 })
 
 // ---- the SSE reader over a stubbed fetch ----
@@ -107,6 +134,42 @@ test('a malformed frame that ends the stream still advances the cursor past it',
   assert.equal(cursor, 2)
 })
 
+test('a stream that dies between a frame id and its data does not claim that seq', async () => {
+  // The daemon writes the id first, so a connection that drops right after
+  // it hands the reader a seq with no event behind it. Reporting that seq
+  // would resume past an event the console never folded, and nothing would
+  // replay it.
+  const { seen, cursor } = await collect('id: 1\ndata: {"seq":1,"type":"a"}\n\nid: 2\n')
+  assert.deepEqual(seen.map((event) => event.type), ['a'])
+  assert.equal(cursor, 1)
+})
+
+test('a multi-line frame reaches onEvent whole, through a real stream', async () => {
+  // The fixture is the one a hand-written sender produces: data split over
+  // two lines, CRLF line endings, and one frame with no space after the
+  // colon. A reader that took a frame to be one `data: ` line folded
+  // nothing here and left the chat empty.
+  const { seen, cursor } = await collect(
+    'id: 1\r\ndata: {"seq":1,\r\ndata: "type":"split"}\r\n\r\n' +
+      'id:2\ndata:{"seq":2,"type":"tight"}\n\n',
+  )
+  assert.deepEqual(seen, [
+    { seq: 1, type: 'split' },
+    { seq: 2, type: 'tight' },
+  ])
+  assert.equal(cursor, 2)
+})
+
+test('a frame still open when the stream dies is not folded', async () => {
+  // A blank line is what ends a frame, so the last one may be half written.
+  // Dropping it and resuming after the last complete frame replays it whole.
+  const { seen, cursor } = await collect(
+    'id: 1\ndata: {"seq":1,"type":"a"}\n\nid: 2\ndata: {"seq":2,"type":"b"}',
+  )
+  assert.deepEqual(seen.map((event) => event.type), ['a'])
+  assert.equal(cursor, 1)
+})
+
 test('a run of malformed frames is noted on the first and again at the tenth', async () => {
   let frames = ''
   for (let seq = 1; seq <= 10; seq += 1) frames += `id: ${seq}\ndata: {oops\n\n`
@@ -123,6 +186,107 @@ test('a garbage stored cursor is a deliberate full replay: no after param', asyn
 test('a valid stored cursor rides the url', async () => {
   const { url } = await collect('id: 10\ndata: {"seq":10,"type":"a"}\n\n', { after: '9' })
   assert.ok(url.includes('after=9'))
+})
+
+// ---- a stream that stops talking ----
+
+// A body the test drives byte by byte: `step` gets the controller and
+// decides what arrives, and whether the stream ever closes.
+function stubStream(step) {
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async () =>
+    new Response(new ReadableStream({ start: (controller) => step(controller) }), { status: 200 })
+  return () => {
+    globalThis.fetch = realFetch
+  }
+}
+
+// Settle with a fallback if the promise has not settled in time, so a
+// reader with no deadline fails an assertion instead of hanging the suite.
+function within(promise, ms, fallback) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ])
+}
+
+test('a stream that goes quiet after an event closes on the idle deadline', async () => {
+  // The half-open socket: one frame arrives, then nothing, ever. The daemon
+  // writes a keep-alive every 15 s, so silence past two of them means the
+  // connection is not quiet, it is gone - and without a deadline the reader
+  // waits forever while the chat sits frozen mid-turn.
+  const restore = stubStream((controller) => {
+    controller.enqueue(new TextEncoder().encode('id: 1\ndata: {"seq":1,"type":"a"}\n\n'))
+  })
+  try {
+    const api = new DaemonApi('http://daemon', 'token')
+    const closed = await within(
+      new Promise((resolve) => {
+        api.events('s1', {
+          idleMs: 30,
+          onEvent: () => {},
+          onClose: (cursor, err) => resolve({ cursor, err }),
+        })
+      }),
+      400,
+      { cursor: 'never closed', err: null },
+    )
+    assert.equal(closed.cursor, 1)
+    assert.equal(closed.err?.idle, true, 'an idle close says why, so the caller can re-dial')
+  } finally {
+    restore()
+  }
+})
+
+test('a stream that keeps sending keep-alives is never declared idle', async () => {
+  // The keep-alive is the daemon saying the wire is alive. A reader that
+  // watched for events instead of bytes would re-dial every deadline here.
+  let ticks = 0
+  const restore = stubStream((controller) => {
+    const timer = setInterval(() => {
+      if (ticks++ < 5) {
+        controller.enqueue(new TextEncoder().encode(': keep-alive\n\n'))
+      } else {
+        clearInterval(timer)
+        controller.close()
+      }
+    }, 10)
+  })
+  try {
+    const api = new DaemonApi('http://daemon', 'token')
+    const closed = await within(
+      new Promise((resolve) => {
+        api.events('s1', {
+          idleMs: 40,
+          onEvent: () => {},
+          onClose: (cursor, err) => resolve({ cursor, err }),
+        })
+      }),
+      500,
+      { cursor: 'never closed', err: null },
+    )
+    assert.equal(closed.cursor, null, 'a keep-alive folds nothing')
+    assert.equal(closed.err, undefined, 'the wire was alive, so no idle close')
+  } finally {
+    restore()
+  }
+})
+
+test('the idle deadline is two missed keep-alives and a margin', () => {
+  assert.equal(KEEP_ALIVE_MS, 15000)
+  assert.ok(STREAM_IDLE_MS > 2 * KEEP_ALIVE_MS)
+  assert.ok(STREAM_IDLE_MS < 4 * KEEP_ALIVE_MS)
+})
+
+test('the re-dial wait backs off from 800 ms to a cap instead of a flat beat', () => {
+  assert.equal(nextRetryDelay(undefined), 800)
+  assert.equal(nextRetryDelay(0), 800)
+  assert.equal(nextRetryDelay(800), 1600)
+  assert.equal(nextRetryDelay(1600), 3200)
+  assert.equal(nextRetryDelay(3200), 5000)
+  // The cap holds however long the daemon stays down.
+  assert.equal(nextRetryDelay(5000), 5000)
+  assert.equal(nextRetryDelay(nextRetryDelay(5000)), 5000)
 })
 
 // ---- a session that is no longer there ----

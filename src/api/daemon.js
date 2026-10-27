@@ -34,25 +34,42 @@ export function parseCursor(value) {
   return null
 }
 
-// One line of an SSE frame. The daemon writes each frame as
-// `id: <seq>\ndata: <json>` - the id line first, so even a frame whose
-// data cannot be parsed has its seq in hand. Returns `{ seq }` for an id
-// line, `{ event }` for a well-formed data line, `{ malformed: true }` for
-// a data line that is not JSON, and null for everything else (frame
-// separators, keep-alive comments, an unreadable id).
-export function parseSseLine(line) {
-  if (line.startsWith('id: ')) {
-    const seq = parseCursor(line.slice(4))
-    return seq == null ? null : { seq }
-  }
-  if (line.startsWith('data: ')) {
-    try {
-      return { event: JSON.parse(line.slice(6)) }
-    } catch {
-      return { malformed: true }
+// One SSE frame, as the protocol defines it: the lines up to the blank line
+// that ends it. `id` carries the frame's seq (the daemon writes it first, so
+// even a frame whose data cannot be parsed has its position in hand) and
+// `data` carries JSON, which the protocol allows to arrive as several lines
+// joined by a newline before parsing. A line is `field: value` with one
+// optional space after the colon, and a trailing carriage return belongs to
+// the line ending, not the payload - both are things a hand-written sender
+// does, and either one silently emptied a chat when the reader took a frame
+// to be one `data: ` line. Returns `{ seq }` for a frame with an id and no
+// data, `{ seq, event }` for a well-formed one, `{ seq, malformed: true }`
+// for data that is not JSON, and null for a frame that carries nothing this
+// reader can use (a separator or a keep-alive).
+export function parseSseFrame(lines) {
+  let seq = null
+  const data = []
+  for (const raw of String(lines ?? '').split('\n')) {
+    const line = raw.replace(/\r$/, '')
+    // A frame separator, a keep-alive comment (`: ping`), or a line with no
+    // field: none of them is a field this reader reads.
+    const colon = line.indexOf(':')
+    if (colon <= 0) continue
+    const field = line.slice(0, colon)
+    const value = line.slice(colon + 1).replace(/^ /, '')
+    if (field === 'id') {
+      const parsed = parseCursor(value)
+      if (parsed != null) seq = parsed
+    } else if (field === 'data') {
+      data.push(value)
     }
   }
-  return null
+  if (!data.length) return seq == null ? null : { seq }
+  try {
+    return { seq, event: JSON.parse(data.join('\n')) }
+  } catch {
+    return { seq, malformed: true }
+  }
 }
 
 // Whether a stream close means the session itself is gone: the daemon
@@ -62,6 +79,28 @@ export function parseSseLine(line) {
 // attempt.
 export function sessionGone(err) {
   return err?.status === 404
+}
+
+// How long a live stream may carry nothing. The daemon writes a keep-alive
+// comment every 15 s, so two missed keep-alives is a half-open socket: the
+// reader waits on a body that will never speak again, the chat sits frozen
+// mid-turn, and the poll meanwhile answers from memory that the session is
+// not running. Any chunk counts, a keep-alive included - the point is that
+// the wire is alive, not that it carried an event.
+export const KEEP_ALIVE_MS = 15000
+export const STREAM_IDLE_MS = KEEP_ALIVE_MS * 2 + 5000
+
+// The re-dial interval after a close: quick at first, because a daemon that
+// is restarting comes back in a second or two, then doubling to a cap so a
+// machine that is asleep or a daemon that keeps dying is not dialed twice a
+// second for as long as the chat stays watched. Takes the delay handed out
+// last; 0 or absent means the stream just talked, so the ladder restarts.
+export const RETRY_BASE_MS = 800
+export const RETRY_CAP_MS = 5000
+
+export function nextRetryDelay(previous) {
+  if (previous == null || !(previous > 0)) return RETRY_BASE_MS
+  return Math.min(previous * 2, RETRY_CAP_MS)
 }
 
 export function loadConnection() {
@@ -719,15 +758,39 @@ export class DaemonApi {
   // event; the reader keeps going until the connection drops, then reports
   // the last cursor through `onClose(cursor, err)` so the caller can resume
   // with `after` - or stop retrying when `err` carries the daemon's own
-  // "no such session" (see sessionGone). Returns a stop function.
-  events(id, { after = null, onEvent, onClose }) {
+  // "no such session" (see sessionGone). The cursor names the last frame
+  // that completed: a stream that dies between a frame's `id:` line and its
+  // data must not claim that seq, or the resume steps over an event the
+  // console never folded and it is lost for good. Returns a stop function.
+  events(id, { after = null, onEvent, onClose, idleMs = STREAM_IDLE_MS }) {
     const controller = new AbortController()
     const run = async () => {
       // A garbage cursor is deliberately absent: one clean full replay
       // rather than a resume that can never find its position.
       let cursor = parseCursor(after)
-      let lastId = cursor
       let skipped = 0
+      // The watchdog. Every chunk restarts it and nothing else does: silence
+      // past the deadline is a half-open socket, and waiting on a body that
+      // will never speak again is the frozen chat. The wait is raced here
+      // rather than only aborted, because only a real fetch ties the
+      // response body to the signal - the read itself must end either way.
+      let quiet = null
+      const readOrQuiet = async (reader) => {
+        const deadline = new Promise((_, reject) => {
+          quiet = setTimeout(() => {
+            const error = new Error('the event stream went quiet')
+            error.idle = true
+            controller.abort()
+            reject(error)
+          }, idleMs)
+        })
+        try {
+          return await Promise.race([reader.read(), deadline])
+        } finally {
+          clearTimeout(quiet)
+        }
+      }
+      let reader = null
       try {
         const query = cursor == null ? '' : `?after=${cursor}`
         const response = await fetch(`${this.url}${this.prefix}/sessions/${id}/events${query}`, {
@@ -744,45 +807,70 @@ export class DaemonApi {
           error.status = response.status
           throw error
         }
-        const reader = response.body.getReader()
+        reader = response.body.getReader()
         const decoder = new TextDecoder()
         let buffer = ''
+        // The frame being read, its lines joined. SSE ends a frame with a
+        // blank line, so until that blank line the payload may still be
+        // half written - which is why a frame still open when the stream
+        // dies is dropped rather than parsed.
+        let frame = ''
+        const fold = (text) => {
+          const parsed = parseSseFrame(text)
+          if (!parsed) return
+          if (parsed.event) {
+            // The event's own seq when it carries a sane one; the frame's
+            // id line otherwise. Either way the cursor only moves
+            // forward to a real position.
+            cursor = parseCursor(parsed.event.seq) ?? parsed.seq ?? cursor
+            onEvent(parsed.event)
+            return
+          }
+          if (parsed.malformed) {
+            // A frame the console cannot read is skipped, not fatal: its
+            // seq arrived with the frame, so the cursor still moves past
+            // it and a reconnect never replays into the same bad line
+            // forever.
+            skipped += 1
+            if (skipped === 1 || skipped === 10) {
+              console.error(`OpenRemote: skipped ${skipped} unreadable event frames in session ${id}`)
+            }
+            cursor = parsed.seq ?? cursor
+          }
+          // An id with no data behind it is not a frame: the cursor stays.
+        }
         while (true) {
-          const { done, value } = await reader.read()
+          const { done, value } = await readOrQuiet(reader)
           if (done) break
           buffer += decoder.decode(value, { stream: true })
           let index
           while ((index = buffer.indexOf('\n')) >= 0) {
             const line = buffer.slice(0, index).replace(/\r$/, '')
             buffer = buffer.slice(index + 1)
-            const parsed = parseSseLine(line)
-            if (parsed?.seq != null) {
-              lastId = parsed.seq
-            } else if (parsed?.event) {
-              // The event's own seq when it carries a sane one; the id
-              // line otherwise. Either way the cursor only moves
-              // forward to a real position.
-              cursor = parseCursor(parsed.event.seq) ?? lastId ?? cursor
-              onEvent(parsed.event)
-            } else if (parsed?.malformed) {
-              // A frame the console cannot read is skipped, not fatal:
-              // its seq already arrived on the id: line, so the cursor
-              // still moves past it and a reconnect never replays into
-              // the same bad line forever.
-              skipped += 1
-              if (skipped === 1 || skipped === 10) {
-                console.error(`OpenRemote: skipped ${skipped} unreadable event frames in session ${id}`)
-              }
-              cursor = lastId ?? cursor
+            if (line === '') {
+              fold(frame)
+              frame = ''
+            } else {
+              frame += (frame ? '\n' : '') + line
             }
           }
         }
-        onClose?.(lastId)
+        onClose?.(cursor)
       } catch (err) {
-        // An aborted stop is not a close. Anything else reports the last
-        // cursor, and the error itself rides along as the second argument
-        // so the caller can stop retrying when the session is gone.
-        if (err?.name !== 'AbortError') onClose?.(lastId ?? cursor, err)
+        if (err?.idle) {
+          // The watchdog's own close: the caller must see it, or the chat
+          // never re-dials and never says anything again.
+          reader?.cancel?.().catch(() => {})
+          onClose?.(cursor, err)
+        } else if (err?.name !== 'AbortError') {
+          // Anything that is not this handle's stop reports the last
+          // cursor, and the error itself rides along as the second
+          // argument so the caller can stop retrying when the session is
+          // gone.
+          onClose?.(cursor, err)
+        }
+      } finally {
+        clearTimeout(quiet)
       }
     }
     run()
