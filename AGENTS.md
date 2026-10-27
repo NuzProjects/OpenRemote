@@ -22,8 +22,21 @@ the project's own map.
   device's keys, the registry client, the relay link, the Noise mesh);
   `fake-cloud` is moreweb's contract in memory for the e2e suites and for
   trying Cloud locally (`cargo run -p fake-cloud` prints the env to use).
-- `scripts/` - design instrumentation (fps, latency, clearance). Not
-  build tooling; the one build script is `sync-daemon.mjs`.
+- `daemon/crates/openremote-daemon/src/pairing.rs` and `pairing_page.rs` -
+  Local-mode phone pairing. While a pairing code is live or a phone is
+  paired, the daemon opens a second socket: this machine's own LAN address
+  (never 0.0.0.0), one of six fixed ports, and a router of four routes
+  (counted as the four `route` calls in `pairing.rs`, `routes()`): the page
+  the QR code opens, the code exchange, one read-only home route for the
+  phone's own token, and a 204 favicon. Nothing else is served there, and
+  the socket closes when no code is live and no phone is paired. The
+  console side is `src/pairing.js`, `src/qr.js` and
+  `src/PairingSection.jsx`; the design note is
+  `docs/superpowers/specs/2026-10-26-qr-pairing-design.md`.
+- `scripts/` - design instrumentation (fps, latency, clearance), plus
+  `check-tab-acl.mjs`, the capability-scope guard CI runs (no arguments; it
+  exits 1 and names the capability that widened). Not build tooling; the
+  one build script is `sync-daemon.mjs`.
 - `DESIGN.md` - the design contract. The console transcribes it, never
   improvises past it.
 - `Archive/` - measured-and-killed experiments. Consult before
@@ -34,6 +47,7 @@ the project's own map.
 ```sh
 npm install
 npm test               # console tests (node --test)
+node scripts/check-tab-acl.mjs   # the tab capability scope (no arguments)
 npm run dev            # browser only (port 5175)
 npx tauri dev          # desktop shell
 npm run daemon         # build + stage the daemon sidecar
@@ -59,8 +73,21 @@ openremote-daemon unenroll     # leave Cloud (keeps private chats)
 cd daemon
 cargo test --locked            # unit + e2e
 cargo clippy --all-targets --locked -- -D warnings
-cargo fmt --all --check        # CI enforces both
+cargo fmt --all --check        # CI runs this and the lint; both are red here
 ```
+
+Neither of those two gates passes in this tree, and neither failure is in
+the shell. `cargo fmt --all --check` reports eight files across four crates
+(`openremote-core/src/model.rs`, `openremote-core/src/store.rs`,
+`openremote-daemon/src/app.rs`, `openremote-daemon/src/http.rs`,
+`openremote-daemon/src/registry.rs`, `openremote-grok/src/config.rs`,
+`openremote-opencode/src/driver.rs`, `openremote-opencode/src/resolve.rs`,
+counted as one path per `Diff in` line that command prints), and
+`cargo clippy --all-targets --locked -- -D warnings` stops on three lints
+(counted as three `error:` lines, all in `openremote-daemon`). `cargo fmt
+--check` inside `src-tauri` alone is green, because the shell's own files
+are formatted; `--all` also formats this crate's path dependencies under
+`../daemon`, which is why both workspaces report the same eight.
 
 ## The sidecar, and its two copies
 
@@ -110,6 +137,11 @@ an old process is still alive; find it before re-running).
 - View state: `STATIC_VIEWS` in App.jsx is the route list. A stale hash
   or stored history falls back to New chat - new views must be added
   there or they never resolve.
+- Mobile is both halves of the phone story, and they do not depend on each
+  other: a phone pairs by QR code over the local network with no account
+  (the socket above, `src/PairingSection.jsx`), and a phone signed in to
+  the account lists the synced chats and can drive a machine. Pairing
+  works while Cloud says the user is signed out.
 
 ## Cloud's trust model, for anyone touching it
 
@@ -140,9 +172,11 @@ an old process is still alive; find it before re-running).
   `tauri.conf.json` must strictly increase with every release -
   Android refuses to install an update whose versionCode does not
   exceed the installed build's.
-- `.github/workflows/release.yml` builds on `v*` tag pushes:
-  stage the sidecar, `npx tauri build`, `gh release create` with the
-  notes from `release-notes/<tag>.md`. It also runs nightly (03:17 UTC)
+- `.github/workflows/release.yml` builds on `v*` tag pushes: a preflight
+  refuses a tag whose commit is not on the default branch's history, and
+  `npm test` runs before the build. Then the sidecar is staged, `npx tauri
+  build`, `gh release create` with the notes from `release-notes/<tag>.md`.
+  It also runs nightly (03:17 UTC)
   to publish the rolling `nightly` prerelease from the default branch,
   and a manual run stays build-only unless its channel input says
   `nightly`. Every published release carries version-free asset names
@@ -168,3 +202,16 @@ an old process is still alive; find it before re-running).
 - Flaky-looking daemon e2e failures under heavy parallel load: rerun
   the suite once before diagnosing; the fixture-agent e2e is timing
   sensitive on a busy machine.
+
+## Checking this file
+
+Four commands check what this page claims, and a reader can run all of them
+from the repo root: `npm test` (says `tests 268`), `node
+scripts/check-tab-acl.mjs` (says `tab acl ok: 2 capability file(s)`), `cd
+daemon && cargo fmt --all --check` (lists the eight files named under
+Commands), and `cd daemon && cargo clippy --all-targets --locked -- -D
+warnings` (lists the three lints). The route and tier claims in "Cloud's
+trust model" are counted from `PEER_ROUTES` in
+`daemon/crates/openremote-daemon/src/http.rs`, the peer paths are driven in
+`daemon/crates/openremote-daemon/tests/e2e_cloud_mesh.rs`, and
+`docs/cloud-trust-model.md` ends with the rows it could not exercise.

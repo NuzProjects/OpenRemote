@@ -48,9 +48,19 @@ bearer token lives in `~/.openremote/token`.
 Tests:
 
 ```sh
-npm test               # console reducer tests
+npm test               # console tests: 268 of them (the count it prints)
+node scripts/check-tab-acl.mjs   # what the desktop webview's capabilities grant
 cd daemon && cargo test --locked   # unit + e2e (drives the fixture agent)
 ```
+
+The first two run from the repo root and take no arguments. The console
+suite covers the rules behind each view and reads a few source files for
+the wiring only a browser could show; the daemon suite drives a real
+sidecar. Two further gates, `cd daemon && cargo fmt --all --check` and
+`cd daemon && cargo clippy --all-targets --locked -- -D warnings`, are red
+in this tree on eight unformatted files and three lints, none of them in
+the shell, so read their output before blaming your own change. AGENTS.md
+lists both.
 
 ## Cloud mode
 
@@ -82,3 +92,5 @@ OpenRemote is licensed AGPL-3.0-only - see [LICENSE](LICENSE).
   `dv-modal` family (Esc / backdrop / X to close).
 - Harness names and marks belong to their owners; OpenRemote is not
   affiliated with them.
+- Everything above is checked by the commands under Tests: if a claim here
+  and a command's output disagree, the command is right.
