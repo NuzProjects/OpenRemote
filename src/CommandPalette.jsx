@@ -276,6 +276,17 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
             icon: <ClockCounterClockwise size={15} />,
             run: { since: true },
           },
+          // Marking everything read acts on the same list the page above shows,
+          // so the two can never disagree about what counts as moved. It asks
+          // nothing and answers with one sentence afterwards.
+          {
+            key: 'action:mark-read',
+            section: 'Actions',
+            name: 'Mark everything as read',
+            sub: `${moved.length} ${moved.length === 1 ? 'chat' : 'chats'}`,
+            icon: <Check size={15} />,
+            run: { markAll: true },
+          },
         ]
       : []
     return {
@@ -288,6 +299,23 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
   }, [kb, sessions, chats, archived, projects, devices, thisDevice, capabilities, machines, raceFree, moved])
 
   const sections = useMemo(() => {
+    if (page === 'caught-up') {
+      // The confirmation is the page: one sentence above, and the only row left
+      // is the way out.
+      return [
+        {
+          label: 'Since your last look',
+          items: [
+            {
+              key: 'caught:close',
+              section: 'Since your last look',
+              name: 'Close',
+              run: { caughtClose: true },
+            },
+          ],
+        },
+      ]
+    }
     if (page === 'since') {
       // A record, not a queue: the chats are in the order the module put them,
       // newest activity first, and each row says what happened last and when.
@@ -446,8 +474,8 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
     const plan = stopPlan
     if (!plan) return
     setStopPhase('stopping')
-    const counts = await stopChats(plan.stoppable)
-    setStopResult(stopSummary({ ...counts, elsewhere: plan.elsewhere.length }))
+    const { stopped, gone, failed } = await stopChats(plan.stoppable)
+    setStopResult(stopSummary({ stopped, elsewhere: plan.elsewhere.length, gone, failed }))
     setStopPhase('done')
   }
 
@@ -595,6 +623,21 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
     setQuery('')
   }
 
+  // The page that has two levels (the harness list, then one harness's
+  // question) steps back one level before it leaves the page, so Esc and
+  // Backspace mean the same thing they mean everywhere else in the palette.
+  const pageBack = () => {
+    if (page === 'stop-harness' && harnessStopId) {
+      setHarnessStopId(null)
+      setHarnessPlan(null)
+      setHarnessPhase(null)
+      setHarnessResult(null)
+      setQuery('')
+      return
+    }
+    back()
+  }
+
   // Esc and the palette's own key answer from anywhere inside the dialog: Tab
   // moves focus onto a row, and the key the footer promises for leaving has to
   // keep working there. Arrows, Enter and Backspace stay with the search
@@ -603,7 +646,7 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
     if (e.key === 'Escape') {
       e.preventDefault()
       e.stopPropagation()
-      if (page) back()
+      if (page) pageBack()
       else onClose()
       return
     }
@@ -625,12 +668,14 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
       choose(flat[cursor])
     } else if (e.key === 'Backspace' && !query && page) {
       e.preventDefault()
-      back()
+      pageBack()
     }
   }
 
   let index = -1
   const stopNames = stopPlan ? namedChats(stopPlan.stoppable) : null
+  const harnessNames = harnessPlan ? namedChats(harnessPlan.stoppable) : null
+  const harnessNameNow = harnessStopId ? harnessName(harnessStopId) : null
   return (
     <div
       className="kb-backdrop"
@@ -692,6 +737,44 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
               )}
             </div>
           )}
+          {page === 'stop-harness' && (
+            <div className="kb-stop">
+              {harnessPhase === 'asking' && harnessPlan && harnessNames && harnessNameNow && (
+                <>
+                  <p className="kb-stop-question">
+                    {harnessQuestion(harnessNameNow, harnessPlan.stoppable.length)}
+                  </p>
+                  <div className="kb-stop-names">
+                    {harnessNames.rows.map((row) => (
+                      <div className="kb-stop-name pv" key={row.id}>
+                        {row.name}
+                      </div>
+                    ))}
+                    {harnessNames.more > 0 && <div className="kb-stop-more">and {harnessNames.more} more</div>}
+                  </div>
+                  {harnessPlan.elsewhere.length > 0 && (
+                    <p className="kb-stop-aside">{elsewhereAside(harnessPlan.elsewhere.length)}</p>
+                  )}
+                </>
+              )}
+              {harnessPhase === 'stopping' && harnessPlan && harnessNameNow && (
+                <p className="kb-stop-question">
+                  {harnessStopping(harnessNameNow, harnessPlan.stoppable.length)}
+                </p>
+              )}
+              {harnessPhase === 'done' && harnessResult && (
+                <p className="kb-stop-question" role="status">
+                  {harnessResult}
+                </p>
+              )}
+              {!harnessPhase && (
+                <>
+                  <p className="kb-stop-aside">{HARNESS_PICK_LINE}</p>
+                  {flat.length === 0 && <p className="kb-stop-aside">{HARNESS_EMPTY_LINE}</p>}
+                </>
+              )}
+            </div>
+          )}
           {sections.map((section) => (
             <div key={section.label} className="kb-group">
               <div className="kb-group-label">{section.label}</div>
@@ -718,7 +801,7 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
               })}
             </div>
           ))}
-          {flat.length === 0 && page !== 'stop-all' && (
+          {flat.length === 0 && page !== 'stop-all' && page !== 'stop-harness' && (
             <div className="kb-empty">
               {query.trim() ? `Nothing matches “${query.trim()}”.` : 'Nothing to show here yet.'}
             </div>
