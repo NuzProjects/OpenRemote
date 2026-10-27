@@ -42,7 +42,7 @@ function authLabel(kind) {
   return AUTH_KINDS.find((k) => k.id === kind)?.name ?? kind
 }
 
-export default function EndpointManager({ harness, deviceId = null, onChanged = null, onClose = null, closeGuard = null }) {
+export default function EndpointManager({ harness, deviceId = null, onChanged = null, onClose = null, closeGuard = null, onEndpoints = null }) {
   const { api } = useConsole()
   const [endpoints, setEndpoints] = useState([])
   const [pending, setPending] = useState(true)
@@ -118,6 +118,16 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
   useEffect(() => {
     load()
   }, [load])
+
+  // The settings search indexes what this table holds, so the table hands its
+  // list up instead of the view reading the same route a second time - one
+  // truth, one fetch. The callback lives in a ref so a fresh closure from the
+  // parent cannot re-report a list that has not changed.
+  const reportRef = useRef(onEndpoints)
+  reportRef.current = onEndpoints
+  useEffect(() => {
+    reportRef.current?.(endpoints)
+  }, [endpoints])
 
   const startAdd = () => {
     const next = { ...emptyForm }

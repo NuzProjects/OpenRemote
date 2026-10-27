@@ -1025,8 +1025,18 @@ export default function BrowserView({ onClosePane = null }) {
               }
             }}
           />
+          {/* The count is the shell's answer, so silence until there is one:
+              printing "No matches" while the term is still travelling to the
+              engine tells a person their search found nothing before the
+              engine has looked. */}
           <span className="bw-find-count">
-            {find.term ? (findState?.count ? `${findState.active} of ${findState.count}` : 'No matches') : ''}
+            {find.term
+              ? findState
+                ? findState.count
+                  ? `${findState.active} of ${findState.count}`
+                  : 'No matches'
+                : ''
+              : ''}
           </span>
           <button type="button" className="bw-btn" title="Previous (Shift+Enter)" onClick={() => runFind(find.term, -1)}>
             <CaretUp size={14} />
