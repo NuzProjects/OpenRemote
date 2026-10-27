@@ -99,6 +99,10 @@ struct Inbound {
     /// response is sealed, so the window counts work in flight rather than
     /// half-written requests.
     dispatched: bool,
+    /// Which entry this is. The TTL sweep can free a stream whose work is
+    /// still running, and the peer may then take that id again, so the
+    /// finishing task must know its own entry from the next request's.
+    generation: u64,
 }
 
 #[derive(Default)]
@@ -112,6 +116,7 @@ struct State {
     /// keeps a nudging device from spawning a task per nudge frame.
     attempts: HashMap<DeviceId, Instant>,
     next_stream: u32,
+    next_generation: u64,
     auto_update: bool,
     online: std::collections::HashSet<DeviceId>,
 }
@@ -141,8 +146,11 @@ const LINK_ATTEMPTS: u32 = 3;
 const ATTEMPT_WINDOW: Duration = Duration::from_secs(12);
 /// The largest frame the relay may hand us. Every frame the protocol builds
 /// fits in one Noise message (65535 bytes plus the framing), so this is a
-/// bound on memory per socket, not on anything legitimate.
-const MAX_FRAME: usize = 128 * 1024;
+/// bound on memory per socket, not on anything legitimate. It also covers the
+/// relay's own text frames, and its device list rides one of those: a large
+/// account's list must not be closed as too big, so the ceiling is well above
+/// the binary frames it guards.
+const MAX_FRAME: usize = 512 * 1024;
 /// How long an inbound stream may wait for its END before its slot is
 /// reclaimed. It must outlast the peer's own request timeout (a harness
 /// install may answer slowly) so a live request never loses its slot; the
@@ -675,6 +683,13 @@ impl Mesh {
                 let now = Instant::now();
                 {
                     let mut st = self.state();
+                    // A nudge is a peer asking for a link it does not have. If
+                    // this one is up there is nothing to do, and spawning a
+                    // task per frame to discover that is the churn this
+                    // coalescing exists to stop.
+                    if st.links.get(&from).is_some_and(Link::is_up) {
+                        return;
+                    }
                     st.attempts.retain(|_, until| now < *until);
                     if st.attempts.contains_key(&from) {
                         // An attempt to this peer is already in flight, and its
@@ -713,14 +728,24 @@ impl Mesh {
                     content_type: h["content_type"].as_str().map(str::to_string),
                     body: Vec::new(),
                 });
+                // An id that is already here is refused, not replaced. The
+                // window counts entries, so a peer could otherwise OPEN a
+                // stream, END it (the work starts, the entry stays), take the
+                // same id again, END again, and hold as many dispatches as it
+                // likes while the count never moves. A finished stream frees
+                // its id; a stream still waiting or still running does not.
+                let taken = st.inbound.contains_key(&(from, stream));
                 match request {
-                    Some(r) if open < MAX_INBOUND_PER_PEER => {
+                    Some(r) if !taken && open < MAX_INBOUND_PER_PEER => {
+                        let generation = st.next_generation;
+                        st.next_generation += 1;
                         st.inbound.insert(
                             (from, stream),
                             Inbound {
                                 request: r,
                                 deadline: now + INBOUND_TTL,
                                 dispatched: false,
+                                generation,
                             },
                         );
                     }
@@ -762,6 +787,7 @@ impl Mesh {
                 // once as it can send ENDs.
                 inbound.dispatched = true;
                 let request = inbound.request.clone();
+                let generation = inbound.generation;
                 let context = self.context(&st, from);
                 drop(st);
                 let mesh = Arc::clone(self);
@@ -779,8 +805,16 @@ impl Mesh {
                     }
                     // The answer is out (or its link is gone): give the slot
                     // back. The TTL sweep is the only other way it comes back,
-                    // for a dispatch that never returns at all.
-                    st.inbound.remove(&(from, stream));
+                    // for a dispatch that never returns at all, and if it took
+                    // this entry the peer may already hold the id again: only
+                    // the entry this task was started for is its to remove.
+                    if st
+                        .inbound
+                        .get(&(from, stream))
+                        .is_some_and(|e| e.generation == generation)
+                    {
+                        st.inbound.remove(&(from, stream));
+                    }
                 });
             }
             rpc::HEAD => {
@@ -1365,6 +1399,22 @@ mod tests {
             .unwrap()
     }
 
+    /// A link that completed its handshake, this device to `peer`: the state a
+    /// nudge finds when the other side's reconnect went unnoticed here.
+    fn up_link(mesh: &Mesh, peer: DeviceId) -> Link {
+        let keys = || {
+            snow::Builder::new(crate::identity::NOISE_PARAMS.parse().unwrap())
+                .generate_keypair()
+                .unwrap()
+        };
+        let (mine, theirs) = (keys(), keys());
+        let prologue = link::prologue(&mesh.account, mesh.me, peer);
+        let (link, hs1) = link::initiate(&mine.private, &theirs.public, &prologue, b"").unwrap();
+        let (_, _, hs2) =
+            link::respond(&theirs.private, &mine.public, &prologue, &hs1[1..], b"").unwrap();
+        link::complete(link, &hs2[1..]).unwrap().0
+    }
+
     fn pins_at(mesh: &Mesh) -> HashMap<String, String> {
         std::fs::read(&mesh.pins_file)
             .ok()
@@ -1737,6 +1787,7 @@ mod tests {
             Inbound {
                 request: live(),
                 dispatched: false,
+                generation: 0,
                 deadline: now - Duration::from_secs(1),
             },
         );
@@ -1745,6 +1796,7 @@ mod tests {
             Inbound {
                 request: live(),
                 dispatched: false,
+                generation: 0,
                 deadline: now, // exactly at the deadline: gone
             },
         );
@@ -1753,6 +1805,7 @@ mod tests {
             Inbound {
                 request: live(),
                 dispatched: false,
+                generation: 0,
                 deadline: now + Duration::from_secs(60),
             },
         );
@@ -1761,6 +1814,7 @@ mod tests {
             Inbound {
                 request: live(),
                 dispatched: false,
+                generation: 0,
                 deadline: now + Duration::from_secs(60),
             },
         );
@@ -1795,6 +1849,7 @@ mod tests {
             },
             deadline,
             dispatched: false,
+            generation: 0,
         };
         {
             let mut st = mesh.state();
@@ -1936,6 +1991,126 @@ mod tests {
             mesh.state().inbound.len(),
             0,
             "the slots come back when the answers are sealed"
+        );
+    }
+
+    /// One stream id, taken again and again the moment its END has started the
+    /// work: the window counts entries, so without a refusal for an id that is
+    /// already here the count never moves while the dispatches pile up. A peer
+    /// gets one dispatch per id, and a new request has to wait for the old one
+    /// to answer.
+    #[tokio::test]
+    async fn one_stream_id_buys_one_dispatch_not_a_hundred() {
+        let started = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let release = Arc::new(tokio::sync::Notify::new());
+        let host = Arc::new(Parked {
+            started: Arc::clone(&started),
+            release: Arc::clone(&release),
+        });
+        let (mesh, _out, _dir) = mesh_over(host);
+        let mesh = Arc::new(mesh);
+        let peer = DeviceId::new();
+        let header = br#"{"method":"GET","path":"/devices"}"#;
+        for _ in 0..100 {
+            mesh.on_rpc(peer, &rpc::frame(rpc::OPEN, 7, header));
+            mesh.on_rpc(peer, &rpc::frame(rpc::DATA, 7, b"x"));
+            mesh.on_rpc(peer, &rpc::frame(rpc::END, 7, b""));
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        assert_eq!(
+            started.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "one stream id bought one dispatch, not one per END"
+        );
+        assert_eq!(
+            mesh.state().inbound.len(),
+            1,
+            "and that one stream is still the only slot it holds"
+        );
+        release.notify_waiters();
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        assert_eq!(
+            mesh.state().inbound.len(),
+            0,
+            "the id comes back when its answer is sealed"
+        );
+    }
+
+    /// A dispatch that outlives the TTL sweep must not take the next request's
+    /// slot with it when it finally answers: the peer may hold the id again by
+    /// then, and the slot it is giving back is no longer its own.
+    #[tokio::test]
+    async fn a_dispatch_that_outlived_its_slot_does_not_steal_the_next_one() {
+        let started = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let release = Arc::new(tokio::sync::Notify::new());
+        let host = Arc::new(Parked {
+            started: Arc::clone(&started),
+            release: Arc::clone(&release),
+        });
+        let (mesh, _out, _dir) = mesh_over(host);
+        let mesh = Arc::new(mesh);
+        let peer = DeviceId::new();
+        let header = br#"{"method":"GET","path":"/devices"}"#;
+        mesh.on_rpc(peer, &rpc::frame(rpc::OPEN, 7, header));
+        mesh.on_rpc(peer, &rpc::frame(rpc::END, 7, b""));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        // The sweep takes the slot while the work still runs, exactly as it
+        // does for a peer that froze; the peer then takes the id again.
+        {
+            let mut st = mesh.state();
+            st.inbound
+                .get_mut(&(peer, 7))
+                .expect("the running slot")
+                .deadline = Instant::now() - Duration::from_secs(1);
+        }
+        mesh.on_rpc(peer, &rpc::frame(rpc::OPEN, 7, header));
+        assert_eq!(
+            mesh.state().inbound.len(),
+            1,
+            "the reclaimed id was taken by a new request"
+        );
+        release.notify_waiters();
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let st = mesh.state();
+        assert_eq!(
+            st.inbound.len(),
+            1,
+            "the old dispatch answered without removing a slot it no longer owned"
+        );
+        assert!(
+            !st.inbound.get(&(peer, 7)).unwrap().dispatched,
+            "and the new request is still waiting for its END"
+        );
+    }
+
+    /// A nudge on a link that is already up is ordinary: the other side's
+    /// reconnect went unnoticed here. Nothing has to be attempted, and
+    /// spawning a task per frame to discover that is churn; the window exists
+    /// for attempts that have somewhere to go.
+    #[tokio::test]
+    async fn a_nudge_on_a_link_that_is_up_spawns_no_attempt() {
+        let (mesh, _dir) = test_mesh();
+        let mesh = Arc::new(mesh);
+        // The higher-numbered device nudges, so ours has to be the lower one
+        // for the frame to be acted on at all.
+        let mut peer = DeviceId::new();
+        while peer.to_bytes() <= mesh.me.to_bytes() {
+            peer = DeviceId::new();
+        }
+        let up = up_link(&mesh, peer);
+        {
+            let mut st = mesh.state();
+            st.peers.insert(peer, listed(peer));
+            st.online.insert(peer);
+            st.links.insert(peer, up);
+        }
+        for _ in 0..50 {
+            mesh.on_frame(peer, &[NUDGE]);
+        }
+        // Read before anything is awaited: the arm decides synchronously.
+        assert!(
+            !mesh.state().attempts.contains_key(&peer),
+            "a nudge on a live link records no attempt and spawns no task"
         );
     }
 
