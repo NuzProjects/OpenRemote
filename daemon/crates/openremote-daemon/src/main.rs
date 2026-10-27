@@ -68,16 +68,19 @@ async fn serve(agent: bool) -> ExitCode {
         return ExitCode::from(NOT_ENROLLED);
     }
     let token = app::load_or_create_token(&data_dir).expect("token");
-    // Bind and announce BEFORE the app assembles: the registry probe
-    // spawns each harness's `--version` (bounded), and the shell should
-    // know the address long before that finishes. The listener's
-    // backlog holds any early request until `serve` picks it up.
+    // Bind early so the port is known before the app is assembled (the
+    // read-a-chat MCP server a chat starts calls back on it), but do not
+    // announce it yet. READY is what tells the shell's console that a daemon
+    // is there to answer, and the console asks the moment it has an address:
+    // the listener's backlog would hold those requests, unanswered, for the
+    // whole of App::new below, which on a cold start is the registry probe
+    // spawning every harness. The console's own timeout fires first, so a
+    // healthy daemon reads as a dead one. The announcement belongs with the
+    // accept loop, not with the bind.
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
         .expect("bind loopback");
     let addr = listener.local_addr().expect("local addr");
-    println!("READY 127.0.0.1:{}", addr.port());
-    println!("DATA_DIR {}", data_dir.display());
     eprintln!(
         "openremote-daemon: token at {}",
         data_dir.join("token").display()
@@ -141,6 +144,10 @@ async fn serve(agent: bool) -> ExitCode {
     }
     let _ = app.port.set(addr.port());
     let router = openremote_daemon::http::router(app).merge(pairing.control_router());
+    // The announcement, then the accept loop with nothing awaited between
+    // them: that ordering is the whole point of where these two lines sit.
+    println!("READY 127.0.0.1:{}", addr.port());
+    println!("DATA_DIR {}", data_dir.display());
     axum::serve(listener, router).await.expect("serve");
     ExitCode::SUCCESS
 }
