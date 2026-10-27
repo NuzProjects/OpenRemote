@@ -16,6 +16,12 @@
 // the protocol, not synthetic DOM events, because the console's shortcuts and
 // focus rules read trusted input. Nothing is installed; WebSocket and fetch
 // come from Node itself, the same as cdp-eval.mjs.
+//
+// WHAT IT DOES NOT COVER: it never exercises the daemon's write path (no chat
+// is created and no task is typed, so the stream and the transcript are never
+// read), it opens no split pane, and it checks only first contact with the
+// shell. A green run says the window, its chrome and its overlays are alive;
+// it does not say the app works.
 
 const port = process.env.OPENREMOTE_CDP_PORT ?? '9333'
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))

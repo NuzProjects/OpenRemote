@@ -5,7 +5,7 @@
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { focusables, inertOthers, tabTarget } from './dialog-focus.js'
+import { captureOpener, focusables, focusOpener, inertOthers, tabTarget } from './dialog-focus.js'
 
 test('Tab wraps at both ends and leaves the middle to the browser', () => {
   // Three stops, focus on the first: Shift+Tab wraps to the last.
@@ -123,4 +123,81 @@ test('an element already inert before the dialog opened stays inert after', () =
   const restore = inertOthers(panel, doc)
   restore()
   assert.equal(sidebar.hasAttribute('inert'), true, 'the undo does not lift someone else\'s mark')
+})
+
+// ---- where focus goes back to ----
+//
+// The hook reads the opener while it renders, because by the time its effect
+// runs the dialog's own autoFocus (or the focus-in) has already moved the
+// keyboard inside. It also keeps the opener's name, because a list can
+// redraw itself while the dialog is open: the sidebar rebuilds its rows on
+// every poll beat, so the tile that was pressed is a different node by the
+// time the dialog closes.
+
+// A fake page just big enough for the opener rules: elements that know their
+// name, whether they are still in the page, and a focus() that moves the
+// document's activeElement.
+function openerPage() {
+  const doc = { activeElement: null, elements: [] }
+  doc.body = { tagName: 'BODY' }
+  doc.querySelectorAll = (tag) => doc.elements.filter((el) => el.tagName === tag)
+  doc.add = (tag, name, { connected = true, rect = true, label = null } = {}) => {
+    const el = {
+      tagName: tag,
+      textContent: name,
+      isConnected: connected,
+      focus() {
+        doc.activeElement = el
+      },
+      hasAttribute: () => false,
+      getAttribute: (attr) => (attr === 'aria-label' ? label : null),
+      getClientRects: () => (rect ? [{ width: 1 }] : []),
+    }
+    doc.elements.push(el)
+    return el
+  }
+  return doc
+}
+
+test('the opener is focused again when it is still in the page', () => {
+  const doc = openerPage()
+  const tile = doc.add('BUTTON', 'New chat')
+  doc.activeElement = tile
+  const saved = captureOpener(tile, doc)
+  doc.activeElement = null
+  assert.equal(focusOpener(saved, doc), true)
+  assert.equal(doc.activeElement, tile)
+})
+
+test('the opener was replaced while the dialog was open: the new node takes the focus', () => {
+  const doc = openerPage()
+  const before = doc.add('BUTTON', 'New chat')
+  doc.activeElement = before
+  const saved = captureOpener(before, doc)
+  // A poll beat redrew the sidebar: same control on screen, new element.
+  before.isConnected = false
+  const after = doc.add('BUTTON', 'New chat')
+  doc.activeElement = null
+  assert.equal(focusOpener(saved, doc), true)
+  assert.equal(doc.activeElement, after, 'the person stays on New chat, not on the body')
+})
+
+test('a name that is no longer on the page leaves focus where it was', () => {
+  const doc = openerPage()
+  const gone = doc.add('BUTTON', 'Rename')
+  doc.activeElement = gone
+  const saved = captureOpener(gone, doc)
+  // The row was removed while the dialog was open, and nothing replaced it.
+  gone.isConnected = false
+  doc.activeElement = null
+  assert.equal(focusOpener(saved, doc), false)
+  assert.equal(doc.activeElement, null)
+})
+
+test('the body is never remembered, and the name a person reads is the fallback', () => {
+  const doc = openerPage()
+  assert.equal(captureOpener(doc.body, doc), null)
+  assert.equal(captureOpener(null, doc), null)
+  const labelled = doc.add('BUTTON', 'New chat Ctrl+N', { label: 'New chat' })
+  assert.equal(captureOpener(labelled, doc).label, 'New chat', 'an aria-label beats the visible shortcut')
 })

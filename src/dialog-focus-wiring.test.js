@@ -47,3 +47,22 @@ test('the plumbing joins the Esc stack instead of answering the key itself', () 
   // The tab loop is the module's, and it is the tested rule that wraps the ends.
   assert.match(module, /tabTarget\(nodes\.length/, 'Tab goes through the tested rule')
 })
+
+test('the opener is read before the dialog takes the keyboard, and re-found if replaced', () => {
+  const module = source('dialog-focus.js')
+  // During render, not in the effect: by the time the effect runs the
+  // dialog's own autoFocus has moved the keyboard inside it, and the effect
+  // would remember the dialog's field as the place to return to.
+  assert.match(module, /const opener = useRef\(null\)/, 'the opener is held across renders')
+  assert.match(
+    module,
+    /captureOpener\(typeof document === 'undefined' \? null : document\.activeElement\)/,
+    'read at render time',
+  )
+  assert.doesNotMatch(module, /const opener = document\.activeElement/, 'not from inside the effect')
+  // And the restore can survive a list that redrew itself: the node first,
+  // then the tag plus the name a person reads.
+  assert.match(module, /focusOpener\(opener\.current\)/)
+  assert.match(module, /aria-label/)
+  assert.match(module, /isConnected/)
+})

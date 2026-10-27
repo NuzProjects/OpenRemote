@@ -12,7 +12,7 @@
 // well, because an older WebView without the attribute must not leave a
 // keyboard user able to walk out of a dialog.
 
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useEscLayer } from './esc-layer.js'
 
 // What a dialog can focus, in tab order. Spelled out rather than pulled from
@@ -33,6 +33,43 @@ export function focusables(root) {
   return [...root.querySelectorAll(FOCUSABLE)].filter(
     (el) => !el.hasAttribute('inert') && el.getClientRects().length > 0,
   )
+}
+
+// What we remember about the element that opened a dialog: the node itself,
+// and the name a person reads on it. The name is the fallback identity, for
+// the lists that re-render while a dialog is open: the sidebar redraws its
+// rows on every poll beat, so the tile someone pressed is a different node by
+// the time the dialog closes, and a restore that only knows the node leaves
+// the keyboard on the body.
+const nameOf = (el) => (el.getAttribute?.('aria-label') ?? el.textContent ?? '').trim().replace(/\s+/g, ' ')
+
+/** Remember the opener: its node and the name that can find it again. */
+export function captureOpener(el, doc = typeof document === 'undefined' ? null : document) {
+  if (!el || !doc || el === doc.body) return null
+  return { node: el, tag: el.tagName ?? '', label: nameOf(el) }
+}
+
+/**
+ * Focus the opener again. If that node is gone, find the control that took
+ * its place by tag and name and focus that instead: a re-rendered list has
+ * not moved the person, even though it replaced the node. Returns whether
+ * focus landed where this meant it to.
+ */
+export function focusOpener(saved, doc = typeof document === 'undefined' ? null : document) {
+  if (!saved || !doc) return false
+  if (saved.node && saved.node.isConnected) {
+    saved.node.focus?.({ preventScroll: true })
+    return doc.activeElement === saved.node
+  }
+  if (!saved.tag || !saved.label) return false
+  for (const el of doc.querySelectorAll(saved.tag)) {
+    if (el === saved.node || el.hasAttribute?.('inert')) continue
+    if (typeof el.getClientRects === 'function' && el.getClientRects().length === 0) continue
+    if (nameOf(el) !== saved.label) continue
+    el.focus?.({ preventScroll: true })
+    return doc.activeElement === el
+  }
+  return false
 }
 
 /**
@@ -83,11 +120,21 @@ export function inertOthers(panel, doc = document) {
 export function useDialog(panelRef, onClose, { esc = true, open = true } = {}) {
   useEscLayer(open && esc, onClose)
 
+  // Read the opener while this renders, not from the effect below. By the
+  // time the effect runs, the dialog's own autoFocus (or the focus-in a few
+  // lines down) has already moved the keyboard inside the dialog, and
+  // `document.activeElement` would then be the dialog's own field: a node
+  // that is gone by the time the dialog closes, so the restore would leave
+  // the user on the body.
+  const opener = useRef(null)
+  if (open && opener.current == null) {
+    opener.current = captureOpener(typeof document === 'undefined' ? null : document.activeElement)
+  }
+
   useEffect(() => {
     if (!open) return undefined
     const panel = panelRef.current
     if (!panel) return undefined
-    const opener = document.activeElement
     // A dialog that already holds the focus must not take it away again: a
     // field marked autoFocus (the sign-in code, a confirm's own button) was
     // given the keyboard on purpose, and this hook runs after it.
@@ -98,11 +145,9 @@ export function useDialog(panelRef, onClose, { esc = true, open = true } = {}) {
     const restore = inertOthers(panel)
     return () => {
       restore()
-      // The opener is where the user was before the dialog; the body is not a
-      // place to leave a keyboard user.
-      if (opener && opener !== document.body && opener.isConnected) {
-        opener.focus?.({ preventScroll: true })
-      }
+      // Where the person was before the dialog. The body is not a place to
+      // leave a keyboard user, and a list that re-rendered has not moved them.
+      focusOpener(opener.current)
     }
   }, [open, panelRef])
 
