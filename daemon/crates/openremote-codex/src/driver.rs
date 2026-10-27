@@ -15,7 +15,9 @@ use std::time::Duration;
 
 use openremote_core::{DecisionKind, DecisionOption, TurnOutcome};
 use openremote_harness::events::{ApprovalRequest, DecisionSpec};
-use openremote_harness::{DriverError, DriverEvent, Resolution, SessionSettings, SpawnOptions};
+use openremote_harness::{
+    DriverError, DriverEvent, Resolution, SessionSettings, SpawnOptions, kill_tree,
+};
 use serde_json::{Value, json};
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
@@ -590,7 +592,7 @@ pub async fn commands(
         Ok(None)
     };
     let answer = tokio::time::timeout(Duration::from_secs(30), exchange).await;
-    let _ = child.start_kill();
+    kill_tree(&mut child).await;
     let frame = match answer {
         Ok(Ok(Some(frame))) => frame,
         Ok(Ok(None)) => {
@@ -626,12 +628,12 @@ pub async fn commands(
 async fn kill_and_reap(
     mut child: tokio::sync::MutexGuard<'_, Child>,
 ) -> Result<Option<i32>, DriverError> {
-    child.start_kill()?;
+    kill_tree(&mut child).await;
     match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
         Ok(Ok(status)) => Ok(status.code()),
         Ok(Err(e)) => Err(e.into()),
         Err(_) => {
-            child.start_kill()?;
+            kill_tree(&mut child).await;
             let status = child.wait().await?;
             Ok(status.code())
         }
@@ -698,7 +700,7 @@ fn splice_tail(error: DriverError, tail: &str) -> DriverError {
 /// failure in place.
 async fn discard_child(shared: &Arc<Shared>) {
     let mut child = shared.child.lock().await;
-    let _ = child.start_kill();
+    kill_tree(&mut child).await;
     let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
 }
 
