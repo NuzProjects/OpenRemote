@@ -4,9 +4,13 @@
 // One entry per settings row: the label and detail read as the row reads,
 // and `terms` carry the words a person might search for instead (theme,
 // shortcut, port). A new row in SettingsView belongs here too, or the
-// search cannot find it.
+// search cannot find it. Rows whose list is daemon data (harnesses, MCP
+// servers, archived chats, model endpoints) are not written down here at
+// all: `dynamicEntries` builds them from the same arrays the view draws, so
+// a seventh harness or a new archived chat is searchable without an edit.
 
 import { ACTIONS, GROUPS, fuzzyScore } from './shortcuts.js'
+import { harnessName } from './harness-names.js'
 
 // The sidebar's category order. A section names its group by id; the tab
 // list renders one small label per group.
@@ -57,7 +61,7 @@ const ROWS = [
   row('new-tasks-model', 'new-tasks', 'Model', "The harness's own catalog.", ['default', 'catalog']),
   row('new-tasks-effort', 'new-tasks', 'Effort', "The model's own reasoning tiers.", ['reasoning', 'tier', 'thinking', 'depth']),
   row('new-tasks-permission', 'new-tasks', 'Permission', 'What the harness may do without asking.', ['approval', 'ask', 'mode']),
-  row('new-tasks-projects', 'new-tasks', 'Projects', 'The folders whose chats group under their project.', ['folder', 'workspace', 'group']),
+  row('new-tasks-projects', 'new-tasks', 'Projects', 'The folders whose chats group under their project.', ['folder', 'workspace', 'group', 'remove', 'unregister', 'delete']),
 
   row('appearance-density', 'appearance', 'Compact density', 'Pulls the rows and gutters in.', ['spacing', 'layout', 'comfortable']),
   row('appearance-motion', 'appearance', 'Reduce motion', 'Stops the running-dot breathe and picker transitions.', ['animation', 'accessibility', 'transition']),
@@ -76,6 +80,10 @@ const ROWS = [
   row('daemon-restart', 'daemon', 'Restart', 'Stops running chats and starts a fresh daemon.', ['stop', 'start', 'daemon']),
 
   row('keyboard-stale', 'keyboard', 'Saved shortcut for an action this build no longer has', 'A key saved for an action that is gone, and the button that clears it.', ['shortcut', 'stale', 'unused', 'clear', 'saved']),
+  // The bar's one button, and the only control in the section that changes
+  // everything at once. It is on screen only while some key has been changed,
+  // and the view hides this row with it (`absent`, SettingsView).
+  row('keyboard-reset', 'keyboard', 'Reset every shortcut', 'Puts every key back to its default and touches nothing else.', ['reset', 'default', 'restore', 'shortcut', 'key', 'binding']),
 
   row('mcp-add', 'mcp-servers', 'Add an MCP server', 'Its launch command, as the machine would start it.', ['tool', 'add', 'command', 'server']),
   row('models-endpoint-add', 'models', 'Add a model endpoint', 'A base URL on this machine or network that lists models.', ['endpoint', 'gateway', 'custom', 'model', 'base url', 'relay', 'self-hosted']),
@@ -98,6 +106,96 @@ const KEYBOARD = ACTIONS.map((a) =>
 const SECTION_ROWS = SECTIONS.map((s) => row(s.id, s.id, s.label, BLURBS[s.id] ?? '', [s.id]))
 
 export const SETTINGS_ENTRIES = [...SECTION_ROWS, ...ROWS, ...KEYBOARD]
+
+/**
+ * The rows whose list is daemon data, built from the same arrays the view
+ * draws. Nothing here names a harness, a chat or a server: a seventh harness
+ * is searchable the moment it appears in `harnesses`, and an archived chat is
+ * findable while it is archived and gone the moment it is restored.
+ *
+ * - one row per harness (its own name, and whether it is installed);
+ * - one row per MCP server;
+ * - one row per archived chat, plus the section's own Restore and Delete
+ *   actions while there is anything to act on (a query for "delete" should
+ *   reach the control that deletes, not a fuzzy word in a detail line);
+ * - for every harness that can run custom endpoints: its endpoint block and
+ *   the row that says where the endpoint's API key is set.
+ */
+export function dynamicEntries({ harnesses = null, mcpServers = null, archived = null, chats = {} } = {}) {
+  const harnessList = Array.isArray(harnesses) ? harnesses : []
+  const servers = Array.isArray(mcpServers) ? mcpServers : []
+  const archivedRows = Array.isArray(archived) ? archived : []
+  const titleOf = (s) => chats?.[s.id]?.title ?? s.title ?? 'A new task'
+
+  const entries = [
+    ...harnessList.map((h) => ({
+      key: `harness-${h.id}`,
+      section: 'harnesses',
+      label: harnessName(h.id),
+      detail: h.available ? 'Installed on this machine.' : 'This harness is not installed on this machine.',
+      terms: ['harness', 'cli', 'install', 'agent', h.id],
+    })),
+    ...servers.map((p) => ({
+      key: `mcp-${p.id}`,
+      section: 'mcp-servers',
+      label: p.name,
+      detail: p.detail ?? 'An MCP server.',
+      terms: ['mcp', 'server', 'tool'],
+    })),
+    ...archivedRows.map((s) => ({
+      key: `archived-${s.id}`,
+      section: 'archived',
+      label: titleOf(s),
+      detail: harnessName(s.harness),
+      terms: ['archive', 'chat', 'restore', 'delete', 'hidden'],
+    })),
+  ]
+
+  if (archivedRows.length > 0) {
+    // The section's two actions, said in the words a person searches with.
+    // They point at the section because each acts on a row inside it.
+    entries.push(
+      {
+        key: 'archived-delete-action',
+        section: 'archived',
+        label: 'Delete an archived chat',
+        detail: 'On the chat\'s own row under Archived chats. Synced copies go on each device\'s next sync.',
+        terms: ['delete', 'remove', 'destroy', 'forget', 'archived', 'chat'],
+      },
+      {
+        key: 'archived-restore-action',
+        section: 'archived',
+        label: 'Restore an archived chat',
+        detail: 'On the chat\'s own row under Archived chats; it goes back to the list.',
+        terms: ['restore', 'unarchive', 'unhide', 'archived', 'chat'],
+      },
+    )
+  }
+
+  for (const h of harnessList) {
+    if (!h.custom_endpoint_supported) continue
+    const name = harnessName(h.id)
+    entries.push(
+      {
+        key: `models-${h.id}`,
+        section: 'models',
+        label: `Model endpoints for ${name}`,
+        detail: 'Model endpoints this harness can run through.',
+        terms: ['endpoint', 'gateway', 'custom', 'model', 'relay', h.id],
+      },
+      {
+        key: `models-key-${h.id}`,
+        section: 'models',
+        // The key is typed on the endpoint's Edit row, which this lands near.
+        label: `Endpoint API key (${name})`,
+        detail: 'Set on the endpoint\'s Edit row. The daemon stores it; the console never shows it again.',
+        terms: ['api key', 'key', 'token', 'secret', 'auth', 'endpoint', h.id],
+      },
+    )
+  }
+
+  return entries
+}
 
 // Which searchable text matched, and how far down the row it sits: the
 // label beats a keyword, a keyword beats the row's section name, and the
@@ -122,8 +220,22 @@ function scoreEntry(query, entry) {
 export function searchSettings(query, entries = SETTINGS_ENTRIES) {
   const q = query.trim()
   if (!q) return []
+  const words = q.split(/\s+/).filter(Boolean)
   return entries
-    .map((entry, index) => ({ entry, index, score: scoreEntry(q, entry) }))
+    .map((entry, index) => {
+      // The whole query first, so a phrase keeps its strong score. When that
+      // finds nothing, every word must match somewhere on the same entry:
+      // "install claude" is two words in two places (a term and the label),
+      // and a person does not think in one string.
+      let score = scoreEntry(q, entry)
+      if (score === null && words.length > 1) {
+        const each = words.map((word) => scoreEntry(word, entry))
+        score = each.every((part) => part !== null)
+          ? each.reduce((sum, part) => sum + part, 0) / each.length
+          : null
+      }
+      return { entry, index, score }
+    })
     .filter((r) => r.score !== null)
     .sort((a, b) => b.score - a.score || a.index - b.index)
     .map((r) => r.entry)

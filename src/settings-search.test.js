@@ -4,6 +4,7 @@ import {
   SECTIONS,
   SETTING_GROUPS,
   SETTINGS_ENTRIES,
+  dynamicEntries,
   searchSettings,
   visibleSections,
 } from './settings-search.js'
@@ -63,4 +64,87 @@ test('a phone sees the phone tabs, a desktop sees them all', () => {
     ['appearance', 'cloud', 'archived', 'this-install'],
   )
   assert.deepEqual(visibleSections(false), SECTIONS)
+})
+
+// ---- the rows whose list is daemon data ----
+
+const HARNESSES = [
+  { id: 'claude', available: true, custom_endpoint_supported: true },
+  { id: 'codex', available: true, custom_endpoint_supported: false },
+  { id: 'grok', available: false, custom_endpoint_supported: false },
+]
+const MCP = [{ id: 'p1', name: 'files' }]
+const ARCHIVED = [{ id: 's1', harness: 'claude' }]
+const CHATS = { s1: { title: 'Nightly review' } }
+
+const withData = (over = {}) => [
+  ...SETTINGS_ENTRIES,
+  ...dynamicEntries({ harnesses: HARNESSES, mcpServers: MCP, archived: ARCHIVED, chats: CHATS, ...over }),
+]
+
+test('the dynamic rows are built from the lists the view draws, not a name list', () => {
+  const base = withData()
+  // A seventh harness is searchable the moment it exists, with no edit here.
+  const seventh = [...HARNESSES, { id: 'agy', available: true, custom_endpoint_supported: false }]
+  const grown = withData({ harnesses: seventh })
+  assert.equal(grown.length, base.length + 1)
+  assert.equal(searchSettings('agy', grown)[0]?.key, 'harness-agy')
+  assert.equal(
+    searchSettings('agy', base).some((e) => e.key === 'harness-agy'),
+    false,
+    'and it is not there before it exists',
+  )
+  // One row per archived chat, so a chat's own title finds it.
+  assert.equal(searchSettings('nightly', base)[0]?.key, 'archived-s1')
+  // The archived actions exist only while something is archived.
+  assert.ok(searchSettings('restore an archived chat', base).length > 0)
+  assert.deepEqual(searchSettings('restore an archived chat', withData({ archived: [] })), [])
+  // No data, no dynamic rows at all.
+  assert.deepEqual(dynamicEntries({}), [])
+})
+
+test('the words a person types find the control, in the right order', () => {
+  const index = withData()
+  // A harness, by its name and by the verb a newcomer uses.
+  assert.equal(searchSettings('claude', index)[0].key, 'harness-claude')
+  assert.equal(searchSettings('install claude', index)[0].key, 'harness-claude')
+  assert.equal(searchSettings('install codex', index)[0].key, 'harness-codex')
+  // Destructive actions before a fuzzy detail line.
+  assert.equal(searchSettings('delete', index)[0].key, 'archived-delete-action')
+  assert.equal(searchSettings('unarchive', index)[0].key, 'archived-restore-action')
+  // The projects row answers the verb as well as the noun.
+  assert.equal(searchSettings('remove project', index)[0].key, 'new-tasks-projects')
+  assert.equal(searchSettings('unregister', index)[0].key, 'new-tasks-projects')
+  // The keyboard bar's one button.
+  assert.equal(searchSettings('reset', index)[0].key, 'keyboard-reset')
+  assert.equal(searchSettings('reset every shortcut', index)[0].key, 'keyboard-reset')
+  // The endpoint key control, and only for a harness that has endpoints.
+  assert.equal(searchSettings('api key', index)[0].key, 'models-key-claude')
+  assert.equal(
+    searchSettings('api key', withData({ harnesses: [] })).some((e) => e.section === 'models'),
+    false,
+    'no endpoint key row without a harness that has endpoints',
+  )
+})
+
+test('every query that should find nothing still finds nothing', () => {
+  const index = withData()
+  assert.deepEqual(searchSettings('zzzxq', index), [])
+  assert.deepEqual(searchSettings('zzz qqq', index), [])
+  // A word no row carries, even split into words that exist: "key" alone matches,
+  // but "key zzzxq" must not, because every word has to match the same row.
+  assert.equal(searchSettings('key zzzxq', index).length, 0)
+  // Restored is not archived: nothing to find when the list is empty.
+  assert.deepEqual(searchSettings('nightly', withData({ archived: [] })), [])
+})
+
+test('no row is indexed twice, with or without data', () => {
+  for (const index of [withData(), SETTINGS_ENTRIES]) {
+    const keys = index.map((e) => e.key)
+    assert.equal(new Set(keys).size, keys.length, 'entry keys are unique')
+  }
+  const sections = new Set(SECTIONS.map((s) => s.id))
+  for (const entry of withData()) {
+    assert.ok(sections.has(entry.section), `${entry.key} points at ${entry.section}`)
+  }
 })

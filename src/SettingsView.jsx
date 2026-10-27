@@ -24,7 +24,7 @@ import DeleteChatModal from './DeleteChatModal.jsx'
 import SignInModal from './SignInModal.jsx'
 import PickerMenu from './PickerMenu.jsx'
 import Toggle from './Toggle.jsx'
-import { SECTIONS, SETTING_GROUPS, SETTINGS_ENTRIES, searchSettings, visibleSections } from './settings-search.js'
+import { SECTIONS, SETTING_GROUPS, SETTINGS_ENTRIES, dynamicEntries, searchSettings, visibleSections } from './settings-search.js'
 import { projectName } from './projects.js'
 import { armRow, clearRow } from './row-confirm.js'
 import { useBack } from './use-back.js'
@@ -429,43 +429,16 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
   )
   const sectionLabel = (id) => SECTIONS.find((s) => s.id === id)?.label ?? id
 
-  const index = useMemo(() => {
-    const dynamic = [
-      ...harnessList.map((h) => ({
-        key: `harness-${h.id}`,
-        section: 'harnesses',
-        label: harnessName(h.id),
-        detail: h.available ? 'Installed on this machine.' : 'This harness is not installed on this machine.',
-        terms: ['harness', 'cli', 'install', h.id],
-      })),
-      ...(mcpServers ?? []).map((p) => ({
-        key: `mcp-${p.id}`,
-        section: 'mcp-servers',
-        label: p.name,
-        detail: p.detail ?? 'An MCP server.',
-        terms: ['mcp', 'server', 'tool'],
-      })),
-      ...archivedRows.map((s) => ({
-        key: `archived-${s.id}`,
-        section: 'archived',
-        label: chats[s.id]?.title ?? s.title ?? 'A new task',
-        detail: harnessName(s.harness),
-        terms: ['archive', 'chat', 'restore', 'delete'],
-      })),
-      // One block per harness that can run custom endpoints, the way the
-      // harness rows are generated: a rendered block belongs in the index.
-      ...harnessList
-        .filter((h) => h.custom_endpoint_supported)
-        .map((h) => ({
-          key: `models-${h.id}`,
-          section: 'models',
-          label: `Model endpoints for ${harnessName(h.id)}`,
-          detail: 'Model endpoints this harness can run through.',
-          terms: ['endpoint', 'gateway', 'custom', 'model', 'relay', h.id],
-        })),
-    ]
-    return [...SETTINGS_ENTRIES, ...dynamic]
-  }, [harnessList, mcpServers, archivedRows, chats])
+  // The rows whose list is daemon data are built by the module from these same
+  // arrays (settings-search.js), so a seventh harness or a freshly archived
+  // chat is searchable without an edit here or there.
+  const index = useMemo(
+    () => [
+      ...SETTINGS_ENTRIES,
+      ...dynamicEntries({ harnesses: harnessList, mcpServers, archived: archivedRows, chats }),
+    ],
+    [harnessList, mcpServers, archivedRows, chats],
+  )
 
   // A row that is not on screen (no model catalog, no tray, browser dev)
   // must not answer the search: a result that lands nowhere is dead UI.
@@ -483,6 +456,9 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
     // stale key to clear.
     if (!onManualConnect || connection.state === 'connected') keys.add('daemon-connect')
     if (!(kb?.staleBindings?.length > 0)) keys.add('keyboard-stale')
+    // "Reset every shortcut" is in the bar only while some key has been
+    // changed with the defaults gone, there is nothing to reset.
+    if (!(Object.keys(kb?.overrides ?? {}).length > 0)) keys.add('keyboard-reset')
     if (isMobile) keys.add('install-first-run')
     return keys
   }, [models, effortTiers, permissionWords, autoStart, tray, daemonDetail, onManualConnect, connection.state, kb])
@@ -1523,8 +1499,8 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
               <h2 className="stg-title">Models</h2>
               <p className="stg-lead">
                 Custom model endpoints on this computer - a self-hosted gateway or a relay
-                on this network that speaks an OpenAI-compatible models API. Keys never
-                leave the daemon.
+                on this network that speaks an OpenAI-compatible models API. The daemon
+                holds the keys; the console never sees them.
               </p>
             </header>
             {(harnessList ?? []).filter((h) => h.custom_endpoint_supported).length === 0 ? (
@@ -1561,7 +1537,8 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
             <h2 className="stg-title">Archived chats</h2>
             <p className="stg-lead">
               Hidden on this computer only. They keep running and syncing; Delete removes a synced
-              chat from every device, and a private chat can't be deleted.
+              chat from your other devices the next time each one syncs, and a private chat can't be
+              deleted.
             </p>
           </header>
           <div className="pn-list pn-list--tight">
