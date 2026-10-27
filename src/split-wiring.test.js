@@ -29,3 +29,22 @@ test('while the pointer moves, the strip is repainted without a commit', () => {
   assert.match(startDrag, /cells\[index\]\.style\.flex/)
   assert.match(startDrag, /cells\[index \+ 1\]\.style\.flex/)
 })
+
+const over = source.slice(source.indexOf('const over ='), source.indexOf('const leave ='))
+
+test('a drag that carries no chat never tints a pane', () => {
+  const gate = over.indexOf('acceptsChatDrop(e.dataTransfer.types)')
+  const prevent = over.indexOf('e.preventDefault()')
+  assert.ok(gate >= 0, 'the hover path asks whether the drag carries a chat')
+  assert.ok(prevent > gate, 'and refuses before it prevents the default, so a file drag stays the browser\'s')
+})
+
+test('a drag that ends anywhere clears the tint it drew', () => {
+  const pane = source.slice(source.indexOf('function Pane('), source.indexOf('export default function SplitArea'))
+  assert.match(pane, /window\.addEventListener\('dragend', clear\)/)
+  assert.match(pane, /window\.addEventListener\('drop', clear\)/)
+  assert.match(pane, /removeEventListener\('dragend', clear\)/)
+  assert.match(pane, /removeEventListener\('drop', clear\)/)
+  // The pointer leaving the window is a leave too (relatedTarget null).
+  assert.match(pane, /if \(e\.relatedTarget && e\.currentTarget\.contains\(e\.relatedTarget\)\) return/)
+})

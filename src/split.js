@@ -124,6 +124,17 @@ export function focusByIndex(layout, index) {
  */
 export const DROP_BAND = 0.28
 
+/**
+ * Whether a drag in progress carries a chat. The payload itself is only
+ * readable on drop, but the drag's own types are readable throughout, so this
+ * is the question the hover path can ask: without it a file or a paragraph
+ * tints a pane and then does nothing when it lands.
+ */
+export function acceptsChatDrop(types) {
+  if (!types) return false
+  return Array.from(types).includes('text/plain')
+}
+
 export function dropZone(box, x, y) {
   const edges = [
     { zone: 'left', dir: 'row', before: true, at: (x - box.left) / box.width },

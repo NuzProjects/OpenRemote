@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   DROP_BAND,
   MAX_PANES,
+  acceptsChatDrop,
   balanceSplit,
   closeLeaf,
   createDividerDrag,
@@ -240,4 +241,15 @@ test('movedSizes clamps both neighbours and leaves other arrays alone', () => {
   const sizes = [1]
   assert.equal(movedSizes(sizes, 0, 0.2), sizes)
   assert.equal(movedSizes(sizes, 5, 0.2), sizes)
+})
+
+test('only a chat drag is offered a pane', () => {
+  // The payload is unreadable during dragover, the types are not: a file or
+  // a selected paragraph must not tint a pane it could never fill.
+  assert.equal(acceptsChatDrop(['text/plain']), true)
+  assert.equal(acceptsChatDrop(['text/plain', 'Files']), true, 'a chat drag may also carry other data')
+  assert.equal(acceptsChatDrop(['Files']), false, 'a file from the desktop')
+  assert.equal(acceptsChatDrop([]), false, 'nothing to carry')
+  assert.equal(acceptsChatDrop(undefined), false, 'a drag event with no dataTransfer')
+  assert.equal(acceptsChatDrop(null), false)
 })

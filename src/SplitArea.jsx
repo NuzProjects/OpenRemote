@@ -1,10 +1,11 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, DotsThree, X } from '@phosphor-icons/react'
 import ContextMenu from './ContextMenu.jsx'
 import SplitGlyph from './SplitGlyph.jsx'
 import { useHint, useKeyboard } from './keyboard.jsx'
 import {
   MAX_PANES,
+  acceptsChatDrop,
   balanceSplit,
   chatDragPayload,
   closeLeaf,
@@ -116,6 +117,10 @@ function Pane({ node, layout, setLayout, renderPane, labelFor, showHeader, onDro
 
   const over = (e) => {
     if (!onDropInPane) return
+    // Only a chat may tint a pane. The payload is unreadable during dragover,
+    // so the drag's own types are the check: a file or a selected paragraph
+    // never passes it, and the pane does not promise an action it cannot do.
+    if (!acceptsChatDrop(e.dataTransfer.types)) return
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
     const box = e.currentTarget.getBoundingClientRect()
@@ -125,7 +130,9 @@ function Pane({ node, layout, setLayout, renderPane, labelFor, showHeader, onDro
   }
 
   const leave = (e) => {
-    if (e.currentTarget.contains(e.relatedTarget)) return
+    // A missing relatedTarget is the pointer leaving the window (or a drag the
+    // browser cancelled), not a move between children.
+    if (e.relatedTarget && e.currentTarget.contains(e.relatedTarget)) return
     place.current = null
     setZone(null)
   }
@@ -139,6 +146,23 @@ function Pane({ node, layout, setLayout, renderPane, labelFor, showHeader, onDro
     e.preventDefault()
     onDropInPane?.(node.id, view, at)
   }
+
+  // A drag can end away from this pane: dropped on the window, cancelled with
+  // Esc, or lost with the pointer. The tint is cleared from the window as
+  // well, so no half-pane highlight outlives the drag that drew it.
+  useEffect(() => {
+    if (!zone) return undefined
+    const clear = () => {
+      place.current = null
+      setZone(null)
+    }
+    window.addEventListener('dragend', clear)
+    window.addEventListener('drop', clear)
+    return () => {
+      window.removeEventListener('dragend', clear)
+      window.removeEventListener('drop', clear)
+    }
+  }, [zone])
 
   return (
     <section
