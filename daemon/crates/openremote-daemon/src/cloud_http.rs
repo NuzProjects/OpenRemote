@@ -141,12 +141,30 @@ pub async fn callback(State(app): State<Arc<App>>, Query(q): Query<CallbackQuery
     };
     match app.cloud.finish_signin(&code, &state).await {
         Ok(signed_in) => {
+            // The one call that makes an account switch safe, so it is not a
+            // footnote: an earlier account's synced chats must be gone before
+            // this one is announced. Purged on every sign-in rather than only
+            // when the daemon happened to notice a previous account - a synced
+            // copy is rebuilt from the account anyway, and the store is the
+            // thing that knows what is on disk. A failure here stops the
+            // announcement: the page below is the only place the person would
+            // ever hear that another account's chats stayed behind.
+            let purged = {
+                let mut store = crate::supervisor::lock_recovering(&app.store);
+                store.purge_synced()
+            };
+            if let Err(e) = purged {
+                eprintln!(
+                    "openremote-daemon: signed in, but the chats copied here by an earlier account could not be removed: {e}"
+                );
+                return page(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Sign-in did not finish",
+                    "This computer is signed in, but the chats an earlier account had copied here could not be removed. Nothing was deleted on any other device. Sign in again to retry the cleanup.",
+                );
+            }
             {
                 let mut store = crate::supervisor::lock_recovering(&app.store);
-                // Another account's synced chats don't belong to this one.
-                if signed_in.previous_account.is_some() {
-                    let _ = store.purge_synced();
-                }
                 let _ = store.set_this_device(Some(signed_in.device_id));
             }
             app.start_cloud();
@@ -282,9 +300,21 @@ pub async fn remove_device(State(app): State<Arc<App>>, Path(id): Path<String>) 
         if let Err(e) = app.cloud.leave().await {
             return cloud_error(e);
         }
-        {
+        // Leaving Cloud means this device stops keeping the account's chats.
+        // The console reports this call's answer as the sign-out, so a purge
+        // that failed must not come back as one: it says so instead.
+        let purged = {
             let mut store = crate::supervisor::lock_recovering(&app.store);
-            let _ = store.purge_synced();
+            store.purge_synced()
+        };
+        if let Err(e) = purged {
+            eprintln!(
+                "openremote-daemon: left Cloud, but the synced chats could not be removed: {e}"
+            );
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "this computer left Cloud, but its copies of the account's chats could not be removed; try again",
+            );
         }
         return Json(app.cloud.view()).into_response();
     }

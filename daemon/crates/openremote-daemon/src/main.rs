@@ -67,7 +67,21 @@ async fn serve(agent: bool) -> ExitCode {
         );
         return ExitCode::from(NOT_ENROLLED);
     }
-    let token = app::load_or_create_token(&data_dir).expect("token");
+    // A data folder that cannot take the token is configuration, not a crash:
+    // say which folder and stop, the way the not-enrolled path stops, instead
+    // of panicking into a service restart loop that never says why.
+    let token = match app::load_or_create_token(&data_dir) {
+        Ok(token) => token,
+        Err(e) => {
+            eprintln!(
+                "openremote-daemon: cannot use the data folder {} - {e}. Fix its permissions, or point OPENREMOTE_DATA_DIR at a writable folder",
+                data_dir.display()
+            );
+            // sysexits' EX_CONFIG, the same code the not-enrolled path uses:
+            // retrying will not change this.
+            return ExitCode::from(NOT_ENROLLED);
+        }
+    };
     // Bind early so the port is known before the app is assembled (the
     // read-a-chat MCP server a chat starts calls back on it), but do not
     // announce it yet. READY is what tells the shell's console that a daemon
@@ -194,33 +208,108 @@ async fn enroll(code: &str) -> ExitCode {
 fn status() -> ExitCode {
     let cloud = Cloud::open(CloudConfig::from_env(), &app::default_data_dir());
     let view = cloud.view();
-    match view["account"]["email"].as_str() {
-        Some(email) if cloud.enrolled() => {
-            println!("In OpenRemote Cloud as {email}.");
-            ExitCode::SUCCESS
-        }
-        _ => {
-            println!("Not in OpenRemote Cloud.");
-            ExitCode::FAILURE
-        }
+    let (line, code) = status_line(cloud.enrolled(), view["account"]["email"].as_str());
+    println!("{line}");
+    ExitCode::from(code)
+}
+
+/// What `status` says and the code it exits with. An enrolled machine is in
+/// Cloud whether or not the account block carries an email: a service script
+/// reads the code and a person reads the sentence, so the two must not
+/// disagree about the one fact this command exists to report.
+fn status_line(enrolled: bool, email: Option<&str>) -> (String, u8) {
+    if !enrolled {
+        return ("Not in OpenRemote Cloud.".to_string(), 1);
+    }
+    match email {
+        Some(email) => (format!("In OpenRemote Cloud as {email}."), 0),
+        None => (
+            "In OpenRemote Cloud, with no account name recorded.".to_string(),
+            0,
+        ),
     }
 }
 
 async fn unenroll() -> ExitCode {
     let data_dir = app::default_data_dir();
     let cloud = Cloud::open(CloudConfig::from_env(), &data_dir);
-    // Best effort: tell the registry this device is gone, then forget it.
-    if let (Some(credential), Some(id)) = (cloud.device_credential(), cloud.device_id()) {
-        let _ = cloud.registry().delete(&credential, &id.to_string()).await;
+    // The account's side is best effort, but never silent: the registry delete
+    // can fail (offline, a credential the registry already rejected), and the
+    // sentence below says which half of "left the account" actually happened.
+    // A registry that has already removed this device is the outcome this
+    // command exists to reach, not a failure.
+    let registry_error = match (cloud.device_credential(), cloud.device_id()) {
+        (Some(credential), Some(id)) => match cloud.registry().delete(&credential, &id.to_string()).await {
+            Ok(()) | Err(openremote_cloud::registry::RegistryError::Revoked) => None,
+            Err(e) => Some(e.to_string()),
+        },
+        _ => None,
+    };
+    let local_error = cloud.signout().await.err().map(|e| e.to_string());
+    let (line, code) = unenroll_answer(local_error.as_deref(), registry_error.as_deref());
+    if code == 0 {
+        println!("{line}");
+    } else {
+        eprintln!("{line}");
     }
-    match cloud.signout().await {
-        Ok(()) => {
-            println!("This computer left OpenRemote Cloud.");
-            ExitCode::SUCCESS
-        }
-        Err(e) => {
-            eprintln!("openremote-daemon: {e}");
-            ExitCode::FAILURE
-        }
+    ExitCode::from(code)
+}
+
+/// The sentence and the code after an unenroll attempt: `local_error` when the
+/// sign-out itself failed, `registry_error` when the account still lists this
+/// computer. The code follows the account, not just the disk - a machine sold
+/// on must not read as gone while the account still lists it.
+fn unenroll_answer(local_error: Option<&str>, registry_error: Option<&str>) -> (String, u8) {
+    if let Some(e) = local_error {
+        return (format!("openremote-daemon: {e}"), 1);
+    }
+    match registry_error {
+        Some(e) => (
+            format!(
+                "This computer left OpenRemote Cloud, but the account still lists it ({e}); it drops off when the registry expires it."
+            ),
+            1,
+        ),
+        None => ("This computer left OpenRemote Cloud.".to_string(), 0),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_agrees_with_itself_about_an_enrolled_machine_without_a_name() {
+        let (line, code) = status_line(false, None);
+        assert_eq!(code, 1);
+        assert!(line.contains("Not in OpenRemote Cloud"));
+
+        // The case D4 found: enrolled, but no name in the account block. It is
+        // still enrolled, and both halves of the answer have to say so.
+        let (line, code) = status_line(true, None);
+        assert_eq!(code, 0);
+        assert!(line.contains("In OpenRemote Cloud"));
+
+        let (line, code) = status_line(true, Some("someone@example.com"));
+        assert_eq!(code, 0);
+        assert!(line.contains("someone@example.com"));
+    }
+
+    #[test]
+    fn unenroll_says_which_half_happened() {
+        let (line, code) = unenroll_answer(None, None);
+        assert_eq!(code, 0);
+        assert_eq!(line, "This computer left OpenRemote Cloud.");
+
+        // The account still lists it: the sentence says so, and the code
+        // agrees rather than reporting a clean exit.
+        let (line, code) = unenroll_answer(None, Some("offline"));
+        assert_eq!(code, 1);
+        assert!(line.contains("still lists it"));
+
+        // The local sign-out failed: the account was never reached at all.
+        let (line, code) = unenroll_answer(Some("no credential"), Some("offline"));
+        assert_eq!(code, 1);
+        assert!(line.contains("no credential"));
     }
 }

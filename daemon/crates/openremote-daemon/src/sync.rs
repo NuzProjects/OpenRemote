@@ -244,10 +244,34 @@ pub async fn apply_tombstone(app: &Arc<App>, id: SessionId, stone: Tombstone) {
         return;
     }
     if running_here {
-        let _ = app.supervisor.stop(&id).await;
+        let stopped: Result<(), String> = app
+            .supervisor
+            .stop(&id)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string());
+        if !tombstone_after_stop(&stopped) {
+            // The row stays, and that is the point: a child whose row has been
+            // deleted is the one state that leaves a harness running with
+            // nothing left that could ever stop it, spending on a chat nobody
+            // can see. So a stop that failed is a failed delete; the peer keeps
+            // its tombstone and offers it again on the next sync beat, and the
+            // chat stays visible here with this failure in the log until one
+            // of the two succeeds.
+            let reason = stopped.err().unwrap_or_default();
+            eprintln!("openremote-daemon: could not stop {id} before deleting it: {reason}");
+            return;
+        }
     }
     let _ = lock_recovering(&app.store).tombstone(id, stone);
     app.sync.forget(id);
+}
+
+/// Whether the tombstone may be written after the stop attempt. Split out so
+/// the rule is pinned without an App: only a stop that reported success may
+/// delete the row.
+pub fn tombstone_after_stop(stop: &Result<(), String>) -> bool {
+    stop.is_ok()
 }
 
 /// Two devices found each other: trade deletions, then pull what's missing.
@@ -546,6 +570,17 @@ async fn notify_head(app: &Arc<App>, mesh: &Arc<Mesh>, id: SessionId, skip: &[De
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_stop_never_deletes_the_row() {
+        // The pair D1 exists for: a deleted row with a live child is a harness
+        // spending with nothing left that could stop it. Only a stop that
+        // reported success may be followed by the tombstone.
+        assert!(tombstone_after_stop(&Ok(())));
+        assert!(!tombstone_after_stop(&Err(
+            "the harness did not exit".to_string()
+        )));
+    }
 
     #[test]
     fn a_pull_slot_guard_releases_on_any_drop() {
