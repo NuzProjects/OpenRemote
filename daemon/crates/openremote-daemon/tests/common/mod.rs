@@ -216,6 +216,78 @@ pub async fn start_daemon(overrides: &[(&str, PathBuf)]) -> TestDaemon {
 
 /// A daemon whose Cloud mode talks to `cloud` (the stand-in), or to a dead
 /// address when there is none.
+/// The Cloud settings the suites use when the feature under test is not Cloud
+/// at all: an address that answers nothing, so a stray attempt fails fast and
+/// loudly instead of reaching a real one.
+pub fn dead_cloud() -> openremote_cloud::CloudConfig {
+    openremote_cloud::CloudConfig {
+        api_base: "http://127.0.0.1:9/v1/openremote".into(),
+        auth_issuer: "http://127.0.0.1:9/v1/auth".into(),
+        client_id: openremote_cloud::config::CLIENT_ID.into(),
+        device_name: "test-device".into(),
+        platform: std::env::consts::OS.into(),
+        redirect_uri: None,
+    }
+}
+
+/// The daemon plus a phone-pairing host whose LAN listener binds `bind`, with
+/// the pairing control routes merged into the loopback router the way
+/// `main.rs` merges them.
+///
+/// Only the pairing suite wants a second socket, but the bootstrap is the
+/// shared part: the data folder, the owner token, the probe-to-serve handoff
+/// of the loopback port. The registry is deliberately empty (a machine with no
+/// harnesses), because the phone's home projection is asserted against exactly
+/// that, and it is also why this path needs no fixture binary.
+pub async fn start_pairing_daemon_over(
+    data_dir: tempfile::TempDir,
+    bind: std::net::SocketAddr,
+    token: String,
+    code_ttl_ms: i64,
+) -> (
+    TestDaemon,
+    Arc<App>,
+    Arc<openremote_daemon::pairing::PairingHost>,
+) {
+    let store = Arc::new(StdMutex::new(
+        Store::open(data_dir.path().to_path_buf()).expect("store"),
+    ));
+    let supervisor = Supervisor::new(store.clone(), HarnessRegistry::none());
+    let app = App::assemble(
+        AppOptions {
+            data_dir: data_dir.path().to_path_buf(),
+            token: token.clone(),
+            cloud: dead_cloud(),
+        },
+        store,
+        supervisor,
+    );
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    app.supervisor.set_controls(
+        PathBuf::from(env!("CARGO_BIN_EXE_openremote-daemon")),
+        addr.port(),
+    );
+    let host =
+        openremote_daemon::pairing::PairingHost::open_on(Arc::clone(&app), bind, code_ttl_ms);
+    let router = openremote_daemon::http::router(Arc::clone(&app)).merge(host.control_router());
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+    (
+        TestDaemon {
+            token,
+            addr,
+            _data_dir: data_dir,
+            _child: None,
+        },
+        app,
+        host,
+    )
+}
+
 pub async fn start_cloud_daemon(
     overrides: &[(&str, PathBuf)],
     cloud: Option<openremote_cloud::CloudConfig>,
@@ -246,14 +318,7 @@ pub async fn start_cloud_daemon(
         AppOptions {
             data_dir: data_dir.path().to_path_buf(),
             token: token.clone(),
-            cloud: cloud.unwrap_or_else(|| openremote_cloud::CloudConfig {
-                api_base: "http://127.0.0.1:9/v1/openremote".into(),
-                auth_issuer: "http://127.0.0.1:9/v1/auth".into(),
-                client_id: openremote_cloud::config::CLIENT_ID.into(),
-                device_name: "test-device".into(),
-                platform: std::env::consts::OS.into(),
-                redirect_uri: None,
-            }),
+            cloud: cloud.unwrap_or_else(dead_cloud),
         },
         store,
         supervisor,
@@ -639,6 +704,31 @@ pub struct RawReply {
     pub raw: String,
 }
 
+impl RawReply {
+    /// The answer's body as text, with the trailing line endings and NULs
+    /// trimmed: what a reader of the response would call its content.
+    pub fn text(&self) -> &str {
+        self.raw
+            .split_once("\r\n\r\n")
+            .map(|(_, body)| body.trim_end_matches(['\r', '\n', '\0']))
+            .unwrap_or_default()
+    }
+
+    /// The body as JSON. A body that is not JSON becomes `Null` rather than a
+    /// panic: what a caller is asserting about is the field it then indexes.
+    pub fn json(&self) -> Value {
+        serde_json::from_str(self.text()).unwrap_or(Value::Null)
+    }
+
+    /// One response header, case-insensitively, as a reader would ask for it.
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    }
+}
+
 pub async fn raw_http(
     daemon: &TestDaemon,
     method: &str,
@@ -646,14 +736,38 @@ pub async fn raw_http(
     headers: &[(&str, &str)],
     body: Option<String>,
 ) -> RawReply {
-    let mut stream = tokio::net::TcpStream::connect(daemon.addr)
-        .await
-        .expect("connect");
+    try_raw_http(
+        daemon.addr,
+        method,
+        path,
+        Some(&daemon.token),
+        headers,
+        body.as_deref(),
+    )
+    .await
+    .unwrap_or_else(|| panic!("{method} {path}: the daemon never answered"))
+}
+
+/// A raw request to any address, with no bearer token when `bearer` is `None`.
+///
+/// `None` back means the peer did not answer at all, which is exactly what the
+/// assertions about a socket that should be closed are about; a plain
+/// refused connection is not a test failure there, it is the expected result.
+/// The timeout still panics: a peer that accepts the connection and then says
+/// nothing is a wedged daemon, not a closed port.
+pub async fn try_raw_http(
+    addr: std::net::SocketAddr,
+    method: &str,
+    path: &str,
+    bearer: Option<&str>,
+    headers: &[(&str, &str)],
+    body: Option<&str>,
+) -> Option<RawReply> {
     let body = body.unwrap_or_default();
-    let mut request = format!(
-        "{method} {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {}\r\n",
-        daemon.token
-    );
+    let mut request = format!("{method} {path} HTTP/1.1\r\nHost: localhost\r\n");
+    if let Some(token) = bearer {
+        request.push_str(&format!("Authorization: Bearer {token}\r\n"));
+    }
     for (key, value) in headers {
         request.push_str(&format!("{key}: {value}\r\n"));
     }
@@ -661,14 +775,18 @@ pub async fn raw_http(
         "Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     ));
-    stream.write_all(request.as_bytes()).await.expect("write");
+    let mut stream = tokio::net::TcpStream::connect(addr).await.ok()?;
+    // A peer that drops the connection before or while we write has not
+    // answered, which is what a socket with nothing behind it looks like on
+    // the way out.
+    stream.write_all(request.as_bytes()).await.ok()?;
     let mut raw = Vec::new();
     // Bounded like call_with_token: a wedged daemon fails the test in
     // 30s instead of hanging it for the rest of the job.
     let read = stream.read_to_end(&mut raw);
     match tokio::time::timeout(Duration::from_secs(30), read).await {
         Ok(result) => {
-            result.expect("read");
+            result.ok()?;
         }
         Err(_) => panic!("{method} {path}: the daemon never answered within 30s"),
     }
@@ -686,9 +804,9 @@ pub async fn raw_http(
         .filter_map(|l| l.split_once(':'))
         .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
         .collect();
-    RawReply {
+    Some(RawReply {
         status,
         headers,
         raw,
-    }
+    })
 }
