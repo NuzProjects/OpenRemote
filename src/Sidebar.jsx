@@ -26,7 +26,7 @@ import {
 import { useConsole } from './state/console.jsx'
 import { chatStatus } from './state/reducer.js'
 import { attentionTitle, needsYou } from './needs-you.js'
-import { projectIndex, sections, unreadProjects } from './projects.js'
+import { projectIndex, projectLine, sections, unreadProjects, waitingProjects } from './projects.js'
 import { activeSessions } from './archive.js'
 import { deviceName, isPhone, sessionsForMode } from './cloud.js'
 import { isMobile } from './platform.js'
@@ -226,6 +226,11 @@ export default function Sidebar({
   // Which project groups hold an unread chat: one pass over the rows, where a
   // count per group re-walked every group.
   const unreadIn = useMemo(() => unreadProjects(rows, unread, folders), [rows, unread, folders])
+  // How many of each project's chats are waiting. Those rows are drawn in the
+  // group above, not under their project, so this is one pass over that same
+  // group against the same folder index - the head's tally and the rows it
+  // counts cannot disagree, and no chat is counted twice.
+  const waitingIn = useMemo(() => waitingProjects(needs.chats, folders), [needs, folders])
 
   const toggleProject = (id) => {
     setCollapsed((c) => ({ ...c, [id]: !c[id] }))
@@ -266,6 +271,42 @@ export default function Sidebar({
     setRovingId(id)
     document.querySelector(`[data-chat-row="${CSS.escape(id)}"]`)?.focus()
   }
+
+  // Keep the keyboard's place when the row it was on disappears. Archiving the
+  // roving chat from the palette, a search that no longer matches it, or
+  // collapsing its project all remove the element that held the list's single
+  // Tab stop. The stop itself is safe (`rovingRow` falls back to the first
+  // row), but the browser drops focus to the body when the focused element
+  // goes, so the next Tab starts at the top of the document instead of beside
+  // where the person was. This puts the keyboard on the row that took its
+  // place (same index, clamped) or the first row.
+  //
+  // It stays out of the way in both directions. It runs only when a row that
+  // was drawn has gone AND focus is on the body, which is what a removed
+  // element leaves behind; a focus that moved to another control clears the
+  // memory instead, so a list nobody has touched never takes the keyboard.
+  const orderKey = order.join('|')
+  const drawnOrder = useRef([])
+  const focusedRow = useRef(null)
+  useEffect(() => {
+    const before = drawnOrder.current
+    drawnOrder.current = order
+    const held = focusedRow.current
+    if (!held || order.includes(held)) return
+    if (document.activeElement && document.activeElement !== document.body) {
+      focusedRow.current = null
+      return
+    }
+    const at = before.indexOf(held)
+    const target = order.length ? order[Math.min(Math.max(at, 0), order.length - 1)] : null
+    focusedRow.current = target
+    if (!target) return
+    setRovingId(target)
+    document.querySelector(`[data-chat-row="${CSS.escape(target)}"]`)?.focus()
+    // `order` is read through the key: the array is rebuilt every render and
+    // only its membership matters here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderKey])
   useShortcut('search-chats', () => {
     if (!open) onReveal?.()
     // After the reveal renders, so the field is there to take focus.
@@ -458,7 +499,12 @@ export default function Sidebar({
         // to the ends, and Enter is the button's own.
         data-chat-row={row.id}
         tabIndex={rovingRow === row.id ? 0 : -1}
-        onFocus={() => setRovingId(row.id)}
+        onFocus={() => {
+          setRovingId(row.id)
+          // Remember whose row held the keyboard: the effect above uses this to
+          // tell "the row went under the keyboard" from "the person moved on".
+          focusedRow.current = row.id
+        }}
         onKeyDown={(e) => {
           const to = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : e.key === 'Home' ? 'first' : e.key === 'End' ? 'last' : null
           if (to == null) return
@@ -656,6 +702,12 @@ export default function Sidebar({
           const isCollapsed = !!collapsed[project.id]
           const name = project.folders[0].split(/[\\/]/).filter(Boolean).pop()
           const isArmed = rowIsArmed(armed, project.id)
+          // What the head says beside the name, or null when it has nothing to
+          // add: the count answers a collapsed head, the waiting count is the
+          // one fact the expanded list does not show at a glance. Both numbers
+          // were counted in the grouping pass (projects.js), so this is only
+          // formatting.
+          const held = projectLine({ chats: items.length, waiting: waitingIn.get(project.id) ?? 0 }, { collapsed: isCollapsed })
           return (
             <section
               key={project.id}
@@ -670,8 +722,9 @@ export default function Sidebar({
             >
               <button
                 className="project-head"
-                // Something inside is unread: the list says so quietly, one
-                // text tier up, and never with a count.
+                // Something inside is unread: the mark is the quiet step, and it
+                // never carries a count of its own. The line beside the name is
+                // the head's own sentence about what the project holds, below.
                 data-unread={unreadIn.has(project.id) ? 'true' : undefined}
                 onClick={() => toggleProject(project.id)}
                 aria-expanded={!isCollapsed}
@@ -680,7 +733,18 @@ export default function Sidebar({
                   <CaretDown size={12} />
                 </span>
                 <span className="project-name pv">{name}</span>
-                <span className="project-count">{items.length}</span>
+                {held && (
+                  <span className="project-count">
+                    {held.map((part) => (
+                      <span
+                        key={part.kind}
+                        className={`project-count-part${part.kind === 'waiting' ? ' is-waiting' : ''}`}
+                      >
+                        {part.text}
+                      </span>
+                    ))}
+                  </span>
+                )}
               </button>
               {isArmed ? (
                 <>

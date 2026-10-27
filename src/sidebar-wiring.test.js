@@ -55,9 +55,18 @@ test('the confirm is the same spot, and Escape keeps the project', () => {
 })
 
 test('a registered project with no chats keeps its row and says so', () => {
+  // The count is a sentence now, not a numeral: a collapsed head says what it
+  // holds ("0 chats" included, which is what tells a person the project is
+  // empty without expanding it), and the expanded head says nothing unless
+  // something is waiting. projects.js owns the copy; the view renders parts.
   assert.ok(
-    source.includes('{items.length}'),
-    'the count is drawn for every project, zero included',
+    source.includes("projectLine({ chats: items.length, waiting: waitingIn.get(project.id) ?? 0 }, { collapsed: isCollapsed })"),
+    'the head reads its line from the shared rule',
+  )
+  assert.ok(source.includes('{held && ('), 'and draws it only when there is something to say')
+  assert.ok(
+    source.includes("part.kind === 'waiting' ? ' is-waiting' : ''"),
+    'the waiting part wears the status colour',
   )
   const empty = source.indexOf('items.length === 0')
   assert.ok(empty >= 0, 'an empty project has its own state')
@@ -93,4 +102,31 @@ test('the chat list is one Tab stop, and the arrows walk it', () => {
   // keyboard is Mod+Shift+A or the palette's row, and leaving the button in
   // the order would double the cost of every row again.
   assert.match(source, /className="chat-archive"[\s\S]{0,220}tabIndex=\{-1\}/, 'the archive button stays out of the Tab order')
+})
+test('a row that vanishes under the keyboard hands its place to its neighbour', () => {
+  // The roving stop already falls back to the first row; this is the person's
+  // place. The effect watches the drawn order and acts only when the row that
+  // held the keyboard has gone and focus was dropped to the body - a focus
+  // that landed on another control clears the memory instead, so a list nobody
+  // has touched never takes the keyboard.
+  assert.ok(source.includes("const orderKey = order.join('|')"), 'one effect per order, not per render')
+  assert.ok(
+    source.includes('if (!held || order.includes(held)) return'),
+    'a row that is still drawn is left exactly where it is',
+  )
+  assert.ok(
+    source.includes('if (document.activeElement && document.activeElement !== document.body) {'),
+    'a person who moved on is not pulled back',
+  )
+  assert.ok(source.includes('const at = before.indexOf(held)'), 'the index the row held')
+  assert.ok(
+    source.includes('order[Math.min(Math.max(at, 0), order.length - 1)]'),
+    'the neighbour at the same index, clamped, or the first row',
+  )
+  assert.ok(
+    source.includes('[data-chat-row="${CSS.escape(target)}"]'),
+    'and the row that took its place receives the keyboard',
+  )
+  assert.ok(source.includes('}, [orderKey])'), 'keyed on the order string, not the array')
+  assert.ok(source.includes('focusedRow.current = row.id'), 'the row says it holds the keyboard')
 })

@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { projectIndex, projectName, projectFor, sections, unreadProjects } from './projects.js'
+import { projectIndex, projectLine, projectName, projectFor, sections, unreadProjects, waitingProjects } from './projects.js'
 
 const P1 = { id: 'p1', folders: ['/home/u/website'] }
 const P2 = { id: 'p2', folders: ['/home/u/daemon'] }
@@ -113,4 +113,66 @@ test('unread counts are collected in one pass', () => {
   const unread = new Set(['c1', 'c2', 'c3'])
   assert.deepEqual([...unreadProjects(rows, unread, index)].sort(), ['p1', 'p2'])
   assert.equal(unreadProjects(rows, new Set(), index).size, 0)
+})
+
+// ---- what a project's head says ----
+
+test('a project head states its own chats, and how many are waiting', () => {
+  // A head with nothing to say says nothing: expanding the list is the answer
+  // to "what is in here", and the waiting count is the only fact the list does
+  // not show without reading every row's status.
+  assert.equal(projectLine({ chats: 3, waiting: 0 }, { collapsed: false }), null)
+  assert.deepEqual(projectLine({ chats: 3, waiting: 2 }, { collapsed: false }), [
+    { kind: 'waiting', text: '2 waiting' },
+  ])
+  // Collapsed, nobody can see the chats: the tally answers the question the
+  // collapsed row raises.
+  assert.deepEqual(projectLine({ chats: 3, waiting: 0 }, { collapsed: true }), [
+    { kind: 'chats', text: '3 chats' },
+  ])
+  assert.deepEqual(projectLine({ chats: 3, waiting: 1 }, { collapsed: true }), [
+    { kind: 'chats', text: '3 chats' },
+    { kind: 'waiting', text: '1 waiting' },
+  ])
+  assert.deepEqual(projectLine({ chats: 1 }, { collapsed: true }), [{ kind: 'chats', text: '1 chat' }])
+  assert.deepEqual(projectLine({ chats: 0 }, { collapsed: true }), [{ kind: 'chats', text: '0 chats' }])
+  assert.equal(projectLine({}, { collapsed: false }), null)
+  assert.equal(projectLine(), null)
+})
+
+test('the head counts waiting with the row rule, not a second one', () => {
+  const projects = [
+    { id: 'p1', name: 'Alpha', folders: ['/work/alpha'] },
+    { id: 'p2', name: 'Beta', folders: ['/work/beta'] },
+  ]
+  const index = projectIndex(projects)
+  // The waiting chats the sidebar draws in the "Needs you" group, which is why
+  // they are not in the grouped items at all.
+  const waiting = [
+    // Waiting by its live status, whatever the poll says: the row's amber.
+    { id: 'a', workspace: '/work/alpha', liveStatus: 'waiting', polledStatus: 'idle' },
+    // Waiting only by the poll.
+    { id: 'b', workspace: '/work/alpha', polledStatus: 'waiting' },
+    // Busy is not waiting.
+    { id: 'c', workspace: '/work/alpha', liveStatus: 'working', polledStatus: 'waiting' },
+    // The live status wins both ways: idle now, though the poll still says waiting.
+    { id: 'd', workspace: '/work/alpha', liveStatus: 'idle', polledStatus: 'waiting' },
+    // Another project's chat.
+    { id: 'e', workspace: '/work/beta', liveStatus: 'waiting' },
+    // A chat outside every project names no workspace the index knows.
+    { id: 'f', workspace: null, liveStatus: 'waiting' },
+  ]
+  const counts = waitingProjects(waiting, index)
+  assert.equal(counts.get('p1'), 2, 'only a and b are waiting by the rule')
+  assert.equal(counts.get('p2'), 1, 'e is beta\'s, and the count lives per project')
+  assert.equal(counts.size, 2, 'the project-less waiting chat belongs to no head')
+  // The grouping is untouched by the tally: a waiting chat is not in `items`,
+  // because the group above already draws it.
+  const out = sections(projects, [{ id: 'g', workspace: '/work/alpha' }], index)
+  assert.equal(out.projects[0].items.length, 1)
+  assert.equal(out.projects[0].waiting, undefined, 'sections does not count waiting; the head does')
+  // The tally is one pass, and the same row can only be counted once.
+  assert.deepEqual([...waitingProjects([waiting[0], waiting[0]], index).values()], [2])
+  assert.equal(waitingProjects(undefined, index).size, 0)
+  assert.equal(waitingProjects(waiting, null).size, 0)
 })

@@ -348,9 +348,26 @@ button.side-tile:active {
 }
 
 .project-count {
+  /* A phrase now, not a numeral: it must not push the name out of its ellipsis,
+     and it must not wrap when a project holds a lot of chats. */
+  flex-shrink: 0;
+  white-space: nowrap;
   font-size: 11px;
   font-weight: 500;
   color: var(--text-3);
+}
+
+/* The separator lives here, not in the copy: the module answers parts, and one
+   rule joins them the same way on every project. */
+.project-count-part + .project-count-part::before {
+  content: ' · ';
+  color: var(--text-3);
+}
+
+/* Waiting wears the status column's amber, so the head and the row agree about
+   what amber means. The chat tally stays quiet: it is a count, not a warning. */
+.project-count-part.is-waiting {
+  color: var(--accent);
 }
 
 .group-label {

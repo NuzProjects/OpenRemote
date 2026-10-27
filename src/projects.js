@@ -3,6 +3,7 @@
 // stays the only place it lives.
 
 import { workspaceName } from './state/reducer.js'
+import { isWaiting } from './needs-you.js'
 
 /** A project's name: its first folder's basename. */
 export function projectName(project) {
@@ -71,4 +72,56 @@ export function sections(projects, rows, index = null) {
     projects: [...byProject.values()],
     flat,
   }
+}
+
+/**
+ * How many of a project's chats are waiting, in one pass over the waiting rows.
+ *
+ * The sidebar draws those chats in the "Needs you" group above the projects,
+ * not under their project, so the grouping never sees them. Counting here,
+ * against the same project index, keeps the two surfaces about the same chats:
+ * the tally a head shows comes from the very rows the group is drawn from, and
+ * a chat cannot be counted twice (it is in `rows` once, and in one project).
+ *
+ * The predicate is the row's own waiting rule (needs-you.js), so a head cannot
+ * call a chat waiting while its row shows busy or idle: a live status wins
+ * over the polled one, exactly as the amber dot does.
+ */
+export function waitingProjects(rows, index) {
+  const counts = new Map()
+  for (const row of rows ?? []) {
+    if (!row || !isWaiting(row.liveStatus, row.polledStatus)) continue
+    const project = index?.get(row.workspace) ?? null
+    if (!project) continue
+    counts.set(project.id, (counts.get(project.id) ?? 0) + 1)
+  }
+  return counts
+}
+
+/**
+ * What a project's head says beside its name, or null when there is nothing to
+ * say: a list of `{ kind, text }` parts, in the order a person reads them.
+ *
+ * Two facts are worth the space, and each has its own reason. How many chats
+ * the project holds answers the question a *collapsed* head raises - is there
+ * anything in here - so it appears only while the project is collapsed; the
+ * expanded list is its own answer, which is why a project with chats and
+ * nothing waiting shows just its name. How many are waiting is not visible
+ * from the list without reading every row's status, so it is said in both
+ * states, and it is the same rule the row's amber dot uses (`isWaiting`),
+ * never a count of a second kind.
+ *
+ * The parts are kept apart rather than glued into one string so the head can
+ * colour the waiting part with the status colour and leave the rest quiet:
+ * a count in the same amber as a waiting row reads as a warning, not a tally.
+ */
+export function projectLine({ chats = 0, waiting = 0 } = {}, { collapsed = false } = {}) {
+  const parts = []
+  if (collapsed) {
+    parts.push({ kind: 'chats', text: `${chats} ${chats === 1 ? 'chat' : 'chats'}` })
+  }
+  if (waiting > 0) {
+    parts.push({ kind: 'waiting', text: `${waiting} waiting` })
+  }
+  return parts.length ? parts : null
 }

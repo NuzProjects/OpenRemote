@@ -105,6 +105,12 @@ export function ruleAnswer({ phase = 'running', name = '', error = null } = {}) 
 
 // ---- the seam: the Automations view lends the palette its Run now ----
 
+// The registrations, newest last. Panes are not exclusive: a window can hold
+// two Automations views at once (one in a split), so "the" handler was never a
+// single thing. The newest registration answers - the pane the person opened
+// most recently - and when it leaves, the one behind it answers again instead
+// of the seam going empty while a view is still on screen.
+const stack = []
 let handler = null
 const listeners = new Set()
 
@@ -112,19 +118,34 @@ function announce() {
   for (const listener of listeners) listener()
 }
 
+/** The handler a run would reach: the newest registration still mounted. */
+function top() {
+  return stack.length ? stack[stack.length - 1] : null
+}
+
 /**
  * Register the view's run action for as long as it is mounted. Returns the
- * unregister function, which only clears the handler it installed (a second
- * view mounting over the first must not take its seam away).
+ * unregister function: it removes its own entry and puts the seam back where
+ * it was, which for the last one is nowhere.
  */
 export function registerRuleRun(fn) {
-  handler = typeof fn === 'function' ? fn : null
+  if (typeof fn !== 'function') return () => {}
+  stack.push(fn)
+  handler = fn
   announce()
+  let removed = false
   return () => {
-    if (handler === fn) {
-      handler = null
-      announce()
-    }
+    if (removed) return
+    removed = true
+    const had = handler !== null
+    const at = stack.lastIndexOf(fn)
+    if (at >= 0) stack.splice(at, 1)
+    handler = top()
+    // Registering always announces, so a palette that missed the first one
+    // still hears the next. Unregistering announces only when the seam comes
+    // or goes: a view leaving while another one still answers changes nothing
+    // the palette renders.
+    if ((handler !== null) !== had) announce()
   }
 }
 

@@ -135,3 +135,21 @@ test('the group follows the seam coming and going, and only clears its own', () 
   registerRuleRun(async () => ({ ok: true }))()
   assert.deepEqual(seen, [true, true, false], 'an unsubscribed listener hears nothing')
 })
+
+test('the newest view leaving puts the one behind it back, not an empty seam', async () => {
+  // Two panes can both show Automations: the newest answers, and when it
+  // unmounts the one still on screen has to answer again. Before the stack this
+  // was the order that emptied the seam while a view was mounted.
+  const first = registerRuleRun(async () => ({ ok: true }))
+  const second = registerRuleRun(async () => ({ ok: false, error: 'the second pane said no' }))
+  assert.deepEqual(await runRule('rule-1'), { ok: false, error: 'the second pane said no' })
+  second()
+  assert.equal(ruleRunAvailable(), true, 'a view is still on screen')
+  assert.deepEqual(await runRule('rule-1'), { ok: true }, 'and it is the one that answers')
+  // Unregistering twice is the same as unregistering once.
+  second()
+  assert.equal(ruleRunAvailable(), true)
+  first()
+  assert.equal(ruleRunAvailable(), false, 'the last one leaving closes the seam')
+  assert.deepEqual(await runRule('rule-1'), { ok: false, error: RULE_GONE })
+})
