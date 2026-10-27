@@ -118,6 +118,19 @@
   }
 }
 
+/* The sweep on a waiting placeholder is the one animation in this file that
+   no switch reached: it stops for either of them, holding the gradient
+   still, and for nobody else. */
+@media (prefers-reduced-motion: reduce) {
+  .nc-skeleton {
+    animation: none;
+  }
+}
+
+html[data-reduce-motion] .nc-skeleton {
+  animation: none;
+}
+
 /* The harness's own fast mode, toggled on per chat. Off sits with the other
    chips; on goes green - the running/ok language, never decorative. */
 .nc-fast {
@@ -200,6 +213,14 @@
 .nc-send:disabled {
   background: transparent;
   color: var(--text-3);
+}
+
+/* The send's press pulse settles for either switch: the system preference
+   and the in-app setting are one rule, written twice. */
+@media (prefers-reduced-motion: reduce) {
+  .nc-send:not(:disabled) {
+    transition: none;
+  }
 }
 
 html[data-reduce-motion] .nc-send:not(:disabled) {

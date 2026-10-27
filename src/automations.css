@@ -186,6 +186,17 @@
   color: var(--accent);
 }
 
+/* The switch, its knob and a row's hover actions settle for either switch:
+   the system preference and the in-app setting are one rule, written twice,
+   so a person who never touched the toggle is honoured too. */
+@media (prefers-reduced-motion: reduce) {
+  .am-knob,
+  .am-switch,
+  .am-row-actions {
+    transition: none;
+  }
+}
+
 html[data-reduce-motion] .am-knob,
 html[data-reduce-motion] .am-switch,
 html[data-reduce-motion] .am-row-actions {
