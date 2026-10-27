@@ -33,7 +33,8 @@ the project's own map.
   console side is `src/pairing.js`, `src/qr.js` and
   `src/PairingSection.jsx`; the design note is
   `docs/superpowers/specs/2026-10-26-qr-pairing-design.md`.
-- `scripts/` - design instrumentation (fps, latency, clearance), plus
+- `scripts/` - design instrumentation (fps, latency, clearance),
+  `dev-app.mjs` (the dev shell under its own bundle identity), plus
   `check-tab-acl.mjs`, the capability-scope guard CI runs. Run bare it
   prints `tab acl ok: 2 capability file(s)` and exits 0, or exits 1 and
   names the capability that widened; `--self-test` checks the check itself,
@@ -51,11 +52,21 @@ npm install
 npm test               # console tests (node --test)
 node scripts/check-tab-acl.mjs   # the tab capability scope (bare; --self-test, --root)
 npm run dev            # browser only (port 5175)
-npx tauri dev          # desktop shell
+npm run tauri:dev      # desktop shell, under the dev bundle identity
+npx tauri dev          # the same build without that identity (see below)
 npm run daemon         # build + stage the daemon sidecar
 OR_RELEASE=1 npm run daemon   # release profile
 npx tauri build        # bundle installers (msi + nsis)
 ```
+
+The two dev lines differ in one thing, and it matters: the shell names its
+single-instance mutex after the bundle identifier, so a dev build that
+carries the release identifier cannot start while the installed app is
+running. It finds the mutex, hands its arguments to that window and exits,
+and the terminal shows a clean exit with no dev window ever appearing.
+`npm run tauri:dev` runs `tauri dev --config src-tauri/tauri.dev.conf.json`,
+which overrides the identifier for that run only and gives the dev build
+its own local data dir; `npx tauri dev` skips the override.
 
 The daemon's own commands (a machine runs `agent` as a systemd user
 service, installed by `moreweb.space/openremote/install.sh` from the

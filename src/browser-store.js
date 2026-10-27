@@ -16,12 +16,47 @@ const keyHandlers = new Set()
 // What the shell said about a page before its tab knew its id.
 const early = new Map()
 
+// Which page the user was on, by the shell's own id, so a console reload
+// brings back the tab that was open instead of the first one. sessionStorage
+// rather than localStorage: a fresh launch should still start on the first
+// tab, and only a reload of this window is a continuation.
+const ACTIVE_KEY = 'openremote-browser-active'
+let rememberedActive = null
+
+function rememberActive() {
+  const tab = state.tabs.find((t) => t.key === state.active)
+  const native = tab?.native ?? null
+  if (!native || native === rememberedActive) return
+  rememberedActive = native
+  try {
+    sessionStorage.setItem(ACTIVE_KEY, native)
+  } catch {
+    // No storage: the first tab is still a fine place to land.
+  }
+}
+
+function wasActive() {
+  try {
+    return sessionStorage.getItem(ACTIVE_KEY)
+  } catch {
+    return null
+  }
+}
+
+// Where a reload lands: the page the user was on if it is still open, the
+// first tab otherwise (that tab was closed while the console was loading,
+// or this window never had one).
+export function restoredActive(tabs, remembered) {
+  return tabs.find((t) => t.native === remembered)?.key ?? tabs[0]?.key
+}
+
 export function getState() {
   return state
 }
 
 export function setState(change) {
   state = { ...state, ...change(state) }
+  rememberActive()
   for (const fn of listeners) fn()
 }
 
@@ -119,7 +154,7 @@ async function wire() {
   if (open?.length) {
     for (const t of open) await call('browser_hide', { tab: t.id })
     const tabs = open.map((t) => newTab({ native: t.id, ...fieldsOf(t) }))
-    setState(() => ({ tabs, active: tabs[0].key }))
+    setState(() => ({ tabs, active: restoredActive(tabs, wasActive()) }))
   }
 }
 
