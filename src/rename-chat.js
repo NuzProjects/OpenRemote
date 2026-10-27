@@ -38,3 +38,22 @@ export function renameState(current, next) {
 export function shownTitle(saved, current) {
   return saved && saved !== current ? saved : current
 }
+
+// Whether the one-beat overlay has done its job.
+//
+// Comparing names alone is not enough: a rename from another device can land
+// while this one's save is in flight, so the record never equals the overlay's
+// name and the row would keep the local name indefinitely. The rename call
+// answers with the session it wrote, stamp included, so the overlay carries
+// that stamp: once the console's own record is newer than the ack, the
+// daemon has said something later than this save and the overlay is stale
+// whatever the names say.
+export function overlayStale(ack, record) {
+  // No stamp on either side is not a comparison: null must not read as zero,
+  // or "we never learned the ack's stamp" would clear the overlay at once.
+  if (ack == null || ack === '' || record == null || record === '') return false
+  const a = Number(ack)
+  const r = Number(record)
+  if (!Number.isFinite(a) || !Number.isFinite(r)) return false
+  return r > a
+}

@@ -6,6 +6,7 @@
 import { useEffect, useState } from 'react'
 import { useConsole } from './state/console.jsx'
 import { madeMachineElsewhere, newDevices, signedIn } from './cloud.js'
+import { errorCopy } from './error-copy.js'
 import './notices.css'
 
 function load(key) {
@@ -115,7 +116,9 @@ export default function CloudNotices() {
                     await removeDevice(device.id)
                     acknowledge(device.id)
                   } catch (err) {
-                    setError(err.message ?? String(err))
+                    // The daemon's words are quoted by errorCopy; this note has
+                    // no retry of its own, so the line promises none.
+                    setError(errorCopy(err))
                   } finally {
                     setRemoving(null)
                   }
@@ -153,7 +156,7 @@ export default function CloudNotices() {
                 await setDeviceKind(thisDevice, 'desktop')
                 settleKind('desktop')
               } catch (err) {
-                setError(err.message ?? String(err))
+                setError(errorCopy(err))
               }
             }}
           >

@@ -33,6 +33,7 @@ import ChangesModal from './ChangesModal.jsx'
 import RaceModal from './RaceModal.jsx'
 import SaveLayoutModal from './SaveLayoutModal.jsx'
 import RenameChatModal from './RenameChatModal.jsx'
+import { overlayStale } from './rename-chat.js'
 import ViewPopup from './ViewPopup.jsx'
 import { POPUP_VIEWS, onPopup } from './popups.js'
 import { KeyboardProvider, useKeyboard, useShortcut } from './keyboard.jsx'
@@ -433,11 +434,14 @@ function Shell() {
 
   // The console call the slash command makes, with one beat of optimism: the
   // list shows the new name at once, and a failure takes it back before the
-  // dialog hears about it, so the dialog stays open with the reason.
+  // dialog hears about it, so the dialog stays open with the reason. The
+  // overlay carries the stamp the daemon answered with, because a name alone
+  // cannot tell an echo from a later rename made on another device.
   const renameTo = async (id, next) => {
-    setRenamed((map) => ({ ...map, [id]: next }))
+    setRenamed((map) => ({ ...map, [id]: { name: next, stamp: null } }))
     try {
-      await renameChat(id, next)
+      const saved = await renameChat(id, next)
+      setRenamed((map) => ({ ...map, [id]: { name: next, stamp: saved?.updated_at ?? null } }))
     } catch (err) {
       setRenamed((map) => {
         const left = { ...map }
@@ -450,16 +454,19 @@ function Shell() {
 
   // The overlay has done its job once the console's own record carries the
   // name, and it has to go then: kept longer, it would hide a later rename
-  // made on another device.
+  // made on another device. "Carries it" is a stamp comparison, not a string
+  // comparison, because two devices can hand the same name to two different
+  // records and the newer one wins.
   useEffect(() => {
     if (Object.keys(renamed).length === 0) return
     setRenamed((map) => {
       const left = {}
       let stale = false
-      for (const [id, name] of Object.entries(map)) {
-        const known = chats[id]?.title ?? (sessions ?? []).find((s) => s.id === id)?.title
-        if (known === name) stale = true
-        else left[id] = name
+      for (const [id, entry] of Object.entries(map)) {
+        const session = (sessions ?? []).find((s) => s.id === id)
+        const known = chats[id]?.updated_at ?? session?.updated_at
+        if (overlayStale(entry?.stamp ?? null, known)) stale = true
+        else left[id] = entry
       }
       return stale ? left : map
     })
@@ -913,7 +920,9 @@ function Shell() {
       // The row menu's Rename opens the dialog hosted below; the overlay is
       // the name it shows until the console's own record catches up.
       onRenameChat={openRename}
-      renamedTitles={renamed}
+      renamedTitles={Object.fromEntries(
+        Object.entries(renamed).map(([id, entry]) => [id, entry?.name ?? entry]),
+      )}
     />
   ) : null
 
@@ -1048,6 +1057,10 @@ function Shell() {
               paneCapacity={isMobile ? 1 : MAX_PANES}
               onSaveLayout={() => setSavingLayout(true)}
               onRestoreLayout={applySavedLayout}
+              // Renaming from the palette: the focused pane's chat, and the
+              // opener the sidebar already uses (the dialog is hosted below).
+              onRenameChat={openRename}
+              focusedChatId={focusedChatId}
               onOpenMachine={(id) => {
                 setOpenDevice({ id, nonce: Date.now() })
                 goView('machines')
@@ -1073,7 +1086,11 @@ function Shell() {
               passes its row here, and the palette's row will too. */}
           {renaming && (
             <RenameChatModal
-              title={renaming.title}
+            title={
+            chats[renaming.id]?.title ??
+            (sessions ?? []).find((s) => s.id === renaming.id)?.title ??
+            renaming.title
+          }
               synced={renaming.synced}
               onClose={() => setRenaming(null)}
               onRename={(next) => renameTo(renaming.id, next)}

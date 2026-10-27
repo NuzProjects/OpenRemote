@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
-import { MAX_NAME, cleanName, renameState, shownTitle } from './rename-chat.js'
+import { MAX_NAME, cleanName, overlayStale, renameState, shownTitle } from './rename-chat.js'
 
 test('a name is trimmed at its ends and keeps the spacing inside it', () => {
   assert.equal(cleanName('  My chat  '), 'My chat')
@@ -79,10 +79,38 @@ test('the dialog is in the modal family and saves on Enter', () => {
   assert.match(modal, /disabled=\{busy \|\| verdict\.state === 'empty'\}/)
   assert.match(modal, /setError\(err\?\.message \?\? String\(err\)\)/)
   assert.match(modal, /<p className="cv-error-line">\{error\}<\/p>/)
-  // The limit is the rule's, not a second number in the field.
-  assert.match(modal, /maxLength=\{MAX_NAME\}/)
+  // The limit is the rule's, not a second number in the field: the attribute
+  // counts UTF-16 units while cleanName counts code points, so it halved an
+  // emoji name and could cut a paste mid-surrogate. The comment explains the
+  // absence, so the check is for the attribute itself.
+  assert.doesNotMatch(modal, /maxLength=/)
   // An unchanged name closes without a call to the daemon.
   assert.match(modal, /if \(verdict\.state === 'unchanged'\) \{[\s\S]{0,40}onClose\(\)/)
+})
+
+test('a full-length emoji name survives the field untouched', () => {
+  // 200 code points is MAX_NAME: one emoji each, 400 UTF-16 units, which a
+  // maxLength of 200 would have cut in half.
+  const full = '🙂'.repeat(MAX_NAME)
+  assert.equal(Array.from(full).length, MAX_NAME)
+  assert.equal(full.length, MAX_NAME * 2, 'the UTF-16 length is twice the cap')
+  assert.equal(cleanName(full), full)
+  // One past the cap is cut by character, so it ends on a whole emoji.
+  const over = cleanName('🙂'.repeat(MAX_NAME + 1))
+  assert.equal(over, full)
+  assert.doesNotMatch(over, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/, 'no lone high surrogate')
+})
+
+test('the overlay is stale once the record is newer than the ack', () => {
+  // A rename from another device can land while this one's save is in flight,
+  // so the record never equals the overlay's name. The ack's stamp is what
+  // tells the overlay it has been overtaken.
+  assert.equal(overlayStale(100, 200), true, 'the record is newer than our save')
+  assert.equal(overlayStale(200, 200), false, 'same beat: keep the overlay')
+  assert.equal(overlayStale(200, 100), false, 'record older than the ack')
+  assert.equal(overlayStale(null, 200), false, 'no ack stamp: nothing to compare')
+  assert.equal(overlayStale(100, null), false)
+  assert.equal(overlayStale('x', 200), false, 'an unreadable stamp never clears the overlay')
 })
 
 test('the sidebar menu offers Rename and asks the shell to open the dialog', () => {
@@ -101,7 +129,7 @@ test('the shell hosts the dialog and owns the one-beat overlay', () => {
   const app = source('App.jsx')
   assert.match(app, /<RenameChatModal/)
   assert.match(app, /onRenameChat={openRename}/)
-  assert.match(app, /renamedTitles={renamed}/)
+  assert.match(app, /renamedTitles=\{Object\.fromEntries\(/)
   // The focused pane's chat, not the address: a split can have focus on a
   // chat the primary view is not showing.
   assert.match(app, /const focusedChatId = focused\?\.view && isChatView\(focused\.view\)/)
@@ -109,8 +137,9 @@ test('the shell hosts the dialog and owns the one-beat overlay', () => {
   // The write is the console's own rename call, optimistic for one beat and
   // taken back when it fails, so the dialog stays open with the reason.
   assert.match(app, /await renameChat\(id, next\)/)
-  assert.match(app, /setRenamed\(\(map\) => \(\{ \.\.\.map, \[id\]: next \}\)\)/)
-  // The overlay is dropped once the record agrees, so a rename from another
-  // device still lands.
-  assert.match(app, /known === name\) stale = true/)
+  assert.match(app, /setRenamed\(\(map\) => \(\{ \.\.\.map, \[id\]: \{ name: next, stamp: null \} \}\)\)/)
+  // The overlay is dropped when the record is newer than what the rename
+  // answered with, so a rename from another device still wins. A name array
+  // cannot tell an echo from a later rename; a stamp can.
+  assert.match(app, /overlayStale\(entry\?\.stamp \?\? null, known\)/)
 })

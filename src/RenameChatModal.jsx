@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { X } from '@phosphor-icons/react'
 import { useBack } from './use-back.js'
 import { useDialog } from './dialog-focus.js'
-import { MAX_NAME, renameState } from './rename-chat.js'
+import { renameState } from './rename-chat.js'
 import './devices.css'
 import './panels.css'
 import './contextmenu.css'
@@ -88,7 +88,10 @@ export default function RenameChatModal({ title, synced = false, onRename, onClo
           ref={inputRef}
           className="rn-input"
           value={text}
-          maxLength={MAX_NAME}
+          /* No maxLength: the attribute counts UTF-16 units while the name
+             rules count code points, so an emoji name would stop at half the
+             allowed length in the field and a paste could be cut mid-surrogate.
+             cleanName owns the cap and cuts by character, as the daemon does. */
           aria-label="Chat name"
           aria-invalid={verdict.state === 'empty' ? 'true' : undefined}
           onChange={(e) => {
