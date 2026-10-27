@@ -726,27 +726,17 @@ jobs:
             have+=("$(basename "$file")")
           done
 
-          # A re-pushed tag whose release is already complete: every
-          # platform skipped, so this run has no artifacts to add and the
-          # release is left exactly as it is.
-          if [ "${#assets[@]}" -eq 0 ] && [ "$TAG" != "nightly" ] && gh release view "$TAG" > /dev/null 2>&1; then
-            echo "publish: ${TAG} already has a complete release; nothing to publish"
-            exit 0
-          fi
-          if [ "${#assets[@]}" -eq 0 ]; then
-            echo "publish: no artifacts were built in this run; refusing to publish an empty release" >&2
-            exit 1
-          fi
-
-          # A name that will be missing should stop the job while nothing is
-          # published, not after: the release page is the first thing a
-          # download link meets, so it may not go live incomplete. For a tag
-          # whose release already exists, the names that release carries count
-          # too - an upload only adds to it.
+          # What a release for this tag already carries, if one exists: a tag
+          # release is only ever added to, so its names count toward the check
+          # even when this run built nothing.
           existing=""
           if [ "$TAG" != "nightly" ] && gh release view "$TAG" > /dev/null 2>&1; then
             existing="$(gh release view "$TAG" --json assets --jq '.assets[].name' || true)"
           fi
+
+          # A name that will be missing should stop the job while nothing is
+          # published, not after: the release page is the first thing a
+          # download link meets, so it may not go live incomplete.
           missing=()
           for name in "${NAMES[@]}"; do
             if printf '%s\n' "${have[@]}" | grep -qxF "$name"; then
@@ -757,6 +747,24 @@ jobs:
             fi
             missing+=("$name")
           done
+
+          # A re-pushed tag whose release is already complete: every platform
+          # skipped, so this run has no artifacts to add and the release is
+          # left exactly as it is. A release left short by an interrupted
+          # upload is the case this must not wave through: it fails here with
+          # the names it lacks, instead of exiting 0 over a dead download link.
+          if [ "${#assets[@]}" -eq 0 ] && [ "$TAG" != "nightly" ] && [ -n "$existing" ]; then
+            if [ "${#missing[@]}" -gt 0 ]; then
+              echo "publish: ${TAG} already exists, no artifacts were built, and it is missing ${missing[*]}; nothing was published" >&2
+              exit 1
+            fi
+            echo "publish: ${TAG} already has a complete release; nothing to publish"
+            exit 0
+          fi
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "publish: no artifacts were built in this run; refusing to publish an empty release" >&2
+            exit 1
+          fi
           if [ "${#missing[@]}" -gt 0 ]; then
             echo "publish: nothing was published; this run and ${TAG} together lack ${missing[*]}" >&2
             exit 1
@@ -777,7 +785,9 @@ jobs:
             # A re-pushed tag with a partial release: the platforms whose
             # asset was missing rebuilt, and their files join the release.
             # The check above has already proved the union is complete.
-            gh release upload "$TAG" --clobber "${assets[@]}"
+            if [ "${#assets[@]}" -gt 0 ]; then
+              gh release upload "$TAG" --clobber "${assets[@]}"
+            fi
           else
             # The first publish for this tag: every channel name was just
             # found in this run, so the create cannot go live incomplete.
