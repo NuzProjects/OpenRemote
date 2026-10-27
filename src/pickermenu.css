@@ -193,3 +193,14 @@
   outline: 1px solid var(--accent);
   color: var(--text-1);
 }
+
+/* The menu's entrance; both motion switches open it in place instead. */
+@media (prefers-reduced-motion: reduce) {
+  .nc-menu {
+    animation: none;
+  }
+}
+
+html[data-reduce-motion] .nc-menu {
+  animation: none;
+}

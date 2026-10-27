@@ -51,6 +51,12 @@
   }
 }
 
+/* The in-app switch, for someone who turned motion off in Settings: the
+   glow lands without its fade and does not breathe. */
+html[data-reduce-motion] .newchat::before {
+  animation: none;
+}
+
 .nc-greeting {
   grid-row: 1;
   align-self: end;
