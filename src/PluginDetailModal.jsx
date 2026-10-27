@@ -1,6 +1,7 @@
 // Dedicated modal showing manifest details, runtime facts, requested powers,
 // and install/update actions for a catalog or installed plugin.
 
+import { useRef } from 'react'
 import { ArrowSquareOut, Warning, X } from '@phosphor-icons/react'
 import PluginIcon from './PluginIcon.jsx'
 import {
@@ -12,11 +13,12 @@ import {
   notSandboxed,
 } from './plugins.js'
 import { openExternal, webLink } from './platform.js'
-import { useEscLayer } from './esc-layer.js'
+import { useDialog } from './dialog-focus.js'
 import './devices.css'
 import './plugins.css'
 
 export function PluginDetailModal({ entry, onClose, onInstall }) {
+  const panelRef = useRef(null)
   const handleClose = () => {
     onClose?.()
   }
@@ -27,8 +29,10 @@ export function PluginDetailModal({ entry, onClose, onInstall }) {
   }
 
   // A detail sheet with no entry renders nothing, and holds nothing: an Esc
-  // there belongs to whatever is underneath.
-  useEscLayer(Boolean(entry), handleClose)
+  // there belongs to whatever is underneath. When it does open, the family's
+  // shared plumbing takes over (focus in, Tab kept inside, the app inert
+  // behind, focus back on the opener).
+  useDialog(panelRef, handleClose, { open: Boolean(entry) })
 
   if (!entry) return null
 
@@ -46,6 +50,8 @@ export function PluginDetailModal({ entry, onClose, onInstall }) {
     <div className="dv-modal-backdrop" onClick={handleClose}>
       <div
         className="dv-modal pg-detail-modal"
+        ref={panelRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label={displayName}

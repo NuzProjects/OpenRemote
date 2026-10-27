@@ -101,6 +101,24 @@
   border-color: rgba(76, 180, 135, 0.35);
 }
 
+/* The destructive button, in the one red the contract names (the diff's
+   #F87171): red text and border so it reads as dangerous before it is pressed,
+   a wash on hover, and nothing else - no fill, no shadow, no animation. It
+   marks a control that deletes: an armed in-place confirm ("Remove it"), or a
+   button whose press opens the delete dialog (the archived list's "Delete").
+   The row beside it still wears a plain .pn-btn until it is armed. It lives
+   beside the button it modifies, and the hover names its own state so file
+   order cannot turn it white. */
+.pn-btn--danger {
+  color: #f87171;
+  border-color: rgba(248, 113, 113, 0.4);
+}
+
+.pn-btn--danger:hover:not(:disabled) {
+  background: rgba(248, 113, 113, 0.1);
+  color: #f87171;
+}
+
 .pn-log {
   margin: 10px 0 0;
   padding: 0;

@@ -59,15 +59,9 @@ html[data-reduce-motion] .ctx-menu {
   margin-top: 16px;
 }
 
-.pn-btn--danger {
-  border-color: rgba(248, 113, 113, 0.4);
-  color: var(--red, #f87171);
-}
-
-.pn-btn--danger:hover:not(:disabled) {
-  background: rgba(248, 113, 113, 0.1);
-  color: var(--red, #f87171);
-}
+/* .pn-btn--danger lives in panels.css, beside the .pn-btn it modifies: a rule
+   filed away from its button is one nobody finds, and it was read as missing
+   for a whole shift. */
 
 .pn-btn:disabled {
   opacity: 0.5;

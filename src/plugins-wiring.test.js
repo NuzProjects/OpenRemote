@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs'
 
 const source = (file) => readFileSync(new URL(`./${file}`, import.meta.url), 'utf8')
 
-test('a dialog that is installing refuses to close, so Esc and the X cannot cancel its stage', () => {
+test('a dialog that is installing refuses to close, and says why', () => {
   const modal = source('InstallPluginModal.jsx')
   // Esc, the backdrop and the X all call close(); the guard is inside it.
   // The dialog family's shared plumbing owns the Escape layer now, and it is
@@ -19,7 +19,17 @@ test('a dialog that is installing refuses to close, so Esc and the X cannot canc
   assert.match(modal, /const close = \(\) => \{\s*\n\s*if \(busy\) return/)
   assert.match(modal, /useDialog\(panelRef, close\)/)
   assert.match(modal, /if \(e\.target === e\.currentTarget\) close\(\)/)
-  assert.match(modal, /<button className="dv-modal-close" onClick=\{close\}/)
+  // A guard that silently swallows the X is dead UI: while busy the control
+  // is disabled and its title and accessible name say the step has to finish.
+  assert.match(modal, /className="dv-modal-close"\s*\n\s*onClick=\{close\}\s*\n\s*disabled=\{busy\}/)
+  assert.match(modal, /title=\{closeTitle\}/)
+  assert.match(modal, /aria-label=\{closeTitle\}/)
+  assert.match(modal, /const closeTitle = busy\s*\n\s*\? 'Wait for this step to finish or fail/)
+  // And the note under the head explains the three inert paths in words.
+  assert.match(modal, /\{busy && \(\s*\n\s*<p className="pg-note" role="status">/)
+  // The backdrop handler is a deliberate no-op while busy, and the comment
+  // says so: it is not a handler nobody wired.
+  assert.match(modal, /Deliberate no-op while busy, not a dead handler/)
 })
 
 test('the Discover tab stays mounted, so its search and filters survive a trip to Installed', () => {
@@ -33,7 +43,12 @@ test('a failed plugin refresh is kept and shown with a retry', () => {
   const view = source('PluginsView.jsx')
   const console = source('state/console.jsx')
   assert.match(view, /pluginsError &&/)
-  assert.match(view, /onClick=\{\(\) => refreshPlugins\(\)\}/)
+  // One retry that refreshes both lists: a marketplace-only failure used to
+  // be cleared by a plugin refresh that never touched marketplaces, so the
+  // banner said the list was fine while it was still stale.
+  assert.match(view, /onClick=\{retryRefresh\}/)
+  assert.match(view, /await refreshPlugins\(\)/)
+  assert.match(view, /await refreshMarketplaces\(\)/)
   // Set on failure and cleared on success, in both refreshes.
   assert.equal((console.match(/setPluginsError\(null\)/g) ?? []).length, 2)
   assert.equal((console.match(/setPluginsError\(err/g) ?? []).length, 2)
@@ -56,11 +71,20 @@ test('an endpoint removal is a two-step confirm, and every other press disarms i
   assert.match(pane, /setArmed\(\(curr\) => armRow\(curr, entry\.id\)\)/)
   assert.match(pane, /rowIsArmed\(armed, entry\.id\)/)
   // The daemon call exists once, in the armed branch, so the first press
-  // cannot reach it.
+  // cannot reach it. The window is wide enough for the arm watch's own two
+  // attributes, which sit between the class and the press on purpose.
   assert.equal((pane.match(/remove\(entry\.id\)/g) ?? []).length, 1)
-  assert.match(pane, /className="pn-btn pn-btn--danger"[\s\S]{0,120}remove\(entry\.id\)/)
+  assert.match(pane, /className="pn-btn pn-btn--danger"[\s\S]{0,220}remove\(entry\.id\)/)
   // Editing, testing, enabling and defaulting all disarm the row.
   assert.equal((pane.match(/setArmed\(clearRow\(\)\)/g) ?? []).length, 7)
+  // The arm also ends when the row stops being the thing the user is looking
+  // at: the armed button watches its own visibility and its focus, and the
+  // shared hook ends the arm on either (use-armed-row.js, pinned below). An
+  // arm that survives a scroll is a first press nobody remembers making.
+  assert.match(pane, /import \{ useArmedRow \} from '\.\/use-armed-row\.js'/)
+  assert.match(pane, /const armWatch = useArmedRow\(armed, setArmed\)/)
+  assert.match(pane, /ref=\{armWatch\.buttonRef\}/)
+  assert.match(pane, /onBlur=\{armWatch\.onBlur\}/)
 })
 
 test('an MCP server removal is a two-step confirm too', () => {
@@ -69,7 +93,34 @@ test('an MCP server removal is a two-step confirm too', () => {
   assert.match(pane, /setArmed\(\(curr\) => armRow\(curr, p\.id\)\)/)
   assert.match(pane, /rowIsArmed\(armed, p\.id\)/)
   assert.equal((pane.match(/remove\(p\.id\)/g) ?? []).length, 1)
-  assert.match(pane, /className="pn-btn pn-btn--danger"[\s\S]{0,120}remove\(p\.id\)/)
+  assert.match(pane, /className="pn-btn pn-btn--danger"[\s\S]{0,220}remove\(p\.id\)/)
   // Enable, disable, add-key and removal each disarm first.
   assert.equal((pane.match(/setArmed\(clearRow\(\)\)/g) ?? []).length, 2)
+  // Same arm lifetime as the endpoint pane: out of view or out of focus ends
+  // it, so a scroll cannot leave the second press loaded.
+  assert.match(pane, /import \{ useArmedRow \} from '\.\/use-armed-row\.js'/)
+  assert.match(pane, /const armWatch = useArmedRow\(armed, setArmed\)/)
+  assert.match(pane, /ref=\{armWatch\.buttonRef\}/)
+  assert.match(pane, /onBlur=\{armWatch\.onBlur\}/)
+})
+
+test('an armed row ends when it leaves the viewport or loses focus', () => {
+  const hook = source('use-armed-row.js')
+  // Scrolled out of view: an IntersectionObserver on the armed button itself,
+  // armed by a callback ref so it follows the row rather than the list.
+  assert.match(hook, /new IntersectionObserver\(/)
+  assert.match(hook, /!entry\.isIntersecting/)
+  assert.match(hook, /armAfter\(current, armed, \{ visible: false \}\)/)
+  // Focus leaving ends it too.
+  assert.match(hook, /armAfter\(current, armed, \{ focused: false \}\)/)
+  // The observer is taken down on unmount and when another row arms, so no
+  // stale observer can disarm a row the user is now looking at.
+  assert.match(hook, /\.disconnect\?\.\(\)/)
+  // Both events ask the tested rule in row-confirm.js rather than inventing a
+  // second copy of the condition.
+  assert.doesNotMatch(hook, /setArmed\(clearRow\(\)\)/)
+  // Every armed destructive row in the console watches its arm.
+  for (const pane of ['EndpointManager.jsx', 'McpServersSection.jsx', 'PluginsView.jsx']) {
+    assert.match(source(pane), /useArmedRow\(/, `${pane} must watch its armed row`)
+  }
 })

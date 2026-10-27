@@ -6,6 +6,7 @@ import { useState } from 'react'
 import AddMcpServerModal from './AddMcpServerModal.jsx'
 import { useConsole } from './state/console.jsx'
 import { armRow, clearRow, rowIsArmed } from './row-confirm.js'
+import { useArmedRow } from './use-armed-row.js'
 import './devices.css'
 import './panels.css'
 
@@ -26,6 +27,7 @@ export default function McpServersSection() {
   const {
     machines,
     mcpServers,
+    mcpServersAnswered,
     removeMcpServer,
     setMcpServerEnabled,
     acknowledgeMcpServerKey,
@@ -36,6 +38,9 @@ export default function McpServersSection() {
   // chat that is running would keep starting a server the record no
   // longer describes: the first press arms, the second removes.
   const [armed, setArmed] = useState(null)
+  // The arm ends when the row scrolls out of view or loses focus (see
+  // use-armed-row.js), so a first press cannot outlive the user's attention.
+  const armWatch = useArmedRow(armed, setArmed)
   const installed = mcpServers ?? []
   // One machine is the honest local state - the plural, the hostname, and
   // the install picker return by themselves when remote machines check in.
@@ -70,7 +75,13 @@ export default function McpServersSection() {
           : 'Tools a session can call, set up by hand. Each runs on a machine, and a key never leaves that machine.'}
       </p>
       {installed.length === 0 && (
-        <p className="pn-empty">No MCP servers on your {machineWord} yet.</p>
+        // "None on this machine" is only said once the machine has answered:
+        // an unanswered list is empty too, and that sentence is a claim.
+        <p className="pn-empty">
+          {mcpServersAnswered
+            ? `No MCP servers on your ${machineWord} yet.`
+            : 'Loading your MCP servers…'}
+        </p>
       )}
       <div className="pn-list pn-list--wide">
         {installed.map((p) => {
@@ -112,6 +123,8 @@ export default function McpServersSection() {
                     <button
                       type="button"
                       className="pn-btn pn-btn--danger"
+                      ref={armWatch.buttonRef}
+                      onBlur={armWatch.onBlur}
                       onClick={() => remove(p.id)}
                       title="Its launch command and binding go with it, and there is no undo"
                     >

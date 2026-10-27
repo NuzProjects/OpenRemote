@@ -14,15 +14,10 @@ const source = (file) => readFileSync(new URL(file, dir), 'utf8')
 const files = readdirSync(dir).filter((name) => name.endsWith('.jsx'))
 
 // Not the dialog family, each for a reason:
-// - the three plugin-lane modals belong to that agent tonight and are its to
-//   convert (this list is the handback, not an exemption forever)
 // - the command palette is its own overlay with its own focus and its own Esc
 //   (it backs one page before it closes), so the shared hook would regress it
 // - keyboard.jsx only names the selector in a string
 const EXCLUDED = {
-  'EndpointManager.jsx': 'plugin lane owns this file tonight',
-  'InstallPluginModal.jsx': 'plugin lane owns this file tonight',
-  'PluginDetailModal.jsx': 'plugin lane owns this file tonight',
   'CommandPalette.jsx': 'own focus and own Esc paging, not a dv-modal',
   'keyboard.jsx': 'names the selector, is not a dialog',
 }

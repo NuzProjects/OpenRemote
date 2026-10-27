@@ -12,6 +12,7 @@ import PluginDiscover from './PluginDiscover.jsx'
 import PluginIcon from './PluginIcon.jsx'
 import PluginMarketplaces from './PluginMarketplaces.jsx'
 import { POWER_SHORT, RUNTIME_LABEL, clashes, notSandboxed, sourceLabel } from './plugins.js'
+import { useArmedRow } from './use-armed-row.js'
 import './devices.css'
 import './panels.css'
 import './plugins.css'
@@ -27,7 +28,19 @@ export default function PluginsView() {
   // What the Install dialog is open for: a Discover entry, or a direct
   // install (folder, git repo, archive).
   const [installing, setInstalling] = useState(null)
-  const { pluginsError, refreshPlugins } = useConsole()
+  const { pluginsError, refreshPlugins, refreshMarketplaces } = useConsole()
+
+  // One field carries both refreshes (the state layer's), so the row must not
+  // name one of them: a failure on the marketplace side used to read as a
+  // plugin-list failure whose Retry then cleared it. The row names both
+  // surfaces and retries both, marketplaces last. Each refresher keeps its own
+  // failure in the shared field rather than throwing, so the last one to run
+  // is the one whose answer the row shows: a marketplace that is still failing
+  // puts the row straight back instead of being declared fine.
+  const retryRefresh = async () => {
+    await refreshPlugins()
+    await refreshMarketplaces()
+  }
 
   return (
     <div className="panel pg-panel">
@@ -60,8 +73,8 @@ export default function PluginsView() {
 
       {pluginsError && (
         <p className="pn-error pg-refresh-error" role="alert">
-          Could not refresh the plugin list, so what is below may be out of date.
-          <button type="button" className="pn-btn" onClick={() => refreshPlugins()}>
+          Could not refresh the plugins or the marketplaces, so what is below may be out of date.
+          <button type="button" className="pn-btn" onClick={retryRefresh}>
             Retry
           </button>
         </p>
@@ -85,6 +98,9 @@ export default function PluginsView() {
 function InstalledPlugins({ onUpdate }) {
   const { plugins, catalog, marketplaces, setPluginEnabled, removePlugin } = useConsole()
   const [confirmRemove, setConfirmRemove] = useState(null)
+  // The arm ends when the row scrolls out of view or loses focus, so a first
+  // press cannot outlive the user's attention (use-armed-row.js).
+  const armWatch = useArmedRow(confirmRemove, setConfirmRemove)
   // The row whose removal is in flight. A second press used to start a
   // second delete and a second refresh, so the list could settle one
   // action behind; the pane disables the button and says what it is doing
@@ -191,6 +207,8 @@ function InstalledPlugins({ onUpdate }) {
                     <button
                       type="button"
                       className="pn-btn pn-btn--danger"
+                      ref={armWatch.buttonRef}
+                      onBlur={armWatch.onBlur}
                       disabled={removing === p.id}
                       onClick={() => {
                         setConfirmRemove(null)

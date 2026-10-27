@@ -10,7 +10,7 @@ import { X } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
 import { canPickFolder, pickFile, pickFolder } from './pick-folder.js'
 import { CLAUDE_PART_LABEL, POWER_LABEL, RUNTIME_LABEL, entrySource, installFailedNote, sourceRequest } from './plugins.js'
-import { useEscLayer } from './esc-layer.js'
+import { useDialog } from './dialog-focus.js'
 import './devices.css'
 import './plugins.css'
 
@@ -30,6 +30,7 @@ export default function InstallPluginModal({ onClose, entry = null }) {
   const [error, setError] = useState(null)
   const stagedRef = useRef(null)
   stagedRef.current = staged
+  const panelRef = useRef(null)
 
   // Closing before approval drops the staged copy: nothing is left behind.
   // While a read or an install is in flight the stage belongs to that call,
@@ -44,8 +45,10 @@ export default function InstallPluginModal({ onClose, entry = null }) {
     onClose()
   }
 
-  // Esc is the same close: a staged copy is cancelled on the way out.
-  useEscLayer(true, close)
+  // Esc is the same close: a staged copy is cancelled on the way out. The rest
+  // of the dialog behaviour (focus in, Tab kept inside, the app inert behind,
+  // focus back on the opener) comes from the family's shared plumbing.
+  useDialog(panelRef, close)
 
   const read = async (source) => {
     if (!source) return
@@ -108,20 +111,52 @@ export default function InstallPluginModal({ onClose, entry = null }) {
         ? `Install ${name}`
         : 'Install a plugin'
 
+  // What the X says while the guard refuses it. A disabled control with a
+  // plain "Close" title is the dead UI the console promised not to ship: it
+  // looks live, does nothing, and never says why.
+  const closeTitle = busy
+    ? 'Wait for this step to finish or fail - closing now would cancel it'
+    : 'Close'
+
   return (
     <div
       className="dv-modal-backdrop"
       onMouseDown={(e) => {
+        // Deliberate no-op while busy, not a dead handler: the backdrop comes
+        // through the same close() as the X and Esc, and that one refuses to
+        // abandon a read or an install. The note under the title and the
+        // disabled X are what tell the user why the three paths are inert.
         if (e.target === e.currentTarget) close()
       }}
     >
-      <div className="dv-modal dv-modal--form" role="dialog" aria-modal="true" aria-label={title}>
+      <div
+        className="dv-modal dv-modal--form"
+        ref={panelRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-busy={busy || undefined}
+        aria-label={title}
+      >
         <div className="dv-modal-head">
           <h2 className="dv-modal-title">{title}</h2>
-          <button className="dv-modal-close" onClick={close} title="Close">
+          <button
+            className="dv-modal-close"
+            onClick={close}
+            disabled={busy}
+            title={closeTitle}
+            aria-label={closeTitle}
+          >
             <X size={14} weight="bold" />
           </button>
         </div>
+
+        {busy && (
+          <p className="pg-note" role="status">
+            This step has to finish or fail before the dialog can close: cancelling it would pull the
+            copy out from under it.
+          </p>
+        )}
 
         {manifest ? (
           <>

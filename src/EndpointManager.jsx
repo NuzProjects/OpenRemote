@@ -4,14 +4,15 @@
 // rows carry only metadata (`has_key`), and the key field stays empty
 // unless the human is setting a new one.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { CaretDown, X } from '@phosphor-icons/react'
 import PickerMenu from './PickerMenu.jsx'
 import { useConsole } from './state/console.jsx'
 import { useBack } from './use-back.js'
-import { useEscLayer } from './esc-layer.js'
+import { useDialog } from './dialog-focus.js'
 import { harnessName } from './harness-names.js'
 import { armRow, clearRow, rowIsArmed } from './row-confirm.js'
+import { useArmedRow } from './use-armed-row.js'
 import './devices.css'
 import './panels.css'
 
@@ -50,9 +51,10 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
   const [picker, setPicker] = useState(null)
   // Removing an endpoint drops its stored key with it, and nothing in the
   // daemon or the console keeps a copy: one press is not enough for that.
-  // Every other action on the pane disarms, so an armed row cannot outlive
-  // the click that moved the user's attention.
+  // Every other action on the pane disarms, and so does the row scrolling out
+  // of view or losing focus (use-armed-row.js).
   const [armed, setArmed] = useState(null)
+  const armWatch = useArmedRow(armed, setArmed)
 
   const openPicker = (kind) => (e) => setPicker({ kind, x: e.clientX, y: e.clientY })
 
@@ -241,6 +243,8 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
                     <button
                       type="button"
                       className="pn-btn pn-btn--danger"
+                      ref={armWatch.buttonRef}
+                      onBlur={armWatch.onBlur}
                       onClick={() => remove(entry.id)}
                       title="Its saved key goes with it, and there is no undo"
                     >
@@ -405,7 +409,11 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
 // was written in it.
 export function EndpointManagerModal({ harness, deviceId = null, where = null, onClose, onChanged = null }) {
   useBack(true, onClose)
-  useEscLayer(true, onClose)
+  const panelRef = useRef(null)
+  // The dialog plumbing every modal in the family shares (dialog-focus.js):
+  // focus in, Tab kept inside, the app inert behind, focus back on the opener,
+  // and its own Esc layer.
+  useDialog(panelRef, onClose)
   return (
     <div
       className="dv-modal-backdrop"
@@ -413,7 +421,7 @@ export function EndpointManagerModal({ harness, deviceId = null, where = null, o
         if (e.target === e.currentTarget) onClose()
       }}
     >
-      <div className="dv-modal dv-modal--form" role="dialog" aria-modal="true" aria-label={`Models for ${harnessName(harness)}`}>
+      <div className="dv-modal dv-modal--form" ref={panelRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={`Models for ${harnessName(harness)}`}>
         <div className="dv-modal-head">
           <h2 className="dv-modal-title">
             Models for {harnessName(harness)}
