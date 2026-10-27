@@ -46,3 +46,47 @@ test('the armed project row carries its promise as a visible line', () => {
   assert.match(side, /title="Unregister this project\. Its chats move to Chats and the folder on disk is never touched\."/)
   assert.match(source('sidebar.css'), /\.sb-unregister-note \{/)
 })
+// ---- the four Settings rows that destroy something ----
+
+const settings = source('SettingsView.jsx')
+
+test('Settings: unregistering a project carries the same promise as the sidebar, safe answer first', () => {
+  assert.match(settings, /The project goes; its chats move to Chats and the folder on disk is never touched\./)
+  // Keep is offered before the press that removes.
+  assert.ok(
+    settings.indexOf('>Keep<') < settings.indexOf('Remove it'),
+    'the safe answer comes first in the armed pair',
+  )
+})
+
+test('Settings: forgetting the daemon says what is forgotten and puts Cancel first', () => {
+  assert.match(settings, /The saved address and token are forgotten; your chats, plugins and settings stay\./)
+  assert.ok(
+    settings.indexOf('setConfirmDisconnect(false)}>Cancel</button>') <
+      settings.indexOf('onClick={disconnect}>Disconnect</button>'),
+    'Cancel comes before Disconnect',
+  )
+})
+
+test('Settings: signing out puts Cancel first and says what stays', () => {
+  assert.ok(
+    settings.indexOf('setConfirmSignOut(false)}>Cancel</button>') <
+      settings.indexOf('await signOutCloud()'),
+    'Cancel comes before Sign out',
+  )
+  assert.match(settings, /Synced chats stay on/)
+})
+
+test('Settings: Reset every shortcut is one press and says what it clears', () => {
+  assert.match(settings, />\s*Reset every shortcut\s*</)
+  assert.match(settings, /Puts every key back to its default\. Nothing else changes\./)
+  // One press is right for a key: no armed row or modal around the reset.
+  assert.doesNotMatch(settings, /confirmReset/)
+})
+
+test('Settings: the archived Delete goes through the chat delete dialog', () => {
+  // A chat delete is the un-undoable one, so it is the family's confirm, not a
+  // press on the row.
+  assert.match(settings, /onClick=\{\(\) => setDeleting\(s\)\}/)
+  assert.match(settings, /<DeleteChatModal/)
+})

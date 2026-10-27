@@ -42,7 +42,11 @@ test('the reason stays in the row while the control is absent', () => {
   // there is nothing to forget and what to do instead.
   assert.match(
     row,
-    /connection\.state === 'connected' \? 'Bearer token accepted\.' : connection\.error \?\? 'Start the app, or use Connect by address below\.'/,
+    // The detail line says what is forgotten once the confirm is open, and
+    // keeps the token sentence otherwise; both live in the row, not a tooltip.
+    /connection\.state === 'connected'\s*\?\s*confirmDisconnect/,
   )
+  assert.match(row, /Bearer token accepted\./)
+  assert.match(row, /The saved address and token are forgotten; your chats, plugins and settings stay\./)
   assert.match(row, /className="pn-detail"/)
 })

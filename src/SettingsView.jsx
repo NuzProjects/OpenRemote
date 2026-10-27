@@ -970,7 +970,7 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
                   <div className="pn-name">Projects</div>
                   <div className="pn-detail">
                     {armedProject != null
-                      ? `Remove “${armedProjectName}”? Its chats move to Chats. The folder on disk is never touched.`
+                      ? `Remove “${armedProjectName}”? The project goes; its chats move to Chats and the folder on disk is never touched.`
                       : projectsList.length
                         ? 'The folders whose chats group under their project. Removing a project keeps every chat.'
                         : 'No projects yet. Add one from the home screen.'}
@@ -985,8 +985,15 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
                     <>
                       <button
                         type="button"
-                        className="pn-btn pn-btn--danger"
+                        className="pn-btn"
                         autoFocus
+                        onClick={() => setArmedProject(clearRow())}
+                      >
+                        Keep
+                      </button>
+                      <button
+                        type="button"
+                        className="pn-btn pn-btn--danger"
                         aria-label={`Remove the project ${armedProjectName}`}
                         onKeyDown={(e) => {
                           if (e.key === 'Escape') {
@@ -1000,13 +1007,6 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
                         }}
                       >
                         Remove it
-                      </button>
-                      <button
-                        type="button"
-                        className="pn-btn"
-                        onClick={() => setArmedProject(clearRow())}
-                      >
-                        Keep
                       </button>
                     </>
                   ) : (
@@ -1214,8 +1214,9 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
                     kb.resetAll()
                     setMoved(null)
                   }}
+                  title="Puts every key back to its default. Nothing else changes."
                 >
-                  Reset all
+                  Reset every shortcut
                 </button>
               )}
             </div>
@@ -1338,6 +1339,7 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
           {inCloud &&
             (confirmSignOut ? (
               <div className="pn-actions">
+                <button type="button" className="pn-btn" onClick={() => setConfirmSignOut(false)}>Cancel</button>
                 <button
                   type="button"
                   className="pn-btn"
@@ -1348,7 +1350,6 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
                 >
                   Sign out
                 </button>
-                <button type="button" className="pn-btn" onClick={() => setConfirmSignOut(false)}>Cancel</button>
               </div>
             ) : (
               <button type="button" className="pn-btn" onClick={() => setConfirmSignOut(true)}>
@@ -1377,7 +1378,13 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
               <div className="pn-row" data-stg="daemon-connection">
                 <div>
                   <div className="pn-name">{connection.state === 'connected' ? 'Connected' : 'Not connected'}</div>
-                  <div className="pn-detail">{connection.state === 'connected' ? 'Bearer token accepted.' : connection.error ?? 'Start the app, or use Connect by address below.'}</div>
+                  <div className="pn-detail">
+                  {connection.state === 'connected'
+                    ? confirmDisconnect
+                      ? 'The saved address and token are forgotten; your chats, plugins and settings stay.'
+                      : 'Bearer token accepted.'
+                    : connection.error ?? 'Start the app, or use Connect by address below.'}
+                </div>
                 </div>
                 {/* A disabled button labelled with a dash read as a rendering
                     fault rather than as "nothing to forget". The detail line
@@ -1385,8 +1392,8 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
                     absent until there is something to forget. */}
                 {confirmDisconnect ? (
                   <div className="pn-actions">
-                    <button type="button" className="pn-btn" onClick={disconnect}>Disconnect</button>
                     <button type="button" className="pn-btn" onClick={() => setConfirmDisconnect(false)}>Cancel</button>
+                    <button type="button" className="pn-btn" onClick={disconnect}>Disconnect</button>
                   </div>
                 ) : connection.state === 'connected' ? (
                   <button

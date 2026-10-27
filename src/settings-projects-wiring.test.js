@@ -34,7 +34,7 @@ test('the confirm says what it does and what it leaves alone', () => {
   assert.ok(source.includes('pn-btn--danger'), 'and wears the console\'s one destructive style')
   assert.ok(source.includes('Keep'), 'and there is a way out that is not Escape')
   assert.ok(
-    source.includes('Its chats move to Chats. The folder on disk is never touched.'),
+    source.includes('The project goes; its chats move to Chats and the folder on disk is never touched.'),
     'the sentence names both halves, in the row that asks',
   )
 })
