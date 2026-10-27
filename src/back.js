@@ -3,17 +3,32 @@
 // open modal or menu, the sidebar drawer, the last view - holds one history
 // entry, and back runs the newest one's handler. Pure over a `history`-like
 // object, so it's tested without a browser.
+//
+// Two rules keep a press honest. Closing something some other way (its X, a
+// choice, Esc) takes its entry with it while that entry is still the newest,
+// so it never lingers as a press that visibly does nothing. And every pop
+// this module causes itself is counted: the popstate that answers it must
+// not be mistaken for the user's press, and must not close what is below.
 
 export function createBackStack(history, { enabled = true } = {}) {
   // depth -> handler, for the entries pushed above the page's own.
   const handlers = new Map()
+  // Pops this module asked for and has not seen answered yet. A real
+  // webview delivers popstate asynchronously, so a second press arriving
+  // mid-unwind must not be read as a second unwind.
+  let pendingPops = 0
   const depthOf = (state) => (state && typeof state.backDepth === 'number' ? state.backDepth : 0)
+
+  function popEntry() {
+    pendingPops += 1
+    history.back()
+  }
 
   /**
    * Holds a history entry while something back should close is open.
    * Returns the release to call when it closes some other way (its X, a
-   * choice, Esc): the entry stays behind as a spent one, and back steps
-   * over it without a stop.
+   * choice, Esc): the entry goes with it, so back lands on the thing the
+   * user was looking at rather than on a gone one.
    */
   function push(handler) {
     if (!enabled) return () => {}
@@ -21,13 +36,26 @@ export function createBackStack(history, { enabled = true } = {}) {
     history.pushState({ ...(history.state ?? {}), backDepth: depth }, '')
     handlers.set(depth, handler)
     return () => {
-      if (handlers.get(depth) === handler) handlers.set(depth, null)
+      if (handlers.get(depth) !== handler) return
+      handlers.delete(depth)
+      // Only the newest entry can be popped safely; one with something
+      // still open above it is left for the pop above to take with it.
+      if (depthOf(history.state) === depth) popEntry()
     }
   }
 
   /** The popstate listener: run what was popped, skip spent entries. */
   function onPop(state) {
     const landed = depthOf(state)
+    if (pendingPops > 0) {
+      // One of ours: the entries above the landing point are spent by
+      // definition, so they are dropped without closing anything.
+      pendingPops -= 1
+      for (const depth of [...handlers.keys()]) {
+        if (depth > landed) handlers.delete(depth)
+      }
+      return
+    }
     let ran = false
     for (const depth of [...handlers.keys()].sort((a, b) => b - a)) {
       if (depth <= landed) continue
@@ -38,8 +66,9 @@ export function createBackStack(history, { enabled = true } = {}) {
         handler()
       }
     }
-    // Only spent entries were popped: one back press is one visible step.
-    if (!ran && landed > 0) history.back()
+    // Only spent entries were popped: one back press is one visible step,
+    // so walk down to the entry the user is actually on.
+    if (!ran && landed > 0) popEntry()
   }
 
   return { push, onPop }
