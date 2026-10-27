@@ -61,6 +61,12 @@ impl PiFixture {
             eprintln!("fixture-pi: crashed at boot: the install is broken");
             return;
         }
+        // `tree` is `plain` plus a helper of its own: a process this CLI
+        // started and OpenRemote never saw. It starts before the first frame
+        // so a test has its pid as soon as the session exists.
+        if self.scenario == "tree" {
+            crate::spawn_grandchild();
+        }
         let stdin = std::io::stdin();
         for line in stdin.lock().lines() {
             let line = match line {

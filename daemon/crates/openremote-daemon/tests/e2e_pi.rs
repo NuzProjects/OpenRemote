@@ -320,3 +320,73 @@ async fn a_boot_crashed_pi_fails_create_in_seconds_not_a_minute() {
     let session = call(&daemon, "GET", &format!("/sessions/{id}"), None).await;
     assert_eq!(session.body["status"], "failed", "raw: {}", session.raw);
 }
+
+// ---- what a stop does to the harness's own children ----
+
+/// Windows only: that is the half where stopping a chat kills the tree, and
+/// the half where a harness starts servers at all on this machine.
+#[cfg(windows)]
+#[tokio::test]
+async fn stopping_a_chat_ends_the_helpers_its_harness_started() {
+    // The fixture's `tree` scenario is a plain session plus one process of
+    // its own: the shape of a plugin's MCP server, which OpenRemote never
+    // spawned, holds no handle on, and which inherits the chat's environment
+    // and so its data folder.
+    let (daemon, ws) = pi_daemon(Some("tree")).await;
+    let id = create_pi(&daemon, &ws).await;
+    let pid = grandchild_pid(&ws.path().join("fixture-grandchild.pid")).await;
+    assert!(
+        process_is_running(pid),
+        "the fixture never started its helper: pid {pid}"
+    );
+
+    let stopped = call(
+        &daemon,
+        "POST",
+        &format!("/sessions/{id}/stop"),
+        Some(json!({"request_id": "pi-tree-stop"})),
+    )
+    .await;
+    assert_eq!(stopped.status, 200, "raw: {}", stopped.raw);
+
+    // The stop kills and reaps the CLI, so the tree is gone in well under a
+    // second on an idle machine; five is slack for a loaded one.
+    for _ in 0..50 {
+        if !process_is_running(pid) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("a process the harness started outlived the stop of its chat (pid {pid})");
+}
+
+/// The pid the fixture wrote once its helper was up.
+#[cfg(windows)]
+async fn grandchild_pid(path: &std::path::Path) -> u32 {
+    for _ in 0..100 {
+        if let Ok(text) = std::fs::read_to_string(path) {
+            if let Ok(pid) = text.trim().parse::<u32>() {
+                return pid;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!(
+        "the fixture never reported a helper pid at {}",
+        path.display()
+    );
+}
+
+/// Whether a process id is still running. `tasklist` rather than a handle:
+/// the daemon spawned this process, and the question the test asks is about
+/// the machine rather than about the test's own children.
+#[cfg(windows)]
+fn process_is_running(pid: u32) -> bool {
+    let out = std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+        .output()
+        .expect("run tasklist");
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .any(|word| word == pid.to_string())
+}

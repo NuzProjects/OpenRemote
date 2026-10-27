@@ -71,6 +71,7 @@ pub const SCENARIOS: &[&str] = &[
     "boot-crash",
     "dialog",
     "die",
+    "tree",
 ];
 
 /// Hold a scenario's turn open until the e2e creates `fixture-release` in
@@ -85,6 +86,38 @@ pub fn wait_for_release() {
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+/// A helper process of the sort a real CLI starts and tells nobody about: a
+/// plugin's MCP server, a language server. `tree` mode starts one so a test
+/// can ask what stopping the chat did to it, and writes its pid to
+/// `fixture-grandchild.pid` in the workspace the test is watching. The
+/// helper's own output goes nowhere; its point is to outlive its parent if
+/// nothing kills the tree.
+pub fn spawn_grandchild() {
+    use std::process::{Command, Stdio};
+    #[cfg(windows)]
+    let mut command = {
+        // A console program that runs for about a minute: long enough that
+        // the test cannot mistake its own exit for the kill.
+        let mut command = Command::new("cmd");
+        command.args(["/c", "ping", "-n", "60", "127.0.0.1"]);
+        command
+    };
+    #[cfg(not(windows))]
+    let mut command = {
+        let mut command = Command::new("sleep");
+        command.arg("60");
+        command
+    };
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    match command.spawn() {
+        Ok(child) => record("fixture-grandchild.pid", &child.id().to_string()),
+        Err(err) => eprintln!("fixture: could not start a helper for `tree`: {err}"),
     }
 }
 

@@ -11,7 +11,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use openremote_core::{DecisionKind, DecisionOption, TurnOutcome};
-use openremote_harness::{DriverError, DriverEvent, Resolution, SessionSettings, SpawnOptions};
+use openremote_harness::{
+    DriverError, DriverEvent, Resolution, SessionSettings, SpawnOptions, kill_tree,
+};
 use serde_json::{Value, json};
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
@@ -356,12 +358,12 @@ fn decision_spec(request: &Value) -> DecisionSpec {
 async fn kill_and_reap(
     mut child: tokio::sync::MutexGuard<'_, Child>,
 ) -> Result<Option<i32>, DriverError> {
-    child.start_kill()?;
+    kill_tree(&mut child).await;
     match tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await {
         Ok(Ok(status)) => Ok(status.code()),
         Ok(Err(e)) => Err(e.into()),
         Err(_) => {
-            child.start_kill()?;
+            kill_tree(&mut child).await;
             let status = child.wait().await?;
             Ok(status.code())
         }
@@ -595,7 +597,7 @@ async fn handshake(
             )),
         ),
     };
-    let _ = child.start_kill();
+    kill_tree(&mut child).await;
     if let Some(e) = read_err {
         return Err(DriverError::Spawn(format!("claude {what}: {e}")));
     }

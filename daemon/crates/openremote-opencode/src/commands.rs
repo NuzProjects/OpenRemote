@@ -8,7 +8,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use openremote_harness::{
-    AgentDescriptor, CommandCatalog, CommandDescriptor, DriverError, Resolution,
+    AgentDescriptor, CommandCatalog, CommandDescriptor, DriverError, Resolution, kill_tree,
 };
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -77,7 +77,7 @@ pub async fn commands(resolution: &Resolution, cwd: &Path) -> Result<CommandCata
         Ok::<_, DriverError>(catalog(&commands, &agents))
     };
     let answer = tokio::time::timeout(Duration::from_secs(30), ask).await;
-    let _ = child.start_kill();
+    kill_tree(&mut child).await;
     match answer {
         Ok(result) => result,
         Err(_) => Err(DriverError::Protocol(

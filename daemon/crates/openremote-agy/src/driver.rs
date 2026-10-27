@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use openremote_core::TurnOutcome;
-use openremote_harness::{DriverError, DriverEvent, Resolution, SpawnOptions};
+use openremote_harness::{DriverError, DriverEvent, Resolution, SpawnOptions, kill_tree};
 use serde_json::Value;
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
@@ -144,7 +144,7 @@ impl Driver {
         *self.shared.reason.lock().unwrap() = EofReason::Interrupted;
         let mut guard = self.shared.child.lock().await;
         if let Some(child) = guard.as_mut() {
-            child.start_kill()?;
+            kill_tree(child).await;
         }
         Ok(())
     }
@@ -153,7 +153,7 @@ impl Driver {
         *self.shared.reason.lock().unwrap() = EofReason::Stopped;
         let mut guard = self.shared.child.lock().await;
         if let Some(mut child) = guard.take() {
-            child.start_kill()?;
+            kill_tree(&mut child).await;
             match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
                 Ok(Ok(status)) => Ok(status.code()),
                 _ => Ok(None),
@@ -425,11 +425,11 @@ pub async fn models(
     let output = match read.await {
         Ok(Ok(out)) => out,
         Ok(Err(e)) => {
-            let _ = child.start_kill();
+            kill_tree(&mut child).await;
             return Err(DriverError::Spawn(format!("agy models: {e}")));
         }
         Err(_) => {
-            let _ = child.start_kill();
+            kill_tree(&mut child).await;
             return Err(DriverError::Spawn(
                 "agy models: the CLI never finished printing its catalog".into(),
             ));
@@ -444,7 +444,7 @@ pub async fn models(
         Ok(Ok(status)) => status,
         Ok(Err(e)) => return Err(DriverError::Spawn(format!("agy models: {e}"))),
         Err(_) => {
-            let _ = child.start_kill();
+            kill_tree(&mut child).await;
             return Err(DriverError::Spawn(
                 "agy models: the CLI never exited".into(),
             ));

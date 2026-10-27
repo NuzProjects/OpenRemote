@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use openremote_harness::{CommandCatalog, CommandDescriptor, DriverError, Resolution};
+use openremote_harness::{CommandCatalog, CommandDescriptor, DriverError, Resolution, kill_tree};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
@@ -62,7 +62,7 @@ pub async fn commands(resolution: &Resolution, cwd: &Path) -> Result<CommandCata
         Ok(None)
     };
     let answer = tokio::time::timeout(Duration::from_secs(30), exchange).await;
-    let _ = child.start_kill();
+    kill_tree(&mut child).await;
     let frame = match answer {
         Ok(Ok(Some(frame))) => frame,
         Ok(Ok(None)) => {
