@@ -68,7 +68,7 @@ test('a failure says what happened, in the words the surface shows', () => {
   const gone = Object.assign(new Error('That phone is not paired with this computer.'), { status: 404 })
   assert.equal(pairingError(gone), 'That phone is not paired with this computer.')
   // A known shape with no sentence still reads as a sentence.
-  assert.equal(pairingError({ status: 409 }), 'This computer cannot take a phone right now.')
+  assert.equal(pairingError({ status: 409 }), 'This computer cannot pair a phone right now.')
   assert.equal(pairingError({ status: 404 }), 'That phone is not paired with this computer.')
   assert.equal(
     pairingError(new Error('The daemon did not answer in time')),

@@ -50,3 +50,16 @@ test('the line is in the sidebar, above the scrolled list, and says what happene
   assert.match(side, /role="status"/)
   assert.match(side, /aria-label=\{`Undo archiving \$\{undo\.title\}`\}/)
 })
+
+// ---- the grouping cost in the sidebar ----
+
+test('the sidebar builds the project index once and counts unread in one pass', () => {
+  const src = readFileSync(new URL('./Sidebar.jsx', import.meta.url), 'utf8')
+  // The index is built on a projects change, never inside the row loop.
+  assert.match(src, /const folders = useMemo\(\(\) => projectIndex\(projects\), \[projects\]\)/)
+  assert.match(src, /sections\(projects, rest, folders\)/)
+  assert.match(src, /const unreadIn = useMemo\(\(\) => unreadProjects\(rows, unread, folders\), \[rows, unread, folders\]\)/)
+  // The group badge reads the pass, not a per-group walk of its items.
+  assert.match(src, /data-unread=\{unreadIn\.has\(project\.id\)/)
+  assert.doesNotMatch(src, /data-unread=\{listHasUnread\(items, unread\)/)
+})

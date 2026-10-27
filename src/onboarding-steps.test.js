@@ -80,26 +80,26 @@ test('the ready step has a sentence for each state it can be reached in', () => 
     readyLine([]),
     'No agent is installed yet. Add one from the harness picker whenever you are ready.',
   )
-  // An agent that can start a task.
-  assert.equal(readyLine([harness()]), 'These agents are ready. Describe the work, pick a folder, and start a task.')
+  // An agent that can start a chat.
+  assert.equal(readyLine([harness()]), 'These agents are ready. Describe the work, pick a folder, and start a chat.')
   // Installed but needing the owner's login, singular and plural.
   assert.equal(
     readyLine([harness({ signed_in: false })]),
-    'Claude Code is installed but not signed in yet. Sign in from the harness picker, then start a task.',
+    'Claude Code is installed but not signed in yet. Sign in from the harness picker, then start a chat.',
   )
   assert.equal(
     readyLine([harness({ signed_in: false }), harness({ id: 'codex', name: 'Codex', signed_in: false })]),
-    'Your agents are installed but not signed in yet. Sign in from the harness picker, then start a task.',
+    'Your agents are installed but not signed in yet. Sign in from the harness picker, then start a chat.',
   )
   // One usable is enough for the ready sentence.
   assert.equal(
     readyLine([harness(), harness({ id: 'codex', signed_in: false })]),
-    'These agents are ready. Describe the work, pick a folder, and start a task.',
+    'These agents are ready. Describe the work, pick a folder, and start a chat.',
   )
   // An API key stands in for a sign-in.
   assert.equal(
     readyLine([harness({ signed_in: false, using_api_key: true })]),
-    'These agents are ready. Describe the work, pick a folder, and start a task.',
+    'These agents are ready. Describe the work, pick a folder, and start a chat.',
   )
   assert.equal(readyLine(null), readyLine([]))
 })

@@ -53,7 +53,7 @@ const GROUP_LABEL = Object.fromEntries(GROUPS.map((g) => [g.id, g.label]))
 const row = (key, section, label, detail, terms) => ({ key, section, label, detail, terms })
 
 const ROWS = [
-  row('new-tasks-harness', 'new-tasks', 'Harness', 'What a new task starts on.', ['default', 'agent', 'cli', 'start']),
+  row('new-tasks-harness', 'new-tasks', 'Harness', 'What a new chat starts on.', ['default', 'agent', 'cli', 'start']),
   row('new-tasks-model', 'new-tasks', 'Model', "The harness's own catalog.", ['default', 'catalog']),
   row('new-tasks-effort', 'new-tasks', 'Effort', "The model's own reasoning tiers.", ['reasoning', 'tier', 'thinking', 'depth']),
   row('new-tasks-permission', 'new-tasks', 'Permission', 'What the harness may do without asking.', ['approval', 'ask', 'mode']),

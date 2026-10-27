@@ -170,7 +170,7 @@ test('looking at a chat marks it read only while the window is being looked at',
 
 test('the mark is on the row, and the list heads carry their own', () => {
   assert.match(sidebar, /data-unread=\{unread\.has\(row\.id\) \? 'true' : undefined\}/)
-  assert.match(sidebar, /data-unread=\{listHasUnread\(items, unread\) \? 'true' : undefined\}/)
+  assert.match(sidebar, /data-unread=\{unreadIn\.has\(project\.id\) \? 'true' : undefined\}/)
   assert.match(sidebar, /data-unread=\{listHasUnread\(grouped\.flat, unread\) \? 'true' : undefined\}/)
 })
 

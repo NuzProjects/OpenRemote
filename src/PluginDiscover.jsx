@@ -279,7 +279,7 @@ export default function PluginDiscover({ onInstall }) {
         <div className="pg-sections">
           {all.length === 0 && !fetching.length && (
             <p className="pn-empty">
-              No catalog has been fetched yet. A marketplace's catalog is read once and kept on this
+              No marketplace has answered yet. A marketplace's catalog is read once and kept on this
               computer; use the refresh button above once one is on.
             </p>
           )}

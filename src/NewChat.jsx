@@ -898,7 +898,7 @@ export default function NewChat({
           the console does not ship. */}
       {connection.state === 'connected' && !available.length && (
         <p className="nc-first-run" key="no-agent">
-          No agent is installed on this computer yet, so a task has nowhere to run. Install one from
+          No agent is installed on this computer yet, so a chat has nowhere to run. Install one from
           the harness picker under the box; it scans this computer each time it opens.
         </p>
       )}

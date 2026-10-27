@@ -15,7 +15,7 @@ test('New chat says there is nothing to run a task on, and where the installer i
   // Only while the daemon is answering: an empty list from a starting daemon
   // is "not yet", not "nothing installed".
   assert.match(newchat, /connection\.state === 'connected' && !available\.length/)
-  assert.match(newchat, /No agent is installed on this computer yet, so a task has nowhere to run\./)
+  assert.match(newchat, /No agent is installed on this computer yet, so a chat has nowhere to run\./)
   assert.match(newchat, /Install one from\s+the harness picker under the box/)
   // A calm row: no border, no tint, and no button in it.
   assert.match(newchat, /className="nc-first-run"/)
@@ -27,7 +27,7 @@ test('New chat says there is nothing to run a task on, and where the installer i
 
 test('Discover separates never fetched from fetching, and names the next step', () => {
   const discover = source('PluginDiscover.jsx')
-  assert.match(discover, /No catalog has been fetched yet\./)
+  assert.match(discover, /No marketplace has answered yet\./)
   assert.match(discover, /use the refresh button above once one is on/)
   assert.match(discover, /Reading the marketplaces' catalogs\.\.\./)
   // The two states are distinct branches, not one line with a word swapped.

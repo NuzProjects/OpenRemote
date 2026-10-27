@@ -65,14 +65,17 @@ export function firstFrame(error, componentStack = '') {
 
 /// The one plain sentence under the title. It says what kind of failure it
 /// was, never that the app is broken: the rest of the window is still
-/// there, and this line is read by someone deciding what to do next.
+/// there, and this line is read by someone deciding what to do next. The
+/// wording stays in the app's own voice ("this view"), not React's: the
+/// person reading it wants to know what the pane hit, not which error class
+/// a developer would have named.
 export function causeLine(error) {
   const name = typeof error?.name === 'string' ? error.name : ''
-  if (name === 'TypeError') return 'Something this view expected to find was not there.'
-  if (name === 'ReferenceError') return 'The view asked for a name that is not defined.'
-  if (name === 'RangeError') return 'The view asked for a size or a number it cannot work with.'
-  if (name === 'SyntaxError') return 'The view could not read something it was given.'
-  return 'The view stopped while it was drawing itself.'
+  if (name === 'TypeError') return 'This view expected something that was not there.'
+  if (name === 'ReferenceError') return 'This view asked for something that does not exist.'
+  if (name === 'RangeError') return 'This view asked for a size it cannot draw.'
+  if (name === 'SyntaxError') return 'This view could not read what it was given.'
+  return 'This view stopped while it was drawing itself.'
 }
 
 /// The rows the panel shows, or null when there is nothing to show. The

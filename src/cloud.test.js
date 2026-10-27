@@ -119,7 +119,7 @@ test('the alert under the door never repeats the body', async () => {
   assert.equal(cloudAlert({ clickError: refused, cloud: { state: 'signing_in' }, signingIn: true }), null)
 
   // Nothing to say at all.
-  assert.equal(cloudAlert({ cloud: { state: 'online' }, body: 'Your devices are reachable.' }), null)
+  assert.equal(cloudAlert({ cloud: { state: 'online' }, body: 'Connected to Cloud.' }), null)
   assert.equal(cloudAlert({}), null)
 })
 

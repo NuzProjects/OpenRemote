@@ -32,11 +32,14 @@ function words(cloud, one) {
             : "moreweb's sign-in page is open in your browser. Come back once it says you're signed in.",
       }
     case 'connecting':
-      return { name: signedName(email), detail: 'Reaching your devices.' }
+      return { name: signedName(email), detail: 'Connecting to Cloud.' }
     case 'online':
-      return { name: signedName(email), detail: 'Your devices are reachable.' }
+      // What the daemon knows is that its relay link is up, not that every
+      // device of the account is answering: a row that said "your devices are
+      // reachable" would be promising for the one machine that is asleep.
+      return { name: signedName(email), detail: 'Connected to Cloud.' }
     case 'offline':
-      return { name: signedName(email), detail: 'Your devices are not reachable right now.' }
+      return { name: signedName(email), detail: 'Cloud is not reachable right now.' }
     case 'relink':
       return {
         name: 'Sign in ended',

@@ -62,10 +62,10 @@ export function readyLine(installed) {
   const usable = rows.filter((row) => harnessState(row) !== 'Not signed in')
   if (usable.length === 0) {
     return rows.length === 1
-      ? `${harnessName(rows[0].id)} is installed but not signed in yet. Sign in from the harness picker, then start a task.`
-      : 'Your agents are installed but not signed in yet. Sign in from the harness picker, then start a task.'
+      ? `${harnessName(rows[0].id)} is installed but not signed in yet. Sign in from the harness picker, then start a chat.`
+      : 'Your agents are installed but not signed in yet. Sign in from the harness picker, then start a chat.'
   }
-  return 'These agents are ready. Describe the work, pick a folder, and start a task.'
+  return 'These agents are ready. Describe the work, pick a folder, and start a chat.'
 }
 
 /// The steps the wizard can visit, in order, for the progress dots. The

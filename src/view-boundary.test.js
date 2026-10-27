@@ -13,7 +13,7 @@ test('an error keeps its own words and the component frame that names where it t
   })
   assert.equal(notice.detail.message, "TypeError: Cannot read properties of undefined (reading 'map')")
   assert.equal(notice.detail.frame, 'at ChatView (http://localhost:5175/src/ChatView.jsx:412:9)')
-  assert.equal(notice.cause, 'Something this view expected to find was not there.')
+  assert.equal(notice.cause, 'This view expected something that was not there.')
   assert.equal(
     notice.retry,
     false,
@@ -56,11 +56,11 @@ test('an error that is not one of the deterministic shapes still offers one retr
 })
 
 test('the cause line names the kind of failure rather than repeating the message', () => {
-  assert.equal(causeLine(new ReferenceError('x is not defined')), 'The view asked for a name that is not defined.')
-  assert.equal(causeLine(new RangeError('bad size')), 'The view asked for a size or a number it cannot work with.')
-  assert.equal(causeLine(new SyntaxError('bad json')), 'The view could not read something it was given.')
-  assert.equal(causeLine(new Error('anything else')), 'The view stopped while it was drawing itself.')
-  assert.equal(causeLine('a thrown string'), 'The view stopped while it was drawing itself.')
+  assert.equal(causeLine(new ReferenceError('x is not defined')), 'This view asked for something that does not exist.')
+  assert.equal(causeLine(new RangeError('bad size')), 'This view asked for a size it cannot draw.')
+  assert.equal(causeLine(new SyntaxError('bad json')), 'This view could not read what it was given.')
+  assert.equal(causeLine(new Error('anything else')), 'This view stopped while it was drawing itself.')
+  assert.equal(causeLine('a thrown string'), 'This view stopped while it was drawing itself.')
 })
 
 test('something thrown that is not an Error still has honest rows', () => {

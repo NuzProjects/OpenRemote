@@ -30,8 +30,11 @@ export default function RenameChatModal({ title, synced = false, onRename, onClo
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const verdict = renameState(title, text)
+  // A synced chat's new name reaches another device when that device next
+  // syncs, so the sentence says when it lands instead of promising it is
+  // already there - the same rule the remove-a-device hint follows.
   const where = synced
-    ? 'Every device that has this chat shows the new name.'
+    ? 'Every device that has this chat shows the new name the next time it syncs.'
     : 'This name stays on this computer.'
 
   // The current name is selected, so the first keystroke replaces it: the

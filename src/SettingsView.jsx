@@ -435,7 +435,7 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
         key: `harness-${h.id}`,
         section: 'harnesses',
         label: harnessName(h.id),
-        detail: h.available ? 'Installed on this machine.' : 'Not found on this machine.',
+        detail: h.available ? 'Installed on this machine.' : 'This harness is not installed on this machine.',
         terms: ['harness', 'cli', 'install', h.id],
       })),
       ...(mcpServers ?? []).map((p) => ({
@@ -796,7 +796,7 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
               <div className="pn-row" data-stg="new-tasks-harness">
                 <div>
                   <div className="pn-name">Harness</div>
-                  <div className="pn-detail">What a new task starts on.</div>
+                  <div className="pn-detail">What a new chat starts on.</div>
                 </div>
                 <button
                   type="button"
@@ -1320,7 +1320,7 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
                 cloud.account?.email ? (
                   <>Signed in as <span className="pv">{cloud.account.email}</span></>
                 ) : (
-                  'Signed in as your account'
+                  'Signed in to your moreweb account'
                 )
               ) : (
                 'Not signed in'
@@ -1474,7 +1474,7 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
                 <div className="pn-row" key={h.id} data-stg={`harness-${h.id}`}>
                   <div>
                     <div className="pn-name">{harnessName(h.id)}</div>
-                    <div className="pn-detail">{h.available ? <span className="pv">{h.path}</span> : 'Not found on this machine.'}</div>
+                    <div className="pn-detail">{h.available ? <span className="pv">{h.path}</span> : 'This harness is not installed on this machine.'}</div>
                   </div>
                   {h.available && h.using_api_key && h.signed_in !== true ? (
                     <span className="pn-btn">Using API key</span>

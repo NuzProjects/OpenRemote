@@ -127,7 +127,7 @@ export function pairedLabel(phone, now = Date.now()) {
  */
 export function pairingError(err) {
   if (err?.status === 404) return err.message || 'That phone is not paired with this computer.'
-  if (err?.status === 409) return err.message || 'This computer cannot take a phone right now.'
+  if (err?.status === 409) return err.message || 'This computer cannot pair a phone right now.'
   if (err?.message === 'The daemon did not answer in time') {
     return 'The daemon did not answer in time. Try again.'
   }
