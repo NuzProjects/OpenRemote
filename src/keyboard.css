@@ -318,3 +318,14 @@ html[data-reduce-motion] .kb-sheet {
   color: var(--text-3);
   line-height: 1.45;
 }
+/* The one line after a copy: said inside the palette, where the row that did
+   it still is. A sentence, not a toast, and it sits above the list so it
+   never covers a row the person might choose next. */
+.kb-copied {
+  margin: 0;
+  padding: 8px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.4;
+}

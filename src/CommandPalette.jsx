@@ -11,6 +11,7 @@ import {
   BookmarkSimple,
   ChartBar,
   Check,
+  ClipboardText,
   ClockCounterClockwise,
   Command,
   Desktop,
@@ -37,6 +38,7 @@ import { useKeyboard, isMac } from './keyboard.jsx'
 import { ACTIONS, comboFromEvent, comboLabel, rankMatches } from './shortcuts.js'
 import { activeSessions } from './archive.js'
 import { hasFileChanges } from './changes.js'
+import { chatMarkdown, copiedLine } from './chat-markdown.js'
 import { planJob, requestJob } from './chat-to-job.js'
 import { openChanges } from './ChangesModal.jsx'
 import PresetNameModal from './PresetNameModal.jsx'
@@ -105,6 +107,9 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
   const [query, setQuery] = useState('')
   const [page, setPage] = useState(null)
   const [cursor, setCursor] = useState(0)
+  // The one line after a copy: kept inside the palette rather than closing to
+  // say it somewhere else.
+  const [copied, setCopied] = useState(null)
   // Stop everything: the plan the question was built from (so the numbers
   // in it cannot move under the user between the ask and the press), the
   // phase, and the sentence that settles it.
@@ -194,6 +199,22 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
             name: 'Changes in this chat',
             icon: <FileCode size={15} />,
             run: { changes: reviewChat.id },
+          },
+        ]
+      : []
+    // The same reading of "this chat", for a copy: offered only while the
+    // chat on screen has anything to write. A chat that exists but has no
+    // items yet has nothing to copy, and a row that could only answer
+    // "nothing" for a chat the user is looking at would be a lie in a list
+    // of actions.
+    const markdown = reviewChat && (reviewChat.timeline ?? []).length > 0
+      ? [
+          {
+            key: 'action:markdown',
+            section: 'Actions',
+            name: 'Copy this chat as Markdown',
+            icon: <ClipboardText size={15} />,
+            run: { markdown: reviewChat.id },
           },
         ]
       : []
@@ -387,7 +408,7 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
         ]
       : []
     return {
-      actions: [...stopRow, ...harnessRow, ...raceRow, ...sinceRow, ...layoutRow, ...layoutsRow, ...renameRow, ...presetRow, ...review, ...jobRow, ...pages, ...actions],
+      actions: [...stopRow, ...harnessRow, ...raceRow, ...sinceRow, ...layoutRow, ...layoutsRow, ...renameRow, ...presetRow, ...review, ...markdown, ...jobRow, ...pages, ...actions],
       chats: chatRows,
       projectRows,
       machines,
@@ -621,6 +642,27 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
   const choose = (row) => {
     if (!row) return
     const r = row.run
+    if (r.markdown) {
+      // The copy keeps the palette open: the answer is one line, and a palette
+      // that closed to say it would need somewhere else to say it. The chat
+      // is read from this window's own state, so nothing is fetched and no
+      // export dialog exists.
+      const chat = chats?.[r.markdown] ?? null
+      const file = chat ? chatMarkdown(chat) : null
+      if (!file) {
+        setCopied('Nothing to copy in this chat.')
+        return
+      }
+      const write = navigator.clipboard?.writeText?.(file.text)
+      if (!write) {
+        setCopied('Could not copy: this window has no clipboard.')
+        return
+      }
+      write
+        .then(() => setCopied(copiedLine(file)))
+        .catch((err) => setCopied(`Could not copy: ${err?.message ?? err}`))
+      return
+    }
     if (r.saveLayout) {
       // The name is asked in the family's dialog, not here: the palette's one
       // field is a search, and a name typed into it would be a second kind of
@@ -910,6 +952,11 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
             aria-controls="kb-list"
           />
         </div>
+        {copied && (
+          <p className="kb-copied" role="status">
+            {copied}
+          </p>
+        )}
         <div className="kb-list" id="kb-list" role="listbox" ref={listRef}>
           {page === 'layouts' && layoutNote && (
             // Why a shape cannot open here, said once above the list. Nothing
