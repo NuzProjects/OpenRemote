@@ -193,7 +193,12 @@ spacing.
   was saved, so applying one keeps only the model, effort and approval word
   the harness still offers, applies the rest, and says what it could not
   bring in one calm line rather than failing. A chip's delete control asks
-  once, by the same two-step as every destructive row. The floating chat
+  once, by the same two-step as every destructive row: the first press arms,
+  the second press does it, and Escape or a click elsewhere keeps. The armed
+  row says what goes and what stays. Only one removal runs at a time: the claim
+  is taken in the press itself, not in state that has not rendered yet, and
+  while one runs every armed confirm is disabled rather than looking live and
+  answering nothing. The floating chat
   composer publishes its measured height (`--cv-clear`) so the transcript's
   bottom padding keeps the last message above it, never under it.
 - **Send button:** 30px radius-8 rounded square; amber (`--accent`) with a
@@ -211,7 +216,9 @@ spacing.
   action. The pages are Switch model, Set effort, Set permission, Stop all
   running chats, Stop one harness's chats and Since your last look; the
   hand-offs are Changes in this chat (the review), Race a prompt across
-  harnesses (the race) and Turn this chat into a recurring job (the rule
+  harnesses (the race), Copy this chat as Markdown (the transcript, in the
+  app's own rendering, with long tool output and long tool input shortened and
+  counted) and Turn this chat into a recurring job (the rule
   editor, already filled). A row that would lie is not rendered: the changes
   row appears only while the chat on screen has file changes to read, the
   stop rows only while something runs, since-last-look only while something
@@ -232,7 +239,23 @@ spacing.
   same prompt verbatim for each. It refuses before a chat is created:
   fewer than two harnesses installed, fewer than two chosen, more than four
   chosen, not enough free panes (naming the ones that would not fit), or an
-  empty prompt.
+  empty prompt. A retry starts from what is missing, not from the whole pick:
+  the harnesses that did not produce a chat are still chosen, and the ones that
+  did are not started twice.
+- **The built-in browser:** its tab strip draws whole tabs only. A tab is a
+  fixed width (200px) and never shrinks to a sliver: the strip measures itself,
+  draws as many whole tabs as fit, and the rest sit behind one overflow control
+  that shows their count and carries the same count in words ("3 more tabs").
+  Every tab's name is in its title as well as on it, so a cut name is never cut
+  without words carrying it. `Ctrl+Shift+T` reopens the last closed tab - five
+  per window, remembered as the address and title it had, because the page went
+  with the close, and a new tab page leaves nothing to reopen. A tab's own menu
+  closes it, closes the others, or closes everything to its right; all three
+  work in strip order, so a window resize never changes what a command does.
+- **Text fields:** right-clicking a field opens the console's own menu - Cut,
+  Copy, Paste, Select all - because the engine's default menu is off for the
+  whole app. A field never has two menus, and the words on the one it has are
+  the console's own.
 - **Since your last look:** a palette page over the unread marks - the chats
   that moved after they were last read, newest activity first, headed in
   words ("Two chats moved while you were away."). Each row says what

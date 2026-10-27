@@ -8,7 +8,6 @@ import { readFileSync } from 'node:fs'
 import {
   CLOSED_CAP,
   NEW_TAB_WIDTH,
-  OVERFLOW_WIDTH,
   TAB_GAP,
   TAB_WIDTH,
   closeOthers,
@@ -109,11 +108,9 @@ test("the strip's numbers are the sheet's numbers", () => {
   assert.equal(px(blockOf('.bw-tab'), 'width'), TAB_WIDTH, 'TAB_WIDTH and .bw-tab')
   assert.equal(px(blockOf('.bw-tabs-scroll'), 'gap'), TAB_GAP, 'TAB_GAP and .bw-tabs-scroll')
   assert.equal(px(blockOf('.bw-newtab'), 'width'), NEW_TAB_WIDTH, 'NEW_TAB_WIDTH and .bw-newtab')
-  assert.equal(
-    px(blockOf('.bw-tabsearch.is-more'), 'width'),
-    OVERFLOW_WIDTH,
-    'OVERFLOW_WIDTH and .bw-tabsearch.is-more',
-  )
+  // The overflow control is not planned against, so its width is asserted
+  // here rather than kept as a constant: this is the sheet's own number.
+  assert.equal(px(blockOf('.bw-tabsearch.is-more'), 'width'), 56, 'the overflow control is 56px')
   // The element the ResizeObserver watches must not carry padding of its own:
   // the plan treats its width as the space tabs occupy, and the strip's own
   // padding lives on .bw-tabs, outside that element.

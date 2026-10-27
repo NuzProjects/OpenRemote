@@ -648,6 +648,7 @@ export default function Sidebar({
                     autoFocus
                     title="Unregister this project. Its chats move to Chats and the folder on disk is never touched."
                     aria-label={`Unregister ${name}`}
+                    aria-describedby="sb-unregister-note"
                     onKeyDown={(e) => {
                       if (e.key === 'Escape') {
                         e.preventDefault()
@@ -661,7 +662,7 @@ export default function Sidebar({
                   >
                     Unregister
                   </button>
-                  <p className="sb-unregister-note">
+                  <p className="sb-unregister-note" id="sb-unregister-note">
                     The project goes; its chats move to Chats and the folder on disk is never touched.
                   </p>
                 </>

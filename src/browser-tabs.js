@@ -133,16 +133,21 @@ export function closeToRight(tabs, key) {
 //   TAB_WIDTH          .bw-tab { width: 200px }
 //   TAB_GAP            .bw-tabs-scroll { gap: 2px }
 //   NEW_TAB_WIDTH      .bw-newtab { width: 28px }
-//   OVERFLOW_WIDTH     .bw-tabsearch.is-more { width: 56px }
 //
-// The overflow control sits beside the measured strip, not inside it, so its
-// width is not subtracted when the count is decided - it is named here only so
-// the sheet and this file agree about its size. The new-tab button is inside
-// the strip, so its width and the gap before it are reserved.
+// The overflow control (.bw-tabsearch.is-more, 56px) sits beside the measured
+// strip, not inside it, so its width is not part of this plan and it is not a
+// constant here: the sheet owns it, and browser-strip.test.js reads the sheet's
+// value directly.
+//
+// The floor is the tab's own minimum: one tab and the gap before it and the
+// new-tab button, 230px at these numbers. Nothing in split.css gives a pane a
+// minimum width, so a pane can in principle be dragged narrower than that; the
+// plan still answers one tab and the CSS clips its right edge. That clip is
+// accepted - the alternative is a shrunken tab, which is the sliver this rule
+// exists to prevent.
 
 export const TAB_WIDTH = 200
 export const TAB_GAP = 2
-export const OVERFLOW_WIDTH = 56
 export const NEW_TAB_WIDTH = 28
 
 /// Which tabs the strip draws: a window of `shown` tabs starting at `start`,
