@@ -11,6 +11,15 @@
 
 #[cfg(windows)]
 use std::process::Stdio;
+#[cfg(windows)]
+use std::time::Duration;
+
+/// How long the tree walk may take. The drivers kill and then wait five
+/// seconds for the child to go, so this has to fit inside a stop rather than
+/// hold it open; a walk that overruns is abandoned and the child is killed on
+/// its own.
+#[cfg(windows)]
+const TREE_WALK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Ends a harness process and everything it started.
 ///
@@ -47,8 +56,14 @@ pub async fn kill_tree(child: &mut tokio::process::Child) {
                 // window on a desktop.
                 .creation_flags(CREATE_NO_WINDOW);
             // A refusal here means the tree was already gone, which is the
-            // answer this function wants.
-            let _ = command.status().await;
+            // answer this function wants. The deadline is not about taskkill
+            // being slow: a process enumeration can hang behind an endpoint
+            // protection driver or a stopped process, and the callers await
+            // this before their own timed wait, so an unbounded wait here
+            // would let one stuck walk hang a stop forever. Timing out means
+            // the tree walk was abandoned, not that the tree is dead - the
+            // child itself is still killed below.
+            let _ = tokio::time::timeout(TREE_WALK_TIMEOUT, command.status()).await;
         }
     }
     // The harness child itself, whether or not the tree walk could reach it.
@@ -63,12 +78,52 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// `%SystemRoot%\System32\taskkill.exe`. By absolute path rather than by
 /// name: this runs as the user, and a directory earlier in PATH would be
 /// able to stand in for it.
+///
+/// `SystemRoot` itself has to be absolute before it is joined, or this hands
+/// back a path that is resolved against the daemon's current directory:
+/// `SystemRoot=foo` would mean `foo\System32\taskkill.exe` there, and a value
+/// of `..\somewhere` would point at whatever that folder holds. The daemon's
+/// environment is not a remote input, but `HKCU\Environment` makes it a
+/// cheap way to plant one, so the value is checked rather than trusted.
 #[cfg(windows)]
 fn taskkill_exe() -> std::path::PathBuf {
-    let root = std::env::var_os("SystemRoot")
-        .filter(|root| !root.is_empty())
-        .unwrap_or_else(|| "C:\\Windows".into());
-    std::path::PathBuf::from(root)
-        .join("System32")
-        .join("taskkill.exe")
+    taskkill_under(std::env::var_os("SystemRoot").as_deref())
+}
+
+/// The same choice, from a value the caller supplies, so the rule can be
+/// checked without touching the process environment: a test that set it
+/// would be changing a global every other test in the binary can see.
+#[cfg(windows)]
+fn taskkill_under(root: Option<&std::ffi::OsStr>) -> std::path::PathBuf {
+    let root = root
+        .map(std::path::PathBuf::from)
+        .filter(|root| root.is_absolute())
+        .unwrap_or_else(|| std::path::PathBuf::from("C:\\Windows"));
+    root.join("System32").join("taskkill.exe")
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use std::ffi::OsStr;
+    use std::path::Path;
+
+    use super::taskkill_under;
+
+    #[test]
+    fn a_system_root_that_is_not_absolute_is_not_used_for_the_tree_walk() {
+        let expected = Path::new("C:\\Windows\\System32\\taskkill.exe");
+        // A relative value would be resolved against whatever folder the
+        // daemon happens to run in, which is how a planted one would choose
+        // the program.
+        assert_eq!(taskkill_under(Some(OsStr::new("foo"))), expected);
+        assert_eq!(taskkill_under(Some(OsStr::new("..\\elsewhere"))), expected);
+        assert_eq!(taskkill_under(Some(OsStr::new(".\\Windows"))), expected);
+        assert_eq!(taskkill_under(Some(OsStr::new(""))), expected);
+        assert_eq!(taskkill_under(None), expected);
+        // An absolute one is honoured: Windows is not always on C:.
+        assert_eq!(
+            taskkill_under(Some(OsStr::new("D:\\Windows"))),
+            Path::new("D:\\Windows\\System32\\taskkill.exe")
+        );
+    }
 }

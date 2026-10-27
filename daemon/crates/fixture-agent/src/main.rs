@@ -95,14 +95,20 @@ pub fn wait_for_release() {
 /// `fixture-grandchild.pid` in the workspace the test is watching. The
 /// helper's own output goes nowhere; its point is to outlive its parent if
 /// nothing kills the tree.
+///
+/// The helper is started directly rather than through a shell, so the pid
+/// here is the leaf of the tree: a `cmd /c ping` wrapper would put one more
+/// level between the CLI and the recorded pid, and a test on that pid would
+/// prove the walk reaches a middle process rather than the end of it.
 pub fn spawn_grandchild() {
     use std::process::{Command, Stdio};
     #[cfg(windows)]
     let mut command = {
-        // A console program that runs for about a minute: long enough that
-        // the test cannot mistake its own exit for the kill.
-        let mut command = Command::new("cmd");
-        command.args(["/c", "ping", "-n", "60", "127.0.0.1"]);
+        // `ping` is in System32, which is on every PATH, and it runs for
+        // about a minute: long enough that the test cannot mistake its own
+        // exit for the kill.
+        let mut command = Command::new("ping");
+        command.args(["-n", "60", "127.0.0.1"]);
         command
     };
     #[cfg(not(windows))]
