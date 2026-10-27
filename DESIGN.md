@@ -68,6 +68,23 @@ spacing.
 - 12.5–13px is the working size for controls, facts, and meta; 14px for chat
   message text; 16px chat titles; 24px the New chat greeting only.
 
+## Writing
+
+- **A control is an action in sentence case**, and the sentence beside it
+  carries the consequence: "Remove it and its key", "Unregister", "Stop all
+  running chats". A noun on a button, or a consequence left to a tooltip, is
+  not a control.
+- **One noun per thing, everywhere:** chat, rule, machine, phone, project,
+  pane, preset. The same object does not get a second word for variety, and a
+  word that changes in the UI changes here too.
+- **Counts drawn from measurement are numerals; small numbers in prose are
+  words.** "3 chats are waiting" sits beside the count it came from; "a second
+  press" and "four panes" stay in words.
+- **The app says what it knows, and quotes what it does not.** A harness's or a
+  daemon's own words appear in quotes with their own spelling; an unknown state
+  stays unknown rather than becoming empty, and a guess is never written as a
+  fact.
+
 ## Layout
 
 - **Frameless window, custom titlebar (36px, `--bg-side`):** sidebar toggle,
