@@ -113,7 +113,10 @@ impl Supervisor {
     /// The MCP servers a chat starts with: the hand-written ones that ride
     /// this machine, and OpenRemote's read-a-chat server for this chat.
     /// The server reads the token from the data folder itself, so the
-    /// token never appears on a command line.
+    /// token never appears on a command line. `--port` is the port this
+    /// daemon is on now, kept as the fallback for a one-release mismatch:
+    /// the server prefers the port the daemon publishes in that same data
+    /// folder, because a restart moves it and the chat outlives us.
     pub(super) fn mcp_servers_for(&self, id: &SessionId) -> Vec<openremote_harness::McpServer> {
         let mut servers = self.mcp_servers();
         if let Some(controls) = self.controls.get() {

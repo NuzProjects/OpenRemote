@@ -95,6 +95,14 @@ async fn serve(agent: bool) -> ExitCode {
         .await
         .expect("bind loopback");
     let addr = listener.local_addr().expect("local addr");
+    // Publish the port for the read-a-chat server every chat starts: it
+    // outlives this daemon, and a restart comes back on a different port, so
+    // the value in a chat's argv goes stale. The file is owner-only and
+    // atomic, the same treatment the token beside it gets, and it is removed
+    // on a clean shutdown so a stale port is never read as a live one.
+    if let Err(e) = openremote_daemon::mcp_chat::write_port_file(&data_dir, addr.port()) {
+        eprintln!("openremote-daemon: could not publish the port: {e}");
+    }
     eprintln!(
         "openremote-daemon: token at {}",
         data_dir.join("token").display()
@@ -119,10 +127,15 @@ async fn serve(agent: bool) -> ExitCode {
         // daemon (opencode serve children have null stdin and never see
         // EOF). Bounded - a wedged child never hangs the exit.
         let app = Arc::clone(&app);
+        let dir = data_dir.clone();
         tokio::spawn(async move {
             shutdown_signal().await;
             eprintln!("openremote-daemon: stopping");
             app.supervisor.shutdown_all().await;
+            // Clean stop: the published port is no longer true, and the next
+            // start publishes its own. Left behind it would point a chat's
+            // read-a-chat server at a socket nobody holds.
+            openremote_daemon::mcp_chat::remove_port_file(&dir);
             std::process::exit(0);
         });
     } else {
@@ -130,6 +143,7 @@ async fn serve(agent: bool) -> ExitCode {
         // the daemon must not outlive its owner. Same sweep for the same
         // reason - the children belong to this process, not to the shell.
         let app = Arc::clone(&app);
+        let dir = data_dir.clone();
         tokio::spawn(async move {
             use tokio::io::AsyncReadExt;
             let mut stdin = tokio::io::stdin();
@@ -142,6 +156,7 @@ async fn serve(agent: bool) -> ExitCode {
             }
             eprintln!("openremote-daemon: stdin closed, exiting");
             app.supervisor.shutdown_all().await;
+            openremote_daemon::mcp_chat::remove_port_file(&dir);
             std::process::exit(0);
         });
     }
