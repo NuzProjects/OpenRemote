@@ -8,6 +8,7 @@ import { useConsole } from './state/console.jsx'
 import './devices.css'
 import { useBack } from './use-back.js'
 import { useDialog } from './dialog-focus.js'
+import { checkMcpCommand } from './form-checks.js'
 
 const STATUS = { online: 'Online', offline: 'Offline', waiting: 'Has not checked in' }
 
@@ -32,6 +33,12 @@ export default function AddMcpServerModal({ onClose }) {
   const effectiveMachineId = machineId ?? online?.machine.id ?? null
   const machine = (machines ?? []).find((m) => m.machine.id === effectiveMachineId)?.machine ?? null
   const ready = name.trim() && detail.trim() && command.trim() && machine?.status === 'online'
+  // The command's own shape, said under the field once the person has left it:
+  // an empty field on a form nobody has typed in yet is not an error, but an
+  // emptied one is, and a dead Add button with no reason is the habit this
+  // replaces.
+  const commandProblem = checkMcpCommand(command)
+  const [commandTouched, setCommandTouched] = useState(false)
   const duplicate =
     ready &&
     (mcpServers ?? []).some(
@@ -106,11 +113,21 @@ export default function AddMcpServerModal({ onClose }) {
             className="dv-command"
             value={command}
             onChange={(e) => setCommand(e.target.value)}
+            onBlur={() => setCommandTouched(true)}
             placeholder="npx -y @scope/server"
             spellCheck={false}
             autoComplete="off"
+            aria-invalid={commandTouched && commandProblem ? 'true' : undefined}
+            aria-describedby={commandTouched && commandProblem ? 'mcp-command-problem' : undefined}
           />
         </label>
+        {/* The Add button is disabled on an empty command; this is the reason,
+            under the field, once the person has been in it. */}
+        {commandTouched && commandProblem && (
+          <p className="pn-note" id="mcp-command-problem" role="alert">
+            {commandProblem}
+          </p>
+        )}
         {!oneMachine && (
           <div className="dv-host">
             Machine

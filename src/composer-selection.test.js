@@ -29,6 +29,32 @@ test('Cloud keeps both when they still exist there', () => {
   assert.equal(keepLine(out.dropped), null)
 })
 
+test('an unanswered Cloud list keeps the machine: unknown is not empty', () => {
+  // Cloud's device poll lands a beat after the switch. An empty array would
+  // say "that machine is gone", which the console does not know yet, so the
+  // list is passed as null and the pick stands.
+  const out = keepSelection({ projectId: 'p1', target: 'm1' }, { mode: 'cloud', machines: null, projects: null })
+  assert.deepEqual(out.kept, { projectId: 'p1', target: 'm1' })
+  assert.deepEqual(out.dropped, [])
+  assert.equal(keepLine(out.dropped), null)
+})
+
+test('an answered Cloud list that does not carry the machine drops it', () => {
+  // The list has answered and the machine is not in it: that is a fact, not an
+  // unknown, and the line says so.
+  const out = keepSelection({ target: 'm1' }, { mode: 'cloud', machines: [], projects: null })
+  assert.equal(out.kept.target, null)
+  assert.deepEqual(out.dropped, ['machine'])
+  assert.match(keepLine(out.dropped), /machine did not come across/)
+})
+
+test('Local drops the machine even when nothing has answered', () => {
+  // A Local chat runs on this computer: there is no machine choice to keep.
+  const out = keepSelection({ target: 'm1' }, { mode: 'local', machines: null, projects: null })
+  assert.equal(out.kept.target, null)
+  assert.deepEqual(out.dropped, ['machine'])
+})
+
 test('a machine that is no longer offered is dropped and named', () => {
   const out = keepSelection({ target: 'gone' }, { mode: 'cloud', machines: CLOUD_MACHINES, projects: null })
   assert.equal(out.kept.target, null)

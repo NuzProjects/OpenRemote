@@ -177,7 +177,11 @@ export default function NewChat({
       { projectId, target },
       {
         mode,
-        machines: cloudMode ? machines : [],
+        // Cloud's device list arrives on the cloud poll: until the cloud state
+        // itself has answered, the list is unknown (null), not empty, and a
+        // machine the person chose is kept rather than declared lost. Local
+        // offers no machine choice at all.
+        machines: cloudMode ? (cloud == null ? null : machines) : [],
         // In Cloud the project list belongs to the target and is read after
         // the switch: unknown, so the pick is kept and the row resolves.
         projects: cloudMode ? null : projects,

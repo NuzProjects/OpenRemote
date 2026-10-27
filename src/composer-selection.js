@@ -9,16 +9,20 @@
  *
  * `current` is `{ projectId, target }`; either may be null. `next` is
  * `{ mode, machines, projects }`, where `machines` is the picker's own list
- * for that mode and `projects` is the known project list, or null when the
- * list for the new target has not been read yet (an unknown list keeps the
- * pick, and the row resolves or falls back once it arrives).
+ * for that mode and `projects` the known project list - or null for either
+ * while that list has not answered yet. Null means unknown, not empty: an
+ * unanswered list keeps the pick, because a machine the person chose has not
+ * stopped existing just because the poll has not landed. An answered list that
+ * does not carry it is a different fact, and drops it.
  */
 export function keepSelection(current, next) {
   const kept = { projectId: null, target: null }
   const dropped = []
   if (current?.target) {
-    const machines = next?.machines ?? []
-    if (next?.mode === 'cloud' && machines.some((m) => m.id === current.target)) {
+    const machines = next?.machines
+    // Only Cloud offers a machine choice; Local runs the chat here, so a
+    // target never survives the trip back whatever the list says.
+    if (next?.mode === 'cloud' && (machines == null || machines.some((m) => m.id === current.target))) {
       kept.target = current.target
     } else {
       dropped.push('machine')

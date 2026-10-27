@@ -10,6 +10,7 @@ import { X } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
 import { canPickFolder, pickFile, pickFolder } from './pick-folder.js'
 import { CLAUDE_PART_LABEL, POWER_LABEL, RUNTIME_LABEL, entrySource, installFailedNote, sourceRequest } from './plugins.js'
+import { checkSource } from './form-checks.js'
 import { useDialog } from './dialog-focus.js'
 import './devices.css'
 import './plugins.css'
@@ -24,6 +25,11 @@ export default function InstallPluginModal({ onClose, entry = null }) {
   const { stagePlugin, installStagedPlugin, cancelStagedPlugin } = useConsole()
   const [kind, setKind] = useState('folder')
   const [value, setValue] = useState('')
+  // The source's own shape, said under the field once the person has left it:
+  // a link is not a folder, a bare word is neither a repo nor an archive. The
+  // button refuses the same shapes, so the field and the button agree.
+  const sourceProblem = checkSource(kind, value)
+  const [sourceTouched, setSourceTouched] = useState(false)
   const [busy, setBusy] = useState(Boolean(entry))
   const [staged, setStaged] = useState(null)
   const [needsCommand, setNeedsCommand] = useState(null)
@@ -298,12 +304,17 @@ export default function InstallPluginModal({ onClose, entry = null }) {
                   className="dv-command"
                   value={value}
                   onChange={(e) => setValue(e.target.value)}
+                  onBlur={() => setSourceTouched(true)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter') read(sourceRequest(kind, value))
+                    // Enter is the button beside the field: it obeys the same
+                    // shape check, or the sentence under the field is a lie.
+                    if (e.key === 'Enter' && !sourceProblem) read(sourceRequest(kind, value))
                   }}
                   placeholder={KINDS.find((k) => k.id === kind).placeholder}
                   spellCheck={false}
                   autoComplete="off"
+                  aria-invalid={sourceTouched && sourceProblem ? 'true' : undefined}
+                  aria-describedby={sourceTouched && sourceProblem ? 'pg-source-problem' : undefined}
                 />
                 {canPickFolder && kind !== 'git' && (
                   <button type="button" className="pn-btn" onClick={browse}>
@@ -312,12 +323,23 @@ export default function InstallPluginModal({ onClose, entry = null }) {
                 )}
               </span>
             </label>
+            {/* A shape the console can judge on its own, said once the person
+                has left the field: the daemon still decides whether the thing
+                exists, so only a shape that certainly cannot work is refused. */}
+            {sourceTouched && sourceProblem && (
+              <p className="pn-note" id="pg-source-problem" role="alert">
+                {sourceProblem}
+              </p>
+            )}
             {error && <p className="pn-error">{error}</p>}
             <button
               type="button"
               className="dv-act dv-connect"
-              disabled={!sourceRequest(kind, value) || busy}
-              onClick={() => read(sourceRequest(kind, value))}
+              disabled={!sourceRequest(kind, value) || Boolean(sourceProblem) || busy}
+              onClick={() => {
+                if (sourceProblem) return
+                read(sourceRequest(kind, value))
+              }}
             >
               {busy ? 'Reading…' : 'Read the plugin'}
             </button>
