@@ -33,6 +33,23 @@ test('a chat on another device is reachable only through a machine that is onlin
   assert.equal(signedIn({ state: 'offline' }), true, 'offline is still signed in')
 })
 
+test('an unanswered device list is unknown, not evidence that a device left', () => {
+  // The list is [] before the first read lands, and the daemon answers [] while
+  // its relay link is still coming up: both are silence, not an answer.
+  assert.equal(chatAccess({ executor: 'dev-box' }, [], me, { state: 'connecting' }), 'unknown')
+  assert.equal(chatAccess({ executor: 'dev-box' }, [], me, { state: 'online' }), 'unknown')
+  assert.equal(
+    chatAccess({ executor: 'dev-box' }, null, me, online),
+    'unknown',
+    'a list that has not arrived is the same as an empty one',
+  )
+  // A daemon that answers always includes itself, so an answered list is never
+  // empty; a populated list missing the device is the one thing that means gone.
+  assert.equal(chatAccess({ executor: 'dev-gone' }, devices, me, online), 'gone')
+  // A list that is not an array is daemon damage, and reads as no answer either.
+  assert.equal(chatAccess({ executor: 'dev-box' }, { devices: [] }, me, online), 'unknown')
+})
+
 test('new Cloud chats can run here or on a machine, online machines first', () => {
   const items = machinePickerItems(devices, me)
   assert.deepEqual(items.map((i) => i.name), ['This computer', 'build-box', 'mac-mini'])

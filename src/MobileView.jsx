@@ -46,9 +46,28 @@ function NoPhonesYet() {
   )
 }
 
+// The list has not answered yet, so this page cannot say whether a phone is in
+// the account. Unknown is not empty: the empty row above is a claim about the
+// account, and this one is only a statement about the read.
+function CheckingPhones() {
+  return (
+    <div className="pn-list pn-list--tight">
+      <div className="pn-row">
+        <div>
+          <div className="pn-name">Checking your Cloud…</div>
+          <div className="pn-detail">
+            Looking for phones signed in to your account. A phone paired to this
+            computer is listed above either way.
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function MobileView({ onOpenChat }) {
   const privacy = usePrivacyMode()
-  const { devices, thisDevice, cloud } = useConsole()
+  const { devices, devicesAnswered, thisDevice, cloud } = useConsole()
   const [openId, setOpenId] = useState(null)
   const inCloud = signedIn(cloud)
   const phones = (devices ?? []).filter(isPhone)
@@ -60,9 +79,11 @@ export default function MobileView({ onOpenChat }) {
         <div>
           <h1 className="dv-title">Mobile</h1>
           <p className="dv-meta">
-            {inCloud
-              ? `${phones.length} ${phones.length === 1 ? 'phone' : 'phones'} in your Cloud`
-              : 'OpenRemote on your phone'}
+            {!inCloud
+              ? 'OpenRemote on your phone'
+              : devicesAnswered
+                ? `${phones.length} ${phones.length === 1 ? 'phone' : 'phones'} in your Cloud`
+                : 'Checking your Cloud…'}
           </p>
         </div>
       </header>
@@ -73,6 +94,8 @@ export default function MobileView({ onOpenChat }) {
         <div className="pn-list pn-list--tight">
           <CloudStateRow one="phone" />
         </div>
+      ) : !devicesAnswered ? (
+        <CheckingPhones />
       ) : phones.length === 0 ? (
         <NoPhonesYet />
       ) : (

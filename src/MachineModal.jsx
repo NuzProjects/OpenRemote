@@ -2,8 +2,10 @@
 // (from this computer's copies, so they show even while it's offline),
 // and, for a machine that's online, its harnesses - installed and signed
 // in remotely, each by its own installer and its own login. Removing a
-// device takes it out of the Cloud; it deletes the synced chats it kept,
-// never its Local ones.
+// device takes it out of the Cloud: the chats it ran stay on it until they
+// are deleted there, and its Local chats stay. Leaving Cloud from this
+// computer is the one that deletes anything now - the synced copies held
+// here - and the confirm says how many.
 
 import { useEffect, useRef, useState } from 'react'
 import { Trash, X } from '@phosphor-icons/react'
@@ -50,6 +52,11 @@ export default function MachineModal({ device, onOpenChat, onClose }) {
   // A phone has no harnesses to show or install.
   const reachable = !isPhone(device) && (isMe || (device.online && device.kind === 'machine'))
   const chats = (sessions ?? []).filter((s) => s.executor === device.id)
+  // Every synced session this console holds a copy of: what leaving Cloud
+  // deletes here, and what the counts below are about. A copy of a chat that
+  // runs elsewhere is deleted along with the ones that run here.
+  const syncedCopies = (sessions ?? []).filter((s) => s.executor).length
+  const chatCount = (n) => `${n} synced ${n === 1 ? 'chat' : 'chats'}`
 
   // The device's own machine view: this computer's from the poll, a
   // machine's over the mesh.
@@ -261,7 +268,7 @@ export default function MachineModal({ device, onOpenChat, onClose }) {
               title={
                 isMe
                   ? `Take ${selfLabel(device).toLowerCase()} out of your Cloud`
-                  : 'Take it out of your Cloud - it deletes the synced chats it kept, never its Local ones'
+                  : 'Take it out of your Cloud. The chats it ran stay on it, and its Local chats stay.'
               }
             >
               <Trash size={14} />
@@ -272,10 +279,12 @@ export default function MachineModal({ device, onOpenChat, onClose }) {
         {confirmRemove && (
           <p className="dv-modal-hint">
             {isMe && isPhone(device)
-              ? 'This phone leaves your Cloud and deletes its copies of synced chats.'
+              ? `This phone leaves your Cloud and deletes its ${chatCount(syncedCopies)} here. Its Local chats stay.`
               : isMe
-              ? 'This computer leaves your Cloud and deletes its copies of synced chats. Its Local chats stay.'
-              : <><span className="pv">{device.name}</span> leaves your Cloud and deletes its copies of synced chats the next time it connects. Its Local chats stay.</>}
+                ? `This computer leaves your Cloud and deletes its ${chatCount(syncedCopies)} here. Its Local chats stay.`
+                : chats.length === 0
+                  ? <><span className="pv">{device.name}</span> leaves your Cloud. Its copies of synced chats stay on it until they are deleted there. Its Local chats stay.</>
+                  : <><span className="pv">{device.name}</span> leaves your Cloud. Its {chatCount(chats.length)} stay on it until they are deleted there, and they stay listed here. Its Local chats stay.</>}
           </p>
         )}
       </div>

@@ -90,6 +90,11 @@ export function ConsoleProvider({ children }) {
   const [mcpServersAnswered, setMcpServersAnswered] = useState(false)
   const [automationsAnswered, setAutomationsAnswered] = useState(false)
   const [projectsAnswered, setProjectsAnswered] = useState(false)
+  // The account's devices are the same kind of list, and the one this console
+  // must not guess at: an unanswered list is empty, and an empty list has been
+  // read as "your phone never joined" and as "that machine left your Cloud".
+  // Unknown is not empty; only an answer may say there are none.
+  const [devicesAnswered, setDevicesAnswered] = useState(false)
   // A daemon the console has not heard from yet: whatever list is left on
   // screen belongs to the previous one, so the flags go back to loading.
   const resetAnswered = useCallback(() => {
@@ -98,6 +103,7 @@ export function ConsoleProvider({ children }) {
     setMcpServersAnswered(false)
     setAutomationsAnswered(false)
     setProjectsAnswered(false)
+    setDevicesAnswered(false)
   }, [])
   const [chats, setChats] = useState({})
   const [modelsByHarness, setModelsByHarness] = useState({})
@@ -384,7 +390,10 @@ export function ConsoleProvider({ children }) {
       }
       if (caps.status === 'fulfilled') setCapabilities(caps.value ?? null)
       if (cloudView.status === 'fulfilled') setCloud(cloudView.value)
-      if (deviceList.status === 'fulfilled') setDevices(deviceList.value?.devices ?? [])
+      if (deviceList.status === 'fulfilled') {
+        setDevices(deviceList.value?.devices ?? [])
+        setDevicesAnswered(true)
+      }
       if (list.status === 'fulfilled') {
         setSessions(list.value ?? [])
         setSessionsAnswered(true)
@@ -442,7 +451,10 @@ export function ConsoleProvider({ children }) {
         // A beat from the daemon this console has left decides nothing.
         if (!stillCurrent(api)) return null
         if (cloudView.status === 'fulfilled') setCloud(cloudView.value)
-        if (deviceList.status === 'fulfilled') setDevices(deviceList.value?.devices ?? [])
+        if (deviceList.status === 'fulfilled') {
+          setDevices(deviceList.value?.devices ?? [])
+          setDevicesAnswered(true)
+        }
         if (sessionList.status === 'fulfilled') {
         setSessions(sessionList.value ?? [])
         setSessionsAnswered(true)
@@ -792,7 +804,10 @@ export function ConsoleProvider({ children }) {
     const [view, list] = await Promise.allSettled([api.cloud(), api.cloudDevices()])
     if (!stillCurrent(api)) return
     if (view.status === 'fulfilled') setCloud(view.value)
-    if (list.status === 'fulfilled') setDevices(list.value?.devices ?? [])
+    if (list.status === 'fulfilled') {
+      setDevices(list.value?.devices ?? [])
+      setDevicesAnswered(true)
+    }
   }, [api, stillCurrent])
 
   // Sign-in happens in the system browser, which the daemon opens; the
@@ -816,6 +831,9 @@ export function ConsoleProvider({ children }) {
   const signOutCloud = useCallback(async () => {
     setCloud(await api.cloudSignOut())
     setDevices([])
+    // The devices list is not "empty" after a sign-out: it is unknown again,
+    // which is the same thing it was before the first answer arrived.
+    setDevicesAnswered(false)
   }, [api])
 
   const setDeviceKind = useCallback(
@@ -1372,6 +1390,7 @@ export function ConsoleProvider({ children }) {
       mcpServersAnswered,
       automationsAnswered,
       projectsAnswered,
+      devicesAnswered,
       chats,
       watchChats,
       connect,
@@ -1461,6 +1480,7 @@ export function ConsoleProvider({ children }) {
       mcpServersAnswered,
       automationsAnswered,
       projectsAnswered,
+      devicesAnswered,
       chats,
       watchChats,
       connect,

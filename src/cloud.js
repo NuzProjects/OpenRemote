@@ -60,13 +60,24 @@ export function sessionsForMode(sessions, mode, thisDevice) {
  * - 'offline': its device is offline (the copy stays readable);
  * - 'not-machine': it runs on a desktop that isn't a machine;
  * - 'signed-out': this computer isn't in Cloud, so it can't reach it;
- * - 'gone': its device left the account.
+ * - 'unknown': the account is signed in but the device list has not answered,
+ *   so this console cannot say whether the device is there;
+ * - 'gone': the list answered, and the device is not in it.
+ *
+ * Unknown is not empty. An unanswered devices list is `[]`, and a signed-in
+ * daemon's answered list always holds at least the daemon itself, so an empty
+ * list is evidence of nothing: the daemon answers `devices: []` while its relay
+ * link is still coming up, and the console holds `[]` until the first read
+ * lands. Reading that as "gone" told a person their machine had left the
+ * account every time the app started or the relay blinked. Only a list with an
+ * answer in it can say a device is missing.
  */
 export function chatAccess(session, devices, thisDevice, cloud) {
   if (!session?.executor || session.executor === thisDevice) return 'here'
   if (!signedIn(cloud)) return 'signed-out'
-  const device = (devices ?? []).find((d) => d.id === session.executor)
-  if (!device) return 'gone'
+  const rows = list(devices)
+  const device = rows.find((d) => d.id === session.executor)
+  if (!device) return rows.length === 0 ? 'unknown' : 'gone'
   if (!device.online) return 'offline'
   if (device.kind !== 'machine') return 'not-machine'
   return 'remote'

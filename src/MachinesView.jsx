@@ -26,7 +26,7 @@ function detail(device) {
 
 export default function MachinesView({ onOpenChat, openDevice = null }) {
   const privacy = usePrivacyMode()
-  const { devices, thisDevice, setDeviceKind } = useConsole()
+  const { devices, devicesAnswered, thisDevice, cloud, setDeviceKind } = useConsole()
   const [adding, setAdding] = useState(false)
   const [openId, setOpenId] = useState(null)
   // The command palette's machine row lands here with that machine open.
@@ -40,7 +40,12 @@ export default function MachinesView({ onOpenChat, openDevice = null }) {
   const list = asList(devices).sort(
     (a, b) => Number(b.id === thisDevice) - Number(a.id === thisDevice) || text(a.name).localeCompare(text(b.name)),
   )
-  const me = list.find((d) => d.id === thisDevice) ?? null
+  // This device's own row. The account view answers even while the device list
+  // has not, and it carries the same id, name, kind and platform, so the self
+  // row is not withheld from a person just because the list is still coming.
+  // Unknown is not empty: an unanswered list is not an account with no devices,
+  // and it must not hide the way to enrol this computer.
+  const me = list.find((d) => d.id === thisDevice) ?? cloud?.device ?? null
   const onlineCount = list.filter((d) => d.online).length
   const open = list.find((d) => d.id === openId) ?? null
 
@@ -66,7 +71,9 @@ export default function MachinesView({ onOpenChat, openDevice = null }) {
       <header className="dv-head">
         <h1 className="dv-title">Machines</h1>
         <p className="dv-meta">
-          {list.length} {list.length === 1 ? 'device' : 'devices'} · {onlineCount} online
+          {devicesAnswered
+            ? `${list.length} ${list.length === 1 ? 'device' : 'devices'} · ${onlineCount} online`
+            : 'Checking your devices…'}
         </p>
       </header>
       {/* A phone runs no chats, so it is never offered as a machine. */}
