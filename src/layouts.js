@@ -46,10 +46,16 @@ const isLeaf = (node) => node?.type === 'leaf'
  *
  * A pane whose view is null is the primary, and what it shows is the console's
  * navigation rather than a leaf field, so its role comes from `primaryView` -
- * the view on screen right now. A view that is neither the current chat, the
- * New chat composer, nor one of the console's static views cannot be stored:
- * an unknown view has no role to restore, and inventing one would put the wrong
- * thing in a pane on the way back.
+ * the view on screen right now. WHICH leaf that is gets recorded (`primary:
+ * true`), because the primary is not always the first pane in reading order:
+ * "Split left" and "Split up" put a pane in front of it, and a shape that
+ * assumed reading order would come back with every role shifted by one.
+ *
+ * A view that is neither the current chat, the New chat composer, nor one of
+ * the console's static views cannot be stored: an unknown view has no role to
+ * restore. A static page off the primary cannot be stored either - the shell
+ * renders only the primary, New chat and chats in a pane, so saving a page in
+ * a side pane would save a window that cannot come back as it was.
  */
 export function shapeOf(layout, { primaryView = null, isChat = () => false } = {}) {
   if (!layout?.root) return { ok: false, reason: 'no-layout' }
@@ -57,6 +63,7 @@ export function shapeOf(layout, { primaryView = null, isChat = () => false } = {
   if (panes < MIN_PANES) return { ok: false, reason: 'too-few-panes' }
   if (panes > MAX_PANES) return { ok: false, reason: 'too-many-panes' }
   let refusal = null
+  let primaries = 0
   const roleFor = (view) => {
     if (isChat(view)) return 'chat'
     if (ROLES.includes(view)) return view
@@ -64,13 +71,19 @@ export function shapeOf(layout, { primaryView = null, isChat = () => false } = {
   }
   const walk = (node) => {
     if (isLeaf(node)) {
-      const view = node.view === null ? primaryView : node.view
+      const primary = node.view === null
+      if (primary) primaries += 1
+      const view = primary ? primaryView : node.view
       const role = roleFor(view)
       if (role === null) {
         refusal ??= 'unknown-view'
         return null
       }
-      return { type: 'leaf', role }
+      if (!primary && role !== 'chat' && role !== 'new') {
+        refusal ??= 'static-in-pane'
+        return null
+      }
+      return { type: 'leaf', role, ...(primary ? { primary: true } : {}) }
     }
     if (!isSplit(node)) {
       refusal ??= 'bad-tree'
@@ -82,6 +95,7 @@ export function shapeOf(layout, { primaryView = null, isChat = () => false } = {
   }
   const tree = walk(layout.root)
   if (refusal || tree === null) return { ok: false, reason: refusal ?? 'bad-tree' }
+  if (primaries !== 1) return { ok: false, reason: 'primary' }
   return { ok: true, panes, tree }
 }
 
@@ -93,9 +107,16 @@ export function shapeOf(layout, { primaryView = null, isChat = () => false } = {
  * of those are refused rather than repaired into something the user never saw.
  * Sizes are scaled to sum to one so a hand-edited or hand-rolled file cannot
  * leave a pane with no width.
+ *
+ * The stored `version` is read, not ignored: a shape this build does not know
+ * is set aside even when its structure happens to validate, because "the fields
+ * line up" is not the same promise as "the meaning is unchanged". A shape
+ * written before the field existed has no version and is set aside the same
+ * way. Exactly one leaf must be the primary.
  */
 export function validateShape(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, reason: 'not-a-shape' }
+  if (raw.version !== LAYOUT_VERSION) return { ok: false, reason: 'version' }
   const name = String(raw.name ?? '').trim()
   if (!name) return { ok: false, reason: 'no-name' }
   const panes = raw.panes
@@ -103,6 +124,7 @@ export function validateShape(raw) {
     return { ok: false, reason: 'pane-count' }
   }
   let leafCount = 0
+  let primaries = 0
   let refusal = null
   const walk = (node) => {
     if (isLeaf(node)) {
@@ -110,8 +132,10 @@ export function validateShape(raw) {
         refusal ??= 'unknown-role'
         return null
       }
+      const primary = node.primary === true
+      if (primary) primaries += 1
       leafCount += 1
-      return { type: 'leaf', role: node.role }
+      return { type: 'leaf', role: node.role, ...(primary ? { primary: true } : {}) }
     }
     if (!isSplit(node)) {
       refusal ??= 'bad-tree'
@@ -139,6 +163,7 @@ export function validateShape(raw) {
   const tree = walk(raw.tree)
   if (refusal || tree === null) return { ok: false, reason: refusal ?? 'bad-tree' }
   if (leafCount !== panes) return { ok: false, reason: 'pane-count' }
+  if (primaries !== 1) return { ok: false, reason: 'primary' }
   return {
     ok: true,
     shape: {
@@ -203,12 +228,20 @@ export function withoutLayout(list, id) {
 /**
  * The window a saved shape becomes.
  *
- * The first pane in reading order is the primary, so it keeps the node's null
- * view and its content comes from the navigation the caller performs with the
- * returned `primaryRole`. Every other pane takes its role: "chat" is the chat
- * current now (the caller passes it), "new" is the New chat composer, and a
- * static role is that view. With no chat current, a chat pane opens the New
- * chat composer - a pane is never left blank.
+ * The leaf the shape marks as primary keeps the null view, because the console's
+ * navigation owns that pane rather than a leaf field, and its content comes from
+ * the caller navigating to the returned `primaryRole`. It is placed where the
+ * shape says it was, not where reading order puts it: "Split left" and "Split
+ * up" leave a pane in front of the primary, and assuming the first leaf would
+ * hand every role to the wrong pane.
+ *
+ * Every other pane takes its role: "chat" is the chat current now (the caller
+ * passes it), "new" is the New chat composer. A static page off the primary
+ * opens on New chat instead: the shell renders only the primary, New chat and
+ * chats in a pane, so a page there would draw "That chat is no longer in this
+ * workspace." rather than itself, and a pane must not be handed a page it cannot
+ * show. With no chat current, a chat pane opens the New chat composer too - a
+ * pane is never left blank.
  *
  * A window that cannot hold the shape's panes is refused before anything is
  * built, so a phone never half-applies a four-pane layout.
@@ -225,6 +258,9 @@ export function restoreShape(shape, { currentChat = null, capacity = MAX_PANES }
     if (role === 'chat') return currentChat ?? 'new'
     return role
   }
+  // Only the primary can show a static page; everywhere else the safe answer is
+  // the composer, which every pane can render.
+  const viewForPane = (role) => (role === 'chat' || role === 'new' ? viewFor(role) : 'new')
   let seq = 0
   const build = (node) => {
     if (isLeaf(node)) {
@@ -237,22 +273,24 @@ export function restoreShape(shape, { currentChat = null, capacity = MAX_PANES }
   }
   const root = build(saved.tree)
   const ordered = leaves(root)
-  // The first leaf is the primary: navigation owns its view. Every other leaf
-  // takes its role's view, and a chat role is the chat current now.
-  const roles = []
+  const savedLeaves = []
   const collect = (node) => {
-    if (isLeaf(node)) roles.push(node.role)
+    if (isLeaf(node)) savedLeaves.push({ role: node.role, primary: node.primary === true })
     else node.children.forEach(collect)
   }
   collect(saved.tree)
+  const primaryAt = savedLeaves.findIndex((leaf) => leaf.primary)
+  // validateShape guarantees exactly one primary, so this is never -1; the guard
+  // is here so a future change to validation cannot index a missing leaf.
+  if (primaryAt < 0) return { ok: false, refusal: { code: 'primary' } }
   ordered.forEach((leaf, index) => {
-    if (index === 0) return
-    leaf.view = viewFor(roles[index])
+    if (index === primaryAt) return
+    leaf.view = viewForPane(savedLeaves[index].role)
   })
   return {
     ok: true,
-    primaryRole: viewFor(roles[0]),
-    layout: { root, focus: ordered[0].id, seq },
+    primaryRole: viewFor(savedLeaves[primaryAt].role),
+    layout: { root, focus: ordered[primaryAt].id, seq },
   }
 }
 
