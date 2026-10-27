@@ -273,3 +273,48 @@ html[data-reduce-motion] .kb-sheet {
 .kb-set .kb-group-label {
   padding-left: 0;
 }
+
+/* Stop everything's question. It is the one block in the palette that is
+   read rather than searched, so it sits apart from the rows: the number
+   first, the names under it, both quiet - the alarm belongs in what the
+   answer does, not in how it is drawn. */
+.kb-stop {
+  margin: 0 0 4px;
+  padding: 8px 10px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.kb-stop-question {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-1);
+  line-height: 1.4;
+}
+
+.kb-stop-names {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 6px 0 0;
+}
+
+.kb-stop-name {
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kb-stop-more {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.kb-stop-aside {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.45;
+}

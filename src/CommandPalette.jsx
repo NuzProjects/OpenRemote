@@ -21,6 +21,7 @@ import {
   Lightning,
   MagnifyingGlass,
   PuzzlePiece,
+  StopCircle,
   UserCircle,
 } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
@@ -29,6 +30,16 @@ import { ACTIONS, comboFromEvent, comboLabel, rankMatches } from './shortcuts.js
 import { activeSessions } from './archive.js'
 import { hasFileChanges } from './changes.js'
 import { openChanges } from './ChangesModal.jsx'
+import {
+  elsewhereAside,
+  namedChats,
+  runningLabel,
+  stopQuestion,
+  stopSummary,
+  stopTargets,
+  stoppingLine,
+} from './stop-everything.js'
+import { sessionGone } from './api/daemon.js'
 import { harnessName } from './harness-names.js'
 import { HarnessMark } from './brand-marks.jsx'
 import { isPhone } from './cloud.js'
@@ -57,11 +68,17 @@ const SECTION_CAP = 8
 const projectLabel = (p) => p.folders[0].split(/[\\/]/).filter(Boolean).pop()
 
 export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onOpenProject, onOpenMachine }) {
-  const { sessions, chats, archived, projects, devices, thisDevice } = useConsole()
+  const { sessions, chats, archived, projects, devices, thisDevice, stopChat } = useConsole()
   const kb = useKeyboard()
   const [query, setQuery] = useState('')
   const [page, setPage] = useState(null)
   const [cursor, setCursor] = useState(0)
+  // Stop everything: the plan the question was built from (so the numbers
+  // in it cannot move under the user between the ask and the press), the
+  // phase, and the sentence that settles it.
+  const [stopPlan, setStopPlan] = useState(null)
+  const [stopPhase, setStopPhase] = useState(null)
+  const [stopResult, setStopResult] = useState(null)
   const listRef = useRef(null)
   const inputRef = useRef(null)
 
@@ -131,10 +148,49 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
         veiled: true,
         run: { machine: d.id },
       }))
-    return { actions: [...review, ...pages, ...actions], chats: chatRows, projectRows, machines }
+    // The one command that ends every running chat. Offered only while
+    // something is running: a command that would end nothing is noise in
+    // a list that is searched by name.
+    const targets = stopTargets(sessions ?? [], { thisDevice })
+    const stopRow = targets.running.length
+      ? [
+          {
+            key: 'action:stop-all',
+            section: 'Actions',
+            name: 'Stop all running chats',
+            sub: runningLabel(targets.running.length),
+            icon: <StopCircle size={15} />,
+            run: { stopAll: true },
+          },
+        ]
+      : []
+    return { actions: [...stopRow, ...review, ...pages, ...actions], chats: chatRows, projectRows, machines }
   }, [kb, sessions, chats, archived, projects, devices, thisDevice])
 
   const sections = useMemo(() => {
+    if (page === 'stop-all') {
+      // The question lives above this list; these are the two answers. The
+      // safe one comes first, so the Enter that muscle memory sends keeps
+      // the work rather than ending it.
+      if (stopPhase === 'stopping') return []
+      if (stopPhase === 'done') {
+        return [
+          {
+            label: 'Stop everything',
+            items: [{ key: 'stop:close', section: 'Stop everything', name: 'Close', run: { stopClose: true } }],
+          },
+        ]
+      }
+      return [
+        {
+          label: 'Stop everything',
+          items: [
+            { key: 'stop:keep', section: 'Stop everything', name: 'Keep them running', run: { stopKeep: true } },
+            { key: 'stop:stop', section: 'Stop everything', name: 'Stop them', run: { stopGo: true } },
+          ],
+        },
+      ]
+    }
     if (page) {
       const src = kb.source(page) ?? { items: [] }
       const rows = src.items.map((item) => ({
@@ -174,7 +230,7 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
       label,
       items: ranked.filter((r) => r.section === label).slice(0, SECTION_CAP),
     })).filter((s) => s.items.length)
-  }, [page, query, everything, recentChatIds, kb])
+  }, [page, query, everything, recentChatIds, kb, stopPhase])
 
   const flat = sections.flatMap((s) => s.items)
 
@@ -183,9 +239,62 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
     listRef.current?.querySelector('.kb-item.cursor')?.scrollIntoView({ block: 'nearest' })
   }, [cursor])
 
+  // The stop itself, per chat, through the action a single chat already
+  // uses (`stopChat` calls the daemon's own stop route; no new route, no
+  // mesh call). A chat that is already gone is skipped rather than failed:
+  // the daemon answers 404 for a session it no longer has, which means the
+  // work this command was about has ended anyway.
+  const runStopAll = async () => {
+    const plan = stopPlan
+    if (!plan) return
+    setStopPhase('stopping')
+    let stopped = 0
+    let gone = 0
+    let failed = 0
+    for (const chat of plan.stoppable) {
+      try {
+        await stopChat(chat.id)
+        stopped += 1
+      } catch (err) {
+        if (sessionGone(err)) gone += 1
+        else failed += 1
+      }
+    }
+    setStopResult(stopSummary({ stopped, elsewhere: plan.elsewhere.length, gone, failed }))
+    setStopPhase('done')
+  }
+
   const choose = (row) => {
     if (!row) return
     const r = row.run
+    if (r.stopAll) {
+      // The question is asked inside the palette, on the numbers the list
+      // shows: closing to ask elsewhere would lose the count and the names
+      // the user is deciding on. With nothing stoppable, the command skips
+      // the question and says what kept running.
+      const targets = stopTargets(sessions ?? [], { thisDevice })
+      setStopPlan(targets)
+      setStopResult(
+        targets.stoppable.length === 0 ? stopSummary({ stopped: 0, elsewhere: targets.elsewhere.length }) : null,
+      )
+      setStopPhase(targets.stoppable.length === 0 ? 'done' : 'asking')
+      setPage('stop-all')
+      setQuery('')
+      inputRef.current?.focus()
+      return
+    }
+    if (r.stopKeep) {
+      back()
+      return
+    }
+    if (r.stopGo) {
+      runStopAll()
+      return
+    }
+    if (r.stopClose) {
+      onClose()
+      return
+    }
     if (r.page) {
       setPage(r.page)
       setQuery('')
@@ -248,6 +357,7 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
   }
 
   let index = -1
+  const stopNames = stopPlan ? namedChats(stopPlan.stoppable) : null
   return (
     <div
       className="kb-backdrop"
@@ -272,6 +382,34 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
           />
         </div>
         <div className="kb-list" id="kb-list" role="listbox" ref={listRef}>
+          {page === 'stop-all' && (
+            <div className="kb-stop">
+              {stopPhase === 'asking' && stopPlan && stopNames && (
+                <>
+                  <p className="kb-stop-question">{stopQuestion(stopPlan.stoppable.length)}</p>
+                  <div className="kb-stop-names">
+                    {stopNames.rows.map((row) => (
+                      <div className="kb-stop-name pv" key={row.id}>
+                        {row.name}
+                      </div>
+                    ))}
+                    {stopNames.more > 0 && <div className="kb-stop-more">and {stopNames.more} more</div>}
+                  </div>
+                  {stopPlan.elsewhere.length > 0 && (
+                    <p className="kb-stop-aside">{elsewhereAside(stopPlan.elsewhere.length)}</p>
+                  )}
+                </>
+              )}
+              {stopPhase === 'stopping' && stopPlan && (
+                <p className="kb-stop-question">{stoppingLine(stopPlan.stoppable.length)}</p>
+              )}
+              {stopPhase === 'done' && stopResult && (
+                <p className="kb-stop-question" role="status">
+                  {stopResult}
+                </p>
+              )}
+            </div>
+          )}
           {sections.map((section) => (
             <div key={section.label} className="kb-group">
               <div className="kb-group-label">{section.label}</div>
@@ -298,7 +436,7 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
               })}
             </div>
           ))}
-          {flat.length === 0 && (
+          {flat.length === 0 && page !== 'stop-all' && (
             <div className="kb-empty">
               {query.trim() ? `Nothing matches “${query.trim()}”.` : 'Nothing to show here yet.'}
             </div>
