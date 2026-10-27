@@ -360,3 +360,16 @@
     width: 100%;
   }
 }
+
+/* The same rules for the in-app switch: someone who turns motion off in
+   Settings gets it whatever the system preference says. */
+html[data-reduce-motion] .ab-backdrop,
+html[data-reduce-motion] .ab-modal,
+html[data-reduce-motion] .ab-screen {
+  animation: none;
+}
+
+html[data-reduce-motion] .ab-bar span {
+  animation: none;
+  width: 100%;
+}

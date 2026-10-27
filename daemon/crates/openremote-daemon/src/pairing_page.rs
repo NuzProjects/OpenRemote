@@ -37,7 +37,7 @@ pub const PAGE: &str = r##"<!doctype html>
     margin: 0;
     background: var(--bg);
     color: var(--text-1);
-    font: 15px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
     -webkit-text-size-adjust: 100%;
   }
   main {
@@ -55,13 +55,13 @@ pub const PAGE: &str = r##"<!doctype html>
   .mark {
     width: 26px;
     height: 26px;
-    border-radius: 8px;
+    border-radius: 7px;
     background: var(--accent);
     flex: none;
   }
   h1 {
     margin: 0;
-    font-size: 15px;
+    font-size: 16px;
     font-weight: 600;
     letter-spacing: 0.01em;
   }
@@ -74,21 +74,21 @@ pub const PAGE: &str = r##"<!doctype html>
     margin: 26px 0 0;
     padding: 18px;
     border: 1px solid var(--line);
-    border-radius: 12px;
+    border-radius: 7px;
     background: var(--panel);
   }
   .state h2 {
     margin: 0 0 6px;
-    font-size: 17px;
+    font-size: 16px;
     font-weight: 600;
   }
   .state p {
     margin: 0;
     color: var(--text-2);
-    font-size: 13.5px;
+    font-size: 14px;
   }
   .state[hidden] { display: none; }
-  .state--bad { border-color: rgba(220, 120, 90, 0.35); }
+  .state--bad { border-color: rgba(248, 113, 113, 0.35); }
   .dot {
     display: inline-block;
     width: 7px;
@@ -104,7 +104,7 @@ pub const PAGE: &str = r##"<!doctype html>
     margin: 26px 0 0;
   }
   .computer .name {
-    font-size: 21px;
+    font-size: 16px;
     font-weight: 600;
     letter-spacing: -0.01em;
   }
@@ -124,13 +124,13 @@ pub const PAGE: &str = r##"<!doctype html>
   .chips li {
     padding: 3px 9px;
     border: 1px solid var(--line);
-    border-radius: 999px;
+    border-radius: 9999px;
     font: 12px/1.4 var(--mono);
     color: var(--text-2);
   }
   h3 {
     margin: 32px 0 10px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     letter-spacing: 0.08em;
     text-transform: uppercase;
@@ -141,7 +141,7 @@ pub const PAGE: &str = r##"<!doctype html>
     padding: 0;
     list-style: none;
     border: 1px solid var(--line);
-    border-radius: 12px;
+    border-radius: 7px;
     overflow: hidden;
   }
   .chats li {
@@ -160,12 +160,12 @@ pub const PAGE: &str = r##"<!doctype html>
     white-space: nowrap;
   }
   .chats .harness {
-    font: 11px/1.4 var(--mono);
+    font: 12px/1.4 var(--mono);
     color: var(--text-3);
     flex: none;
   }
   .chats .when {
-    font: 11px/1.4 var(--mono);
+    font: 12px/1.4 var(--mono);
     color: var(--text-3);
     flex: none;
     min-width: 54px;

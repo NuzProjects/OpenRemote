@@ -170,3 +170,16 @@
 .si-stop:disabled {
   opacity: 0.5;
 }
+
+/* The relay modal's fade and pop; both motion switches show it settled. */
+@media (prefers-reduced-motion: reduce) {
+  .si-backdrop,
+  .si-modal {
+    animation: none;
+  }
+}
+
+html[data-reduce-motion] .si-backdrop,
+html[data-reduce-motion] .si-modal {
+  animation: none;
+}

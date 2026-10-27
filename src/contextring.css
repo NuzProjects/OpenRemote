@@ -96,3 +96,13 @@
   color: var(--text-3);
 }
 
+/* The hover card fades in on hover; both motion switches settle it at once. */
+@media (prefers-reduced-motion: reduce) {
+  .nc-ctx-card {
+    transition: none;
+  }
+}
+
+html[data-reduce-motion] .nc-ctx-card {
+  transition: none;
+}

@@ -119,6 +119,15 @@
   opacity: 0.45;
 }
 
+/* The pill's border and its send press settle for either switch: the system
+   preference and the in-app setting are one rule, written twice. */
+@media (prefers-reduced-motion: reduce) {
+  .pill,
+  .pill-send:not(:disabled) {
+    transition: none;
+  }
+}
+
 html[data-reduce-motion] .pill,
 html[data-reduce-motion] .pill-send:not(:disabled) {
   transition: none;
@@ -274,6 +283,13 @@ html[data-reduce-motion] .pill-send:not(:disabled) {
 
 .pt-undo:hover {
   color: var(--text-1);
+}
+
+/* A thread group's entrance settles for either switch. */
+@media (prefers-reduced-motion: reduce) {
+  .pt-group {
+    animation: none;
+  }
 }
 
 html[data-reduce-motion] .pt-group {

@@ -239,3 +239,15 @@
 .split-area.is-split .split-body .cv-composer {
   padding: 0 14px 14px;
 }
+
+/* A divider's hairline changes brightness on hover; both motion switches
+   change it at once. */
+@media (prefers-reduced-motion: reduce) {
+  .split-divider::after {
+    transition: none;
+  }
+}
+
+html[data-reduce-motion] .split-divider::after {
+  transition: none;
+}

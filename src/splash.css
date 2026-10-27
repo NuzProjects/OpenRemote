@@ -35,4 +35,15 @@
 
 @media (prefers-reduced-motion: reduce) {
   .splash-dot { animation: none; }
+  .splash { transition: none; }
+}
+
+/* The in-app switch, for someone who turned motion off in Settings: the dots
+   are simply there, and the splash leaves without a fade. */
+html[data-reduce-motion] .splash-dot {
+  animation: none;
+}
+
+html[data-reduce-motion] .splash {
+  transition: none;
 }
