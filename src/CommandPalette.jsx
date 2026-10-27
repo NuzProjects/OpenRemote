@@ -192,10 +192,11 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
     }
   }, [chats, focusedChatId])
   // Row identity across beats: the memo above runs on every token, the rows it
-  // produces are reused while its key is unchanged.
+  // produces are reused while its key is unchanged. The address is already read
+  // once above, so only the two rows this memo decided are taken from here.
   const chatActionsRef = useRef({ key: null, onScreen: '', reviewChat: null, markdownChat: null })
   if (chatActionsRef.current.key !== chatActions.key) chatActionsRef.current = chatActions
-  const { onScreen, reviewChat, markdownChat } = chatActionsRef.current
+  const { reviewChat, markdownChat } = chatActionsRef.current
 
   const everything = useMemo(() => {
     const keys = (id) => comboLabel(kb.bindings[id], isMac)
