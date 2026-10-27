@@ -6,6 +6,7 @@
 // instead of a hang.
 
 import { seg } from '../shape.js'
+import { TOO_LONG_SENTENCE } from '../send-bound.js'
 
 const TOKEN_KEY = 'openremote-daemon-token'
 const URL_KEY = 'openremote-daemon-url'
@@ -25,6 +26,15 @@ const CALL_TIMEOUT_MS = 10000
 // cap, still bounded: the poll's own banner (three missed 10 s beats)
 // says "not answering" long before this fires.
 const BOOT_TIMEOUT_MS = 120000
+
+// Calls that leave this machine: a cloud sign-out, a device kind change or
+// removal (the registry, over the network), and an enrolment mint. They are
+// not the installer, but they are network-shaped and can outlive the ten
+// seconds a local read deserves. Bounded, never unlimited: a leave that lands
+// after the client has given up reads as a failure, and the retry then
+// answers 404, so a person believes they are still signed in when they are
+// not.
+const CLOUD_TIMEOUT_MS = 60000
 
 // The resume cursor of an SSE stream: the highest event seq the client
 // already holds. Only a non-negative integer counts (a digit string too,
@@ -263,6 +273,14 @@ export class DaemonApi {
       json = null
     }
     if (!response.ok) {
+      // A body the daemon refused arrives with nothing to read, so name the
+      // limit instead of the code: "HTTP 413" tells a person nothing about
+      // what to cut.
+      if (response.status === 413) {
+        const tooLong = new Error(TOO_LONG_SENTENCE)
+        tooLong.status = 413
+        throw tooLong
+      }
       const error = new Error(json?.error ?? `HTTP ${response.status}`)
       error.status = response.status
       throw error
@@ -359,7 +377,7 @@ export class DaemonApi {
   }
 
   cloudSignOut() {
-    return this.call('POST', '/cloud/signout', { request_id: newRequestId() })
+    return this.call('POST', '/cloud/signout', { request_id: newRequestId() }, { timeoutMs: CLOUD_TIMEOUT_MS })
   }
 
   cloudDevices() {
@@ -367,15 +385,15 @@ export class DaemonApi {
   }
 
   setDeviceKind(id, kind) {
-    return this.call('POST', `/cloud/devices/${seg(id)}/kind`, { request_id: newRequestId(), kind })
+    return this.call('POST', `/cloud/devices/${seg(id)}/kind`, { request_id: newRequestId(), kind }, { timeoutMs: CLOUD_TIMEOUT_MS })
   }
 
   removeDevice(id) {
-    return this.call('DELETE', `/cloud/devices/${seg(id)}?request_id=${encodeURIComponent(newRequestId())}`)
+    return this.call('DELETE', `/cloud/devices/${seg(id)}?request_id=${encodeURIComponent(newRequestId())}`, null, { timeoutMs: CLOUD_TIMEOUT_MS })
   }
 
   createEnrollment() {
-    return this.call('POST', '/cloud/enrollments', { request_id: newRequestId() })
+    return this.call('POST', '/cloud/enrollments', { request_id: newRequestId() }, { timeoutMs: CLOUD_TIMEOUT_MS })
   }
 
   /** The subfolders of `path` (default: home) on the device this aims at.
@@ -877,6 +895,9 @@ export class DaemonApi {
           const parsed = parseSseFrame(text)
           if (!parsed) return
           if (parsed.event) {
+            // A read frame ends the run of skips: the next unreadable frame
+            // is a new hole and gets its own note.
+            skipped = 0
             // The event's own seq when it carries a sane one; the frame's
             // id line otherwise. Either way the cursor only moves
             // forward to a real position.
@@ -893,6 +914,10 @@ export class DaemonApi {
             if (skipped === 1 || skipped === 10) {
               console.error(`OpenRemote: skipped ${skipped} unreadable event frames in session ${id}`)
             }
+            // The transcript hears about the hole once per run: the reducer
+            // turns this into one note, so the gap is visible instead of
+            // silent.
+            if (skipped === 1) onEvent({ type: 'stream_gap' })
             cursor = parsed.seq ?? cursor
           }
           // An id with no data behind it is not a frame: the cursor stays.

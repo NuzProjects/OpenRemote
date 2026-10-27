@@ -434,6 +434,19 @@ export function foldEvent(chat, event) {
       if (chat.pendingDecisionId === payload.decision_id) chat.pendingDecisionId = null
       break
     }
+    case 'stream_gap': {
+      // The transport skipped a frame it could not read and moved its cursor
+      // past it, so this chat's history has a hole here. One note per run of
+      // skips, in the shape a daemon note takes, because a gap the transcript
+      // cannot show is a gap the person will not know about.
+      chat.timeline.push({
+        kind: 'message',
+        id: `gap-${chat.timeline.length}`,
+        role: 'note',
+        text: 'One update from the daemon could not be read, so this chat is missing whatever it said.',
+      })
+      break
+    }
     case 'daemon.error': {
       chat.timeline.push({
         kind: 'message',

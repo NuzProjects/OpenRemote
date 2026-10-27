@@ -649,3 +649,20 @@ test('a beat still wins over a fold when the two disagree', () => {
   assert.equal(merged.status, 'running', 'the beat reasserts what it says')
   assert.equal(merged.running, true)
 })
+
+test('a stream gap leaves one note where the history is incomplete', () => {
+  const chat = chatFromSession(session())
+  const before = chat.timeline.length
+  foldEvent(chat, { type: 'stream_gap' })
+  assert.equal(chat.timeline.length, before + 1)
+  const note = chat.timeline[chat.timeline.length - 1]
+  assert.equal(note.role, 'note')
+  assert.match(note.text, /could not be read/)
+  // A gap carries no seq, so the fold cursor is untouched: a later replay
+  // still starts from where the read events left off.
+  assert.equal(chat.foldedSeq, null)
+  // A second hole (a later run of skips) is its own note, not a repeat of
+  // this one.
+  foldEvent(chat, { type: 'stream_gap' })
+  assert.equal(chat.timeline.filter((i) => i.text === note.text).length, 2)
+})

@@ -123,7 +123,9 @@ test('a malformed frame is skipped, not fatal: reading continues past it', async
       'id: 2\ndata: {not json\n\n' +
       'id: 3\ndata: {"seq":3,"type":"c"}\n\n',
   )
-  assert.deepEqual(seen.map((event) => event.type), ['a', 'c'])
+  // The skipped frame is one gap the transcript is told about, between the
+  // frames it could read.
+  assert.deepEqual(seen.map((event) => event.type), ['a', 'stream_gap', 'c'])
   assert.equal(cursor, 3)
   assert.equal(noted.length, 1)
 })
@@ -132,7 +134,7 @@ test('a malformed frame that ends the stream still advances the cursor past it',
   const { seen, cursor } = await collect(
     'id: 1\ndata: {"seq":1,"type":"a"}\n\nid: 2\ndata: torn\n\n',
   )
-  assert.deepEqual(seen.map((event) => event.type), ['a'])
+  assert.deepEqual(seen.map((event) => event.type), ['a', 'stream_gap'])
   // Resuming from 2 starts after the bad frame, never inside it again.
   assert.equal(cursor, 2)
 })
@@ -177,7 +179,9 @@ test('a run of malformed frames is noted on the first and again at the tenth', a
   let frames = ''
   for (let seq = 1; seq <= 10; seq += 1) frames += `id: ${seq}\ndata: {oops\n\n`
   const { seen, noted } = await collect(frames)
-  assert.deepEqual(seen, [])
+  // The transcript hears about the hole once per run of skips, not once per
+  // frame: a chat with ten bad frames in a row has one gap, not ten.
+  assert.deepEqual(seen, [{ type: 'stream_gap' }])
   assert.equal(noted.length, 2)
 })
 
@@ -566,4 +570,26 @@ test('a hostile id cannot change the route a call lands on', async () => {
       '/devices/..%2Fsessions%2Fother/sessions/x',
     ],
   )
+})
+
+// ---- a body the daemon refused ----
+
+test('a 413 names the limit instead of the code', async () => {
+  const real = globalThis.fetch
+  globalThis.fetch = async () => new Response('', { status: 413, statusText: 'Payload Too Large' })
+  try {
+    const api = new DaemonApi('http://127.0.0.1:9', 'token')
+    await assert.rejects(
+      () => api.prompt('s1', 'a very long paste'),
+      (err) => {
+        assert.equal(err.status, 413)
+        assert.doesNotMatch(err.message, /^HTTP 413$/, 'the bare code is not the sentence')
+        assert.match(err.message, /too long/)
+        assert.match(err.message, /at most 2\.0 MB/)
+        return true
+      },
+    )
+  } finally {
+    globalThis.fetch = real
+  }
 })

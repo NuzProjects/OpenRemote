@@ -21,6 +21,7 @@ import { harnessName } from './harness-names.js'
 import {
   CONNECTOR_KINDS,
   RULE_EMPTY_NONE,
+  RULE_SEARCH_HINT_FROM,
   ruleCountLine,
   ruleEmptyLine,
   ruleSearchHint,
@@ -36,13 +37,7 @@ import './devices.css'
 import './automations.css'
 import './pill.css'
 import { pickable } from './harness-manager.js'
-
-const RAN = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-
-function ranLabel(rule) {
-  if (!rule.last_run) return 'never ran'
-  return `ran ${RAN.format(new Date(rule.last_run))}`
-}
+import { ranLabel } from './ran-label.js'
 
 export default function AutomationsView({ onOpenChat }) {
   const {
@@ -237,12 +232,12 @@ export default function AutomationsView({ onOpenChat }) {
         </button>
       </header>
 
-      {/* The list's one way in. A field over an empty list would be a control
-          with nothing to act on, so it appears with the first rule; its hint
-          appears only once the list is long enough that a person scans it -
-          searchHint owns the threshold. Escape clears it, then leaves it, the
-          way the sidebar's own search does. */}
-      {rules.length > 0 && (
+      {/* The list's one way in. The field and its hint arrive together, at
+          the threshold ruleSearchHint owns: below it the list fits at a
+          glance, and a field with an icon and no words would be a control
+          nobody could name. Escape clears it, then leaves it, the way the
+          sidebar's own search does. */}
+      {rules.length >= RULE_SEARCH_HINT_FROM && (
         <div className="am-toolbar">
           <label className="am-search">
             <MagnifyingGlass size={14} className="am-search-icon" />
