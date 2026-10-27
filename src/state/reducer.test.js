@@ -324,6 +324,34 @@ test('a poll merge preserves the folded transcript, its cursor, and the running 
   assert.equal(bare.thinkingTokens, 0)
 })
 
+test('a beat that says the turn ended retires what the stream left live', () => {
+  // The daemon says the session stopped, and the stream never delivered the
+  // turn's end - a lost event, a socket that died mid-turn. The partial
+  // reply is real and stays in the transcript; what cannot stay is its
+  // liveness, a breathing caret under an idle dot.
+  const chat = chatFromSession(session({ status: 'working' }))
+  foldEvent(chat, event(1, { type: 'message.delta', turn: 1, text: 'half an ans' }))
+  assert.equal(chat.timeline.at(-1).kind, 'stream')
+
+  const merged = mergeSessionIntoChat(chat, session({ status: 'idle' }))
+  assert.equal(merged.status, 'idle')
+  assert.equal(merged.timeline.at(-1).kind, 'message', 'the beat settles the live block')
+  assert.equal(merged.timeline.at(-1).text, 'half an ans', 'the partial text survives')
+  // The fold is not edited behind its back: the merge returns a new record.
+  assert.equal(chat.timeline.at(-1).kind, 'stream')
+
+  // A failure ends a turn the same way, so the same retirement applies.
+  const failed = mergeSessionIntoChat(chat, session({ status: 'failed', last_error: 'harness exited' }))
+  assert.equal(failed.timeline.at(-1).kind, 'message')
+
+  // A chat that was already idle brings no news about a turn: its timeline
+  // comes through untouched, item for item.
+  const idle = chatFromSession(session({ status: 'idle' }))
+  foldEvent(idle, event(1, { type: 'message.added', message: { id: 'm1', turn: 1, role: 'agent', text: 'done' } }))
+  const same = mergeSessionIntoChat(idle, session({ status: 'idle' }))
+  assert.deepEqual(same.timeline, idle.timeline)
+})
+
 test('vanished ids: only a chat a poll once carried and then lost counts as gone', () => {
   const chats = {
     s1: chatFromSession(session({ id: 's1' })),

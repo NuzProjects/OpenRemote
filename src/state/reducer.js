@@ -102,7 +102,7 @@ export function mergeSessionIntoChat(existing, session) {
   // `>=` on purpose: an equal stamp goes to the beat, which is the fresher
   // snapshot of the two, and the next beat settles it if they disagree.
   const beatIsNewer = (fresh.updatedAt ?? 0) >= (existing.updatedAt ?? 0)
-  return {
+  const merged = {
     ...fresh,
     title: (beatIsNewer ? fresh.title : null) ?? existing.title,
     updatedAt: Math.max(existing.updatedAt ?? 0, fresh.updatedAt ?? 0),
@@ -114,6 +114,18 @@ export function mergeSessionIntoChat(existing, session) {
     costUsd: existing.costUsd ?? 0,
     thinkingTokens: existing.thinkingTokens ?? 0,
   }
+  // A beat that says the session stopped running accounts for a turn end
+  // the stream never delivered: a lost event, a socket that died mid-turn.
+  // The partial text is real and stays in the transcript; what cannot stay
+  // is its liveness, a caret breathing under an idle dot. Only the
+  // transition counts, because a beat taken while the chat was already
+  // idle is no news about a turn.
+  if (existing.running && !merged.running) {
+    const timeline = [...existing.timeline]
+    retireLiveItems({ timeline }, null)
+    merged.timeline = timeline
+  }
+  return merged
 }
 
 /// The chats whose sessions the polled list no longer carries - a chat
