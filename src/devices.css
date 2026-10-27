@@ -673,6 +673,42 @@
   text-overflow: ellipsis;
 }
 
+/* The installer command is the daemon's own line, so the row keeps it folded
+   away for the person who would rather run it by hand. The summary is caption
+   text with no marker and no fill, and it wears the same focus ring as the
+   other controls, because a disclosure is a control. */
+.dv-install-more {
+  min-width: 0;
+}
+
+.dv-install-more > summary {
+  width: fit-content;
+  font-size: 11.5px;
+  color: var(--text-3);
+  list-style: none;
+  cursor: pointer;
+}
+
+.dv-install-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.dv-install-more > summary:hover {
+  color: var(--text-2);
+}
+
+.dv-install-more > summary:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.dv-install-why {
+  margin: 5px 0 3px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
 .dv-token {
   margin: 10px 0 0;
   font-size: 12px;

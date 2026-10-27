@@ -25,6 +25,8 @@ import SignInModal from './SignInModal.jsx'
 import PickerMenu from './PickerMenu.jsx'
 import Toggle from './Toggle.jsx'
 import { SECTIONS, SETTING_GROUPS, SETTINGS_ENTRIES, searchSettings, visibleSections } from './settings-search.js'
+import { projectName } from './projects.js'
+import { armRow, clearRow } from './row-confirm.js'
 import { useBack } from './use-back.js'
 import { useConsole } from './state/console.jsx'
 import { signedIn } from './cloud.js'
@@ -322,6 +324,15 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
   const [query, setQuery] = useState('')
   const [shortcutQuery, setShortcutQuery] = useState('')
   const [flash, setFlash] = useState(null)
+  // The project waiting on a "remove?" answer. Removing one keeps its chats
+  // and never touches the folder, but there is no undo, so the chip arms the
+  // row first. row-confirm.js owns the rule (one armed row at a time, no id,
+  // no arming) so this list and the sidebar cannot drift apart.
+  const [armedProject, setArmedProject] = useState(null)
+  // The armed project's name, for the sentence and the label that ask.
+  const armedProjectName = armedProject
+    ? projectName((projectsList ?? []).find((p) => p.id === armedProject))
+    : null
   const panelRef = useRef(null)
   const searchRef = useRef(null)
   const shortcutSearchRef = useRef(null)
@@ -843,27 +854,73 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
                   )}
                 </div>
               )}
-              <div className="pn-row" data-stg="new-tasks-projects">
+              <div
+                className="pn-row"
+                data-stg="new-tasks-projects"
+                // Focus or a click leaving the row is a decision to keep it:
+                // the armed project never survives a look away.
+                onBlur={(e) => {
+                  if (armedProject && !e.currentTarget.contains(e.relatedTarget)) {
+                    setArmedProject(clearRow())
+                  }
+                }}
+              >
                 <div>
                   <div className="pn-name">Projects</div>
                   <div className="pn-detail">
-                    {projectsList.length
-                      ? 'The folders whose chats group under their project. Removing a project keeps every chat.'
-                      : 'No projects yet. Add one from the home screen.'}
+                    {armedProject != null
+                      ? `Remove “${armedProjectName}”? Its chats move to Chats. The folder on disk is never touched.`
+                      : projectsList.length
+                        ? 'The folders whose chats group under their project. Removing a project keeps every chat.'
+                        : 'No projects yet. Add one from the home screen.'}
                   </div>
                 </div>
                 <div className="pn-actions">
-                  {projectsList.map((p) => (
-                    <button
-                      key={p.id}
-                      type="button"
-                      className="pn-btn"
-                      title={privacy ? 'Remove the project - its chats stay' : `Remove the project - its chats stay. Folder: ${p.folders[0]}`}
-                      onClick={() => removeProject(p.id)}
-                    >
-                      <span className="pv">{p.folders[0].split(/[\\/]/).filter(Boolean).pop()}</span> ✕
-                    </button>
-                  ))}
+                  {/* The trash that used to sit here removed a project on the
+                      first click, with no undo. It asks once now, through the
+                      same armed-row rules the sidebar and the panes use, so
+                      one project at a time can be waiting on an answer. */}
+                  {armedProject != null ? (
+                    <>
+                      <button
+                        type="button"
+                        className="pn-btn pn-btn--danger"
+                        autoFocus
+                        aria-label={`Remove the project ${armedProjectName}`}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Escape') {
+                            e.preventDefault()
+                            setArmedProject(clearRow())
+                          }
+                        }}
+                        onClick={() => {
+                          setArmedProject(clearRow())
+                          removeProject(armedProject)
+                        }}
+                      >
+                        Remove it
+                      </button>
+                      <button
+                        type="button"
+                        className="pn-btn"
+                        onClick={() => setArmedProject(clearRow())}
+                      >
+                        Keep
+                      </button>
+                    </>
+                  ) : (
+                    projectsList.map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        className="pn-btn"
+                        title={privacy ? 'Remove the project - it asks once, and its chats stay' : `Remove the project - it asks once, and its chats stay. Folder: ${p.folders[0]}`}
+                        onClick={() => setArmedProject((current) => armRow(current, p.id))}
+                      >
+                        <span className="pv">{p.folders[0].split(/[\\/]/).filter(Boolean).pop()}</span> ✕
+                      </button>
+                    ))
+                  )}
                 </div>
               </div>
             </div>

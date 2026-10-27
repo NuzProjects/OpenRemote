@@ -190,7 +190,17 @@ export default function MachineModal({ device, onOpenChat, onClose }) {
                 <div key={spec.harness_id} className="dv-install">
                   <div className="dv-install-body">
                     <span>{spec.name}</span>
-                    <code className="dv-install-cmd">{spec.command}</code>
+                    {/* The installer line is the daemon's own: Install runs it
+                        for you, so it stays folded away instead of reading as
+                        homework. A disclosure rather than a tooltip keeps it
+                        reachable by keyboard and copyable by hand. */}
+                    <details className="dv-install-more">
+                      <summary>Show the command</summary>
+                      <p className="dv-install-why">
+                        The installer's own line, for running it yourself.
+                      </p>
+                      <code className="dv-install-cmd">{spec.command}</code>
+                    </details>
                   </div>
                   <button
                     type="button"
