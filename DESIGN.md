@@ -163,8 +163,12 @@ spacing.
 - **Switches (`tg-switch`):** real toggles for settings - 30x18 with a
   sliding knob, amber when on; green stays reserved for running/ok. On/Off
   words never stand in for a switch.
-- **Modals:** one family (Esc / backdrop / X close): onboarding panel, device,
-  plugin, about, confirm. Panels, not surprise shapes.
+- **Modals:** one family (Esc / backdrop / X close): device, plugin, about,
+  confirm, and the thirteen overlays `src/esc-layer-wiring.test.js` lists
+  (counted as the files in its `MODALS` array). Panels, not surprise
+  shapes. The onboarding panel is not one of them: it is a full-screen
+  view with no backdrop and no X, one step at a time, each step with its
+  own button out.
 - **Context ring:** a 20px SVG donut of context-window usage (2px stroke,
   round cap, track `rgba(255,255,255,0.12)`), in the composer foot left of
   the send button, hover card with used/remaining/auto-compact rows.
@@ -298,15 +302,20 @@ Every screen the design specifies, backed by the real daemon:
   rendered only where the default harness offers them), appearance
   (compact density; the dark theme is contract), startup
   (launch at login, reopen last view vs New chat), the daemon connection
-  (port, version, data dir, restart, two-step Forget), the harness list,
+  (the address, connect by address, which opens the manual form while
+  nothing is connected, chats on record, restart, two-step Forget), the
+  harness list,
   reduce-motion (restored before first paint), first-run replay.
 - **Account, Mobile, Metrics** - the footer's views (2026-10-15), each
   rendering before Cloud's sign-in door with its own signed-out row:
   Account carries the sign-in state and its actions, this device's
   identity, and the devices count (its Machines button crosses modes);
-  Mobile is the phone companion page - the install-and-sign-in lead, the
-  account's phones as cards opening the same device detail, the signed-out
-  row when there is no account; Metrics counts the polled record (status
+  Mobile is the phone companion page in two halves that do not depend on
+  each other: first the pairing panel (a QR code, the phones paired with
+  this computer on the local network, each one removable), which needs no
+  account at all; then the install-and-sign-in lead, the account's phones
+  as cards opening the same device detail, and the signed-out row when
+  there is no account; Metrics counts the polled record (status
   sentence, the synced split, per-harness counts, a 14-day strip of new
   chats) beside this machine's 48-cell presence band, all derived from
   the poll - cost and tokens stay out until the daemon aggregates them.
@@ -385,3 +394,13 @@ from the film's own components:
   status dot at the row's right edge (one vertical column of statuses).
 - **Press feedback on primaries** - both send buttons, the decision
   affirmative; all of it under `data-reduce-motion`.
+
+## Checking this contract
+
+Most of this page can be checked without opening the app: `npm test` runs
+the console's rule tests (268 of them, the count it prints) and a handful
+of wiring tests read the source text for the parts only a browser could
+show, such as the modal family and the waiting screen's doors. Colour,
+type and motion are not testable that way, so a change to them is checked
+by eye at both motion settings (`prefers-reduced-motion` and the in-app
+toggle) before it counts as done.
