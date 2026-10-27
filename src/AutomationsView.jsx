@@ -13,6 +13,8 @@ import { whenSentence, CONNECTOR_KINDS } from './automation.js'
 import { onJobRequest, takeJobRequest } from './chat-to-job.js'
 import { parsePill } from './pill.js'
 import { projectName } from './projects.js'
+import { armRow, clearRow, rowIsArmed } from './row-confirm.js'
+import { useArmedRow } from './use-armed-row.js'
 import './devices.css'
 import './automations.css'
 import './pill.css'
@@ -43,8 +45,10 @@ export default function AutomationsView({ onOpenChat }) {
   const [error, setError] = useState(null)
   // The rule waiting on a "remove?" answer. A rule is user-written text with a
   // schedule behind it, and there is no undo for one this conversation did not
-  // create, so the trash icon asks once in place before it acts.
-  const [removing, setRemoving] = useState(null)
+  // create, so the trash icon asks once in place before it acts: the same
+  // two-step every destructive row uses, armed by row-confirm.js.
+  const [armed, setArmed] = useState(null)
+  const armWatch = useArmedRow(armed, setArmed)
   // The pill's conversation: {role: user|reply|card|done|note, text?, draft?}
   const [thread, setThread] = useState([])
 
@@ -84,6 +88,9 @@ export default function AutomationsView({ onOpenChat }) {
 
   const run = async (action, id, ...args) => {
     if (busyId) return
+    // Any action on the view is the user moving on: the armed row stands down
+    // first, the way the endpoint and MCP panes do it.
+    setArmed(clearRow())
     setBusyId(id ?? 'view')
     setError(null)
     try {
@@ -249,18 +256,37 @@ export default function AutomationsView({ onOpenChat }) {
                   >
                     <Play size={13} weight="fill" />
                   </button>
-                  <button className="am-icon" title="Edit" onClick={() => setEditing(rule)}>
+                  <button className="am-icon" title="Edit" onClick={() => { setArmed(clearRow()); setEditing(rule) }}>
                     <PencilSimple size={13} />
                   </button>
-                  <button
-                    className="am-icon"
-                    title="Remove"
-                    aria-label={`Remove ${rule.name}`}
-                    disabled={busyId != null}
-                    onClick={() => setRemoving(rule.id)}
-                  >
-                    <TrashSimple size={13} />
-                  </button>
+                  {rowIsArmed(armed, rule.id) ? (
+                    /* The trash is replaced in place by the word that acts, the
+                       way the endpoint and MCP rows ask: same danger button,
+                       same "Remove it", same spot the first press landed on. */
+                    <button
+                      type="button"
+                      className="pn-btn pn-btn--danger"
+                      ref={armWatch.buttonRef}
+                      onBlur={armWatch.onBlur}
+                      onClick={() => {
+                        setArmed(clearRow())
+                        run(() => removeAutomation(rule.id), rule.id)
+                      }}
+                      title="The rule and its schedule go, and there is no undo"
+                    >
+                      Remove it
+                    </button>
+                  ) : (
+                    <button
+                      className="am-icon"
+                      title="Remove"
+                      aria-label={`Remove ${rule.name}`}
+                      disabled={busyId != null}
+                      onClick={() => setArmed((curr) => armRow(curr, rule.id))}
+                    >
+                      <TrashSimple size={13} />
+                    </button>
+                  )}
                   <button
                     className={`am-switch${rule.enabled ? ' on' : ''}`}
                     role="switch"
@@ -270,24 +296,6 @@ export default function AutomationsView({ onOpenChat }) {
                   />
                 </div>
               </div>
-              {removing === rule.id && (
-                <div className="am-confirm" role="group" aria-label={`Remove ${rule.name}?`}>
-                  <span className="am-confirm-text">Remove this rule?</span>
-                  <button
-                    type="button"
-                    className="am-act"
-                    onClick={() => {
-                      setRemoving(null)
-                      run(() => removeAutomation(rule.id), rule.id)
-                    }}
-                  >
-                    Remove
-                  </button>
-                  <button type="button" className="am-act" onClick={() => setRemoving(null)}>
-                    Keep
-                  </button>
-                </div>
-              )}
               {rule.enabled && missing && (
                 <p className="am-note">
                   {harnessName(rule.harness)} is not installed

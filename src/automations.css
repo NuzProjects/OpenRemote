@@ -437,24 +437,9 @@ html[data-reduce-motion] .am-row-actions {
   color: var(--text-1);
 }
 
-/* The in-place remove confirm: the same text row the chat header uses, so the
-   second click is a word and not a second guess at the same icon. */
-.am-confirm {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 8px 0 0;
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.am-confirm-text {
-  margin-right: auto;
-  color: var(--text-2);
-  font-size: 12.5px;
-}
+/* The rule row's remove confirm is not a row of its own: the trash is replaced
+   in place by the danger button, the way the endpoint and MCP panes ask (see
+   .pn-btn--danger in panels.css). */
 
 .am-starter {
   display: flex;
