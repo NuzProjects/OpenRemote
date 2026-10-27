@@ -11,6 +11,7 @@
 
 import { ACTIONS, GROUPS, fuzzyScore } from './shortcuts.js'
 import { harnessName } from './harness-names.js'
+import { text } from './shape.js'
 
 // The sidebar's category order. A section names its group by id; the tab
 // list renders one small label per group.
@@ -118,10 +119,19 @@ export const SETTINGS_ENTRIES = [...SECTION_ROWS, ...ROWS, ...KEYBOARD]
  * - one row per archived chat, plus the section's own Restore and Delete
  *   actions while there is anything to act on (a query for "delete" should
  *   reach the control that deletes, not a fuzzy word in a detail line);
- * - for every harness that can run custom endpoints: its endpoint block and
- *   the row that says where the endpoint's API key is set.
+ * - for every harness that can run custom endpoints: its endpoint block, one
+ *   row per endpoint that harness actually holds (by the person's name for it
+ *   and by its base URL's host), and the row that says where its API key is
+ *   set. `endpoints` is the list EndpointManager hands up, either one array or
+ *   a map of harness id to array.
  */
-export function dynamicEntries({ harnesses = null, mcpServers = null, archived = null, chats = {} } = {}) {
+export function dynamicEntries({
+  harnesses = null,
+  mcpServers = null,
+  archived = null,
+  chats = {},
+  endpoints = null,
+} = {}) {
   const harnessList = Array.isArray(harnesses) ? harnesses : []
   const servers = Array.isArray(mcpServers) ? mcpServers : []
   const archivedRows = Array.isArray(archived) ? archived : []
@@ -183,18 +193,56 @@ export function dynamicEntries({ harnesses = null, mcpServers = null, archived =
         detail: 'Model endpoints this harness can run through.',
         terms: ['endpoint', 'gateway', 'custom', 'model', 'relay', h.id],
       },
-      {
-        key: `models-key-${h.id}`,
-        section: 'models',
-        // The key is typed on the endpoint's Edit row, which this lands near.
-        label: `Endpoint API key (${name})`,
-        detail: 'Set on the endpoint\'s Edit row. The daemon stores it; the console never shows it again.',
-        terms: ['api key', 'key', 'token', 'secret', 'auth', 'endpoint', h.id],
-      },
     )
+    // One row per endpoint the table holds, by the name the person gave it and
+    // by the host it points at: "my gateway" and "gateway.internal" are both
+    // how they think of it, and neither is a harness or a section name.
+    for (const entry of endpointRowsFor(h.id, endpoints)) {
+      entries.push({
+        key: `endpoint-${h.id}-${entry.id}`,
+        section: 'models',
+        label: text(entry.name) || 'Model endpoint',
+        detail: [text(entry.base_url), entry.enabled === false ? 'Off' : null].filter(Boolean).join(' · '),
+        terms: [
+          'endpoint',
+          'model endpoint',
+          'model server',
+          'gateway',
+          name,
+          h.id,
+          hostOf(entry.base_url),
+          text(entry.default_model),
+        ].filter(Boolean),
+      })
+    }
+    entries.push({
+      key: `models-key-${h.id}`,
+      section: 'models',
+      // The key is typed on the endpoint's Edit row, which this lands near.
+      label: `Endpoint API key (${name})`,
+      detail: 'Set on the endpoint\'s Edit row. The daemon stores it; the console never shows it again.',
+      terms: ['api key', 'key', 'token', 'secret', 'auth', 'endpoint', h.id],
+    })
   }
 
   return entries
+}
+
+/** The host a base URL points at, for the search: "https://box:4000/v1" -> "box:4000". */
+export function hostOf(baseUrl) {
+  const url = text(baseUrl).trim()
+  if (!url) return ''
+  try {
+    return new URL(url.includes('://') ? url : `http://${url}`).host
+  } catch {
+    return url.replace(/^[a-z]+:\/\//i, '').split('/')[0]
+  }
+}
+
+/** One harness's endpoints, however the table's list reached the view. */
+function endpointRowsFor(harnessId, endpoints) {
+  const list = Array.isArray(endpoints) ? endpoints : endpoints?.[harnessId]
+  return (Array.isArray(list) ? list : []).filter((entry) => entry && entry.id != null)
 }
 
 // Which searchable text matched, and how far down the row it sits: the

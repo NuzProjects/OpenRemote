@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Archive,
   CaretLeft,
@@ -107,6 +107,15 @@ export default function SettingsView({ onReplay, onOpenChat, onClose = null, onM
   } = useConsole()
   const [deleting, setDeleting] = useState(null)
   const archivedRows = archivedSessions(sessions, archived)
+  // What each endpoint table holds, handed up by EndpointManager so the search
+  // can index an endpoint by the name its person gave it. The table owns the
+  // only read of that route; this is a mirror, never a second fetch.
+  const [endpointLists, setEndpointLists] = useState({})
+  const reportEndpoints = useCallback(
+    (harnessId, list) =>
+      setEndpointLists((current) => (current[harnessId] === list ? current : { ...current, [harnessId]: list })),
+    [],
+  )
   const [confirmSignOut, setConfirmSignOut] = useState(false)
   const inCloud = signedIn(cloud)
   const harnessList = capabilities?.harnesses ?? []
@@ -440,9 +449,9 @@ export default function SettingsView({ onReplay, onOpenChat, onClose = null, onM
   const index = useMemo(
     () => [
       ...SETTINGS_ENTRIES,
-      ...dynamicEntries({ harnesses: harnessList, mcpServers, archived: archivedRows, chats }),
+      ...dynamicEntries({ harnesses: harnessList, mcpServers, archived: archivedRows, chats, endpoints: endpointLists }),
     ],
-    [harnessList, mcpServers, archivedRows, chats],
+    [harnessList, mcpServers, archivedRows, chats, endpointLists],
   )
 
   // A row that is not on screen (no model catalog, no tray, browser dev)
@@ -1523,7 +1532,10 @@ export default function SettingsView({ onReplay, onOpenChat, onClose = null, onM
                 .map((h) => (
                   <div key={h.id} data-stg={`models-${h.id}`}>
                     <h3 className="stg-subhead">{harnessName(h.id)}</h3>
-                    <EndpointManager harness={h.id} />
+                    <EndpointManager
+                      harness={h.id}
+                      onEndpoints={(list) => reportEndpoints(h.id, list)}
+                    />
                   </div>
                 ))
             )}

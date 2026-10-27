@@ -5,6 +5,7 @@ import {
   SETTING_GROUPS,
   SETTINGS_ENTRIES,
   dynamicEntries,
+  hostOf,
   searchSettings,
   visibleSections,
 } from './settings-search.js'
@@ -147,4 +148,54 @@ test('no row is indexed twice, with or without data', () => {
   for (const entry of withData()) {
     assert.ok(sections.has(entry.section), `${entry.key} points at ${entry.section}`)
   }
+})
+// ---- endpoints by the name their person gave them ----
+
+const ENDPOINTS = {
+  claude: [
+    { id: 'e1', name: 'My gateway', base_url: 'https://gateway.internal:8080/v1', enabled: true },
+    { id: 'e2', name: 'Home relay', base_url: 'http://192.168.1.9:4000', enabled: false },
+  ],
+}
+
+test('a named endpoint is findable by its name and by its host', () => {
+  const index = withData({ endpoints: ENDPOINTS })
+  assert.equal(searchSettings('my gateway', index)[0].key, 'endpoint-claude-e1')
+  assert.equal(searchSettings('gateway.internal', index)[0].key, 'endpoint-claude-e1', 'by its host')
+  assert.equal(searchSettings('192.168.1.9', index)[0].key, 'endpoint-claude-e2', 'a bare address too')
+  // The key row is still the one a key query lands on.
+  assert.equal(searchSettings('api key', index)[0].key, 'models-key-claude')
+  // And the endpoint row is not the key row.
+  assert.notEqual(searchSettings('my gateway', index)[0].key, 'models-key-claude')
+})
+
+test('a renamed endpoint is findable by the new name and not the old', () => {
+  const renamed = {
+    claude: [{ id: 'e1', name: 'Work gateway', base_url: 'https://gateway.internal:8080/v1', enabled: true }],
+  }
+  const index = withData({ endpoints: renamed })
+  assert.equal(searchSettings('work gateway', index)[0].key, 'endpoint-claude-e1')
+  assert.equal(
+    searchSettings('my gateway', index).some((e) => e.key === 'endpoint-claude-e1'),
+    false,
+    'the old name is gone with the rename',
+  )
+})
+
+test('with no endpoints only the block and the key row are indexed', () => {
+  for (const endpoints of [undefined, {}, { claude: [] }]) {
+    const index = withData({ endpoints })
+    const modelRows = index.filter((e) => e.section === 'models')
+    assert.ok(modelRows.some((e) => e.key === 'models-claude'), 'the block stays')
+    assert.ok(modelRows.some((e) => e.key === 'models-key-claude'), 'the key row stays')
+    assert.equal(modelRows.filter((e) => e.key.startsWith('endpoint-')).length, 0, 'and nothing else')
+  }
+})
+
+test('a host is read out of a base URL without trusting its shape', () => {
+  assert.equal(hostOf('https://gateway.internal:8080/v1'), 'gateway.internal:8080')
+  assert.equal(hostOf('gateway.internal/v1'), 'gateway.internal', 'no scheme still reads')
+  assert.equal(hostOf('  '), '')
+  assert.equal(hostOf('not a url at all'), 'not a url at all'.split('/')[0])
+  assert.equal(hostOf(null), '')
 })
