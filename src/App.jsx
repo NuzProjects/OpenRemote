@@ -18,7 +18,9 @@ import FloatingBar from './FloatingBar.jsx'
 import { ConsoleProvider, useConsole } from './state/console.jsx'
 import { needsSignIn } from './cloud.js'
 import CloudNotices from './CloudNotices.jsx'
-import { isMobile } from './platform.js'
+import { hasTauri, isMobile } from './platform.js'
+import { connectionNotice } from './connection-notice.js'
+import { keepNav } from './nav.js'
 import { hashWriteReady } from './settings.js'
 import { Archive, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Copy, X } from '@phosphor-icons/react'
 import { pushBack, useBack } from './use-back.js'
@@ -27,6 +29,7 @@ import ViewBoundary from './ViewBoundary.jsx'
 import ContextMenu from './ContextMenu.jsx'
 import CommandPalette from './CommandPalette.jsx'
 import ShortcutSheet from './ShortcutSheet.jsx'
+import ChangesModal from './ChangesModal.jsx'
 import ViewPopup from './ViewPopup.jsx'
 import { POPUP_VIEWS, onPopup } from './popups.js'
 import { KeyboardProvider, useKeyboard, useShortcut } from './keyboard.jsx'
@@ -101,7 +104,8 @@ function loadLayout() {
 const isChatView = (v) => !STATIC_VIEWS.includes(v)
 
 function Shell() {
-  const { sessions, chats, connection, ensureChat, cloud, watchChats, setChatArchived } = useConsole()
+  const { sessions, chats, connection, ensureChat, cloud, watchChats, setChatArchived, retryDaemon } =
+    useConsole()
   // The sidebar's docked-vs-overlay shape is the viewport's, not a mount-time
   // guess: crossing 640px live swaps the layout (the alternative - reading
   // innerWidth once at mount - left the sidebar overlaid after narrowing).
@@ -186,6 +190,26 @@ function Shell() {
       : stored
   const chat = STATIC_VIEWS.includes(view) ? null : chats[view] ?? null
 
+  // Whether this window has had a working connection at any point, which is
+  // the one fact that tells a daemon that stopped apart from one that never
+  // answered. Set once and never cleared: the row's words are about this
+  // session, not about the last beat.
+  const [everConnected, setEverConnected] = useState(false)
+  useEffect(() => {
+    if (connection.state === 'connected') setEverConnected(true)
+  }, [connection.state])
+
+  // The daemon row above the main area, or nothing. A view that prints the
+  // same news in its own error line (a chat, the New chat home) keeps the
+  // row away; the words themselves live in connection-notice.js.
+  const daemonRow = connectionNotice({
+    state: connection.state,
+    everConnected,
+    restartable: hasTauri && !isMobile,
+    showsOwnError: view === 'new' || isChatView(view),
+    error: connection.error,
+  })
+
   // Every chat on screen streams live - the primary's and each pane's -
   // but only one that still exists. A chat deleted on another device
   // loses its record on the poll beat that drops it, so it leaves the
@@ -210,7 +234,10 @@ function Shell() {
     // the hash-write effect may run again (hashWriteReady).
     if (sessions !== mountSessionsRef.current) setSessionsAnswered(true)
     const state = loadViewState(sessions)
-    setNav(state)
+    // A beat rebuilds the view state from storage whether or not anything
+    // about it changed. Storing it only when it actually differs keeps the
+    // shell from re-rendering on the clock, mid-stream.
+    setNav((previous) => keepNav(previous, state))
     const view = state.history[state.hIndex]
     const session = (sessions ?? []).find((s) => s.id === view)
     if (session) ensureChat(session)
@@ -792,6 +819,25 @@ function Shell() {
           {!isMobile && sidebarOpen && <div className="sb-backdrop" onClick={() => setSidebarOpen(false)} />}
           {!isMobile && sidebar}
           <main className="main" onContextMenu={onMainContextMenu}>
+            {/* The daemon row comes first: while it is up, every list under
+                it is the last one the daemon sent, and that is the fact the
+                row is there to explain. */}
+            {daemonRow && (
+              <div className="cn-stack" role="status">
+                <div className="cn-row">
+                  <span className="cn-title">{daemonRow.title}</span>
+                  <span className="cn-text">{daemonRow.note}</span>
+                  {daemonRow.action === 'restart' && (
+                    <button type="button" className="cn-btn primary" onClick={retryDaemon}>
+                      Restart the daemon
+                    </button>
+                  )}
+                  <button type="button" className="cn-btn" onClick={() => goView('settings')}>
+                    Open Settings
+                  </button>
+                </div>
+              </div>
+            )}
             <CloudNotices />
             <div className="main-row">
               {/* One frame for the main area, split or not: with a single
@@ -831,6 +877,9 @@ function Shell() {
             />
           )}
           {sheet && <ShortcutSheet onClose={() => setSheet(false)} />}
+          {/* The review surface for the chat's reported edits. It opens
+              itself when the palette asks for it and needs no state here. */}
+          {chat && <ChangesModal chat={chat} />}
           {popup && (
             <ViewPopup
               label={{ settings: 'Settings', metrics: 'Metrics', mobile: 'Mobile' }[popup]}

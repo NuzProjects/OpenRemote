@@ -56,3 +56,20 @@
     flex-wrap: wrap;
   }
 }
+
+/* The daemon row (App.jsx, words in connection-notice.js) rides the same
+   stack and row as Cloud's notices: one hairline, the same buttons, no fill
+   and no second shape for the same kind of news. Its title is the brighter
+   tier so the fault reads before the sentence beside it. */
+.cn-title {
+  flex: none;
+  font-size: 12.5px;
+  color: var(--text-1);
+}
+
+/* Both stacks can be on screen at once. They share the stack's gutters, so
+   the second one takes the space between the rows rather than opening
+   another full gutter above itself. */
+.cn-stack + .cn-stack {
+  padding-top: 6px;
+}

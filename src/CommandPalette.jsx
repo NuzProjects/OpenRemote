@@ -13,6 +13,7 @@ import {
   Command,
   Desktop,
   DeviceMobile,
+  FileCode,
   FolderOpen,
   GearSix,
   HardDrives,
@@ -26,6 +27,8 @@ import { useConsole } from './state/console.jsx'
 import { useKeyboard, isMac } from './keyboard.jsx'
 import { ACTIONS, comboFromEvent, comboLabel, rankMatches } from './shortcuts.js'
 import { activeSessions } from './archive.js'
+import { hasFileChanges } from './changes.js'
+import { openChanges } from './ChangesModal.jsx'
 import { harnessName } from './harness-names.js'
 import { HarnessMark } from './brand-marks.jsx'
 import { isPhone } from './cloud.js'
@@ -54,7 +57,7 @@ const SECTION_CAP = 8
 const projectLabel = (p) => p.folders[0].split(/[\\/]/).filter(Boolean).pop()
 
 export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onOpenProject, onOpenMachine }) {
-  const { sessions, archived, projects, devices, thisDevice } = useConsole()
+  const { sessions, chats, archived, projects, devices, thisDevice } = useConsole()
   const kb = useKeyboard()
   const [query, setQuery] = useState('')
   const [page, setPage] = useState(null)
@@ -80,7 +83,25 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
       icon: <ArrowRight size={15} />,
       run: { page: p.kind },
     }))
-    const chats = activeSessions(sessions ?? [], archived).map((s) => ({
+    // The chat on screen: the shell writes the address on every navigation,
+    // and the palette gets no prop about the view, so the address is the
+    // only honest answer to "this chat". A review of a chat the user cannot
+    // see would be a lie, so the row appears only when the address names a
+    // chat this window holds and that chat has file changes to read.
+    const onScreen = typeof location === 'undefined' ? '' : location.hash.replace(/^#/, '')
+    const reviewChat = chats?.[onScreen] ?? null
+    const review = reviewChat && hasFileChanges(reviewChat.timeline)
+      ? [
+          {
+            key: 'action:changes',
+            section: 'Actions',
+            name: 'Changes in this chat',
+            icon: <FileCode size={15} />,
+            run: { changes: reviewChat.id },
+          },
+        ]
+      : []
+    const chatRows = activeSessions(sessions ?? [], archived).map((s) => ({
       key: `chat:${s.id}`,
       section: 'Chats',
       name: s.title ?? 'A new task',
@@ -110,8 +131,8 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
         veiled: true,
         run: { machine: d.id },
       }))
-    return { actions: [...pages, ...actions], chats, projectRows, machines }
-  }, [kb, sessions, archived, projects, devices, thisDevice])
+    return { actions: [...review, ...pages, ...actions], chats: chatRows, projectRows, machines }
+  }, [kb, sessions, chats, archived, projects, devices, thisDevice])
 
   const sections = useMemo(() => {
     if (page) {
@@ -130,7 +151,16 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
     if (!query.trim()) {
       const byId = new Map(everything.chats.map((c) => [c.run.chat, c]))
       const recent = recentChatIds.map((id) => byId.get(id)).filter(Boolean).slice(0, 5)
-      const suggested = ['action:new-chat', 'page:model', 'action:view-settings', 'action:cheat-sheet']
+      // The review belongs in the suggestions when there is something to
+      // review: it is the one action on this list the user cannot reach
+      // anywhere else yet.
+      const suggested = [
+        'action:new-chat',
+        'action:changes',
+        'page:model',
+        'action:view-settings',
+        'action:cheat-sheet',
+      ]
         .map((k) => everything.actions.find((a) => a.key === k))
         .filter(Boolean)
       return [
@@ -171,6 +201,7 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
     // After the palette is gone, so focus and anchors land on the app.
     requestAnimationFrame(() => {
       if (r.action) kb.run(r.action)
+      else if (r.changes) openChanges(r.changes)
       else if (r.chat) onOpenChat(r.chat)
       else if (r.project) onOpenProject(r.project)
       else if (r.machine) onOpenMachine(r.machine)

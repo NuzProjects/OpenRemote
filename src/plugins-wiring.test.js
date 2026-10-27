@@ -14,8 +14,10 @@ const source = (file) => readFileSync(new URL(`./${file}`, import.meta.url), 'ut
 test('a dialog that is installing refuses to close, so Esc and the X cannot cancel its stage', () => {
   const modal = source('InstallPluginModal.jsx')
   // Esc, the backdrop and the X all call close(); the guard is inside it.
+  // The dialog family's shared plumbing owns the Escape layer now, and it is
+  // handed the same close, so the guard still stands in front of the key.
   assert.match(modal, /const close = \(\) => \{\s*\n\s*if \(busy\) return/)
-  assert.match(modal, /useEscLayer\(true, close\)/)
+  assert.match(modal, /useDialog\(panelRef, close\)/)
   assert.match(modal, /if \(e\.target === e\.currentTarget\) close\(\)/)
   assert.match(modal, /<button className="dv-modal-close" onClick=\{close\}/)
 })
