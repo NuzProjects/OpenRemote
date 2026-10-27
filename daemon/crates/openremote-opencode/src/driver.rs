@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use openremote_core::{DecisionKind, DecisionOption, TurnOutcome};
 use openremote_harness::events::{ApprovalRequest, DecisionSpec};
-use openremote_harness::{DriverError, DriverEvent, Resolution, SpawnOptions, kill_tree};
+use openremote_harness::{DriverError, DriverEvent, Resolution, SpawnOptions};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
@@ -198,7 +198,7 @@ impl Driver {
     /// Kill the serve child (the session stays in OpenCode's own store).
     pub async fn shutdown(&mut self) -> Result<Option<i32>, DriverError> {
         let mut child = self.child.lock().await;
-        kill_tree(&mut child).await;
+        child.start_kill()?;
         match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
             Ok(Ok(status)) => Ok(status.code()),
             _ => Ok(None),
