@@ -7,6 +7,7 @@ import { DaemonApi, clearConnection, loadConnection, nextRetryDelay, sameDaemon,
 import { chatFromSession, foldEvent, mergeSessionIntoChat, vanishedChatIds } from './reducer.js'
 import { createBeatLoop } from './beat.js'
 import { samePayload } from './same.js'
+import { errorCopy } from '../error-copy.js'
 import { isMobile, openExternal } from '../platform.js'
 import { loadArchived, saveArchived, withArchived } from '../archive.js'
 
@@ -72,6 +73,9 @@ export function ConsoleProvider({ children }) {
   // can say so and offer a retry: a swallowed failure left the last good
   // list on screen, which reads as a healthy list that is simply stale.
   const [pluginsError, setPluginsError] = useState(null)
+  // A marketplace refresh has its own failure: the two lists can be stale for
+  // different reasons, and one success must not declare the other fine.
+  const [marketplacesError, setMarketplacesError] = useState(null)
   const [automations, setAutomations] = useState([])
   // The registered projects - daemon-side, the one list every surface
   // reads (the sidebar's groups, the composer's picker, the pill).
@@ -1117,8 +1121,10 @@ export function ConsoleProvider({ children }) {
       setPluginsError(null)
     } catch (err) {
       // Kept rather than swallowed: the next action may never come, and the
-      // pane has to be able to say that what it shows is not current.
-      setPluginsError(err?.message ?? String(err))
+      // pane has to be able to say that what it shows is not current. The
+      // sentence is error-copy's, so a daemon refusal is quoted as the
+      // daemon's words rather than adopted as ours.
+      setPluginsError(errorCopy(err))
     }
   }, [api, stillCurrent])
 
@@ -1128,9 +1134,11 @@ export function ConsoleProvider({ children }) {
       if (!stillCurrent(api)) return
       setMarketplaces(marketList ?? [])
       setCatalog(catalogList)
-      setPluginsError(null)
+      setMarketplacesError(null)
     } catch (err) {
-      setPluginsError(err?.message ?? String(err))
+      // Its own field: a plugin refresh that succeeds afterwards says nothing
+      // about the marketplaces, and used to clear this failure anyway.
+      setMarketplacesError(errorCopy(err))
     }
   }, [api, stillCurrent])
 
@@ -1351,6 +1359,7 @@ export function ConsoleProvider({ children }) {
       marketplaces,
       catalog,
       pluginsError,
+      marketplacesError,
       refreshPlugins,
       addMarketplace,
       refreshMarketplace,
@@ -1439,6 +1448,7 @@ export function ConsoleProvider({ children }) {
       marketplaces,
       catalog,
       pluginsError,
+      marketplacesError,
       refreshPlugins,
       addMarketplace,
       refreshMarketplace,

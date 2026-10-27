@@ -40,7 +40,7 @@ export default function PluginsView() {
   // What the Install dialog is open for: a Discover entry, or a direct
   // install (folder, git repo, archive).
   const [installing, setInstalling] = useState(null)
-  const { pluginsError, refreshPlugins, refreshMarketplaces } = useConsole()
+  const { pluginsError, marketplacesError, refreshPlugins, refreshMarketplaces } = useConsole()
 
   // One field carries both refreshes (the state layer's), so the row must not
   // name one of them: a failure on the marketplace side used to read as a
@@ -49,10 +49,21 @@ export default function PluginsView() {
   // failure in the shared field rather than throwing, so the last one to run
   // is the one whose answer the row shows: a marketplace that is still failing
   // puts the row straight back instead of being declared fine.
-  const retryRefresh = async () => {
-    await refreshPlugins()
-    await refreshMarketplaces()
+  // One row carries whichever refresh failed, because a person reading it
+  // wants the truth about the list below rather than a diagnosis of which
+  // request went wrong. Its retry refreshes the surface that failed, and both
+  // surfaces when both failed, so a marketplace that is still failing is not
+  // cleared by a plugin refresh that never touched it.
+  const retryFailed = async () => {
+    if (pluginsError) await refreshPlugins()
+    if (marketplacesError) await refreshMarketplaces()
   }
+  const refreshCopy =
+    pluginsError && marketplacesError
+      ? 'Could not refresh the plugins or the marketplaces, so what is below may be out of date.'
+      : pluginsError
+        ? 'Could not refresh the plugins, so the installed list may be out of date.'
+        : 'Could not refresh the marketplaces, so Discover may be missing plugins.'
 
   return (
     <div className="panel pg-panel">
@@ -83,10 +94,10 @@ export default function PluginsView() {
         ))}
       </div>
 
-      {pluginsError && (
+      {(pluginsError || marketplacesError) && (
         <p className="pn-error pg-refresh-error" role="alert">
-          Could not refresh the plugins or the marketplaces, so what is below may be out of date.
-          <button type="button" className="pn-btn" onClick={retryRefresh}>
+          {refreshCopy}
+          <button type="button" className="pn-btn" onClick={retryFailed}>
             Retry
           </button>
         </p>

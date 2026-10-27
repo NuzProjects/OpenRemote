@@ -51,17 +51,19 @@ test('the Discover tab stays mounted, so its search and filters survive a trip t
 test('a failed plugin refresh is kept and shown with a retry', () => {
   const view = source('PluginsView.jsx')
   const console = source('state/console.jsx')
-  assert.match(view, /pluginsError &&/)
-  // One retry that refreshes both lists: a marketplace-only failure used to
-  // be cleared by a plugin refresh that never touched marketplaces, so the
-  // banner said the list was fine while it was still stale.
-  assert.match(view, /onClick=\{retryRefresh\}/)
-  assert.match(view, /await refreshPlugins\(\)/)
-  assert.match(view, /await refreshMarketplaces\(\)/)
-  // Set on failure and cleared on success, in both refreshes.
-  assert.equal((console.match(/setPluginsError\(null\)/g) ?? []).length, 2)
-  assert.equal((console.match(/setPluginsError\(err/g) ?? []).length, 2)
-  assert.match(console, /pluginsError,\s*\n\s*refreshPlugins,/)
+  assert.match(view, /marketplacesError/)
+  // One row, naming whichever surface failed; its retry refreshes that one and
+  // both when both are stale.
+  assert.match(view, /onClick=\{retryFailed\}/)
+  assert.match(view, /if \(pluginsError\) await refreshPlugins\(\)/)
+  assert.match(view, /if \(marketplacesError\) await refreshMarketplaces\(\)/)
+  // Each surface clears only its own failure: a plugin refresh that succeeds
+  // says nothing about the marketplaces, so its clear names its own field.
+  assert.equal((console.match(/setPluginsError\(null\)/g) ?? []).length, 1)
+  assert.equal((console.match(/setMarketplacesError\(null\)/g) ?? []).length, 1)
+  assert.equal((console.match(/setPluginsError\(errorCopy\(err\)\)/g) ?? []).length, 1)
+  assert.equal((console.match(/setMarketplacesError\(errorCopy\(err\)\)/g) ?? []).length, 1)
+  assert.match(console, /pluginsError,\s*\n\s*marketplacesError,\s*\n\s*refreshPlugins,/)
 })
 
 test('the installed Remove button is disabled while its own removal runs', () => {

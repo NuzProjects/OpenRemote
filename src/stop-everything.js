@@ -32,21 +32,24 @@ export function isRunning(session) {
 }
 
 /**
- * The chats to stop, oldest first. `created_at` is when the work began -
- * the chat with the smallest one has been burning the longest, which is
- * the one a person closing the laptop most wants named. Ties (and rows
- * without timestamps) fall back to the last activity, then the title, so
+ * The sessions to stop, oldest first. Its input is the daemon's session rows,
+ * never a console chat record (which carries `updatedAt` only): the palette
+ * passes `sessions` straight from the poll. `created_at` is when the work
+ * began - the session with the smallest one has been burning the longest,
+ * which is the one a person closing the laptop most wants named. Ties (and
+ * rows without timestamps) fall back to the last activity, then the title, so
  * the order is stable between two polls of the same list.
  */
-export function orderForStop(chats) {
-  const at = (chat, key) => (typeof chat?.[key] === 'number' && Number.isFinite(chat[key]) ? chat[key] : null)
+export function orderForStop(sessions) {
+  const at = (session, key) =>
+    typeof session?.[key] === 'number' && Number.isFinite(session[key]) ? session[key] : null
   const rank = (chat) => {
     const created = at(chat, 'created_at')
     if (created != null) return created
     const updated = at(chat, 'updated_at')
     return updated != null ? updated : Number.MAX_SAFE_INTEGER
   }
-  return [...(chats ?? [])].sort((a, b) => {
+  return [...(sessions ?? [])].sort((a, b) => {
     const byRank = rank(a) - rank(b)
     if (byRank !== 0) return byRank
     const byUpdated = (at(a, 'updated_at') ?? 0) - (at(b, 'updated_at') ?? 0)
