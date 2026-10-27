@@ -11,6 +11,7 @@ import { useConsole } from './state/console.jsx'
 import { useBack } from './use-back.js'
 import { useEscLayer } from './esc-layer.js'
 import { harnessName } from './harness-names.js'
+import { armRow, clearRow, rowIsArmed } from './row-confirm.js'
 import './devices.css'
 import './panels.css'
 
@@ -47,6 +48,11 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
   const [tested, setTested] = useState({}) // id -> { ok, count } | { ok: false, message }
   const [testing, setTesting] = useState(null)
   const [picker, setPicker] = useState(null)
+  // Removing an endpoint drops its stored key with it, and nothing in the
+  // daemon or the console keeps a copy: one press is not enough for that.
+  // Every other action on the pane disarms, so an armed row cannot outlive
+  // the click that moved the user's attention.
+  const [armed, setArmed] = useState(null)
 
   const openPicker = (kind) => (e) => setPicker({ kind, x: e.clientX, y: e.clientY })
 
@@ -70,6 +76,7 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
     setForm(emptyForm)
     setEditing(true)
     setError(null)
+    setArmed(clearRow())
   }
 
   const startEdit = (entry) => {
@@ -86,6 +93,7 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
     })
     setEditing(true)
     setError(null)
+    setArmed(clearRow())
   }
 
   const save = async () => {
@@ -117,6 +125,7 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
 
   const remove = async (id) => {
     setError(null)
+    setArmed(clearRow())
     try {
       await api.device(deviceId).removeEndpoint(id)
       await load()
@@ -127,6 +136,7 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
   }
 
   const setEnabled = async (id, enabled) => {
+    setArmed(clearRow())
     try {
       await api.device(deviceId).setEndpointEnabled(id, enabled)
       await load()
@@ -137,6 +147,7 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
   }
 
   const makeDefault = async (id) => {
+    setArmed(clearRow())
     try {
       await api.device(deviceId).setDefaultEndpoint(harness, id)
       await load()
@@ -147,6 +158,7 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
   }
 
   const clearDefault = async () => {
+    setArmed(clearRow())
     try {
       await api.device(deviceId).setDefaultEndpoint(harness, null)
       await load()
@@ -157,6 +169,7 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
   }
 
   const test = async (id) => {
+    setArmed(clearRow())
     setTesting(id)
     try {
       const models = (await api.device(deviceId).endpointModels(id)) ?? []
@@ -224,9 +237,20 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
                   <button type="button" className="pn-btn" onClick={() => setEnabled(entry.id, !entry.enabled)}>
                     {entry.enabled ? 'Turn off' : 'Turn on'}
                   </button>
-                  <button type="button" className="pn-btn" onClick={() => remove(entry.id)}>
-                    Remove
-                  </button>
+                  {rowIsArmed(armed, entry.id) ? (
+                    <button
+                      type="button"
+                      className="pn-btn pn-btn--danger"
+                      onClick={() => remove(entry.id)}
+                      title="Its saved key goes with it, and there is no undo"
+                    >
+                      Remove it
+                    </button>
+                  ) : (
+                    <button type="button" className="pn-btn" onClick={() => setArmed((curr) => armRow(curr, entry.id))}>
+                      Remove
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

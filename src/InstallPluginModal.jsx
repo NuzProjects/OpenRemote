@@ -32,7 +32,13 @@ export default function InstallPluginModal({ onClose, entry = null }) {
   stagedRef.current = staged
 
   // Closing before approval drops the staged copy: nothing is left behind.
+  // While a read or an install is in flight the stage belongs to that call,
+  // so closing is refused: cancelling it here would pull the copy out from
+  // under the install (and the failure would land after the dialog was
+  // gone, where nobody could see it). Esc, the X and a backdrop click all
+  // come through here, so one guard covers the three.
   const close = () => {
+    if (busy) return
     const pending = stagedRef.current
     if (pending) cancelStagedPlugin(pending.stage_id).catch(() => {})
     onClose()

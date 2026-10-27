@@ -889,3 +889,12 @@ html[data-reduce-motion] .pg-spin {
   padding-top: 14px;
   border-top: 1px solid var(--line);
 }
+
+/* A refresh that failed: the sentence and its retry on one row, so it
+   reads as a notice about the list rather than as another list item. */
+.pg-refresh-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}

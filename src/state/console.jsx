@@ -46,6 +46,10 @@ export function ConsoleProvider({ children }) {
   // Plugins > Marketplaces, and Discover's entries from their catalogs.
   const [marketplaces, setMarketplaces] = useState([])
   const [catalog, setCatalog] = useState(null)
+  // The last plugins or marketplaces refresh that failed. Kept so the pane
+  // can say so and offer a retry: a swallowed failure left the last good
+  // list on screen, which reads as a healthy list that is simply stale.
+  const [pluginsError, setPluginsError] = useState(null)
   const [automations, setAutomations] = useState([])
   // The registered projects - daemon-side, the one list every surface
   // reads (the sidebar's groups, the composer's picker, the pill).
@@ -938,8 +942,11 @@ export function ConsoleProvider({ children }) {
       if (!stillCurrent(api)) return
       setPlugins(pluginList)
       setCatalog(catalogList)
-    } catch {
-      /* the next action refreshes again */
+      setPluginsError(null)
+    } catch (err) {
+      // Kept rather than swallowed: the next action may never come, and the
+      // pane has to be able to say that what it shows is not current.
+      setPluginsError(err?.message ?? String(err))
     }
   }, [api, stillCurrent])
 
@@ -949,8 +956,9 @@ export function ConsoleProvider({ children }) {
       if (!stillCurrent(api)) return
       setMarketplaces(marketList ?? [])
       setCatalog(catalogList)
-    } catch {
-      /* the next action refreshes again */
+      setPluginsError(null)
+    } catch (err) {
+      setPluginsError(err?.message ?? String(err))
     }
   }, [api, stillCurrent])
 
@@ -1161,6 +1169,8 @@ export function ConsoleProvider({ children }) {
       removePlugin,
       marketplaces,
       catalog,
+      pluginsError,
+      refreshPlugins,
       addMarketplace,
       refreshMarketplace,
       setMarketplaceEnabled,
@@ -1242,6 +1252,8 @@ export function ConsoleProvider({ children }) {
       removePlugin,
       marketplaces,
       catalog,
+      pluginsError,
+      refreshPlugins,
       addMarketplace,
       refreshMarketplace,
       setMarketplaceEnabled,

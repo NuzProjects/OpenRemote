@@ -5,6 +5,7 @@
 import { useState } from 'react'
 import AddMcpServerModal from './AddMcpServerModal.jsx'
 import { useConsole } from './state/console.jsx'
+import { armRow, clearRow, rowIsArmed } from './row-confirm.js'
 import './devices.css'
 import './panels.css'
 
@@ -31,6 +32,10 @@ export default function McpServersSection() {
   } = useConsole()
   const [adding, setAdding] = useState(false)
   const [error, setError] = useState(null)
+  // The row is the only copy of the launch command and its binding, and a
+  // chat that is running would keep starting a server the record no
+  // longer describes: the first press arms, the second removes.
+  const [armed, setArmed] = useState(null)
   const installed = mcpServers ?? []
   // One machine is the honest local state - the plural, the hostname, and
   // the install picker return by themselves when remote machines check in.
@@ -39,8 +44,19 @@ export default function McpServersSection() {
 
   const run = async (action, ...args) => {
     setError(null)
+    setArmed(clearRow())
     try {
       await action(...args)
+    } catch (err) {
+      setError(err.message ?? String(err))
+    }
+  }
+
+  const remove = async (id) => {
+    setError(null)
+    setArmed(clearRow())
+    try {
+      await removeMcpServer(id)
     } catch (err) {
       setError(err.message ?? String(err))
     }
@@ -92,9 +108,20 @@ export default function McpServersSection() {
                       Disable
                     </button>
                   )}
-                  <button type="button" className="pn-btn" onClick={() => run(() => removeMcpServer(p.id))}>
-                    Remove
-                  </button>
+                  {rowIsArmed(armed, p.id) ? (
+                    <button
+                      type="button"
+                      className="pn-btn pn-btn--danger"
+                      onClick={() => remove(p.id)}
+                      title="Its launch command and binding go with it, and there is no undo"
+                    >
+                      Remove it
+                    </button>
+                  ) : (
+                    <button type="button" className="pn-btn" onClick={() => setArmed((curr) => armRow(curr, p.id))}>
+                      Remove
+                    </button>
+                  )}
                 </div>
               </div>
               <code className="pn-command pv">{p.command}</code>

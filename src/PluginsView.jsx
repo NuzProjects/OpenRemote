@@ -27,6 +27,7 @@ export default function PluginsView() {
   // What the Install dialog is open for: a Discover entry, or a direct
   // install (folder, git repo, archive).
   const [installing, setInstalling] = useState(null)
+  const { pluginsError, refreshPlugins } = useConsole()
 
   return (
     <div className="panel pg-panel">
@@ -57,7 +58,22 @@ export default function PluginsView() {
         ))}
       </div>
 
-      {tab === 'discover' && <PluginDiscover onInstall={(entry) => setInstalling({ entry })} />}
+      {pluginsError && (
+        <p className="pn-error pg-refresh-error" role="alert">
+          Could not refresh the plugin list, so what is below may be out of date.
+          <button type="button" className="pn-btn" onClick={() => refreshPlugins()}>
+            Retry
+          </button>
+        </p>
+      )}
+
+      {/* Discover stays mounted across the tabs, hidden rather than dropped:
+          its search, its two filters and its expanded sections are view
+          state the user typed, and going to Installed to check something
+          and coming back used to empty all of it. */}
+      <div hidden={tab !== 'discover'}>
+        <PluginDiscover onInstall={(entry) => setInstalling({ entry })} />
+      </div>
       {tab === 'installed' && <InstalledPlugins onUpdate={(entry) => setInstalling({ entry })} />}
       {tab === 'marketplaces' && <PluginMarketplaces />}
 
@@ -69,6 +85,11 @@ export default function PluginsView() {
 function InstalledPlugins({ onUpdate }) {
   const { plugins, catalog, marketplaces, setPluginEnabled, removePlugin } = useConsole()
   const [confirmRemove, setConfirmRemove] = useState(null)
+  // The row whose removal is in flight. A second press used to start a
+  // second delete and a second refresh, so the list could settle one
+  // action behind; the pane disables the button and says what it is doing
+  // instead.
+  const [removing, setRemoving] = useState(null)
   const [error, setError] = useState(null)
   const builtin = plugins?.builtin ?? []
   const installed = plugins?.installed ?? []
@@ -170,15 +191,22 @@ function InstalledPlugins({ onUpdate }) {
                     <button
                       type="button"
                       className="pn-btn pn-btn--danger"
+                      disabled={removing === p.id}
                       onClick={() => {
                         setConfirmRemove(null)
-                        run(() => removePlugin(p.id))
+                        setRemoving(p.id)
+                        run(() => removePlugin(p.id)).finally(() => setRemoving(null))
                       }}
                     >
-                      Remove it
+                      {removing === p.id ? 'Removing…' : 'Remove it'}
                     </button>
                   ) : (
-                    <button type="button" className="pn-btn" onClick={() => setConfirmRemove(p.id)}>
+                    <button
+                      type="button"
+                      className="pn-btn"
+                      disabled={removing != null}
+                      onClick={() => setConfirmRemove(p.id)}
+                    >
                       Remove
                     </button>
                   )}

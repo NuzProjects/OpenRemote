@@ -1,17 +1,18 @@
 // The daemon API client. Every mutating call carries a client request_id
 // (the receipt contract: retries dedup; crashes surface as unknown, never
 // resent). SSE subscriptions resume from a cursor. Every call but the
-// installer and the event stream carries a timeout, so a daemon that is
-// wedged (alive, but not answering) surfaces as an error instead of a
-// hang.
+// installer, a plugin install and the event stream carries a timeout, so
+// a daemon that is wedged (alive, but not answering) surfaces as an error
+// instead of a hang.
 
 const TOKEN_KEY = 'openremote-daemon-token'
 const URL_KEY = 'openremote-daemon-url'
 
 // A normal request must answer within this; a daemon that is alive but
 // stuck holds every spinner forever without it. The installer is exempt
-// (it runs minutes by design), and so is the SSE reader (its lifetime is
-// the stream).
+// (it runs minutes by design), a plugin install is exempt for the same
+// reason (a marketplace entry can be made by running a command), and so
+// is the SSE reader (its lifetime is the stream).
 const CALL_TIMEOUT_MS = 10000
 
 // Calls whose wait includes a harness boot: creating or resuming a chat
@@ -489,8 +490,14 @@ export class DaemonApi {
     return this.call('POST', '/plugins/stage', { request_id: newRequestId(), source }, { timeoutMs: 180_000 })
   }
 
+  // Installing takes the staged copy and runs whatever makes the plugin
+  // - for a marketplace entry, an install command that can take minutes
+  // (the review screen says it runs again each time a Claude chat starts).
+  // No client timeout, like the harness installer: the daemon holds its
+  // own limit, and a client that gave up first would report a failure
+  // while the install finished without anyone to show it.
   installStagedPlugin(stageId) {
-    return this.call('POST', `/plugins/stage/${stageId}/install`, { request_id: newRequestId() })
+    return this.call('POST', `/plugins/stage/${stageId}/install`, { request_id: newRequestId() }, { timeoutMs: null })
   }
 
   cancelStagedPlugin(stageId) {
@@ -503,8 +510,12 @@ export class DaemonApi {
     return this.call('POST', `/plugins/${encodeURIComponent(id)}/enabled`, { request_id: newRequestId(), enabled })
   }
 
+  // Removing deletes the plugin's whole directory: a large plugin on a
+  // slow disk can outlast the normal budget, and a timeout would report a
+  // failure for a removal that happened. Bounded rather than exempt,
+  // because a daemon that is hung should still give the pane its answer.
   removePlugin(id) {
-    return this.call('POST', `/plugins/${encodeURIComponent(id)}/remove`, { request_id: newRequestId() })
+    return this.call('POST', `/plugins/${encodeURIComponent(id)}/remove`, { request_id: newRequestId() }, { timeoutMs: 180_000 })
   }
 
   // ---- marketplaces (Plugins > Discover, Marketplaces) ----
