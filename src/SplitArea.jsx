@@ -9,6 +9,7 @@ import {
   balanceSplit,
   chatDragPayload,
   closeLeaf,
+  CHAT_DRAG_TYPE,
   createDividerDrag,
   draggedChat,
   focusLeaf,
@@ -184,6 +185,9 @@ function Pane({ node, layout, setLayout, renderPane, labelFor, showHeader, onDro
             title={primary ? label : `${label} - drag onto another pane's edge to move it`}
             draggable={!primary && node.view !== 'new'}
             onDragStart={(e) => {
+              // The same pair the sidebar writes: the private type the panes
+              // test, and the prefixed text/plain an older reader understands.
+              e.dataTransfer.setData(CHAT_DRAG_TYPE, node.view)
               e.dataTransfer.setData('text/plain', chatDragPayload(node.view))
               e.dataTransfer.effectAllowed = 'move'
             }}

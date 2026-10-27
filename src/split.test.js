@@ -7,6 +7,7 @@ import {
   balanceSplit,
   closeLeaf,
   createDividerDrag,
+  CHAT_DRAG_TYPE,
   dropZone,
   focusByIndex,
   focusLeaf,
@@ -249,9 +250,13 @@ test('movedSizes clamps both neighbours and leaves other arrays alone', () => {
 
 test('only a chat drag is offered a pane', () => {
   // The payload is unreadable during dragover, the types are not: a file or
-  // a selected paragraph must not tint a pane it could never fill.
-  assert.equal(acceptsChatDrop(['text/plain']), true)
-  assert.equal(acceptsChatDrop(['text/plain', 'Files']), true, 'a chat drag may also carry other data')
+  // a selected paragraph must not tint a pane it could never fill. A text
+  // selection carries text/plain, so the private type is the only question
+  // that can be asked without lying.
+  assert.equal(acceptsChatDrop([CHAT_DRAG_TYPE]), true)
+  assert.equal(acceptsChatDrop([CHAT_DRAG_TYPE, 'text/plain']), true, 'a chat drag may also carry other data')
+  assert.equal(acceptsChatDrop(['text/plain']), false, 'a selected paragraph is not a chat')
+  assert.equal(acceptsChatDrop(['text/plain', 'Files']), false, 'neither is a dragged file')
   assert.equal(acceptsChatDrop(['Files']), false, 'a file from the desktop')
   assert.equal(acceptsChatDrop([]), false, 'nothing to carry')
   assert.equal(acceptsChatDrop(undefined), false, 'a drag event with no dataTransfer')

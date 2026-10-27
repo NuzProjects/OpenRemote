@@ -35,7 +35,7 @@ import { PICKER_CANCEL, PICKER_SOURCE, formatPicked } from './browser-pick.js'
 import { insertToComposer } from './composer-insert.js'
 import { omnibox, security, shownAddress } from './browser-omnibox.js'
 import { closeOthers, closeTab, closeToRight, cycle, newTab, openBelongs, rememberClosed, stripPlan, takeClosed, tabTitle } from './browser-tabs.js'
-import { adopt, call, getState, onKey, patchTab, setState, subscribe } from './browser-store.js'
+import { adopt, call, getState, onKey, patchTab, registerReopen, setState, subscribe } from './browser-store.js'
 import { FLOATING, covered } from './browser-occlusion.js'
 import { DEVICES, fitDevice, fileName, nextZoom, zoomLabel } from './browser-chrome.js'
 import ContextMenu from './ContextMenu.jsx'
@@ -453,6 +453,13 @@ export default function BrowserView({ onClosePane = null }) {
     setState((s) => ({ closed: taken.rest, tabs: [...s.tabs, tab], active: tab.key }))
     requestAnimationFrame(() => go(taken.entry.url))
   }
+
+  // The palette's "Reopen closed tab" asks the store, and the store asks the
+  // mounted view: only the view can build the page and place it. The ref keeps
+  // the registration pointing at the latest render's `reopen`.
+  const reopenRef = useRef(reopen)
+  reopenRef.current = reopen
+  useEffect(() => registerReopen(() => reopenRef.current()), [])
 
   const onNative = (command, extra = {}) => {
     const native = activeTab()?.native

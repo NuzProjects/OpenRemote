@@ -36,9 +36,11 @@ import { useConsole } from './state/console.jsx'
 import { useDialog } from './dialog-focus.js'
 import { useKeyboard, isMac } from './keyboard.jsx'
 import { ACTIONS, comboFromEvent, comboLabel, rankMatches } from './shortcuts.js'
+import { reopenAvailable, reopenClosed } from './browser-store.js'
 import { activeSessions } from './archive.js'
 import { hasFileChanges } from './changes.js'
 import { chatMarkdown, copiedLine } from './chat-markdown.js'
+import { errorCopy } from './error-copy.js'
 import { planJob, requestJob } from './chat-to-job.js'
 import { openChanges } from './ChangesModal.jsx'
 import PresetNameModal from './PresetNameModal.jsx'
@@ -202,19 +204,22 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
           },
         ]
       : []
-    // The same reading of "this chat", for a copy: offered only while the
-    // chat on screen has anything to write. A chat that exists but has no
-    // items yet has nothing to copy, and a row that could only answer
-    // "nothing" for a chat the user is looking at would be a lie in a list
-    // of actions.
-    const markdown = reviewChat && (reviewChat.timeline ?? []).length > 0
+    // Copying this chat. Deliberately not `reviewChat` above: that one reads
+    // the address, which names the primary pane's view, and a split can have
+    // its focus on a different chat - the clipboard would then hold another
+    // chat's transcript while the person is looking at this one, and they
+    // would paste it somewhere believing it was the chat on screen. The shell
+    // owns the focused pane and passes its chat in, the same seam the rename
+    // row uses.
+    const markdownChat = focusedChatId ? chats?.[focusedChatId] ?? null : null
+    const markdown = markdownChat && (markdownChat.timeline ?? []).length > 0
       ? [
           {
             key: 'action:markdown',
             section: 'Actions',
             name: 'Copy this chat as Markdown',
             icon: <ClipboardText size={15} />,
-            run: { markdown: reviewChat.id },
+            run: { markdown: markdownChat.id },
           },
         ]
       : []
@@ -407,8 +412,25 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
           },
         ]
       : []
+    // The browser's one-level-back: the last tab closed in the browser pane.
+    // Only while a mounted browser can actually do it - the store registers
+    // that action from the view, so the row is never a promise with no page
+    // behind it.
+    const reopenRow = reopenAvailable()
+      ? [
+          {
+            key: 'action:reopen-closed-tab',
+            section: 'Actions',
+            name: 'Reopen closed tab',
+            sub: 'The last tab closed in the browser',
+            keys: 'Ctrl+Shift+T',
+            icon: <Repeat size={15} />,
+            run: { reopenClosed: true },
+          },
+        ]
+      : []
     return {
-      actions: [...stopRow, ...harnessRow, ...raceRow, ...sinceRow, ...layoutRow, ...layoutsRow, ...renameRow, ...presetRow, ...review, ...markdown, ...jobRow, ...pages, ...actions],
+      actions: [...stopRow, ...harnessRow, ...raceRow, ...sinceRow, ...layoutRow, ...layoutsRow, ...renameRow, ...presetRow, ...reopenRow, ...review, ...markdown, ...jobRow, ...pages, ...actions],
       chats: chatRows,
       projectRows,
       machines,
@@ -660,7 +682,9 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
       }
       write
         .then(() => setCopied(copiedLine(file)))
-        .catch((err) => setCopied(`Could not copy: ${err?.message ?? err}`))
+        // A refused clipboard write is a failure like any other, so it goes
+        // through the one rule rather than pasting a caught message here.
+        .catch((err) => setCopied(errorCopy(err)))
       return
     }
     if (r.saveLayout) {
@@ -860,6 +884,7 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
       // surface that offers renaming), so the palette closes first and then
       // asks, the same shape as the arms above.
       else if (r.renameChat) onRenameChat?.(r.renameChat)
+    else if (r.reopenClosed) reopenClosed()
     })
   }
 

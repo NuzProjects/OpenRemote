@@ -499,3 +499,23 @@ html[data-reduce-motion] .bw-btn {
   height: auto;
   min-height: 0;
 }
+
+/* The strip's overflow count: how many tabs sit behind the control. Small and
+   quiet, and never the only cue - the control's own title says the same thing
+   in words. */
+.bw-tabsearch.is-more {
+  gap: 4px;
+  padding-right: 5px;
+}
+
+.bw-tab-more-count {
+  min-width: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-1);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 14px;
+  text-align: center;
+}

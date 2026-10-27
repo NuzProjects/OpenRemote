@@ -151,6 +151,13 @@ export function focusByIndex(layout, index) {
 export const DROP_BAND = 0.28
 
 /**
+ * The drag's own type for a chat. A text selection carries `text/plain` too,
+ * so the type - not the payload - is the only thing the hover path can trust:
+ * this is what keeps a pane from tinting for a drop it cannot take.
+ */
+export const CHAT_DRAG_TYPE = 'application/x-openremote-chat'
+
+/**
  * Whether a drag in progress carries a chat. The payload itself is only
  * readable on drop, but the drag's own types are readable throughout, so this
  * is the question the hover path can ask: without it a file or a paragraph
@@ -158,7 +165,7 @@ export const DROP_BAND = 0.28
  */
 export function acceptsChatDrop(types) {
   if (!types) return false
-  return Array.from(types).includes('text/plain')
+  return Array.from(types).includes(CHAT_DRAG_TYPE)
 }
 
 /**
@@ -298,9 +305,11 @@ function valid(layout) {
 }
 
 /**
- * A dragged chat travels as text/plain with this prefix: every drag source
- * (a sidebar row, a pane's own title) writes it, and a drop only acts on a
- * payload that carries it, so a stray file or text drop is ignored.
+ * A dragged chat travels under its own type (CHAT_DRAG_TYPE) with the id as
+ * the value, and under `text/plain` with this prefix for anything that reads
+ * the older way. Every drag source (a sidebar row, a pane's own title) writes
+ * both; a drop acts on the private type and falls back to the prefix only when
+ * the private type is missing.
  */
 export const CHAT_DRAG = 'openremote-chat:'
 
@@ -308,7 +317,13 @@ export function chatDragPayload(id) {
   return CHAT_DRAG + id
 }
 
+/// The chat a drag carries: the private type first, because a text selection
+/// carries `text/plain` too and the prefix alone would not tell them apart;
+/// the prefixed payload is the fallback for a payload written by an older
+/// build.
 export function draggedChat(dataTransfer) {
+  const own = dataTransfer?.getData(CHAT_DRAG_TYPE)
+  if (own) return own
   const raw = dataTransfer?.getData('text/plain') ?? ''
   return raw.startsWith(CHAT_DRAG) ? raw.slice(CHAT_DRAG.length) : ''
 }

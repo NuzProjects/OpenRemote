@@ -160,6 +160,29 @@ async function wire() {
 
 if (hasTauri && !isMobile) wire()
 
+// The browser's view is the only thing that can reopen a tab (it builds the
+// page and places it), so it registers that one action while it is mounted and
+// the palette's row asks for it. With no registrant the row is not drawn at
+// all: a command whose only effect is nothing is worse than a missing row.
+let reopenHandler = null
+
+export function registerReopen(fn) {
+  reopenHandler = fn
+  return () => {
+    if (reopenHandler === fn) reopenHandler = null
+  }
+}
+
+/// Whether reopening would do anything right now: a view that can do it, and
+/// at least one closed tab to go back to.
+export function reopenAvailable() {
+  return Boolean(reopenHandler) && getState().closed.length > 0
+}
+
+export function reopenClosed() {
+  reopenHandler?.()
+}
+
 // Editing this module in development reloads the console (the restore
 // above then takes the pages back) instead of starting a second tab list.
 if (import.meta.hot) import.meta.hot.decline()

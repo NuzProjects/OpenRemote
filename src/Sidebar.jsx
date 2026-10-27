@@ -30,7 +30,7 @@ import { sections } from './projects.js'
 import { activeSessions } from './archive.js'
 import { deviceName, isPhone, sessionsForMode } from './cloud.js'
 import { isMobile } from './platform.js'
-import { chatDragPayload } from './split.js'
+import { CHAT_DRAG_TYPE, chatDragPayload } from './split.js'
 import { armRow, clearRow, rowIsArmed } from './row-confirm.js'
 import { listHasUnread, loadSeen, recordSeen, seedSeen, storeSeen, unreadIds } from './unread.js'
 import { lineFor, missingLines, pruneLines, questionKey, questionLine, rememberLine, wantedKeys } from './question-line.js'
@@ -403,6 +403,10 @@ export default function Sidebar({
       // the same job for anyone who never drags.
       draggable
       onDragStart={(e) => {
+        // Both types: the private one is what the panes look for (a text
+        // selection carries text/plain too), the prefixed one is what a
+        // reader from an older build understands.
+        e.dataTransfer.setData(CHAT_DRAG_TYPE, row.id)
         e.dataTransfer.setData('text/plain', chatDragPayload(row.id))
         e.dataTransfer.effectAllowed = 'move'
       }}
