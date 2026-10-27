@@ -311,6 +311,14 @@ export function paneCountLine(panes) {
 export const UNOPENABLE_LINE = 'That layout cannot open in this window.'
 
 /**
+ * The one sentence for "you have saved none". Two surfaces say it - the pane
+ * header's menu and the palette's Layouts page - and they used to disagree
+ * ("No saved layouts yet" against a generic "Nothing to show here yet."), so it
+ * lives here beside the rest of the layouts copy.
+ */
+export const SAVED_LAYOUTS_NONE = 'No saved layouts yet'
+
+/**
  * The saved layouts as a menu offers them: every one, in the stored order
  * (newest first), each with the plan it would become or the sentence saying
  * why it cannot open here. Nothing is filtered out - a shape that cannot fit

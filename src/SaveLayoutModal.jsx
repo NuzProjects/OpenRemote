@@ -6,7 +6,7 @@
 // is the tree, its sizes and each pane's role; never a chat id, because the chat
 // in a pane today is not the chat a person wants there a week from now.
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { X } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
 import { useBack } from './use-back.js'
@@ -25,10 +25,25 @@ import { errorCopy } from './error-copy.js'
 export default function SaveLayoutModal({ layout, currentView, onClose, onSaved = null }) {
   const { sessions } = useConsole()
   const panelRef = useRef(null)
+  // The field is focused on mount by hand, the way the rename and preset
+  // dialogs focus theirs. The autoFocus attribute was not enough here: the
+  // command palette closes just before this dialog opens and puts focus back on
+  // the row that opened it, so the browser's mount-time focus could be taken
+  // away again - and then Enter reached nothing, or a button, instead of the
+  // field. A focus() after the palette's own restore settles keeps Enter
+  // meaning save.
+  const inputRef = useRef(null)
   const [name, setName] = useState('')
   const [error, setError] = useState(null)
   useBack(true, onClose)
   useDialog(panelRef, onClose)
+
+  useEffect(() => {
+    const input = inputRef.current
+    if (!input) return
+    input.focus()
+    input.select()
+  }, [])
 
   // The chat test is the console's own list, so a view that is not one of the
   // static ones and not a chat cannot be saved as either.
@@ -80,18 +95,17 @@ export default function SaveLayoutModal({ layout, currentView, onClose, onSaved 
         <label className="sl-field">
           <span className="sl-label">Name</span>
           <input
+            ref={inputRef}
             className="sl-input"
             value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault()
-                save()
-              }
+              if (e.key !== 'Enter') return
+              e.preventDefault()
+              save()
             }}
             placeholder="For example: review"
             maxLength={NAME_CAP}
-            autoFocus
             spellCheck={false}
           />
         </label>

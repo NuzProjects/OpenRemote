@@ -74,7 +74,7 @@ import { isPhone } from './cloud.js'
 import { chatStatus } from './state/reducer.js'
 import { loadSeen, recordSeen, storeSeen } from './unread.js'
 import { markAllSeen, movedLine, sinceLastLook, whatHappened, whenLabel } from './since-last-look.js'
-import { capacityLine, loadLayouts, restoreShape, saveLayouts, withoutLayout } from './layouts.js'
+import { SAVED_LAYOUTS_NONE, capacityLine, loadLayouts, restoreShape, saveLayouts, withoutLayout } from './layouts.js'
 import { armRow, clearRow, rowIsArmed } from './row-confirm.js'
 import {
   RULES_SECTION,
@@ -1236,7 +1236,14 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
           ))}
           {flat.length === 0 && page !== 'stop-all' && page !== 'stop-harness' && (
             <div className="kb-empty">
-              {query.trim() ? `Nothing matches “${query.trim()}”.` : 'Nothing to show here yet.'}
+              {/* The layouts page says what is missing in its own words, the
+                  same sentence the pane header's menu uses (layouts.js), not
+                  the generic line for a page that has nothing at all. */}
+              {query.trim()
+                ? `Nothing matches “${query.trim()}”.`
+                : page === 'layouts'
+                  ? SAVED_LAYOUTS_NONE
+                  : 'Nothing to show here yet.'}
             </div>
           )}
         </div>

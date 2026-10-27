@@ -4,7 +4,7 @@ import ContextMenu from './ContextMenu.jsx'
 import SplitGlyph from './SplitGlyph.jsx'
 import { HarnessMark } from './brand-marks.jsx'
 import { useHint, useKeyboard } from './keyboard.jsx'
-import { MIN_PANES, loadLayouts, offerLayouts } from './layouts.js'
+import { MIN_PANES, SAVED_LAYOUTS_NONE, loadLayouts, offerLayouts } from './layouts.js'
 import { paneChatId, paneHeader } from './pane-header.js'
 import { projectFor } from './projects.js'
 import { useConsole } from './state/console.jsx'
@@ -157,7 +157,7 @@ function Pane({
   const layoutMenuItems = () => {
     const offers = offerLayouts(loadLayouts(), { currentChat })
     const items = []
-    if (offers.length === 0) items.push({ header: 'No saved layouts yet' })
+    if (offers.length === 0) items.push({ header: SAVED_LAYOUTS_NONE })
     for (const offer of offers) {
       items.push({
         label: offer.name,

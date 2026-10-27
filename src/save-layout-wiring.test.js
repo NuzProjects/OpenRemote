@@ -32,3 +32,18 @@ test('it saves the shape the rules built, and nothing about which chat was there
   assert.ok(modal.includes('saveLayouts(saved)'), 'and written once')
   assert.ok(modal.includes('disabled={!ready}'), 'an unnamed layout cannot be saved')
 })
+
+test('Enter saves, and the field is focused by hand the way its siblings are', () => {
+  // Enter commits, as it does in the rename and preset dialogs.
+  assert.match(modal, /if \(e\.key !== 'Enter'\) return\s*\n\s*e\.preventDefault\(\)\s*\n\s*save\(\)/)
+  // The field takes focus on mount through a ref, not the autoFocus attribute:
+  // the palette closes just before this dialog opens and restores focus to the
+  // row that opened it, which could take the mount-time focus away.
+  assert.match(modal, /const inputRef = useRef\(null\)/)
+  assert.match(modal, /useEffect\(\(\) => \{\s*\n\s*const input = inputRef\.current\s*\n\s*if \(!input\) return\s*\n\s*input\.focus\(\)\s*\n\s*input\.select\(\)/)
+  assert.match(modal, /ref=\{inputRef\}/)
+  assert.doesNotMatch(modal, /^\s*autoFocus\b/m, 'no autoFocus attribute on the field')
+  // Escape stays the family's cancel, one layer at a time.
+  assert.match(modal, /useDialog\(panelRef, onClose\)/)
+  assert.match(modal, /useBack\(true, onClose\)/)
+})

@@ -29,7 +29,7 @@ test('the header gains one word control beside the split, in the same menu patte
 })
 
 test('the list comes from layouts.js, not from SplitArea', () => {
-  assert.match(area, /import \{ MIN_PANES, loadLayouts, offerLayouts \} from '\.\/layouts\.js'/)
+  assert.match(area, /import \{[^}]*MIN_PANES[^}]*loadLayouts[^}]*offerLayouts[^}]*\} from '\.\/layouts\.js'/)
   assert.match(area, /const offers = offerLayouts\(loadLayouts\(\), \{ currentChat \}\)/)
   // Read when the menu opens: a shape saved elsewhere is in storage by then.
   assert.match(area, /const openLayoutMenu = \(\) => \{[\s\S]{0,220}setLayoutMenu\(\{ x:/)
@@ -43,8 +43,23 @@ test('each layout carries its pane count, and one that cannot open says why', ()
   assert.match(menu, /disabled: !offer\.ok/)
   assert.match(menu, /if \(!offer\.ok\) items\.push\(\{ header: offer\.note \}\)/)
   assert.match(menu, /onSelect: offer\.ok \? \(\) => onRestoreLayout\(offer\.plan\) : undefined/)
-  // Nothing saved is said in the menu rather than leaving it blank.
-  assert.match(menu, /if \(offers\.length === 0\) items\.push\(\{ header: 'No saved layouts yet' \}\)/)
+  // Nothing saved is said in the menu rather than leaving it blank, in the one
+  // sentence layouts.js holds (the palette's Layouts page says it too).
+  assert.match(menu, /if \(offers\.length === 0\) items\.push\(\{ header: SAVED_LAYOUTS_NONE \}\)/)
+})
+
+test('the empty state is one sentence, shared with the palette\u2019s layouts page', () => {
+  const layouts = source('layouts.js')
+  assert.match(layouts, /export const SAVED_LAYOUTS_NONE = 'No saved layouts yet'/)
+  const palette = source('CommandPalette.jsx')
+  assert.match(palette, /SAVED_LAYOUTS_NONE, capacityLine, loadLayouts/)
+  // The layouts page takes the specific sentence; the generic one stays for
+  // pages that really have nothing at all.
+  assert.match(palette, /page === 'layouts'\s*\n\s*\? SAVED_LAYOUTS_NONE/)
+  assert.match(palette, /'Nothing to show here yet\.'/)
+  // And no second copy of the sentence anywhere the two of them say it.
+  const copies = (source('SplitArea.jsx').match(/'No saved layouts yet'/g) ?? []).length
+  assert.equal(copies, 0, 'the header menu reads the constant, not a copy')
 })
 
 test('save-as is offered only when the window holds more than one pane', () => {
