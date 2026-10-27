@@ -231,6 +231,11 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   // reach from here.
   const [watched, setWatched] = useState(true)
   const baseTitle = useRef('')
+  // The string this effect last wrote. Anything else in the title at the next
+  // beat means another writer owns it now, and that is the console's own title
+  // from then on - so the base is read at the moment of the decision instead of
+  // being a value cached at mount that can go stale.
+  const writtenTitle = useRef(null)
   useEffect(() => {
     baseTitle.current = document.title
     const read = () => setWatched(!document.hidden && document.hasFocus())
@@ -245,11 +250,28 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
     }
   }, [])
   useEffect(() => {
-    document.title = attentionTitle(baseTitle.current, needs.count, watched)
-    return () => {
-      document.title = attentionTitle(baseTitle.current, 0, true)
+    if (writtenTitle.current !== null && document.title !== writtenTitle.current) {
+      baseTitle.current = document.title
     }
-  }, [needs.count, watched])
+    const next = attentionTitle(baseTitle.current, needs.count, unread.size, watched)
+    // Written only when it changed: a title that rewrote itself on every beat
+    // would be worse than no title at all.
+    if (document.title !== next) {
+      writtenTitle.current = next
+      document.title = next
+    }
+    return () => {
+      // Leaving a title behind that somebody else wrote would be the same
+      // rudeness as taking it in the first place, so the cleanup only puts the
+      // console's own title back when the attention title is still ours.
+      if (writtenTitle.current !== null && document.title !== writtenTitle.current) return
+      const back = attentionTitle(baseTitle.current, 0, 0, true)
+      if (document.title !== back) {
+        writtenTitle.current = back
+        document.title = back
+      }
+    }
+  }, [needs.count, unread.size, watched])
 
   // The quiet mark's two halves. First sight of a chat is not news: a
   // backlog from before this existed, or a chat another device created,

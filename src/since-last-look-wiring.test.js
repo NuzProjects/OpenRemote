@@ -36,3 +36,15 @@ test('a row says what happened last, and when, and opens the chat', () => {
 test('the header names the count in words', () => {
   assert.ok(palette.includes('movedLine(moved.length)'), 'the page header is the count sentence')
 })
+
+test('marking everything read acts on the page\'s own list and answers in one sentence', () => {
+  assert.ok(palette.includes("name: 'Mark everything as read'"), 'the row exists')
+  assert.ok(palette.includes('markAllSeen(moveRows, seen)'), 'with the rules\' own pass, over the same rows')
+  assert.ok(palette.includes('if (count > 0)'), 'nothing is stored when nothing was recorded')
+  assert.ok(palette.includes("setPage('caught-up')"), 'and the answer is a page, not a silent close')
+  assert.ok(palette.includes('All caught up.'), 'saying the sentence it was asked to say')
+  // The row lives inside the same guard as the page: nothing unread, no row.
+  const guard = palette.indexOf('const sinceRow = moved.length')
+  const mark = palette.indexOf("name: 'Mark everything as read'")
+  assert.ok(guard >= 0 && mark > guard, 'offered only while something is unread')
+})

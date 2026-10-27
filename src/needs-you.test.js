@@ -94,22 +94,32 @@ test('a malformed row cannot break the list', () => {
   assert.equal(needs.count, 1)
 })
 
-test('the title carries the count only while the window is not looked at', () => {
-  assert.equal(attentionTitle('OpenRemote', 0, false), 'OpenRemote')
-  assert.equal(attentionTitle('OpenRemote', 2, true), 'OpenRemote', 'looking clears it')
-  assert.equal(attentionTitle('OpenRemote', 2, false), '2 waiting - OpenRemote')
-  assert.equal(attentionTitle('OpenRemote', 1, false), '1 waiting - OpenRemote')
+test('the title carries the counts only while the window is not looked at', () => {
+  assert.equal(attentionTitle('OpenRemote', 0, 0, false), 'OpenRemote')
+  assert.equal(attentionTitle('OpenRemote', 2, 3, true), 'OpenRemote', 'looking clears it')
+  assert.equal(attentionTitle('OpenRemote', 2, 0, false), '2 waiting - OpenRemote')
+  assert.equal(attentionTitle('OpenRemote', 1, 0, false), '1 waiting - OpenRemote')
+  assert.equal(attentionTitle('OpenRemote', 1, 1, false), '1 waiting, 1 unread - OpenRemote')
+  assert.equal(
+    attentionTitle('OpenRemote', 2, 3, false),
+    '2 waiting, 3 unread - OpenRemote',
+    'waiting and unread are different facts, and the title names both',
+  )
+  assert.equal(attentionTitle('OpenRemote', 0, 3, false), '3 unread - OpenRemote')
 })
 
 test('the title is never invented when the document has none', () => {
-  assert.equal(attentionTitle('', 0, true), '', 'nothing to say, nothing touched')
-  assert.equal(attentionTitle('', 2, false), `2 waiting - ${BASE_TITLE}`)
-  assert.equal(attentionTitle(undefined, 0, false), '')
-  assert.equal(attentionTitle(null, 1, false), `1 waiting - ${BASE_TITLE}`)
+  assert.equal(attentionTitle('', 0, 0, true), '', 'nothing to say, nothing touched')
+  assert.equal(attentionTitle('', 2, 0, false), `2 waiting - ${BASE_TITLE}`)
+  assert.equal(attentionTitle('', 0, 4, false), `4 unread - ${BASE_TITLE}`)
+  assert.equal(attentionTitle(undefined, 0, 0, false), '')
+  assert.equal(attentionTitle(null, 1, 0, false), `1 waiting - ${BASE_TITLE}`)
 })
 
-test('a count that is not a number reads as nothing waiting', () => {
-  assert.equal(attentionTitle('OpenRemote', undefined, false), 'OpenRemote')
-  assert.equal(attentionTitle('OpenRemote', Number.NaN, false), 'OpenRemote')
-  assert.equal(attentionTitle('OpenRemote', -1, false), 'OpenRemote')
+test('a count that is not a number reads as nothing to say', () => {
+  assert.equal(attentionTitle('OpenRemote', undefined, undefined, false), 'OpenRemote')
+  assert.equal(attentionTitle('OpenRemote', Number.NaN, 0, false), 'OpenRemote')
+  assert.equal(attentionTitle('OpenRemote', -1, 0, false), 'OpenRemote')
+  assert.equal(attentionTitle('OpenRemote', 0, -3, false), 'OpenRemote')
+  assert.equal(attentionTitle('OpenRemote', 2.7, 0, false), '2 waiting - OpenRemote', 'a count is whole')
 })

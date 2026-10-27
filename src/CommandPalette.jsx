@@ -58,7 +58,7 @@ import { HarnessMark } from './brand-marks.jsx'
 import { isPhone } from './cloud.js'
 import { chatStatus } from './state/reducer.js'
 import { loadSeen, recordSeen, storeSeen } from './unread.js'
-import { movedLine, sinceLastLook, whatHappened, whenLabel } from './since-last-look.js'
+import { markAllSeen, movedLine, sinceLastLook, whatHappened, whenLabel } from './since-last-look.js'
 import './keyboard.css'
 
 const VIEW_ICONS = {
@@ -82,7 +82,7 @@ const SECTION_ORDER = ['Actions', 'Chats', 'Views', 'Projects', 'Machines']
 const SECTION_CAP = 8
 
 // The pages with no keyboard source behind them, so the crumb has a name.
-const PAGE_TITLES = { since: 'Since your last look' }
+const PAGE_TITLES = { since: 'Since your last look', 'caught-up': 'Since your last look' }
 
 const projectLabel = (p) => p.folders[0].split(/[\\/]/).filter(Boolean).pop()
 
@@ -493,6 +493,24 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
   const choose = (row) => {
     if (!row) return
     const r = row.run
+    if (r.markAll) {
+      // One pass, one write: exactly the chats the page above lists, each
+      // recorded at its own activity, and the same storage the sidebar reads.
+      // It asks nothing, and the page that follows says what happened.
+      const { seen: next, count } = markAllSeen(moveRows, seen)
+      if (count > 0) {
+        setSeen(next)
+        storeSeen(next)
+      }
+      setPage('caught-up')
+      setQuery('')
+      inputRef.current?.focus()
+      return
+    }
+    if (r.caughtClose) {
+      onClose()
+      return
+    }
     if (r.since) {
       // A page, like the stop-everything question: the list is the point, so
       // opening it stays inside the palette rather than closing to show it.
@@ -700,6 +718,15 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
           />
         </div>
         <div className="kb-list" id="kb-list" role="listbox" ref={listRef}>
+          {page === 'caught-up' && (
+            // The answer to a command that asked nothing: one sentence, and the
+            // way out under it.
+            <div className="kb-stop">
+              <p className="kb-stop-question" role="status">
+                All caught up.
+              </p>
+            </div>
+          )}
           {page === 'since' && (
             // The count as a sentence: what the page is about, said in words
             // rather than worn as a badge.

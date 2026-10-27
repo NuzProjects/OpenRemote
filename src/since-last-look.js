@@ -8,7 +8,7 @@
 // it: `updated_at` moves on any event, so the page says what moved and when,
 // and never implies that the newest thing matters most.
 
-import { activityAt, isUnread } from './unread.js'
+import { activityAt, isUnread, recordSeen } from './unread.js'
 
 // The one timestamp format the console writes - the same options the
 // automations list uses for "last ran", so a time on screen looks the same
@@ -53,6 +53,36 @@ export function sinceLastLook(rows, seen) {
     .filter((row) => isUnread(seen, row))
     .slice()
     .sort((a, b) => activityAt(b) - activityAt(a) || String(a.id).localeCompare(String(b.id)))
+}
+
+/**
+ * Every chat the page would list, recorded as looked at, in one pass.
+ *
+ * The same rows, in the same order, so "what the page shows" and "what marking
+ * all reads" cannot drift apart: the map that comes back is the map the page
+ * would have shown as empty. A chat with no activity stamp is never given a
+ * record - there is no stamp to record, and a record at zero would read as
+ * "looked at, when nothing happened" for every later beat.
+ *
+ * `{ seen, count }` where count is how many chats were recorded. With nothing
+ * moved the input map comes back as the same object and the count is zero, so
+ * the caller can tell "nothing to write" from "wrote" without comparing maps.
+ */
+export function markAllSeen(rows, seen) {
+  const moved = sinceLastLook(rows, seen)
+  if (moved.length === 0) return { seen, count: 0 }
+  let next = seen ?? {}
+  let count = 0
+  for (const row of moved) {
+    const stamp = activityAt(row)
+    if (!stamp) continue
+    const after = recordSeen(next, row.id, stamp)
+    if (after !== next) {
+      next = after
+      count += 1
+    }
+  }
+  return { seen: next, count }
 }
 
 // The count in words, because the page's header is a sentence and a badge is

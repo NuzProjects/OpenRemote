@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { movedLine, sinceLastLook, whatHappened, whenLabel } from './since-last-look.js'
+import { markAllSeen, movedLine, sinceLastLook, whatHappened, whenLabel } from './since-last-look.js'
 
 // The row shape the palette builds from the poll: the id, the title, the
 // harness, when it last moved, and the status in the sidebar's vocabulary.
@@ -72,4 +72,38 @@ test('the header is a sentence with the count in it, never a badge', () => {
   assert.equal(movedLine(12), '12 chats moved while you were away.', 'past ten the numeral is the honest word')
   assert.equal(movedLine(0), '', 'nothing moved, nothing to say')
   assert.equal(movedLine(undefined), '')
+})
+
+test('marking everything read records exactly the chats the page lists', () => {
+  const seen = { a: 100, b: 200 }
+  const rows = [
+    row('a', 300), // unread
+    row('b', 200), // already read at this activity
+    row('c', 400), // no record: seedable, never news
+    row('d', 0), // no activity stamp at all
+  ]
+  const before = sinceLastLook(rows, seen).map((r) => r.id)
+  const { seen: after, count } = markAllSeen(rows, seen)
+  assert.deepEqual(before, ['a'])
+  assert.equal(count, 1, 'one chat was recorded')
+  assert.equal(after.a, 300, 'recorded at its own activity, not at now')
+  assert.deepEqual(sinceLastLook(rows, after), [], 'and the page is empty afterwards')
+})
+
+test('a chat with no activity stamp never gets a record', () => {
+  const seen = { z: 5 }
+  const { seen: after, count } = markAllSeen([row('z', 0)], seen)
+  assert.equal(count, 0)
+  assert.equal(after, seen, 'nothing written, the same map')
+  assert.equal(Object.prototype.hasOwnProperty.call(after, 'z'), true)
+  assert.equal(after.z, 5, 'and the record it had is untouched')
+})
+
+test('with nothing unread there is nothing to do', () => {
+  const seen = { a: 300 }
+  const rows = [row('a', 300)]
+  const { seen: after, count } = markAllSeen(rows, seen)
+  assert.equal(count, 0)
+  assert.equal(after, seen, 'the caller can tell "nothing to write" from "wrote"')
+  assert.deepEqual(markAllSeen([], {}), { seen: {}, count: 0 })
 })

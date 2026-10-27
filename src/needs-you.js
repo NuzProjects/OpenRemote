@@ -47,12 +47,24 @@ export function needsYou(rows) {
 /// The document title for one beat.
 ///
 /// The console's own title is left exactly as it was while the window is being
-/// looked at, and while nothing is waiting. Only a window that cannot be
-/// looked at wears the count, and it goes first, because a title that is cut
-/// short keeps its beginning: the count is the part that survives, and the
-/// console's name may be the part that goes.
-export function attentionTitle(base, count, visible) {
+/// looked at, and while nothing waits and nothing is unread. Only a window that
+/// cannot be looked at wears the facts, and they go first, because a title that
+/// is cut short keeps its beginning: the counts are the part that survives, and
+/// the console's name may be the part that goes.
+///
+/// Two facts, not one: a chat whose harness is blocked on an answer is a
+/// different thing from a chat whose work moved while nobody was reading, and
+/// the title names both when both exist ("2 waiting, 3 unread - OpenRemote").
+/// A zero half is left out rather than printed, so the title never says "0".
+export function attentionTitle(base, waiting, unread, visible) {
   const title = String(base ?? '')
-  if (visible || !(count > 0)) return title
-  return `${count} waiting - ${title.trim() || BASE_TITLE}`
+  if (visible) return title
+  const count = (value) => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0)
+  const waitingCount = count(waiting)
+  const unreadCount = count(unread)
+  const parts = []
+  if (waitingCount > 0) parts.push(`${waitingCount} waiting`)
+  if (unreadCount > 0) parts.push(`${unreadCount} unread`)
+  if (parts.length === 0) return title
+  return `${parts.join(', ')} - ${title.trim() || BASE_TITLE}`
 }
