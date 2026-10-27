@@ -21,9 +21,14 @@ export function projectFor(projects, workspace) {
 }
 
 /**
- * The sidebar's two sections: registered projects (each with the chats
- * that ran in its folders), then the flat chats - every chat that
- * belongs to no project, in one list.
+ * The sidebar's sections: registered projects (each with the chats that ran
+ * in its folders), then the flat chats - every chat that belongs to no
+ * project, in one list.
+ *
+ * Every registered project comes back, including one with no chats: the first
+ * thing a new user does is register a folder, and a project that is missing
+ * from the list until a chat exists in it reads as an action the app dropped.
+ * The caller draws the zero and says the project has no chats yet.
  */
 export function sections(projects, rows) {
   const byProject = new Map((projects ?? []).map((p) => [p.id, { project: p, items: [] }]))
@@ -34,7 +39,7 @@ export function sections(projects, rows) {
     else flat.push(row)
   }
   return {
-    projects: [...byProject.values()].filter((g) => g.items.length > 0),
+    projects: [...byProject.values()],
     flat,
   }
 }

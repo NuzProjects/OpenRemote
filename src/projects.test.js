@@ -38,8 +38,21 @@ test('sections splits chats into projects and one flat list', () => {
   assert.deepEqual(out.flat.map((r) => r.id), ['b', 'd'])
 })
 
-test('a project with no chats holds no group', () => {
+test('a registered project with no chats is still listed, with its count', () => {
   const out = sections([P1, P2], [{ id: 'a', workspace: '/home/u/website' }])
-  assert.equal(out.projects.length, 1)
+  assert.deepEqual(
+    out.projects.map((g) => [g.project.id, g.items.length]),
+    [
+      ['p1', 1],
+      ['p2', 0],
+    ],
+    'registering a folder must not end with the project missing from the list',
+  )
   assert.deepEqual(out.flat, [])
+})
+
+test('a project with no chats comes back even when nothing is running', () => {
+  const out = sections([P1], [])
+  assert.equal(out.projects.length, 1)
+  assert.deepEqual(out.projects[0].items, [])
 })

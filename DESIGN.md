@@ -78,15 +78,20 @@ spacing.
   whole bar is a drag region.
 - **Sidebar (264px, collapsible):** mode switch (Local/Cloud), New chat tile,
   search, then nav tiles - Plugins and Automations in Local, Machines in
-  Cloud (grid-rows reveal, reduced-motion aware); then the two sections -
-  Projects (the registered ones, each with collapse caret and count, the
-  `+` in the section head, unregister on hover; a project's chats grouped
-  under it) and the flat Chats list (every chat that belongs to no
-  project), each row led by its harness's brand mark with the status dot
-  at the row's right edge; the footer is an icon row - Account, Mobile,
-  Metrics, Settings - spaced evenly. The Mobile tile is the phones'
-  status without words: green tile + black glyph while one is
-  reachable, a hollow corner dot while away, quiet when there is none.
+  Cloud (grid-rows reveal, reduced-motion aware); then the Needs you group,
+  rendered only while it holds something: the chats whose harness is waiting
+  on a person, oldest wait first, with the count in its head, and no header at
+  all when nothing waits. A waiting chat appears here rather than in the lists
+  below. Then Projects (every registered project, each with collapse caret
+  and count, the `+` in the section head, unregister on hover, which asks once
+  before it acts; a project's chats grouped under it, and a project with none
+  keeping its row with a zero and one line saying it has no chats yet) and the
+  flat Chats list (every chat that belongs to no project), each row led by
+  its harness's brand mark with the status dot at the row's right edge; the
+  footer is an icon row - Account, Mobile, Metrics, Settings - spaced evenly.
+  The Mobile tile is the phones' status without words: green tile + black
+  glyph while one is reachable, a hollow corner dot while away, quiet when
+  there is none.
 - **Settings is a window over the app:** a sidebar with a settings search
   and one tab per section, grouped General (New tasks, Appearance, Startup,
   Keyboard), System (Cloud, Daemon, Harnesses, MCP servers), Chats (Archived

@@ -30,6 +30,7 @@ import { activeSessions } from './archive.js'
 import { deviceName, isPhone, sessionsForMode } from './cloud.js'
 import { isMobile } from './platform.js'
 import { chatDragPayload } from './split.js'
+import { armRow, clearRow, rowIsArmed } from './row-confirm.js'
 import { HarnessMark } from './brand-marks.jsx'
 import ContextMenu from './ContextMenu.jsx'
 import DeleteChatModal from './DeleteChatModal.jsx'
@@ -42,6 +43,12 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   const privacy = usePrivacyMode()
   const [query, setQuery] = useState('')
   const [collapsed, setCollapsed] = useState({})
+  // The project waiting on a "unregister?" answer. The sidebar's trash sits
+  // two pixels from the project's new-chat button, and unregistering has no
+  // undo, so the first press arms the row and the second acts. row-confirm.js
+  // owns the rule (one armed row at a time, no id, no arming) so this surface
+  // and the panes that remove plugins cannot drift apart.
+  const [armed, setArmed] = useState(null)
   const [menu, setMenu] = useState(null)
   const [deleting, setDeleting] = useState(null)
 
@@ -383,8 +390,20 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
         )}
         {grouped.projects.map(({ project, items }) => {
           const isCollapsed = !!collapsed[project.id]
+          const name = project.folders[0].split(/[\\/]/).filter(Boolean).pop()
+          const isArmed = rowIsArmed(armed, project.id)
           return (
-            <section key={project.id} className="project">
+            <section
+              key={project.id}
+              className={`project${isArmed ? ' armed' : ''}`}
+              // Focus or a click leaving the row is a decision to keep it:
+              // the armed state never survives a look away.
+              onBlur={(e) => {
+                if (isArmed && !e.currentTarget.contains(e.relatedTarget)) {
+                  setArmed(clearRow())
+                }
+              }}
+            >
               <button
                 className="project-head"
                 onClick={() => toggleProject(project.id)}
@@ -393,42 +412,80 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
                 <span className={`project-caret${isCollapsed ? ' closed' : ''}`}>
                   <CaretDown size={12} />
                 </span>
-                <span className="project-name pv">{project.folders[0].split(/[\\/]/).filter(Boolean).pop()}</span>
+                <span className="project-name pv">{name}</span>
                 <span className="project-count">{items.length}</span>
               </button>
-              {/* A new chat already in this project, straight from its
-                  row: no trip through the home screen's project picker. */}
-              <button
-                type="button"
-                className="sb-project-new"
-                title={`New chat in ${project.folders[0].split(/[\\/]/).filter(Boolean).pop()}`}
-                aria-label={`New chat in ${project.folders[0].split(/[\\/]/).filter(Boolean).pop()}`}
-                onClick={() => onNewChatIn?.(project.id)}
-              >
-                <Plus size={12} weight="bold" />
-              </button>
-              {/* Unregistering keeps the chats - they fall to the flat
-                  list below; the folder on disk is never touched. */}
-              <button
-                type="button"
-                className="sb-project-remove"
-                title="Remove the project - its chats stay"
-                onClick={() => removeProject(project.id)}
-              >
-                <TrashSimple size={11} />
-              </button>
+              {isArmed ? (
+                /* The trash is replaced in place by the word that acts, so a
+                   second press is a press on the same spot and cannot land on
+                   the `+` two pixels away. It is always visible while armed
+                   (a hover-only confirm is easy to miss) and Escape keeps. */
+                <button
+                  type="button"
+                  className="sb-unregister"
+                  autoFocus
+                  title="Unregister this project. Its chats move to Chats and the folder on disk is never touched."
+                  aria-label={`Unregister ${name}`}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') {
+                      e.preventDefault()
+                      setArmed(clearRow())
+                    }
+                  }}
+                  onClick={() => {
+                    setArmed(clearRow())
+                    removeProject(project.id)
+                  }}
+                >
+                  Unregister
+                </button>
+              ) : (
+                <>
+                  {/* A new chat already in this project, straight from its
+                      row: no trip through the home screen's project picker. */}
+                  <button
+                    type="button"
+                    className="sb-project-new"
+                    title={`New chat in ${name}`}
+                    aria-label={`New chat in ${name}`}
+                    onClick={() => onNewChatIn?.(project.id)}
+                  >
+                    <Plus size={12} weight="bold" />
+                  </button>
+                  {/* Unregistering keeps the chats - they fall to the flat
+                      list below; the folder on disk is never touched. It asks
+                      once first, because that click sits beside the `+`. */}
+                  <button
+                    type="button"
+                    className="sb-project-remove"
+                    title="Remove the project - it asks once, and its chats stay"
+                    aria-label={`Remove ${name}`}
+                    onClick={() => setArmed((current) => armRow(current, project.id))}
+                  >
+                    <TrashSimple size={11} />
+                  </button>
+                </>
+              )}
+              {!isCollapsed && items.length === 0 && (
+                <p className="sb-empty sb-project-empty">No chats yet.</p>
+              )}
               {!isCollapsed && items.map(chatRow)}
             </section>
           )
         })}
 
         <div className="section-title sb-chats-title">Chats</div>
-        {grouped.projects.length > 0 && grouped.flat.length === 0 && (
+        {/* Only while there are chats to be outside a project: with every
+            project at zero, the projects say it and this line would be a
+            second sentence about nothing. */}
+        {grouped.projects.length > 0 && grouped.flat.length === 0 && rows.length > 0 && (
           <p className="sb-empty">No chats outside projects.</p>
         )}
         {grouped.flat.map(chatRow)}
 
-        {rows.length === 0 && (
+        {/* With a project registered and nothing running, the project's own row
+            says it has no chats yet; the generic line would say it twice. */}
+        {rows.length === 0 && grouped.projects.length === 0 && (
           <p className="sb-empty">
             {query.trim()
               ? `No chats match “${query.trim()}”.`
