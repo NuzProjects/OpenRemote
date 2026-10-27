@@ -275,6 +275,13 @@ impl Supervisor {
         id: &SessionId,
         chats: &[SessionId],
     ) -> Result<(), SupervisorError> {
+        // A mention note is a write like any other. On a copy it would take
+        // the sequence number the machine that runs the chat will use for its
+        // next event, and the copy's pull starts after that number, so the
+        // copy would never fetch it: the guard sits above the empty-list
+        // shortcut because the refusal must not depend on whether the user
+        // typed an @ this time.
+        self.ensure_here(id)?;
         if chats.is_empty() {
             return Ok(());
         }
@@ -296,6 +303,15 @@ impl Supervisor {
     /// Rename a chat: the name every device shows, in place of the first
     /// line of its first prompt.
     pub fn rename(&self, id: &SessionId, title: &str) -> Result<Session, SupervisorError> {
+        // The name is an event, so a rename on a copy is the one write a copy
+        // could have taken as its own: it would sit at the sequence number the
+        // machine that runs the chat uses for its next turn, the copy's pull
+        // would start after it and never fetch that turn, and the copy would
+        // stop being a prefix of the runner's log. Every sibling write path
+        // asks this first; so does the store, which is the second net under
+        // it, but the answer there is a store error rather than the sentence
+        // the console knows how to show.
+        self.ensure_here(id)?;
         let title = title.trim();
         if title.is_empty() {
             return Err(SupervisorError::Conflict(
