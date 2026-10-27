@@ -57,6 +57,12 @@ jobs:
       - name: the console's capability scope
         if: runner.os == 'Linux'
         run: node scripts/check-tab-acl.mjs
+      # The assertion above passes on the tree as it is; this proves it can
+      # still fail, against a copy, so a rewrite that quietly stops judging
+      # anything goes red here instead of printing ok forever.
+      - name: the acl check can still fail
+        if: runner.os == 'Linux'
+        run: node scripts/check-tab-acl.mjs --self-test
       - run: npm run build
 
   daemon:
