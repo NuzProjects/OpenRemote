@@ -13,6 +13,10 @@ mod browser;
 mod desktop;
 #[cfg(target_os = "android")]
 mod mobile;
+// The rule for the sign-in's in-app browser. Only the phone app opens pages,
+// so on the desktop it exists for the test build alone.
+#[cfg(any(target_os = "android", test))]
+mod signin;
 #[cfg(desktop)]
 mod tray;
 

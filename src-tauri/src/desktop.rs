@@ -3,7 +3,10 @@
 //! own; the daemon's stdin watchdog (it exits when stdin closes) kills it
 //! transitively on app exit.
 
-use std::sync::Mutex;
+use std::collections::VecDeque;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tauri::{Emitter, Manager, State, WindowEvent};
@@ -33,32 +36,111 @@ const RESPAWN_WAIT_MAX: Duration = Duration::from_secs(30);
 /// restart, which would kill it.
 const READY_DEADLINE: Duration = Duration::from_secs(90);
 
-/// The sidecar child the shell owns: the running daemon's handle, or
-/// None while none runs (dead, and not yet respawned). daemon_restart
-/// takes the child to stop the old daemon before spawning a new one, and
-/// a watcher tells its own daemon by the child's pid. Storing a
-/// replacement drops the child it replaces, and with it the daemon's
-/// stdin pipe: the daemon exits when stdin closes, so a replaced daemon
-/// stops itself, and the app-exit path rides the same watchdog.
-#[derive(Default)]
-struct Sidecar(Mutex<Option<tauri_plugin_shell::process::CommandChild>>);
+/// How long a restart waits for the old daemon to end itself after its
+/// stdin is closed. The daemon stops every harness child it started on the
+/// way out, and that sweep is bounded per child, so this only has to
+/// outlast a slow machine. A daemon still there after it is wedged.
+const GRACEFUL_STOP_WAIT: Duration = Duration::from_secs(5);
 
-/// Restart the daemon sidecar: kill the old child, drop what the shell
-/// knew about it, spawn fresh. The console heals on its own - on
-/// connection error it re-polls daemon_info every 2.5s and follows a
-/// new port - so this returns before the new daemon is ready.
+/// The most of the daemon's own words that is kept for a diagnosis: forty
+/// lines, and no more than 8 KiB of them.
+const SAID_LINES: usize = 40;
+const SAID_BYTES: usize = 8 * 1024;
+
+/// The sidecar child the shell owns: the running daemon's handle, or None
+/// while none runs (dead, and not yet respawned). A watcher tells its own
+/// daemon by the child's pid. Storing a replacement drops the child it
+/// replaces, and with it the daemon's stdin pipe: the daemon exits when
+/// stdin closes, so a replaced daemon stops itself, and the app-exit path
+/// rides the same watchdog.
+#[derive(Default)]
+struct Sidecar {
+    child: Mutex<Option<tauri_plugin_shell::process::CommandChild>>,
+    /// Set by a watcher once its process is gone. `daemon_restart` closes
+    /// the old daemon's stdin and waits on this, so a replacement is not
+    /// started while the old daemon is still stopping the harnesses it ran.
+    exited: Arc<AtomicBool>,
+}
+
+/// Restart the daemon sidecar: close the old daemon's stdin so it stops
+/// itself, wait a bounded moment, then spawn a fresh one.
+///
+/// Not `kill`: a killed process runs no destructors, so the shutdown sweep
+/// in the daemon's stdin watchdog never fires and every harness CLI it
+/// started keeps running with no daemon to talk to - still working, still
+/// spending, still holding its folder. Closing stdin is the daemon's own
+/// stop button, and the sweep is what it does with it. The console heals on
+/// its own (on a connection error it re-polls daemon_info every 2.5s and
+/// follows a new port), so this returns before the new daemon is ready.
 #[tauri::command]
-fn daemon_restart(
+async fn daemon_restart(
     app: tauri::AppHandle,
     state: State<'_, DaemonState>,
     sidecar: State<'_, Sidecar>,
-) {
-    if let Some(child) = sidecar.0.lock().expect("daemon state lock").take() {
-        let _ = child.kill();
+) -> Result<(), String> {
+    let old = sidecar.child.lock().expect("daemon state lock").take();
+    if let Some(child) = old {
+        let pid = child.pid();
+        let exited = Arc::clone(&sidecar.exited);
+        // Dropping the handle is what closes the pipe: the plugin's child
+        // can be written to and killed, and has no way to close stdin on its
+        // own.
+        drop(child);
+        let gone = tauri::async_runtime::spawn_blocking(move || {
+            let deadline = std::time::Instant::now() + GRACEFUL_STOP_WAIT;
+            while std::time::Instant::now() < deadline {
+                if exited.load(Ordering::SeqCst) {
+                    return true;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            exited.load(Ordering::SeqCst)
+        })
+        .await
+        .unwrap_or(false);
+        if !gone {
+            // The daemon never read its closed stdin: a stuck harness, a
+            // store that will not release, a process under a debugger. Its
+            // handle went with the drop, so the pid is all that is left.
+            stop_by_pid(pid);
+        }
     }
     *state.info.lock().expect("daemon state lock") = DaemonInfo::default();
     tell_console(&app);
     spawn_daemon(app);
+    Ok(())
+}
+
+/// Stop a daemon by pid, for the case the graceful path could not.
+///
+/// On Windows the filter names the image as well as the pid: if the system
+/// handed that pid to another process while a restart waited, the new owner
+/// is not ours to kill. No console window is created; the shell is a GUI
+/// process and would only flash one.
+fn stop_by_pid(pid: u32) {
+    let pid = pid.to_string();
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let by_pid = format!("PID eq {pid}");
+        let _ = std::process::Command::new("taskkill")
+            .args([
+                "/F",
+                "/FI",
+                by_pid.as_str(),
+                "/FI",
+                "IMAGENAME eq openremote-daemon.exe",
+            ])
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = std::process::Command::new("kill")
+            .args(["-9", &pid])
+            .status();
+    }
 }
 
 pub fn run() {
@@ -151,6 +233,9 @@ fn spawn_daemon(app: tauri::AppHandle) {
         // The delay before the next spawn after a death.
         let mut wait = RESPAWN_WAIT_MIN;
         loop {
+            // The flag describes the child this pass is about to watch, not
+            // the one before it.
+            app.state::<Sidecar>().exited.store(false, Ordering::SeqCst);
             let sidecar = app
                 .shell()
                 .sidecar(DAEMON_NAME)
@@ -180,7 +265,7 @@ fn spawn_daemon(app: tauri::AppHandle) {
             };
             let pid = child.pid();
             app.state::<Sidecar>()
-                .0
+                .child
                 .lock()
                 .expect("daemon state lock")
                 .replace(child);
@@ -198,24 +283,34 @@ fn spawn_daemon(app: tauri::AppHandle) {
             let mut info = DaemonInfo::default();
             let mut published = false;
             let mut exit = None;
+            // What the daemon says on stderr: its own words for a panic, a
+            // bind that failed, the reason it stopped. Kept bounded as it
+            // arrives, because a daemon that dies in a loop can talk.
+            let mut said: VecDeque<String> = VecDeque::new();
             while let Some(event) = rx.recv().await {
-                if let CommandEvent::Terminated(payload) = &event {
-                    exit = payload.code;
-                }
-                if let CommandEvent::Stdout(line) = event {
-                    let line = String::from_utf8_lossy(&line).trim().to_string();
-                    if let Some(addr) = line.strip_prefix("READY ") {
-                        info.url = Some(format!("http://{addr}"));
-                    } else if let Some(dir) = line.strip_prefix("DATA_DIR ") {
-                        info.data_dir = Some(dir.to_string());
+                match event {
+                    CommandEvent::Terminated(payload) => exit = payload.code,
+                    CommandEvent::Stdout(line) => {
+                        let line = String::from_utf8_lossy(&line).trim().to_string();
+                        if let Some(addr) = line.strip_prefix("READY ") {
+                            info.url = Some(format!("http://{addr}"));
+                        } else if let Some(dir) = line.strip_prefix("DATA_DIR ") {
+                            info.data_dir = Some(dir.to_string());
+                        }
+                        if info.url.is_some() && info.data_dir.is_some() && !published {
+                            publish(&app, &mut info);
+                            published = true;
+                        }
                     }
-                    if info.url.is_some() && info.data_dir.is_some() && !published {
-                        publish(&app, &mut info);
-                        published = true;
-                    }
+                    CommandEvent::Stderr(bytes) => keep_lines(&mut said, &bytes),
+                    _ => {}
                 }
             }
             deadline.abort();
+            // A deliberate restart waits on this: it closed this process's
+            // stdin and has to know the daemon finished stopping the
+            // harnesses it ran before a replacement starts.
+            app.state::<Sidecar>().exited.store(true, Ordering::SeqCst);
             // The stream ends only when the process is gone. If the
             // child in the slot is still this one's, the daemon died on
             // its own: take the dead handle out so the slot says what is
@@ -223,7 +318,7 @@ fn spawn_daemon(app: tauri::AppHandle) {
             // or another watcher already replaced it.
             let was_mine = {
                 let sidecar = app.state::<Sidecar>();
-                let mut slot = sidecar.0.lock().expect("daemon state lock");
+                let mut slot = sidecar.child.lock().expect("daemon state lock");
                 let mine = slot.as_ref().is_some_and(|child| child.pid() == pid);
                 if mine {
                     let _ = slot.take();
@@ -240,12 +335,21 @@ fn spawn_daemon(app: tauri::AppHandle) {
                 .info
                 .lock()
                 .expect("daemon state lock") = DaemonInfo::default();
+            let said_log = write_stderr_log(&app, &said, exit);
             report_failure(
                 &app,
                 DaemonFailureKind::Stopped,
-                match exit {
-                    Some(code) => format!("the daemon stopped (exit code {code})"),
-                    None => "the daemon stopped".to_string(),
+                match (exit, said_log) {
+                    (Some(code), Some(path)) => format!(
+                        "the daemon stopped (exit code {code}); what it said last is in {}",
+                        path.display()
+                    ),
+                    (Some(code), None) => format!("the daemon stopped (exit code {code})"),
+                    (None, Some(path)) => format!(
+                        "the daemon stopped; what it said last is in {}",
+                        path.display()
+                    ),
+                    (None, None) => "the daemon stopped".to_string(),
                 },
             );
             eprintln!("openremote: the daemon exited, respawning");
@@ -269,7 +373,7 @@ fn spawn_daemon(app: tauri::AppHandle) {
 /// ran; the waiting watcher stands down rather than double-spawn.
 fn daemon_slot_claimed(app: &tauri::AppHandle) -> bool {
     app.state::<Sidecar>()
-        .0
+        .child
         .lock()
         .expect("daemon state lock")
         .is_some()
@@ -345,6 +449,78 @@ fn report_silent(app: &tauri::AppHandle) {
 /// exactly this kind of wait.
 async fn respawn_delay(wait: Duration) {
     let _ = tauri::async_runtime::spawn_blocking(move || std::thread::sleep(wait)).await;
+}
+
+/// Keep the newest lines of the daemon's stderr, bounded both ways.
+fn keep_lines(tail: &mut VecDeque<String>, bytes: &[u8]) {
+    for line in String::from_utf8_lossy(bytes).lines() {
+        let mut line = line.trim_end().to_string();
+        if line.is_empty() {
+            continue;
+        }
+        // One line can be as long as the daemon likes, and the bound is on
+        // what is kept: an overlong line keeps its newest end.
+        if line.len() > SAID_BYTES {
+            let mut cut = line.len() - SAID_BYTES;
+            while !line.is_char_boundary(cut) {
+                cut += 1;
+            }
+            line = line[cut..].to_string();
+        }
+        tail.push_back(line);
+    }
+    while tail.len() > SAID_LINES {
+        tail.pop_front();
+    }
+    while tail.iter().map(String::len).sum::<usize>() > SAID_BYTES && tail.len() > 1 {
+        tail.pop_front();
+    }
+}
+
+/// Write the daemon's last words where a person can find them, and answer
+/// the path (None when it said nothing).
+///
+/// A packaged shell has no console to print them to, and the one place in
+/// the app that could show them is the console's, so a file under the app's
+/// own log directory is the whole mechanism: the failure the panel shows
+/// names the path. Overwritten per death rather than appended, so the file
+/// always describes the failure the panel is talking about.
+fn write_stderr_log(
+    app: &tauri::AppHandle,
+    tail: &VecDeque<String>,
+    exit: Option<i32>,
+) -> Option<PathBuf> {
+    if tail.is_empty() {
+        return None;
+    }
+    let dir = app.path().app_log_dir().ok()?;
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join("daemon-stderr.log");
+    let mut body = String::new();
+    for line in tail {
+        body.push_str(line);
+        body.push('\n');
+    }
+    if body.len() > SAID_BYTES {
+        // Cut from the front, on a character boundary: the newest end is the
+        // part worth keeping.
+        let mut cut = body.len() - SAID_BYTES;
+        while !body.is_char_boundary(cut) {
+            cut += 1;
+        }
+        body = body[cut..].to_string();
+    }
+    let head = format!(
+        "openremote: what the daemon said last before the shell saw it stop (exit code {}).\n\n",
+        exit.map(|code| code.to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    );
+    std::fs::write(&path, head + &body).ok()?;
+    eprintln!(
+        "openremote: the daemon's last words are in {}",
+        path.display()
+    );
+    Some(path)
 }
 
 /// Under an AppImage the shell runs with the image's own library and data

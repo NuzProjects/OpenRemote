@@ -101,13 +101,21 @@ fn cloud_config() -> CloudConfig {
     if let Some(api) = option_env!("OPENREMOTE_CLOUD_API") {
         config.api_base = api.trim_end_matches('/').to_string();
     }
-    if let Some(issuer) = option_env!("OPENREMOTE_AUTH_ISSUER") {
-        config.auth_issuer = issuer.trim_end_matches('/').to_string();
-    }
+    config.auth_issuer = auth_issuer();
     config.platform = "android".to_string();
     config.redirect_uri = Some(APP_REDIRECT.to_string());
     config.device_name = device_name();
     config
+}
+
+/// The account service this build signs in to: the daemon builds the sign-in
+/// page's address from it (`openremote_cloud::oauth`), so it is also the only
+/// service whose page may open in the sign-in frame.
+fn auth_issuer() -> String {
+    match option_env!("OPENREMOTE_AUTH_ISSUER") {
+        Some(issuer) => issuer.trim_end_matches('/').to_string(),
+        None => CloudConfig::from_env().auth_issuer,
+    }
 }
 
 /// The phone's own name for itself ("Google Pixel 8"): the hostname every
@@ -161,6 +169,19 @@ fn sign_in_returned(url: String) {
 fn open_url(app: tauri::AppHandle, url: String, sign_in: Option<bool>) -> Result<(), String> {
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return Err("only web pages open from here".into());
+    }
+    if sign_in.unwrap_or(false) {
+        // The in-app browser is the frame the sign-in page is trusted with,
+        // and the frame whose return address the app listens for. Only the
+        // account service this build signs in to may have it; any other page
+        // there would borrow the sign-in's clothes for a caller that names it.
+        if !crate::signin::trusted_sign_in_page(&url, &auth_issuer()) {
+            return Err(
+                "that page is not the sign-in page of this build's account service; \
+                 open it in the browser instead"
+                    .into(),
+            );
+        }
     }
     let with = sign_in.unwrap_or(false).then_some("inAppBrowser");
     app.opener().open_url(url, with).map_err(|e| e.to_string())
