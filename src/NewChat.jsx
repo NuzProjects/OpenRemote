@@ -871,6 +871,18 @@ export default function NewChat({
           )}
         </div>
       ))}
+      {/* Nothing to run a chat on: the screen says so once, where the task
+          box is, rather than leaving a composer whose send button is dead
+          for a reason nobody can see. No button here - the harness picker
+          under the box is the one control that starts this, and a second
+          "Install" that opened something else would be the dead control
+          the console does not ship. */}
+      {connection.state === 'connected' && !available.length && (
+        <p className="nc-first-run" key="no-agent">
+          No agent is installed on this computer yet, so a task has nowhere to run. Install one from
+          the harness picker under the box; it scans this computer each time it opens.
+        </p>
+      )}
       <div className={`nc-box${needsSignIn || usingApiKey ? ' nc-box--auth' : ''}`} ref={boxRef}>
         {/* Saved setups, above the composer. Ghost text, no fill and no
             border: the hover wash is the only affordance, so the row reads

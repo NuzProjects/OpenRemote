@@ -92,6 +92,12 @@ export default function PluginMarketplaces() {
       {error && <p className="pn-error">{error}</p>}
 
       <h2 className="pn-section">Added</h2>
+      {(marketplaces ?? []).length === 0 && (
+        <p className="pn-empty">
+          No marketplace has been added yet. Everything under Plugins works without one: a marketplace
+          only adds Discover's catalog and its updates.
+        </p>
+      )}
       <div className="pn-list pg-list-full">
         {(marketplaces ?? []).map((m) => (
           <div className="pn-row pn-row--stack pg-mkt-card" key={m.name}>

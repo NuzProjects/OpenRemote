@@ -278,10 +278,13 @@ export default function PluginDiscover({ onInstall }) {
       ) : (
         <div className="pg-sections">
           {all.length === 0 && !fetching.length && (
-            <p className="pn-empty">No catalog has been fetched yet.</p>
+            <p className="pn-empty">
+              No catalog has been fetched yet. A marketplace's catalog is read once and kept on this
+              computer; use the refresh button above once one is on.
+            </p>
           )}
           {all.length === 0 && fetching.length > 0 && (
-            <p className="pn-empty">Fetching catalogs...</p>
+            <p className="pn-empty">Reading the marketplaces' catalogs...</p>
           )}
           {groups.map((group) => {
             const isExpanded = expandedCategories.has(group.category)

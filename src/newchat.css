@@ -451,3 +451,13 @@ html[data-reduce-motion] .newchat::before {
   font-size: 12px;
   line-height: 1.45;
 }
+/* A first-day fact the screen says once, without raising its voice: no
+   border, no tint, no button. The amber box beside it is for something
+   wrong; a computer with nothing installed yet is simply a beginning. */
+.nc-first-run {
+  max-width: 620px;
+  margin: 0 0 12px;
+  color: var(--text-3);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
