@@ -76,6 +76,11 @@ const SECTION_ICONS = {
 
 const MAX_RESULTS = 24
 
+// The time a fact was read, said plainly. A row the console cannot re-read on
+// focus says when it last looked rather than pretending to be live.
+const checkedAt = (at) =>
+  new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+
 export default function SettingsView({ onReplay, onOpenChat, onClose, onManualConnect = null }) {
   const privacy = usePrivacyMode()
   const {
@@ -238,7 +243,29 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
   // Run key. The fact is asked once on open; toggling flips it through
   // the plugin and re-reads. Browser dev has no shell - the row never
   // renders there.
+  // A tick that moves whenever the window is looked at again. Two of these
+  // rows read a fact that can change outside this panel (the tray setting, the
+  // daemon's address), so they ask again on focus instead of showing what was
+  // true when Settings opened.
+  const [focusTick, setFocusTick] = useState(0)
+  useEffect(() => {
+    const bump = () => {
+      if (!document.hidden) setFocusTick((n) => n + 1)
+    }
+    window.addEventListener('focus', bump)
+    document.addEventListener('visibilitychange', bump)
+    return () => {
+      window.removeEventListener('focus', bump)
+      document.removeEventListener('visibilitychange', bump)
+    }
+  }, [])
+
+  // The Windows startup toggle: the shell's autostart plugin writes the Run
+  // key. This one is read once on open and not re-read on focus - the row says
+  // when it was read, so a key changed outside the app reads as "older news"
+  // rather than as a lie. Toggling re-reads it.
   const [autoStart, setAutoStart] = useState(null)
+  const [autoStartAt, setAutoStartAt] = useState(null)
   useEffect(() => {
     if (!hasTauri || isMobile) return
     let cancelled = false
@@ -246,7 +273,10 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
       try {
         const { isEnabled } = await import('@tauri-apps/plugin-autostart')
         const enabled = await isEnabled()
-        if (!cancelled) setAutoStart(enabled)
+        if (!cancelled) {
+          setAutoStart(enabled)
+          setAutoStartAt(Date.now())
+        }
       } catch {
         /* the row stays absent */
       }
@@ -262,6 +292,7 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
       if (autoStart) await disable()
       else await enable()
       setAutoStart(await isEnabled())
+      setAutoStartAt(Date.now())
     } catch {
       /* the fact stays what it was */
     }
@@ -269,7 +300,9 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
 
   // Keeping OpenRemote in the tray when the window closes: the shell's own
   // setting (on by default when this computer is a machine). Absent in the
-  // browser, and where no tray can be shown.
+  // browser, and where no tray can be shown. Re-asked on focus, because the
+  // close behaviour can change it while Settings sits open behind another
+  // window.
   const [tray, setTray] = useState(null)
   useEffect(() => {
     if (!hasTauri || isMobile) return
@@ -280,13 +313,13 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
         const view = await invoke('tray_prefs')
         if (!cancelled) setTray(view)
       } catch {
-        /* the row stays absent */
+        /* the row stays absent, or keeps the value it had */
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [focusTick])
   const toggleTray = async () => {
     if (!tray) return
     try {
@@ -312,7 +345,9 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
   }
 
   // The daemon's port and data dir, straight from the shell's own
-  // record of the sidecar. Browser dev has no sidecar - no dead rows.
+  // record of the sidecar. Browser dev has no sidecar - no dead rows. Asked
+  // again on a reconnect and on focus: a restart can move the port while the
+  // window is in the background.
   const [daemonDetail, setDaemonDetail] = useState(null)
   useEffect(() => {
     if (!hasTauri) return
@@ -330,16 +365,28 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
     return () => {
       cancelled = true
     }
-  }, [connection.state])
+  }, [connection.state, focusTick])
 
   // Tabs and search: the panel shows one section at a time, and a query
   // replaces it with results gathered from every section this device has.
   const [tab, setTab] = useState(isMobile ? 'appearance' : 'new-tasks')
-  // On a phone the list is the screen. A category opens over it; back
-  // returns to the list before it leaves Settings.
+  // On a phone the list is the screen. A category opens over it, and a search
+  // replaces it; one back ladder covers both, so a search is never a dead end:
+  // clear the query, then leave the category, then leave Settings.
   const [category, setCategory] = useState(null)
-  useBack(isMobile && category != null, () => setCategory(null))
   const [query, setQuery] = useState('')
+  const phoneBack = () => {
+    if (query) {
+      setQuery('')
+      return
+    }
+    if (category != null) {
+      setCategory(null)
+      return
+    }
+    onClose?.()
+  }
+  useBack(isMobile && (category != null || query !== ''), phoneBack)
   const [shortcutQuery, setShortcutQuery] = useState('')
   const [flash, setFlash] = useState(null)
   // The project waiting on a "remove?" answer. Removing one keeps its chats
@@ -530,17 +577,19 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
     <div className={`settings${isMobile ? ' settings--phone' : ''}${phoneCategory ? ' is-category' : ''}`}>
       {isMobile && (
         <header className="stg-phone-bar">
-          {(phoneCategory || onClose) && (
+          {(phoneCategory || query || onClose) && (
             <button
               type="button"
               className="stg-phone-back"
-              onClick={() => (phoneCategory ? setCategory(null) : onClose())}
-              aria-label="Back"
+              onClick={phoneBack}
+              aria-label={query ? 'Clear the search' : 'Back'}
             >
               <CaretLeft size={22} />
             </button>
           )}
-          <h1 className="stg-phone-title">{phoneCategory ? sectionLabel(category) : 'Settings'}</h1>
+          <h1 className="stg-phone-title">
+            {phoneCategory ? sectionLabel(category) : query ? 'Search' : 'Settings'}
+          </h1>
         </header>
       )}
       {!phoneCategory && (
@@ -1041,7 +1090,10 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
                 <div className="pn-row" data-stg="startup-launch">
                   <div>
                     <div className="pn-name">Launch at login</div>
-                    <div className="pn-detail">Starts OpenRemote when you sign in to this computer.</div>
+                    <div className="pn-detail">
+                      Starts OpenRemote when you sign in to this computer.
+                      {autoStartAt ? ` Checked at ${checkedAt(autoStartAt)}.` : ''}
+                    </div>
                   </div>
                   <Toggle checked={autoStart} onChange={toggleAutoStart} label="Launch at login" />
                 </div>

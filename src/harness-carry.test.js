@@ -4,14 +4,22 @@
 // registry): claude offers default / acceptEdits / bypassPermissions / plan,
 // grok offers those four plus auto and dontAsk, codex uses untrusted /
 // on-failure / on-request / never, and the other three offer none.
+//
+// The list arrives as rows, `{ w, l }` with the flag in `w` and the label in
+// `l` (openremote-core's PermissionWord). These tests pass that shape, which
+// is the one the console actually hands over - a string-only test passed while
+// the real list compared nothing, which is how the permission half of the
+// carry came to never carry.
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { carrySetup, droppedLine, restoreFromCatalog } from './harness-carry.js'
+import { carrySetup, droppedLine, permissionWords, restoreFromCatalog } from './harness-carry.js'
 
-const CLAUDE_WORDS = ['default', 'acceptEdits', 'bypassPermissions', 'plan']
-const GROK_WORDS = ['default', 'acceptEdits', 'auto', 'dontAsk', 'bypassPermissions', 'plan']
-const CODEX_WORDS = ['untrusted', 'on-failure', 'on-request', 'never']
+const rows = (words) => words.map((w) => ({ w, l: `Label for ${w}` }))
+
+const CLAUDE_WORDS = rows(['default', 'acceptEdits', 'bypassPermissions', 'plan'])
+const GROK_WORDS = rows(['default', 'acceptEdits', 'auto', 'dontAsk', 'bypassPermissions', 'plan'])
+const CODEX_WORDS = rows(['untrusted', 'on-failure', 'on-request', 'never'])
 
 const models = [
   { model: 'opus', display_name: 'Opus 5.5', resolved_model: 'claude-opus-5-5' },
@@ -40,11 +48,24 @@ test('a model with no catalog to check against yet is dropped, and can come back
   assert.equal(restoreFromCatalog(null, models), null)
 })
 
+test('the words are read out of the daemon rows, whatever shape they arrive in', () => {
+  // The wire shape: rows with the flag in `w`. This is what the console hands
+  // over, and reading `includes` on the list instead of the words in it is the
+  // bug this pins: a string compared against objects is always false.
+  assert.deepEqual(permissionWords(GROK_WORDS), ['default', 'acceptEdits', 'auto', 'dontAsk', 'bypassPermissions', 'plan'])
+  // A hand-built list of plain strings still works.
+  assert.deepEqual(permissionWords(['default', 'plan']), ['default', 'plan'])
+  assert.deepEqual(permissionWords([]), [])
+  assert.deepEqual(permissionWords(null), [])
+  // A malformed row is skipped, not turned into the word "undefined".
+  assert.deepEqual(permissionWords([{ l: 'no flag' }, { w: 'plan', l: 'Plan only' }]), ['plan'])
+})
+
 test('a permission word survives exactly where the harness speaks it', () => {
-  // claude -> grok: every claude word is one of grok's six.
-  for (const word of CLAUDE_WORDS) {
-    const out = carrySetup({ permission: word }, { models: [], permissionModes: GROK_WORDS })
-    assert.equal(out.kept.permission, word, `${word} carries to grok`)
+  // claude -> grok: every claude word is one of grok's six, rows or not.
+  for (const mode of CLAUDE_WORDS) {
+    const out = carrySetup({ permission: mode.w }, { models: [], permissionModes: GROK_WORDS })
+    assert.equal(out.kept.permission, mode.w, `${mode.w} carries to grok`)
     assert.deepEqual(out.dropped, [])
   }
   // grok -> claude: two of grok's words are its own.
@@ -57,6 +78,8 @@ test('a permission word survives exactly where the harness speaks it', () => {
   assert.deepEqual(carrySetup({ permission: 'plan' }, { models: [], permissionModes: CODEX_WORDS }).dropped, ['permission'])
   // Any harness with no words at all cannot carry one.
   assert.deepEqual(carrySetup({ permission: 'plan' }, { models: [], permissionModes: [] }).dropped, ['permission'])
+  // And the same verdict for the plain-string shape a fixture might use.
+  assert.equal(carrySetup({ permission: 'plan' }, { models: [], permissionModes: ['default', 'plan'] }).kept.permission, 'plan')
 })
 
 test('both fields can be named at once, in one sentence', () => {

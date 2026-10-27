@@ -26,13 +26,26 @@ export function carrySetup(current, next) {
     else dropped.push('model')
   }
   if (current?.permission) {
-    if ((next?.permissionModes ?? []).includes(current.permission)) {
+    if (permissionWords(next?.permissionModes).includes(current.permission)) {
       kept.permission = current.permission
     } else {
       dropped.push('permission')
     }
   }
   return { kept, dropped }
+}
+
+/**
+ * The words a harness's `permission_modes` list carries. The daemon sends rows
+ * (`{ w, l }`, its own flag plus the label to show) and presets pass the same
+ * rows, so a caller that hands this module the raw capability list is the
+ * normal case. A plain string is accepted too, because a hand-built list in a
+ * test or a fixture should not have to imitate the wire shape.
+ */
+export function permissionWords(modes) {
+  return (modes ?? [])
+    .map((mode) => (typeof mode === 'string' ? mode : mode?.w ?? null))
+    .filter(Boolean)
 }
 
 /**
