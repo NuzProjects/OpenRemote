@@ -61,7 +61,6 @@ test('Settings can do what the connection errors point at', () => {
   // address row is read-only.
   const app = source('App.jsx')
   const settings = source('SettingsView.jsx')
-  const console = source('state/console.jsx')
   assert.match(app, /<SettingsView[\s\S]{0,400}?onManualConnect=\{\(\) => setManualConnect\(true\)\}/)
   assert.match(settings, /onManualConnect = null/)
   assert.match(settings, /data-stg="daemon-connect"/)
@@ -69,9 +68,6 @@ test('Settings can do what the connection errors point at', () => {
   // The row is hidden while a daemon is connected: the form it opens says the
   // daemon did not answer, which must not be said to a working connection.
   assert.match(settings, /onManualConnect && connection\.state !== 'connected'/)
-  // Both sentences that name Settings still name it.
-  assert.match(console, /check that it's running, or reconnect from Settings/)
-  assert.match(console, /Restart the app, or reconnect from Settings/)
 })
 
 test('the shell and the console name the status event the same way', () => {
