@@ -123,16 +123,51 @@ impl CloudHost for DaemonHost {
     fn online(&self, peer: DeviceId) {
         if let Some(app) = self.app.upgrade() {
             tokio::spawn(async move { crate::sync::sync_with(&app, peer).await });
+            // A link event is not the only thing that should trigger a compare:
+            // on an account where both machines simply stay on there may never
+            // be another one, and the compare is what retries a tombstone this
+            // device refused and a copy a cut-off pull left behind.
+            start_retry_beat(&self.app);
         }
     }
 
     /// Removed from the account: the synced chats here go; private ones stay.
     fn revoked(&self) {
         if let Some(app) = self.app.upgrade() {
-            let mut store = crate::supervisor::lock_recovering(&app.store);
-            let _ = store.purge_synced();
+            let purged = {
+                let mut store = crate::supervisor::lock_recovering(&app.store);
+                store.purge_synced()
+            };
+            // This callback has no reply channel, so a failed purge has to
+            // reach somebody in the log or nowhere: the removal stands and the
+            // account's chats would otherwise sit on disk unmentioned, which is
+            // the same silence the sign-in and leave paths were fixed for.
+            if let Err(e) = purged {
+                eprintln!(
+                    "openremote-daemon: this computer was removed from the account, but its copies of the account's chats could not be removed: {e}"
+                );
+            }
         }
     }
+}
+
+/// Whether the periodic compare has been started for this process. One daemon
+/// has one mesh, so one beat is enough; `sync_with` itself is idempotent per
+/// peer, so a double start would only double the traffic.
+static RETRY_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Starts the beat on the first peer that comes up. It must not wait for a link
+/// event to be scheduled, but it also must not run before there is a mesh.
+fn start_retry_beat(app: &Weak<App>) {
+    if RETRY_STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    tokio::spawn(async move {
+        if let Some(app) = app.upgrade() {
+            crate::sync::retry_loop(app).await;
+        }
+    });
 }
 
 #[cfg(test)]

@@ -29,6 +29,14 @@ use crate::supervisor::lock_recovering;
 const RANGE_BYTES: usize = 256 * 1024;
 /// Head notices for one chat go out at most this often.
 const HEAD_EVERY: Duration = Duration::from_millis(1000);
+/// A pull that lost its range waits this long before its one retry: long
+/// enough for a reconnect to start, short enough to stay inside one request.
+const PULL_RETRY_DELAY: Duration = Duration::from_secs(5);
+/// How often this device compares notes with the peers that are up. This is the
+/// beat a link event does not give: a tombstone this device refused (the stop
+/// and the force step both failed) and a copy left behind by a cut-off pull are
+/// offered again here, without waiting for a restart.
+const RETRY_EVERY: Duration = Duration::from_secs(300);
 
 #[derive(Default)]
 pub struct SyncState {
@@ -195,15 +203,28 @@ pub async fn pull(app: &Arc<App>, peer: DeviceId, id: SessionId, runner: DeviceI
     let Some(mesh) = app.cloud.mesh() else {
         return;
     };
+    let mut retried = false;
     loop {
         let from = local_head(app, &id);
-        let Some(range) = get(
+        let range = get(
             &mesh,
             peer,
             format!("/sync/sessions/{id}/events?from={from}"),
         )
-        .await
-        else {
+        .await;
+        let Some(range) = range else {
+            // A range that never arrived is the network (or the peer) going
+            // away between two chunks, not the end of the chat: say so once and
+            // try once more before leaving the copy behind for the retry beat
+            // to pick up.
+            if !retried {
+                retried = true;
+                eprintln!(
+                    "openremote-daemon: pulling chat {id} from {peer} was cut off after seq {from}; trying once more"
+                );
+                tokio::time::sleep(PULL_RETRY_DELAY).await;
+                continue;
+            }
             break;
         };
         let events: Vec<Value> = range["events"].as_array().cloned().unwrap_or_default();
@@ -244,22 +265,18 @@ pub async fn apply_tombstone(app: &Arc<App>, id: SessionId, stone: Tombstone) {
         return;
     }
     if running_here {
-        let stopped: Result<(), String> = app
-            .supervisor
-            .stop(&id)
-            .await
-            .map(|_| ())
-            .map_err(|e| e.to_string());
-        if !tombstone_after_stop(&stopped) {
-            // The row stays, and that is the point: a child whose row has been
-            // deleted is the one state that leaves a harness running with
-            // nothing left that could ever stop it, spending on a chat nobody
-            // can see. So a stop that failed is a failed delete; the peer keeps
-            // its tombstone and offers it again on the next sync beat, and the
-            // chat stays visible here with this failure in the log until one
-            // of the two succeeds.
-            let reason = stopped.err().unwrap_or_default();
-            eprintln!("openremote-daemon: could not stop {id} before deleting it: {reason}");
+        if let Err(reason) = stop_chat(app, &id).await {
+            // Two attempts at the kill path and the child is still there. The
+            // row stays: a child whose row has been deleted is the one state
+            // that leaves a harness running with nothing left that could ever
+            // stop it, spending on a chat nobody can see. Keeping the row also
+            // keeps the delete retriable - the peer offers its tombstone on
+            // every meeting and the retry beat asks every few minutes - and a
+            // child that survives both attempts is a machine-level failure the
+            // log shouts about rather than a quiet leak.
+            eprintln!(
+                "openremote-daemon: could not stop {id} on two attempts before deleting it: {reason}"
+            );
             return;
         }
     }
@@ -267,11 +284,56 @@ pub async fn apply_tombstone(app: &Arc<App>, id: SessionId, stone: Tombstone) {
     app.sync.forget(id);
 }
 
-/// Whether the tombstone may be written after the stop attempt. Split out so
-/// the rule is pinned without an App: only a stop that reported success may
-/// delete the row.
+/// Whether a stop attempt reported the child gone. Only a stop that succeeded
+/// may be followed by the tombstone; a chat that is not here at all also
+/// reports an error, and keeping its row until the next attempt is the
+/// harmless half of that (there is no child left to spend).
 pub fn tombstone_after_stop(stop: &Result<(), String>) -> bool {
     stop.is_ok()
+}
+
+/// Asks the supervisor to kill a chat's child, twice. `Supervisor::stop` is
+/// the kill path this crate can reach: it shuts the driver down and settles
+/// the entry, and it is the only per-chat kill the supervisor offers from
+/// outside itself. So the second call is the force step - the same mechanism,
+/// tried again after the child has had a moment to die on the first - rather
+/// than a new one. A chat that is not here reports that too, and there is
+/// nothing to kill.
+async fn stop_chat(app: &App, id: &SessionId) -> Result<(), String> {
+    let first = app
+        .supervisor
+        .stop(id)
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string());
+    if tombstone_after_stop(&first) {
+        return Ok(());
+    }
+    tokio::time::sleep(PULL_RETRY_DELAY).await;
+    app.supervisor
+        .stop(id)
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// The beat a link event does not give. Every few minutes this device compares
+/// notes with each peer that is up, so a tombstone refused because the child
+/// would not die, and a copy left behind by a cut-off pull, are offered again
+/// on an account where nothing restarts. Runs until the process ends with the
+/// rest of the mesh work; peers that went offline are not in the list, so the
+/// loop only spends on live links.
+pub async fn retry_loop(app: Arc<App>) {
+    loop {
+        tokio::time::sleep(RETRY_EVERY).await;
+        let Some(mesh) = app.cloud.mesh() else {
+            continue;
+        };
+        for peer in mesh.peers() {
+            let app = Arc::clone(&app);
+            tokio::spawn(async move { sync_with(&app, peer.id).await });
+        }
+    }
 }
 
 /// Two devices found each other: trade deletions, then pull what's missing.
@@ -580,6 +642,45 @@ mod tests {
         assert!(!tombstone_after_stop(&Err(
             "the harness did not exit".to_string()
         )));
+    }
+
+    #[test]
+    fn the_delete_path_asks_for_the_kill_and_keeps_the_result() {
+        // Wiring pin, source text. Nothing in this crate can make `stop` fail on
+        // demand, so an e2e that drives a tombstone through a failing stop does
+        // not exist yet; what can be pinned is the call site, because a
+        // regression that put `let _ = app.supervisor.stop(&id)` back would
+        // leave every other test in the tree green: the rule helper is still
+        // tested and the store is still correct, and only the wiring lies.
+        let src = include_str!("sync.rs");
+        let body = src
+            .split("pub async fn apply_tombstone")
+            .nth(1)
+            .expect("apply_tombstone is in this file")
+            .split("pub fn tombstone_after_stop")
+            .next()
+            .expect("the function has a body");
+        assert!(
+            body.contains("stop_chat(app, &id).await"),
+            "the delete path must ask for the kill through stop_chat"
+        );
+        assert!(
+            !body.contains("let _ = app.supervisor.stop"),
+            "and must not discard the result again"
+        );
+        assert!(
+            body.contains("return;"),
+            "a child that survived both attempts must keep the row"
+        );
+    }
+
+    #[test]
+    fn the_retry_beat_is_no_slower_than_the_refresher() {
+        // The beat exists because a link event is not guaranteed on a pair that
+        // simply stays up. Five minutes keeps it in step with the mesh's
+        // device-list refresher; a longer one would leave a refused delete
+        // waiting for a restart that may never come.
+        assert!(RETRY_EVERY <= Duration::from_secs(300));
     }
 
     #[test]

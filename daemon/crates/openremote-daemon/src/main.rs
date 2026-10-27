@@ -233,6 +233,9 @@ fn status_line(enrolled: bool, email: Option<&str>) -> (String, u8) {
 async fn unenroll() -> ExitCode {
     let data_dir = app::default_data_dir();
     let cloud = Cloud::open(CloudConfig::from_env(), &data_dir);
+    // What the machine had before this run, for the sentence: a computer that
+    // was never enrolled did not leave anything, and must not be told it did.
+    let enrolled = cloud.device_credential().is_some() || cloud.device_id().is_some();
     // The account's side is best effort, but never silent: the registry delete
     // can fail (offline, a credential the registry already rejected), and the
     // sentence below says which half of "left the account" actually happened.
@@ -246,7 +249,7 @@ async fn unenroll() -> ExitCode {
         _ => None,
     };
     let local_error = cloud.signout().await.err().map(|e| e.to_string());
-    let (line, code) = unenroll_answer(local_error.as_deref(), registry_error.as_deref());
+    let (line, code) = unenroll_answer(enrolled, local_error.as_deref(), registry_error.as_deref());
     if code == 0 {
         println!("{line}");
     } else {
@@ -255,13 +258,23 @@ async fn unenroll() -> ExitCode {
     ExitCode::from(code)
 }
 
-/// The sentence and the code after an unenroll attempt: `local_error` when the
-/// sign-out itself failed, `registry_error` when the account still lists this
-/// computer. The code follows the account, not just the disk - a machine sold
-/// on must not read as gone while the account still lists it.
-fn unenroll_answer(local_error: Option<&str>, registry_error: Option<&str>) -> (String, u8) {
+/// The sentence and the code after an unenroll attempt: `enrolled` is what the
+/// machine had before the attempt, `local_error` is when the sign-out itself
+/// failed, `registry_error` when the account still lists this computer. The
+/// code follows the account, not just the disk - a machine sold on must not
+/// read as gone while the account still lists it - and a machine that was never
+/// enrolled gets the same sentence `status` uses, because it did not leave
+/// anything.
+fn unenroll_answer(
+    enrolled: bool,
+    local_error: Option<&str>,
+    registry_error: Option<&str>,
+) -> (String, u8) {
     if let Some(e) = local_error {
         return (format!("openremote-daemon: {e}"), 1);
+    }
+    if !enrolled {
+        return ("Not in OpenRemote Cloud.".to_string(), 0);
     }
     match registry_error {
         Some(e) => (
@@ -297,18 +310,24 @@ mod tests {
 
     #[test]
     fn unenroll_says_which_half_happened() {
-        let (line, code) = unenroll_answer(None, None);
+        let (line, code) = unenroll_answer(true, None, None);
         assert_eq!(code, 0);
         assert_eq!(line, "This computer left OpenRemote Cloud.");
 
+        // A machine that was never enrolled did not leave anything: it gets the
+        // sentence `status` uses for that state, not a claim that it left.
+        let (line, code) = unenroll_answer(false, None, None);
+        assert_eq!(code, 0);
+        assert_eq!(line, "Not in OpenRemote Cloud.");
+
         // The account still lists it: the sentence says so, and the code
         // agrees rather than reporting a clean exit.
-        let (line, code) = unenroll_answer(None, Some("offline"));
+        let (line, code) = unenroll_answer(true, None, Some("offline"));
         assert_eq!(code, 1);
         assert!(line.contains("still lists it"));
 
         // The local sign-out failed: the account was never reached at all.
-        let (line, code) = unenroll_answer(Some("no credential"), Some("offline"));
+        let (line, code) = unenroll_answer(true, Some("no credential"), Some("offline"));
         assert_eq!(code, 1);
         assert!(line.contains("no credential"));
     }

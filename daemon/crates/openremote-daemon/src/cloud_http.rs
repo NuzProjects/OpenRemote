@@ -141,6 +141,11 @@ pub async fn callback(State(app): State<Arc<App>>, Query(q): Query<CallbackQuery
     };
     match app.cloud.finish_signin(&code, &state).await {
         Ok(signed_in) => {
+            // The credential is stored and this computer is in Cloud from here
+            // on, so the loop that makes that true on the wire starts before
+            // anything can send the person away: a page must never describe a
+            // machine that is not in the state it claims.
+            app.start_cloud();
             // The one call that makes an account switch safe, so it is not a
             // footnote: an earlier account's synced chats must be gone before
             // this one is announced. Purged on every sign-in rather than only
@@ -159,15 +164,17 @@ pub async fn callback(State(app): State<Arc<App>>, Query(q): Query<CallbackQuery
                 );
                 return page(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    "Sign-in did not finish",
-                    "This computer is signed in, but the chats an earlier account had copied here could not be removed. Nothing was deleted on any other device. Sign in again to retry the cleanup.",
+                    "Signed in, but not cleaned up",
+                    &format!(
+                        "OpenRemote Cloud is on for {}, but the chats an earlier account had copied here could not be removed. Nothing was deleted on any other device. Sign in again to retry the cleanup.",
+                        escape(&signed_in.account.email)
+                    ),
                 );
             }
             {
                 let mut store = crate::supervisor::lock_recovering(&app.store);
                 let _ = store.set_this_device(Some(signed_in.device_id));
             }
-            app.start_cloud();
             page(
                 StatusCode::OK,
                 "You're signed in",
