@@ -253,10 +253,15 @@ export function ConsoleProvider({ children }) {
     // leaves by itself when the daemon answers, so it is the honest thing to
     // show while the shell has no address. It is only ever entered from
     // `connecting`: a first run starts in `new` and shows the wizard.
+    //
+    // `grace` marks this patience, because it is not a failure: nothing has
+    // said anything went wrong, and the screen must not offer the button that
+    // restarts the sidecar (that would throw a healthy boot away). Only the
+    // shell's own reason clears the room for it (DaemonStatus).
     const slow = setTimeout(
       () =>
         setConnection((c) =>
-          c.state === 'connecting' ? { state: 'waiting-daemon', error: null } : c,
+          c.state === 'connecting' ? { state: 'waiting-daemon', error: null, grace: true } : c,
         ),
       BOOT_GRACE_MS,
     )
@@ -329,6 +334,14 @@ export function ConsoleProvider({ children }) {
   // itself. The connection follows the health lists alone - the same four the
   // beat watches (BEAT_LISTS in beat.js) - and a beat refills whatever failed
   // here, so an unhappy route catches up without a restart.
+  // A boot chain belongs to a connection and to whether that connection has
+  // failed, not to the state it is showing. Keying this effect on
+  // `connection.state` made the grace's own flip (connecting to the waiting
+  // screen) cancel an in-flight chain and start a second one: a daemon that was
+  // merely slow got asked twice, and could connect later than its first chain
+  // would have. The flag below changes only when a boot itself fails, so the
+  // grace and the other patient states leave a running chain alone.
+  const bootFailed = connection.state === 'error'
   useEffect(() => {
     if (!api.ready || connection.state === 'connected') return undefined
     let cancelled = false
@@ -397,7 +410,7 @@ export function ConsoleProvider({ children }) {
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api, connection.state])
+  }, [api, bootFailed])
 
   // The beat: the sidebar's truth, machines, MCP servers and rules ride it,
   // and capabilities ride it too so a harness installed, removed or signed in
