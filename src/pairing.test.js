@@ -52,7 +52,13 @@ test('a phone name cannot carry a direction override past the list', () => {
   // Ordinary names are untouched: accented Latin and CJK are not invisible.
   assert.equal(phoneName('Téléphone de Zoé'), 'Téléphone de Zoé')
   assert.equal(phoneName('山田のスマホ'), '山田のスマホ')
-  // The cap counts characters, as the daemon does, not UTF-16 units.
+  assert.equal(phoneName('Büro Pixel'), 'Büro Pixel')
+  assert.equal(phoneName('电话 Pixel'), '电话 Pixel')
+  // The daemon's two: eighty invisibles after a word leave the word, and
+  // invisibles alone leave nothing, which is the fallback. The cap counts
+  // characters as the daemon does, not UTF-16 units.
+  assert.equal(phoneName(`Pixel${'\u200B'.repeat(80)}`), 'Pixel')
+  assert.equal(phoneName('\u202E\u200B\uFEFF'), 'Phone')
   assert.equal(Array.from(phoneName('😀'.repeat(60))).length, 40)
 })
 
