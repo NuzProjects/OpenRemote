@@ -134,6 +134,17 @@
   color: var(--green);
 }
 
+/* Installed, but not able to start a task yet (not signed in) or standing on
+   an API key: the name stays readable and the state stays a quiet fact,
+   never the green that means ready. */
+.ob-harness--quiet {
+  color: var(--text-1);
+}
+
+.ob-harness--quiet .ob-harness-state {
+  color: var(--text-3);
+}
+
 .ob-progress {
   display: flex;
   gap: 6px;
