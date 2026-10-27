@@ -213,16 +213,19 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
   const savedEffort = defaults.efforts?.[defaultHarness?.id] ?? null
   const chosenEffort = effortTiers.includes(savedEffort) ? savedEffort : null
   // The permission row offers only the default harness's own words -
-  // the same rule the composer holds. No words, no row.
+  // the same rule the composer holds. No words, no row. The saved word is
+  // shown only while the harness still offers it, so a word from another
+  // harness reads as unset rather than as a choice that would not apply.
   const permissionWords = defaultHarness?.permission_modes ?? []
   const savedPermission = defaults.permissions?.[defaultHarness?.id] ?? null
   const chosenPermission = permissionWords.some((w) => w.w === savedPermission) ? savedPermission : null
-    ? savedPermission
-    : null
 
   const setPref = (partial) => {
     savePrefs(partial)
     setPrefs(loadPrefs())
+    // A pref chosen from a picker closes it, the way `set` does for the New
+    // tasks rows: leaving the menu open read as "the choice did not land".
+    setPicker(null)
   }
 
   const openPicker = (kind) => (e) => setPicker({ kind, x: e.clientX, y: e.clientY })
@@ -403,6 +406,18 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
   const shortcutSearchRef = useRef(null)
   const navRef = useRef(null)
   const tabs = useMemo(() => visibleSections(isMobile), [])
+  // Lay the strip out the way the stylesheet does (settings.css turns it into a
+  // horizontal row at 700px), so the tablist can announce what it really is.
+  const [narrow, setNarrow] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 700px)').matches,
+  )
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 700px)')
+    const onChange = () => setNarrow(query.matches)
+    onChange()
+    query.addEventListener('change', onChange)
+    return () => query.removeEventListener('change', onChange)
+  }, [])
   const active = tabs.some((s) => s.id === tab) ? tab : tabs[0].id
   const navGroups = useMemo(
     () =>
@@ -437,6 +452,17 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
         detail: harnessName(s.harness),
         terms: ['archive', 'chat', 'restore', 'delete'],
       })),
+      // One block per harness that can run custom endpoints, the way the
+      // harness rows are generated: a rendered block belongs in the index.
+      ...harnessList
+        .filter((h) => h.custom_endpoint_supported)
+        .map((h) => ({
+          key: `models-${h.id}`,
+          section: 'models',
+          label: `Model endpoints for ${harnessName(h.id)}`,
+          detail: 'Custom model servers this harness can run through.',
+          terms: ['endpoint', 'gateway', 'custom', 'model', 'relay', h.id],
+        })),
     ]
     return [...SETTINGS_ENTRIES, ...dynamic]
   }, [harnessList, mcpServers, archivedRows, chats])
@@ -452,9 +478,14 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
     if (!tray?.available) keys.add('startup-tray')
     if (!daemonDetail?.url) keys.add('daemon-address')
     if (!hasTauri) keys.add('daemon-restart')
+    // The connect row renders only while nothing is connected and only where
+    // the shell can offer the form; the stale-key row only while there is a
+    // stale key to clear.
+    if (!onManualConnect || connection.state === 'connected') keys.add('daemon-connect')
+    if (!(kb?.staleBindings?.length > 0)) keys.add('keyboard-stale')
     if (isMobile) keys.add('install-first-run')
     return keys
-  }, [models, effortTiers, permissionWords, autoStart, tray, daemonDetail])
+  }, [models, effortTiers, permissionWords, autoStart, tray, daemonDetail, onManualConnect, connection.state, kb])
 
   const searchable = useMemo(() => {
     const ids = new Set(tabs.map((s) => s.id))
@@ -647,7 +678,10 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
           className="stg-nav"
           role="tablist"
           aria-label="Settings sections"
-          aria-orientation="vertical"
+          // The strip is a vertical rail on a wide window and a horizontal row
+          // under 700px (settings.css), so the announced orientation follows the
+          // same breakpoint rather than claiming vertical in both.
+          aria-orientation={narrow ? 'horizontal' : 'vertical'}
           hidden={isMobile && !!query}
           onKeyDown={onTabKey}
         >

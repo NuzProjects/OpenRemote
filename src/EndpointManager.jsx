@@ -58,6 +58,10 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
   // of view or losing focus (use-armed-row.js).
   const [armed, setArmed] = useState(null)
   const armWatch = useArmedRow(armed, setArmed)
+  // The row whose removal is in flight. Two presses used to send two deletes
+  // over the same row, and the second answered a 404 while the first was still
+  // settling the list; the button disables and says what it is doing.
+  const [removing, setRemoving] = useState(null)
   // The fields as they were when this editor opened, and the table's own
   // close hint: the same dirty rule the rule editor uses (form-dirty.js), so a
   // backdrop click or Esc cannot throw away a pasted key.
@@ -172,14 +176,18 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
   }
 
   const remove = async (id) => {
+    if (removing != null) return
     setError(null)
     setArmed(clearRow())
+    setRemoving(id)
     try {
       await api.device(deviceId).removeEndpoint(id)
       await load()
       onChanged?.()
     } catch (err) {
       setError(errorCopy(err))
+    } finally {
+      setRemoving(null)
     }
   }
 
@@ -252,8 +260,10 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
             <div key={entry.id} className="pn-row pn-row--stack">
               <div className="pn-row-main">
                 <div>
+                  {/* The person names this endpoint and points it at their own
+                      server, so both halves are theirs: they blur together. */}
                   <div className="pn-name">
-                    {entry.name}
+                    <span className="pv">{entry.name}</span>
                     {entry.is_default ? ' · default' : ''}
                     {entry.enabled ? '' : ' · off'}
                   </div>
@@ -291,13 +301,19 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
                       className="pn-btn pn-btn--danger"
                       ref={armWatch.buttonRef}
                       onBlur={armWatch.onBlur}
+                      disabled={removing === entry.id}
                       onClick={() => remove(entry.id)}
                       title="Its saved key goes with it, and there is no undo"
                     >
-                      Remove it and its key
+                      {removing === entry.id ? "Removing…" : "Remove it and its key"}
                     </button>
                   ) : (
-                    <button type="button" className="pn-btn" onClick={() => setArmed((curr) => armRow(curr, entry.id))}>
+                    <button
+                      type="button"
+                      className="pn-btn"
+                      disabled={removing != null}
+                      onClick={() => setArmed((curr) => armRow(curr, entry.id))}
+                    >
                       Remove
                     </button>
                   )}

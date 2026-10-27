@@ -922,7 +922,10 @@ export default function NewChat({
                     onClick={() => applyPreset(preset)}
                     onDoubleClick={() => beginRename(preset)}
                   >
-                    {chipLabel(preset)}
+                    {/* A preset carries the name the person gave it (and, in
+                        the summary form, the project it was saved in), so it
+                        blurs with their other content. */}
+                    <span className="pv">{chipLabel(preset)}</span>
                   </button>
                 )}
                 <button

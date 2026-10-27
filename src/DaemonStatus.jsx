@@ -52,7 +52,9 @@ export default function DaemonStatus({ onManualConnect = null }) {
     <div className="ds">
       <div className="ds-panel" role="status" aria-live="polite">
         <h1 className="ds-title">{status.title}</h1>
-        {status.detail && <p className="ds-detail">{status.detail}</p>}
+        {/* The shell's own sentence, which can carry the sidecar's absolute
+            path - the person's home folder - so it blurs like the rest. */}
+        {status.detail && <p className="ds-detail pv">{status.detail}</p>}
         <p className="ds-note">{booting ? BOOTING_NOTE : status.note}</p>
         {status.action === 'try-now' && !booting && (
           <button className="ds-cta" onClick={retryNow} disabled={retrying}>

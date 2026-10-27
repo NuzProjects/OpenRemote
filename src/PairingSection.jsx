@@ -270,7 +270,7 @@ export default function PairingSection() {
               <span className="qr-phone-icon">
                 <DeviceMobile size={17} weight="light" />
               </span>
-              <span className="qr-phone-name">{phoneName(phone.name)}</span>
+              <span className="qr-phone-name pv">{phoneName(phone.name)}</span>
               <span className="qr-phone-when">{pairedLabel(phone, now)}</span>
               <button className="pn-btn" onClick={() => revoke(phone.id)}>
                 Remove

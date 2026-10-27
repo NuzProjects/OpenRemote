@@ -70,9 +70,12 @@ const ROWS = [
   row('cloud-account', 'cloud', 'Account', "Your moreweb account and this device's place in it.", ['sign in', 'sign out', 'email', 'sync', 'device']),
 
   row('daemon-connection', 'daemon', 'Daemon connection', 'The local process the chats run through.', ['connect', 'connection', 'token', 'local']),
+  row('daemon-connect', 'daemon', 'Connect by address', 'The address and token of a daemon you run yourself.', ['connect', 'address', 'token', 'manual', 'elsewhere']),
   row('daemon-chats', 'daemon', 'Chats on record', 'Sessions survive daemon restarts; stopped ones can resume.', ['sessions', 'record', 'history', 'resume']),
   row('daemon-address', 'daemon', 'Daemon address', 'The local address the console talks to.', ['url', 'port', 'data', 'folder', 'path']),
   row('daemon-restart', 'daemon', 'Restart', 'Stops running chats and starts a fresh daemon.', ['stop', 'start', 'daemon']),
+
+  row('keyboard-stale', 'keyboard', 'Saved shortcut for an action this build no longer has', 'A key saved for an action that is gone, and the button that clears it.', ['shortcut', 'stale', 'unused', 'clear', 'saved']),
 
   row('mcp-add', 'mcp-servers', 'Add an MCP server', 'Its launch command, as the machine would start it.', ['tool', 'add', 'command', 'server']),
   row('models-endpoint-add', 'models', 'Add a model endpoint', 'A base URL on this machine or network that lists models.', ['endpoint', 'gateway', 'custom', 'model', 'base url', 'relay', 'self-hosted']),

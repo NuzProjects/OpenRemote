@@ -39,6 +39,9 @@ export default function McpServersSection() {
   // chat that is running would keep starting a server the record no
   // longer describes: the first press arms, the second removes.
   const [armed, setArmed] = useState(null)
+  // The row whose removal is in flight, so a second press cannot send a second
+  // delete over the same row (the second would answer a 404).
+  const [removing, setRemoving] = useState(null)
   // The arm ends when the row scrolls out of view or loses focus (see
   // use-armed-row.js), so a first press cannot outlive the user's attention.
   const armWatch = useArmedRow(armed, setArmed)
@@ -59,12 +62,16 @@ export default function McpServersSection() {
   }
 
   const remove = async (id) => {
+    if (removing != null) return
     setError(null)
     setArmed(clearRow())
+    setRemoving(id)
     try {
       await removeMcpServer(id)
     } catch (err) {
       setError(errorCopy(err))
+    } finally {
+      setRemoving(null)
     }
   }
 
@@ -92,7 +99,9 @@ export default function McpServersSection() {
             <div key={p.id} className="pn-row pn-row--stack" data-stg={`mcp-${p.id}`}>
               <div className="pn-row-main">
                 <div>
-                  <div className="pn-name">{p.name}</div>
+                  {/* The person names these, so the name is theirs, not the
+                      catalogue's: it blurs with their other content. */}
+                  <div className="pn-name pv">{p.name}</div>
                   <div className="pn-detail">
                     {p.detail}
                     {oneMachine ? '' : <> · <span className="pv">{host}</span></>}
@@ -126,13 +135,19 @@ export default function McpServersSection() {
                       className="pn-btn pn-btn--danger"
                       ref={armWatch.buttonRef}
                       onBlur={armWatch.onBlur}
+                      disabled={removing === p.id}
                       onClick={() => remove(p.id)}
                       title="Its launch command and binding go with it, and there is no undo"
                     >
-                      Remove it and its launch command
+                      {removing === p.id ? "Removing…" : "Remove it and its launch command"}
                     </button>
                   ) : (
-                    <button type="button" className="pn-btn" onClick={() => setArmed((curr) => armRow(curr, p.id))}>
+                    <button
+                      type="button"
+                      className="pn-btn"
+                      disabled={removing != null}
+                      onClick={() => setArmed((curr) => armRow(curr, p.id))}
+                    >
                       Remove
                     </button>
                   )}
