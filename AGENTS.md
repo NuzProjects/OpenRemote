@@ -91,27 +91,24 @@ openremote-daemon unenroll     # leave Cloud (keeps private chats)
 cd daemon
 cargo test --locked            # unit + e2e
 cargo clippy --all-targets --locked -- -D warnings
-cargo fmt --all --check        # CI runs this and the lint; both are red here
+cargo fmt --all --check        # CI runs this and the lint; the lint is red here
 ```
 
-Neither of those two gates passes in this tree, and neither failure is in
-the shell. `cargo fmt --all --check` reports one hunk, in
-`daemon/crates/openremote-daemon/src/main.rs:242` (the `match` in
-`unenroll`), and it is in the committed tree rather than local dirt: the
-last commit to touch that file is "daemon: a delete finishes, and the retry
-has a beat behind it". `cargo clippy --all-targets --locked -- -D warnings`
-stops on three lints (`openremote-daemon/src/http.rs:376`, unneeded cloning
-of iterator items; `openremote-daemon/src/http.rs:624`, unneeded late
-initialization; `openremote-daemon/src/supervisor.rs:1215`, a function with
-9 arguments where 7 is the limit), which the run prints as five `error:`
-lines: those three and the two `could not compile` lines after them.
-`cargo fmt --check` inside `src-tauri` alone is green, because the shell's
-own files are formatted.
+`cargo fmt --all --check` is green, and so is the shell's own `cargo
+fmt --check` inside `src-tauri`. The one gate that does not pass is the
+lint: `cargo clippy --all-targets --locked -- -D warnings` stops on three
+lints (`openremote-daemon/src/http.rs:376`, unneeded cloning of iterator
+items; `openremote-daemon/src/http.rs:624`, unneeded late initialization;
+`openremote-daemon/src/supervisor.rs:1215`, a function with 9 arguments
+where 7 is the limit), which the run prints as five `error:` lines: those
+three and the two `could not compile` lines after them. Each of the three
+sits in a file whose work is still in flux, so the repair is the same one
+`cargo fmt` needed: land those edits, then run the linter over them.
 
-The format failure came in with last night's daemon work rather than with an
-older spread: the unenroll change landed in a shape rustfmt wants to rewrap,
-so the repair is one `cargo fmt` inside `daemon` once that file's work has
-settled, not a reformat of the workspace.
+The format gate went red for a night and is green again: the unenroll change
+landed in a shape rustfmt wants to rewrap, and one `cargo fmt` inside `daemon`
+cleared it. That is the shape of the remaining repairs too - a small edit in a
+file that is being worked on, rather than a reformat of the workspace.
 
 ## The sidecar, and its two copies
 
@@ -236,9 +233,9 @@ from the repo root: `npm test` (prints a count; 912 the last time this line
 was checked, and the run is the truth rather than this number), `node
 scripts/check-tab-acl.mjs` (says `tab acl ok: 2 capability file(s), every
 non-phone one scoped to the main webview, every declared command (27)
-granted`), `cd daemon && cargo fmt --all --check` (lists the one file named
-under Commands), and `cd daemon && cargo clippy --all-targets --locked -- -D
-warnings` (lists the three lints). The route and tier claims in "Cloud's
+granted`), `cd daemon && cargo fmt --all --check` (exits 0 on this tree), and
+`cd daemon && cargo clippy --all-targets --locked -- -D warnings` (lists the
+three lints). The route and tier claims in "Cloud's
 trust model" are counted from `PEER_ROUTES` in
 `daemon/crates/openremote-daemon/src/http.rs`, the peer paths are driven in
 `daemon/crates/openremote-daemon/tests/e2e_cloud_mesh.rs`, and
