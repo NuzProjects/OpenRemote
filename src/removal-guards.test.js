@@ -37,3 +37,12 @@ test('the rule trash says the schedule goes with the rule', () => {
   assert.match(view, /Remove it and its schedule/)
   assert.match(view, /The rule and its schedule go, and there is no undo/)
 })
+
+test('the armed project row carries its promise as a visible line', () => {
+  const side = source('Sidebar.jsx')
+  assert.match(side, /className="sb-unregister-note"/)
+  assert.match(side, /The project goes; its chats move to Chats and the folder on disk is never touched\./)
+  // The tooltip stays, as the hover repeat rather than the only home.
+  assert.match(side, /title="Unregister this project\. Its chats move to Chats and the folder on disk is never touched\."/)
+  assert.match(source('sidebar.css'), /\.sb-unregister-note \{/)
+})

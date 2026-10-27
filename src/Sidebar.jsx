@@ -657,6 +657,9 @@ export default function Sidebar({
                 >
                   Unregister
                 </button>
+                <p className="sb-unregister-note">
+                  The project goes; its chats move to Chats and the folder on disk is never touched.
+                </p>
               ) : (
                 <>
                   {/* A new chat already in this project, straight from its
