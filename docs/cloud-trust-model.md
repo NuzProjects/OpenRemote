@@ -173,7 +173,7 @@ peer rows), not from driving a chat.
   second check. The note channel is not in that list at all, so no "cannot" column above describes
   what a note can do (see One-way notes).
 - The pins file as a last line of defence: `pins()` treats an unreadable `peers.json` as no pins at
-  all, so a corrupted file re-pins whatever the registry serves (`mesh.rs:310-315`). It is a detection
+  all, so a corrupted file re-pins whatever the registry serves (`mesh.rs:335-340`). It is a detection
   mechanism, not an authority.
 
 ## Rows that look dangerous and are not reachable by a peer
