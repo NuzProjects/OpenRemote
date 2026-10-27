@@ -128,7 +128,17 @@ pub fn parse_frame(line: &str) -> Option<Frame> {
     match kind.as_str() {
         "system" => match raw.get("subtype").and_then(|s| s.as_str()) {
             Some("init") => Some(Frame::Init {
-                session_id: raw.get("session_id").and_then(|s| s.as_str())?.to_string(),
+                // A CLI that names no conversation has still started. Taking
+                // the id with `?` dropped the whole frame, and with it the
+                // model, the permission word and the command list the chat
+                // needs: the start went unnoticed and a later resume looked
+                // like a fresh chat. An empty ref is a fact the resume path
+                // can refuse on; a dropped frame is silence.
+                session_id: raw
+                    .get("session_id")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
                 model: raw.get("model").and_then(|m| m.as_str()).map(String::from),
                 permission_mode: raw
                     .get("permissionMode")
@@ -320,6 +330,33 @@ mod tests {
                 assert_eq!(model.as_deref(), Some("sonnet"));
                 assert_eq!(permission_mode.as_deref(), Some("default"));
                 assert_eq!(slash_commands, vec!["compact", "notes:jot"]);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_init_without_a_session_id_keeps_the_rest_of_the_frame() {
+        // A CLI that names no conversation has still started, and its
+        // model, permission word and command list are real news. Dropping
+        // the frame whole is what left the chat looking like it had never
+        // begun: the empty ref is a fact the resume path can refuse on,
+        // and silence was not.
+        let frame = parse_frame(
+            r#"{"type":"system","subtype":"init","model":"sonnet","permissionMode":"plan","slash_commands":["compact"]}"#,
+        )
+        .expect("a session_id-less init is still an init frame");
+        match frame {
+            Frame::Init {
+                session_id,
+                model,
+                permission_mode,
+                slash_commands,
+            } => {
+                assert_eq!(session_id, "");
+                assert_eq!(model.as_deref(), Some("sonnet"));
+                assert_eq!(permission_mode.as_deref(), Some("plan"));
+                assert_eq!(slash_commands, vec!["compact"]);
             }
             other => panic!("unexpected {other:?}"),
         }
