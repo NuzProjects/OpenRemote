@@ -208,11 +208,12 @@ an old process is still alive; find it before re-running).
   It also runs nightly (03:17 UTC)
   to publish the rolling `nightly` prerelease from the default branch,
   and a manual run stays build-only unless its channel input says
-  `nightly`. Every published release carries version-free asset names
-  beside the versioned ones (`OpenRemote-Setup-x64.exe`,
-  `-x86_64.AppImage`, `-universal.dmg`, and so on), so
+  `nightly`. Every published release carries the six version-free asset
+  names (`OpenRemote-Setup-x64.exe`, `-Setup-x64.msi`, `-x86_64.AppImage`,
+  `-amd64.deb`, `-universal.dmg`, `-universal.apk`) so
   `releases/latest/download/<name>` is the stable channel and
-  `releases/download/nightly/<name>` the nightly one. `docs/release-channels.md`
+  `releases/download/nightly/<name>` the nightly one; the Android APK is
+  the one that also ships under its versioned name beside them. `docs/release-channels.md`
   has the details and the nightly's prerelease rule. The Linux job also uploads the
   machine installer's download: `openremote-daemon-linux-x86_64` plus
   `SHA256SUMS`, cross-built with zig pinned to glibc 2.28 (a runner
