@@ -106,6 +106,13 @@ shell's own files are formatted; `--all` also formats this crate's path
 dependencies under `../daemon`, which is why both workspaces report the
 same eight.
 
+The format failure is not local dirt: `cargo fmt --all --check` fails on a
+clean checkout too, at the pushed main (`c17bb60`) and at the branch head
+(`097e0c3`), with 42 hunks in the same eight files on both. The repair is
+one `cargo fmt` across the daemon workspace once the work in those files has
+landed; all eight are among the files in flux on this tree, so reformatting
+them first would rewrite someone's in-flight edits.
+
 ## The sidecar, and its two copies
 
 The desktop app runs the daemon as a Tauri sidecar (`externalBin:

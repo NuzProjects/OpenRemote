@@ -21,8 +21,10 @@ import { MAX_RENDER_ROWS, capRows } from './render-budget.js'
 import { useBack } from './use-back.js'
 import { useDialog } from './dialog-focus.js'
 import './devices.css'
-// The styles for this surface live with the main canvas they are read in.
-import './sidebar.css'
+// Its own sheet, imported here rather than borrowed from the sidebar: the
+// review belongs to the dialog, not to whatever happens to be mounted
+// beside it.
+import './changes.css'
 
 // Anything that can reach the shell can ask for the review; the mounted
 // modal answers. The same shape as popups.js, kept here because the thing

@@ -255,8 +255,11 @@ spacing.
   sliding knob, amber when on; green stays reserved for running/ok. On/Off
   words never stand in for a switch.
 - **Modals:** one family (Esc / backdrop / X close): device, plugin, about,
-  confirm, and the thirteen overlays `src/esc-layer-wiring.test.js` lists
-  (counted as the files in its `MODALS` array). Panels, not surprise
+  confirm, the command palette, and every dialog the console has - anything
+  that declares itself one (`aria-modal`) holds its layer through the shared
+  hook, and `src/esc-layer-wiring.test.js` discovers the family from that
+  declaration rather than keeping a list by hand, so a dialog added later is
+  covered without editing the test. Panels, not surprise
   shapes. The keyboard is part of the definition, not a bonus: focus moves
   in when a dialog opens (unless a field already took it on purpose), Tab
   stays inside it, everything behind it is `inert` for both the tab order

@@ -61,13 +61,17 @@ test('the shell can mount it with a chat and nothing else', () => {
   assert.match(modal, /listeners\.add\(ask\)/)
 })
 
-test('its styles live with the main canvas, and add no colour or shadow', () => {
-  const css = source('sidebar.css')
-  assert.match(css, /Changes in this chat \(ChangesModal\)/)
+test('its styles are its own sheet, and add no colour or shadow', () => {
+  // The dialog imports its own sheet; borrowing the sidebar's would make the
+  // review depend on whatever else the shell happens to load.
+  assert.match(source('ChangesModal.jsx'), /import '\.\/changes\.css'/)
+  assert.doesNotMatch(source('ChangesModal.jsx'), /import '\.\/sidebar\.css'/)
+  const css = source('changes.css')
+  assert.match(css, /The review surface:/)
   for (const rule of ['.chg-modal', '.chg-file', '.chg-path', '.chg-diff', '.chg-cell--del', '.chg-cell--add', '.chg-empty']) {
     assert.match(css, new RegExp(rule.replace('.', '\\.')), `${rule} is styled`)
   }
-  const block = css.slice(css.indexOf('Changes in this chat (ChangesModal)'))
+  const block = css
   assert.doesNotMatch(block, /box-shadow/, 'no shadows for depth')
   // The only literal colours are the contract's split-diff tints; every
   // other colour is a token.
@@ -75,11 +79,12 @@ test('its styles live with the main canvas, and add no colour or shadow', () => 
   assert.deepEqual(literals, ['#f87171'], 'the red fallback, and nothing else')
   assert.match(block, /rgba\(248, 113, 113, 0\.18\)/, 'del tint from the contract')
   assert.match(block, /rgba\(76, 180, 135, 0\.2\)/, 'add tint from the contract')
+  // And nothing of the review is left in the sidebar's sheet.
+  assert.doesNotMatch(source('sidebar.css'), /\.chg-/)
 })
 
 test('a phone gets one column of diff, not two half-width ones', () => {
-  const css = source('sidebar.css')
-  const block = css.slice(css.indexOf('Changes in this chat (ChangesModal)'))
-  assert.match(block, /@media \(max-width: 639px\)/)
-  assert.match(block, /grid-template-columns: minmax\(0, 1fr\);/)
+  const css = source('changes.css')
+  assert.match(css, /@media \(max-width: 639px\)/)
+  assert.match(css, /grid-template-columns: minmax\(0, 1fr\);/)
 })
