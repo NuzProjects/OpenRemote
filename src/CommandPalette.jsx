@@ -69,7 +69,7 @@ const SECTION_CAP = 8
 
 const projectLabel = (p) => p.folders[0].split(/[\\/]/).filter(Boolean).pop()
 
-export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onOpenProject, onOpenMachine }) {
+export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onOpenProject, onOpenMachine, onRace, raceFree }) {
   // One line on purpose: the stop-everything wiring test reads this call to
   // prove the palette stops chats through the action a single chat already
   // uses. The two new names sit before `stopChat`, which stays last.
@@ -189,8 +189,28 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
           },
         ]
       : []
-    return { actions: [...stopRow, ...review, ...jobRow, ...pages, ...actions], chats: chatRows, projectRows, machines }
-  }, [kb, sessions, chats, archived, projects, devices, thisDevice, capabilities, machines])
+    // One prompt into several harnesses at once: the console's own thesis as an
+    // action. A race opens a pane per harness, so a window with fewer than two
+    // free says why in the row's own words instead of offering a start the
+    // modal would have to refuse.
+    const raceShort = (raceFree ?? 0) < 2
+    const raceRow = [
+      {
+        key: 'action:race',
+        section: 'Actions',
+        name: 'Race a prompt across harnesses',
+        ...(raceShort ? { sub: 'No free pane' } : {}),
+        icon: <Repeat size={15} />,
+        run: { race: true },
+      },
+    ]
+    return {
+      actions: [...stopRow, ...raceRow, ...review, ...jobRow, ...pages, ...actions],
+      chats: chatRows,
+      projectRows,
+      machines,
+    }
+  }, [kb, sessions, chats, archived, projects, devices, thisDevice, capabilities, machines, raceFree])
 
   const sections = useMemo(() => {
     if (page === 'stop-all') {
@@ -339,6 +359,7 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
     requestAnimationFrame(() => {
       if (r.action) kb.run(r.action)
       else if (r.changes) openChanges(r.changes)
+      else if (r.race) onRace?.()
       else if (r.job) {
         requestJob(r.job)
         kb.run('view-automations')

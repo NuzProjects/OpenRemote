@@ -20,7 +20,7 @@ import { needsSignIn } from './cloud.js'
 import CloudNotices from './CloudNotices.jsx'
 import { hasTauri, isMobile } from './platform.js'
 import { connectionNotice } from './connection-notice.js'
-import { keepNav } from './nav.js'
+import { keepNav, pruneNav } from './nav.js'
 import { hashWriteReady } from './settings.js'
 import { Archive, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Copy, X } from '@phosphor-icons/react'
 import { pushBack, useBack } from './use-back.js'
@@ -30,9 +30,11 @@ import ContextMenu from './ContextMenu.jsx'
 import CommandPalette from './CommandPalette.jsx'
 import ShortcutSheet from './ShortcutSheet.jsx'
 import ChangesModal from './ChangesModal.jsx'
+import RaceModal from './RaceModal.jsx'
 import ViewPopup from './ViewPopup.jsx'
 import { POPUP_VIEWS, onPopup } from './popups.js'
 import { KeyboardProvider, useKeyboard, useShortcut } from './keyboard.jsx'
+import { freePanes, raceLayout } from './race.js'
 import {
   MAX_PANES,
   closeLeaf,
@@ -67,22 +69,35 @@ function loadMode() {
   }
 }
 
-function loadViewState(sessions) {
+const EMPTY_GONE = new Set()
+
+function loadViewState(sessions, gone = EMPTY_GONE) {
   let saved = null
   try {
     saved = JSON.parse(sessionStorage.getItem(STORE_KEY) ?? 'null')
   } catch {
     saved = null
   }
-  const known = new Set([...STATIC_VIEWS, ...sessions.map((s) => s.id)])
+  const known = new Set([...STATIC_VIEWS, ...(sessions ?? []).map((s) => s.id)])
   const hashView = location.hash.replace(/^#/, '')
   const fromHash = known.has(hashView) ? hashView : null
-  let history
-  let hIndex
-  if (saved?.history?.some((v) => known.has(v))) {
-    history = saved.history.filter((v) => known.has(v))
-    hIndex = Math.min(saved.hIndex ?? 0, history.length - 1)
-  } else {
+  // The stored history is kept as it stands, minus the chats this console
+  // knows are gone (`gone` comes from the same rule the chat records use).
+  // It used to be filtered by the current beat, so any beat that happened
+  // to come back short - the first one after a reconnect is empty - took
+  // the user's back stack with it.
+  const stored = Array.isArray(saved?.history)
+    ? saved.history.filter((view) => typeof view === 'string' && view.length > 0)
+    : []
+  const pruned = stored.length
+    ? pruneNav(
+        { history: stored, hIndex: Math.min(saved.hIndex ?? 0, stored.length - 1) },
+        gone,
+      )
+    : { history: [], hIndex: 0 }
+  let history = pruned.history
+  let hIndex = pruned.hIndex
+  if (history.length === 0) {
     history = ['new']
     hIndex = 0
   }
@@ -135,6 +150,10 @@ function Shell() {
   // empty one): any later identity is a beat's answer, and that answer
   // is the hold's release.
   const mountSessionsRef = useRef(sessions)
+  // Chat ids a beat has carried at least once, for the navigation prune: an
+  // id that was never listed is not a deleted chat, it is a chat this beat
+  // has not reached yet.
+  const seenIdsRef = useRef(new Set())
   const [sessionsAnswered, setSessionsAnswered] = useState(false)
   // Set from the waiting screen's "connect by address" link, for someone
   // who runs the daemon themselves: the first-run wizard opens straight on
@@ -233,7 +252,20 @@ function Shell() {
     // against the real list, which is the seed's consumption; from here
     // the hash-write effect may run again (hashWriteReady).
     if (sessions !== mountSessionsRef.current) setSessionsAnswered(true)
-    const state = loadViewState(sessions)
+    // The chats a beat has listed at least once, and the ones whose record
+    // the console dropped: a history step goes only when its chat was
+    // listed before, is listed no longer, and has no record left - the same
+    // rule `vanishedChatIds` uses in the state layer. A step whose chat was
+    // never in a beat (a reconnect's empty first beat, a chat created
+    // between beats) is not gone, and the back stack keeps it.
+    const seen = seenIdsRef.current
+    const live = new Set((sessions ?? []).map((s) => s.id))
+    for (const id of live) seen.add(id)
+    const gone = new Set()
+    for (const id of seen) {
+      if (!live.has(id) && !chats[id]) gone.add(id)
+    }
+    const state = loadViewState(sessions, gone)
     // A beat rebuilds the view state from storage whether or not anything
     // about it changed. Storing it only when it actually differs keeps the
     // shell from re-rendering on the clock, mid-stream.
@@ -353,6 +385,16 @@ function Shell() {
     const next = splitLeaf(layout, layout.focus, dir, id, before)
     if (next === layout) openInFocus(id)
     else setLayout(next)
+  }
+
+  // The race's chats arrived: one pane each, in the order they were picked.
+  // The plan lives in race.js, and it hands back the chat the primary pane must
+  // navigate to (an empty primary's view is the navigation, not a leaf field)
+  // plus the panes to open beside it, so the shell keeps owning the layout.
+  const startRace = (ids) => {
+    const { primary, layout: next } = raceLayout(layout, ids)
+    if (primary) openSession(primary)
+    if (next !== layout) setLayout(next)
   }
 
   // A chat dropped on a pane: the middle opens it in that pane, an outer
@@ -485,6 +527,9 @@ function Shell() {
   const kb = useKeyboard()
   const desk = onboarded && !isMobile
   const [palette, setPalette] = useState(false)
+  // The race modal: the palette's row opens it, and it hands back the chats it
+  // created so the shell can lay them out in the panes it already owns.
+  const [racing, setRacing] = useState(false)
   // The view open over the app, if any: settings, metrics or mobile.
   const [popup, setPopup] = useState(null)
   useEffect(() => onPopup((name) => setPopup(name)), [])
@@ -870,10 +915,19 @@ function Shell() {
               onClose={() => setPalette(false)}
               onOpenChat={openInFocus}
               onOpenProject={newChatIn}
+              onRace={() => setRacing(true)}
+              raceFree={freePanes(layout)}
               onOpenMachine={(id) => {
                 setOpenDevice({ id, nonce: Date.now() })
                 goView('machines')
               }}
+            />
+          )}
+          {racing && (
+            <RaceModal
+              free={freePanes(layout)}
+              onClose={() => setRacing(false)}
+              onStarted={startRace}
             />
           )}
           {sheet && <ShortcutSheet onClose={() => setSheet(false)} />}

@@ -33,12 +33,16 @@ test('choosing it stages the draft and asks the shell for the Automations view',
 })
 
 test('the rows the palette already had are still offered', () => {
-  // Two other lanes added a row to this list tonight; this one goes beside
-  // them, not instead of them.
+  // Other lanes added rows to this list tonight; this one goes beside them,
+  // not instead of them. Membership is pinned rather than order, so a row
+  // another lane inserts between them does not break this case.
   const palette = source('CommandPalette.jsx')
   assert.match(palette, /key: 'action:changes'/, 'the changes review row')
   assert.match(palette, /key: 'action:stop-all'/, 'the stop everything row')
-  assert.match(palette, /\.\.\.stopRow, \.\.\.review, \.\.\.jobRow, \.\.\.pages, \.\.\.actions/)
+  const list = palette.slice(palette.indexOf('actions: ['), palette.indexOf('chats: chatRows'))
+  for (const group of ['stopRow', 'review', 'jobRow', 'pages', 'actions']) {
+    assert.match(list, new RegExp(`\\.\\.\\.${group}\\b`), `${group} is still spread into the list`)
+  }
   // The stop lane's own pin on this call (stopChat last) is kept.
   assert.match(palette, /stopChat \} = useConsole\(\)/)
 })

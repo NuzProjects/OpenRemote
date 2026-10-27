@@ -1,0 +1,119 @@
+/* The race modal: a prompt, the harnesses installed here, and a start button.
+   It sits in the dv-modal family, so it wears the family's shell and actions;
+   everything below is the one thing the family does not have, a field and a
+   list of switches. No new colour: text tiers, the existing toggle in amber,
+   one hairline per row. */
+
+.race-modal {
+  width: 480px;
+}
+
+.race-field {
+  display: block;
+  margin-top: 14px;
+}
+
+.race-field-label,
+.race-label-row {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-3);
+}
+
+.race-prompt {
+  display: block;
+  width: 100%;
+  margin-top: 5px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-1);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+  min-height: 62px;
+}
+
+.race-prompt::placeholder {
+  color: var(--text-3);
+}
+
+.race-prompt:focus {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.race-prompt:disabled {
+  opacity: 0.6;
+}
+
+.race-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.race-label-val {
+  font-weight: 400;
+}
+
+.race-list {
+  margin-top: 6px;
+}
+
+/* One harness per row: its own mark, its name, the switch the rest of the
+   console uses for a boolean. */
+.race-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 0;
+  border-top: 1px solid var(--line);
+}
+
+.race-row:first-child {
+  border-top: 0;
+}
+
+.race-name {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-1);
+}
+
+.race-empty {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+/* The one line under the list: a refusal, a failure, or the sentence that says
+   the work is under way. It never moves the buttons. */
+.race-note,
+.race-error {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+.race-error {
+  color: #f87171;
+}
+
+/* Amber marks the primary interaction, and only the border and the label say
+   so: no fill, no shadow - the same treatment as the console's other primary
+   buttons. */
+.race-start:not(:disabled) {
+  border-color: rgba(220, 162, 75, 0.45);
+  color: var(--accent);
+}
+
+.race-start:not(:disabled):hover {
+  background: rgba(220, 162, 75, 0.08);
+  color: var(--accent);
+}
