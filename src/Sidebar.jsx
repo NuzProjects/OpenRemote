@@ -31,6 +31,7 @@ import { deviceName, isPhone, sessionsForMode } from './cloud.js'
 import { isMobile } from './platform.js'
 import { chatDragPayload } from './split.js'
 import { armRow, clearRow, rowIsArmed } from './row-confirm.js'
+import { listHasUnread, loadSeen, recordSeen, seedSeen, storeSeen, unreadIds } from './unread.js'
 import { HarnessMark } from './brand-marks.jsx'
 import ContextMenu from './ContextMenu.jsx'
 import DeleteChatModal from './DeleteChatModal.jsx'
@@ -39,7 +40,7 @@ import { useHint, useShortcut } from './keyboard.jsx'
 import './sidebar.css'
 
 export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit, onAddProject, onNewChatIn, onReveal }) {
-  const { connection, sessions, chats, devices, thisDevice, projects, removeProject, archived, setChatArchived, deleteChat } = useConsole()
+  const { connection, sessions, chats, devices, thisDevice, projects, projectsAnswered, sessionsAnswered, removeProject, archived, setChatArchived, deleteChat } = useConsole()
   const privacy = usePrivacyMode()
   const [query, setQuery] = useState('')
   const [collapsed, setCollapsed] = useState({})
@@ -51,6 +52,20 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   const [armed, setArmed] = useState(null)
   const [menu, setMenu] = useState(null)
   const [deleting, setDeleting] = useState(null)
+  // What this console has looked at, per chat: the stamp each chat showed
+  // the last time it was read. Read once at mount from this computer's own
+  // key, never on the boot path, so a damaged record cannot take the first
+  // paint. The ref carries the newest value to the effects below, so the two
+  // of them cannot overwrite each other's fresh write with a stale copy.
+  const [seen, setSeen] = useState(() => loadSeen())
+  const seenRef = useRef(seen)
+  seenRef.current = seen
+  const remember = (next) => {
+    if (next === seenRef.current) return
+    seenRef.current = next
+    setSeen(next)
+    storeSeen(next)
+  }
 
   // Local: everything that runs on this computer. Cloud: every synced chat,
   // named by the device it runs on when that isn't this one.
@@ -101,6 +116,11 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
     return visible.filter((c) => !waiting.has(c.id))
   }, [visible, needs])
   const grouped = useMemo(() => sections(projects, rest), [projects, rest])
+
+  // The ids that should carry the quiet mark. Ordering never consults it:
+  // the sorts above keep the order they had, so nothing jumps under the
+  // pointer when a mark appears or clears.
+  const unread = useMemo(() => unreadIds(seen, rows), [seen, rows])
 
   const toggleProject = (id) => {
     setCollapsed((c) => ({ ...c, [id]: !c[id] }))
@@ -164,6 +184,27 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
       document.title = attentionTitle(baseTitle.current, 0, true)
     }
   }, [needs.count, watched])
+
+  // The quiet mark's two halves. First sight of a chat is not news: a
+  // backlog from before this existed, or a chat another device created,
+  // gets its record at the stamp it had when this console first listed it.
+  // Only what moves after that is marked.
+  useEffect(() => {
+    remember(seedSeen(seenRef.current, rows))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows])
+
+  // Looking at a chat marks it read - the chat on screen, and only while the
+  // window is actually being looked at (visible and focused), which is the
+  // same fact the title effect above reads. A chat left open in a
+  // background window has not been read.
+  useEffect(() => {
+    if (!watched || !active) return
+    const row = rows.find((r) => r.id === active)
+    if (!row) return
+    remember(recordSeen(seenRef.current, row.id, row.updatedAt))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watched, active, rows])
 
   const archive = (id) => {
     setChatArchived(id, true)
@@ -236,6 +277,10 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
       <button
         className={`chat-row${row.id === active ? ' active' : ''}`}
         data-status={row.status}
+        // The quiet mark: one white-alpha tint step (DESIGN.md's ladder),
+        // not a colour and not a number. The status column keeps its own
+        // language, so "not read" and "waiting" cannot be mistaken.
+        data-unread={unread.has(row.id) ? 'true' : undefined}
         onClick={() => onSelect(row.id)}
       >
         {/* the harness's mark leads - every harness, one
@@ -386,7 +431,9 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
           </button>
         </div>
         {grouped.projects.length === 0 && (
-          <p className="sb-empty">No projects yet.</p>
+          <p className="sb-empty">
+            {projectsAnswered ? 'No projects yet.' : 'Loading your projects…'}
+          </p>
         )}
         {grouped.projects.map(({ project, items }) => {
           const isCollapsed = !!collapsed[project.id]
@@ -406,6 +453,9 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
             >
               <button
                 className="project-head"
+                // Something inside is unread: the list says so quietly, one
+                // text tier up, and never with a count.
+                data-unread={listHasUnread(items, unread) ? 'true' : undefined}
                 onClick={() => toggleProject(project.id)}
                 aria-expanded={!isCollapsed}
               >
@@ -467,31 +517,41 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
                 </>
               )}
               {!isCollapsed && items.length === 0 && (
-                <p className="sb-empty sb-project-empty">No chats yet.</p>
+                <p className="sb-empty sb-project-empty">
+                  {sessionsAnswered ? 'No chats yet.' : 'Loading your chats…'}
+                </p>
               )}
               {!isCollapsed && items.map(chatRow)}
             </section>
           )
         })}
 
-        <div className="section-title sb-chats-title">Chats</div>
+        <div className="section-title sb-chats-title" data-unread={listHasUnread(grouped.flat, unread) ? 'true' : undefined}>
+          Chats
+        </div>
         {/* Only while there are chats to be outside a project: with every
             project at zero, the projects say it and this line would be a
             second sentence about nothing. */}
         {grouped.projects.length > 0 && grouped.flat.length === 0 && rows.length > 0 && (
-          <p className="sb-empty">No chats outside projects.</p>
+          <p className="sb-empty">
+            {sessionsAnswered ? 'No chats outside projects.' : 'Loading your chats…'}
+          </p>
         )}
         {grouped.flat.map(chatRow)}
 
         {/* With a project registered and nothing running, the project's own row
-            says it has no chats yet; the generic line would say it twice. */}
+            says it has no chats yet; the generic line would say it twice. An
+            unanswered first poll is not "no chats yet": until the list has
+            answered, the line says it is still reading. */}
         {rows.length === 0 && grouped.projects.length === 0 && (
           <p className="sb-empty">
-            {query.trim()
-              ? `No chats match “${query.trim()}”.`
-              : mode === 'cloud'
-                ? 'No synced chats yet.'
-                : 'No chats yet.'}
+            {!sessionsAnswered
+              ? 'Loading your chats…'
+              : query.trim()
+                ? `No chats match “${query.trim()}”.`
+                : mode === 'cloud'
+                  ? 'No synced chats yet.'
+                  : 'No chats yet.'}
           </p>
         )}
         {rows.length > 0 && query.trim() && visible.length === 0 && (

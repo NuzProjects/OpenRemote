@@ -39,7 +39,7 @@ function DayBar({ band, max }) {
 }
 
 export default function MetricsView() {
-  const { sessions, machines, devices, thisDevice } = useConsole()
+  const { sessions, sessionsAnswered, machines, devices, thisDevice } = useConsole()
   const list = sessions ?? []
   const sentence = statusSentence(list)
   const split = syncSplit(list, thisDevice)
@@ -56,12 +56,19 @@ export default function MetricsView() {
         <div>
           <h1 className="dv-title">Metrics</h1>
           <p className="dv-meta">
-            {list.length} {list.length === 1 ? 'chat' : 'chats'} on record
+            {sessionsAnswered
+              ? `${list.length} ${list.length === 1 ? 'chat' : 'chats'} on record`
+              : 'Reading the record…'}
           </p>
         </div>
       </header>
 
-      {list.length === 0 ? (
+      {/* "Nothing on record yet" is a claim about the daemon's answer, so it is
+          only made once the record has answered: a cold start would otherwise
+          say the user has never run a chat. */}
+      {!sessionsAnswered ? (
+        <p className="pn-empty">Reading the record…</p>
+      ) : list.length === 0 ? (
         <p className="pn-empty">No chats on record yet. Start one - it shows up here.</p>
       ) : (
         <>
