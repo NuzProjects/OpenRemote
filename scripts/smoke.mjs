@@ -17,11 +17,30 @@
 // focus rules read trusted input. Nothing is installed; WebSocket and fetch
 // come from Node itself, the same as cdp-eval.mjs.
 //
+// The checks past the view walk press things, and each says what it proves
+// and what it does not:
+// - a chat row's menu: proves right-click opens it and Escape closes it and
+//   focus comes back to the row; not that any row in it acts.
+// - the pane menu in a split: proves a split can be made from the menu and
+//   that its rows and Escape behave; not that a split row's effect is what it
+//   says (the Layouts menu is the palette's page, not a pane-header control).
+// - the palette's Rules group: proves it is offered only while Automations is
+//   mounted; not that any rule in it runs. It needs a profile with at least one
+//   rule, which the dev profile does not have: make one in Automations (New
+//   automation), or run against the fixture profile the daemon e2e suites seed
+//   (cargo test -p openremote-daemon with OPENREMOTE_DATA_DIR pointing at the
+//   e2e fixture, or the fake-cloud suite's seeded chats). With none it skips.
+// - an armed plugin row: proves the first press arms, Escape disarms, and the
+//   plugin is still installed; not that a second press would remove it. It
+//   needs an installed plugin, which the dev profile does not have: install one
+//   from a local folder (Plugins > Install > folder) or from the fixture the
+//   plugins e2e uses. With none it skips.
+//
 // WHAT IT DOES NOT COVER: it never exercises the daemon's write path (no chat
 // is created and no task is typed, so the stream and the transcript are never
-// read), it opens no split pane, and it reads what each view draws rather than
-// proving the view's own controls do anything beyond being there. A green run
-// says every view opens, draws and keeps the boundary panel away; it does not
+// read), no settings are changed, no plugin is actually removed and no layout
+// is saved or applied. A green run says every view opens, draws, keeps the
+// boundary panel away and that the four interactions above behave; it does not
 // say the app works.
 
 const port = process.env.OPENREMOTE_CDP_PORT ?? '9333'
@@ -468,6 +487,205 @@ for (const view of POPUPS) {
   await key({ key: 'Escape', code: 'Escape', vk: 27 })
   await waitFor("!document.querySelector('.vp-window')", { timeout: 4000 })
   await sleep(200)
+}
+
+// ---- the interactions ------------------------------------------------------
+//
+// Everything above reads; these four press. Each one asserts what changes on
+// screen, and the header says what it proves and what it leaves alone.
+//
+// (a) A chat row's menu: right-click opens it, Escape closes it, and the focus
+// comes back to the row. Proves the menu's own open, close and focus rules on
+// the sidebar's rows; not that any row inside it does its job.
+const rowMenuTarget = await evaluate(`(() => {
+  const r = document.querySelector('.chat-row');
+  if (!r) return null;
+  r.focus();
+  const b = r.getBoundingClientRect();
+  return { x: b.x + Math.min(40, b.width / 2), y: b.y + b.height / 2, label: (r.textContent || '').trim().slice(0, 40) };
+})()`)
+let rowMenu = null
+if (rowMenuTarget) {
+  await click(rowMenuTarget.x, rowMenuTarget.y, 'right')
+  if (await waitFor("!!document.querySelector('.ctx-menu')")) {
+    const shown = await evaluate(`(() => {
+      const menu = document.querySelector('.ctx-menu');
+      window.__smokeRow = document.querySelector('.chat-row');
+      return {
+        labels: [...menu.querySelectorAll('.nc-item')].map((i) => i.textContent.trim()),
+        menuFocused: document.activeElement === menu,
+      };
+    })()`)
+    await key({ key: 'Escape', code: 'Escape', vk: 27 })
+    const closed = await waitFor("!document.querySelector('.ctx-menu')")
+    const back = await evaluate(`(() => {
+      const a = document.activeElement;
+      return {
+        onRow: Boolean(window.__smokeRow) && a === window.__smokeRow,
+        on: a ? a.tagName + (a.className ? '.' + a.className : '') : '(none)',
+      };
+    })()`)
+    rowMenu = { shown, closed, back }
+  }
+}
+record(
+  'a chat row menu opens on right-click, Escape closes it, and focus returns to the row',
+  Boolean(rowMenu?.closed) && Boolean(rowMenu?.back.onRow),
+  rowMenuTarget
+    ? rowMenu
+      ? `row "${rowMenuTarget.label}": ${rowMenu.shown.labels.length} row(s) "${rowMenu.shown.labels.slice(0, 4).join(' / ')}", Escape closed it: ${rowMenu.closed}, focus after: ${rowMenu.back.on} (on the row: ${rowMenu.back.onRow})`
+      : 'the row menu never opened'
+    : 'no .chat-row in the sidebar',
+)
+
+// (b) The pane menu in a split: makes the split from the menu, reads the rows
+// the menu offers there, and closes it with Escape. Proves a split can be made
+// from the same menu a person uses and that its rows and Escape behave; not
+// that a split row's effect is what its words say, and not that a Layouts
+// control exists in a pane header (the Layouts page is the palette's).
+const clickMenuRow = async (source, timeout = 4000) => {
+  if (!(await waitFor("!!document.querySelector('.ctx-menu')", { timeout }))) return false
+  // Let the menu settle where it opened: it clamps itself inside the window in
+  // the same frame, and the hand sequence that works (and does split the pane)
+  // waits a beat before measuring the row.
+  await sleep(250)
+  const at = await evaluate(`(() => {
+    const row = [...document.querySelectorAll('.ctx-menu .nc-item')].find((i) => new RegExp('${source}', 'i').test(i.textContent.trim()));
+    if (!row) return null;
+    const b = row.getBoundingClientRect();
+    return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+  })()`)
+  if (!at) return false
+  await click(at.x, at.y)
+  return true
+}
+const openPaneMenu = async () => {
+  // A blank margin first: a card, a link or a text field under the cursor
+  // hands the right-click to something else, and the pane menu is what this
+  // check needs. The marked-up pane itself is the fallback.
+  const points = await evaluate(`(() => {
+    const pane = document.querySelector('[data-leaf-id]');
+    if (!pane) return [];
+    const b = pane.getBoundingClientRect();
+    return [
+      { x: b.x + 12, y: b.y + b.height / 2 },
+      { x: b.x + b.width / 2, y: b.y + b.height / 2 },
+      { x: b.x + b.width - 12, y: b.y + 40 },
+    ];
+  })()`)
+  for (const p of points ?? []) {
+    await click(p.x, p.y, 'right')
+    if (await waitFor("!!document.querySelector('.ctx-menu')", { timeout: 1500 })) return true
+  }
+  return false
+}
+let splitMade = false
+if (await openPaneMenu()) {
+  splitMade = await clickMenuRow('split right')
+  splitMade = splitMade && (await waitFor("document.querySelectorAll('[data-leaf-id]').length === 2", { timeout: 5000 }))
+}
+let paneMenu = null
+if (splitMade) {
+  if (await openPaneMenu()) {
+    const labels = await evaluate(`[...document.querySelectorAll('.ctx-menu .nc-item')].map((i) => i.textContent.trim())`)
+    await key({ key: 'Escape', code: 'Escape', vk: 27 })
+    const closed = await waitFor("!document.querySelector('.ctx-menu')")
+    paneMenu = { labels, closed }
+  }
+  // Put the window back to one pane, the way a person would.
+  if (await openPaneMenu()) {
+    await clickMenuRow('close pane')
+    await waitFor("document.querySelectorAll('[data-leaf-id]').length === 1", { timeout: 5000 })
+  }
+}
+record(
+  'in a split, the pane menu lists its rows and Escape closes it',
+  Boolean(splitMade) && Boolean(paneMenu?.closed) && (paneMenu?.labels.length ?? 0) >= 4,
+  splitMade
+    ? paneMenu
+      ? `rows "${paneMenu.labels.slice(0, 6).join(' / ')}", Escape closed it: ${paneMenu.closed}`
+      : 'the pane menu never opened in the split'
+    : 'the split never happened (the pane menu did not act)',
+)
+
+// (c) The palette's Rules group: typing "rul" offers it only while Automations
+// is mounted. Proves the group is mounted with the view rather than always on;
+// not that a rule in it runs.
+const goView = async (label, hash) => {
+  const clicked = await clickSidebar(`(x.textContent || '').trim() === '${label}'`)
+  if (!clicked) return false
+  const reached = await waitFor(`location.hash === '${hash}'`, { timeout: 5000 })
+  await sleep(300)
+  return reached
+}
+const rulesIn = async (label, hash) => {
+  if (!(await goView(label, hash))) return null
+  // The view's own words say whether it holds any rules; a profile with none
+  // cannot show the group on any view, so the gating is not exercised there.
+  const empty = await evaluate(`(document.querySelector('.split-body')?.innerText ?? '').includes('No rules yet.')`)
+  await key({ key: 'k', code: 'KeyK', vk: 75, modifiers: 2 })
+  if (!(await waitFor("!!document.querySelector('.kb-palette')"))) return null
+  for (const [ch, code, vk] of [
+    ['r', 'KeyR', 82],
+    ['u', 'KeyU', 85],
+    ['l', 'KeyL', 76],
+  ]) {
+    await key({ key: ch, code, vk, text: ch })
+  }
+  await sleep(250)
+  const labels = await evaluate(`[...document.querySelectorAll('.kb-group-label')].map((l) => l.textContent.trim())`)
+  await key({ key: 'Escape', code: 'Escape', vk: 27 })
+  await waitFor("!document.querySelector('.kb-palette')", { timeout: 4000 })
+  return { empty, labels, hasRules: labels.includes('Rules') }
+}
+const onAutomations = await rulesIn('Automations', '#automations')
+const onPlugins = await rulesIn('Plugins', '#plugins')
+if (onAutomations?.empty) {
+  skip('the palette rules group', 'this dev profile has no rules, so the group is empty on every view')
+} else {
+  record(
+    "the palette's Rules group appears only while Automations is mounted",
+    Boolean(onAutomations?.hasRules) && Boolean(onPlugins) && !onPlugins.hasRules,
+    `Automations: "${onAutomations?.labels.join(', ') ?? '(none)'}"; Plugins: "${onPlugins?.labels.join(', ') ?? '(none)'}"`,
+  )
+}
+
+// (d) An armed plugin row: the first press on Remove arms it, Escape cancels
+// the arm, and the plugin is still in the list. Proves the arm is reversible
+// and removes nothing; not that a second press would remove the plugin.
+const armTarget = await evaluate(`(() => {
+  const buttons = [...document.querySelectorAll('.split-body button')];
+  const remove = buttons.find((b) => (b.textContent || '').trim() === 'Remove');
+  if (!remove) return null;
+  const b = remove.getBoundingClientRect();
+  return { x: b.x + b.width / 2, y: b.y + b.height / 2, before: buttons.filter((x) => (x.textContent || '').trim() === 'Remove').length };
+})()`)
+let pluginArm = null
+if (armTarget) {
+  await click(armTarget.x, armTarget.y)
+  const armsUp = await waitFor(`[...document.querySelectorAll('.split-body button')].some((b) => (b.textContent || '').trim() === 'Remove it')`, {
+    timeout: 3000,
+  })
+  await key({ key: 'Escape', code: 'Escape', vk: 27 })
+  await sleep(300)
+  pluginArm = await evaluate(`(() => {
+    const buttons = [...document.querySelectorAll('.split-body button')];
+    return {
+      armed: buttons.some((b) => (b.textContent || '').trim() === 'Remove it'),
+      count: buttons.filter((b) => (b.textContent || '').trim() === 'Remove').length,
+    };
+  })()`)
+  pluginArm.armsUp = armsUp
+  pluginArm.before = armTarget.before
+}
+if (!armTarget) {
+  skip('the armed plugin row', 'no installed plugin in this dev profile')
+} else {
+  record(
+    'arming a plugin row and pressing Escape cancels the arm and removes nothing',
+    Boolean(pluginArm?.armsUp) && !pluginArm.armed && pluginArm.count === pluginArm.before,
+    `armed on the first press: ${pluginArm?.armsUp}, still armed after Escape: ${pluginArm?.armed}, Remove buttons ${pluginArm?.before} -> ${pluginArm?.count}`,
+  )
 }
 
 const passed = results.filter((r) => r.pass).length

@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { captureOpener, focusOpener } from './dialog-focus.js'
 import './pickermenu.css'
 import './contextmenu.css'
 
@@ -17,6 +18,12 @@ export default function ContextMenu({ x, y, items, onClose }) {
   const [cursor, setCursor] = useState(actions[0]?.i ?? -1)
 
   useEffect(() => {
+    // The menu takes the keyboard while it is open and hands it back when it
+    // goes - Escape, a chosen row, a click elsewhere, or the opener
+    // unmounting. Captured before the focus below, which is the last moment
+    // the opener is the active element; the shared helper finds the control
+    // again when the row it was has been re-rendered under the menu.
+    const opener = captureOpener(typeof document === 'undefined' ? null : document.activeElement)
     ref.current?.focus()
     const away = (e) => {
       if (!ref.current?.contains(e.target)) onClose()
@@ -37,6 +44,9 @@ export default function ContextMenu({ x, y, items, onClose }) {
     return () => {
       clearTimeout(arm)
       for (const [type, fn] of listeners) window.removeEventListener(type, fn)
+      // A row that opens a dialog focuses it in that dialog's own effect, so
+      // this hands the keyboard back before the dialog claims it.
+      focusOpener(opener)
     }
   }, [onClose])
 
