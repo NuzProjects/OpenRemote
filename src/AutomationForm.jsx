@@ -224,7 +224,10 @@ export default function AutomationForm({ rule, onClose }) {
           {kind === 'webhook' && (
             <p className="af-when-note">
               {hookUrl
-                ? 'Any request to this hook fires the rule - the key in the URL is its credential.'
+                ? 'The hook answers only on this computer, at the address shown on the saved '
+                  + 'rule, and the key in that URL is its credential. That address changes each '
+                  + 'time OpenRemote starts, so a script reads the current one first rather than '
+                  + 'hardcoding it.'
                 : 'The hook URL appears on the rule once it is saved.'}
             </p>
           )}
