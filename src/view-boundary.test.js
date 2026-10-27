@@ -26,13 +26,25 @@ test('the property-access family is not worth retrying, whichever way it is word
     "Cannot read properties of undefined (reading 'map')",
     "Cannot read property 'map' of undefined",
     "Cannot read properties of null (reading 'length')",
-    "undefined is not an object (evaluating 'rows.map')",
-    "null is not an object (evaluating 'state.id')",
   ]
   for (const message of shapes) {
     const notice = failureNotice({ error: new TypeError(message) })
     assert.equal(notice.retry, false, `no retry for: ${message}`)
     assert.equal(notice.detail.message, `TypeError: ${message}`, 'and the words still reach the panel')
+  }
+})
+
+test('a TypeError that a fresh render can rescue keeps its one retry', () => {
+  // The evaluating form and "is not a function" are what a value that had not
+  // loaded yet throws: the same state may render fine a moment later, so the
+  // panel keeps its one retry instead of declaring the view broken.
+  for (const message of [
+    "undefined is not an object (evaluating 'rows.map')",
+    "null is not an object (evaluating 'state.id')",
+    'rows.map is not a function',
+  ]) {
+    const notice = failureNotice({ error: new TypeError(message) })
+    assert.equal(notice.retry, true, `one retry for: ${message}`)
   }
 })
 

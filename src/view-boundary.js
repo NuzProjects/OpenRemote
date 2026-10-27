@@ -24,13 +24,11 @@ const DETERMINISTIC = [
   /Rendered fewer hooks than expected/,
   /Too many re-renders/,
   /Maximum update depth exceeded/,
-  /is not a function/,
   // The property-access family, the commonest crash there is: a render that
   // reads a field of undefined or null fails the same way on every try. Both
   // spellings are here (the field may sit inside the sentence in older
   // engines), and the message is all a thrown TypeError carries.
   /Cannot read propert(?:y|ies) (?:'[^']*' )?of (?:undefined|null)/,
-  /(?:undefined|null) is not an object/,
 ]
 
 /// What was thrown, as one line for the mono block: the error's name and
