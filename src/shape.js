@@ -16,8 +16,15 @@
 /// `../automations/<id>` turns a chat's delete into a rule's delete, with the
 /// same token. Encoding keeps the id inside the segment it was meant for, and
 /// the daemon decodes it back before it looks at it.
+///
+/// An empty or missing id throws rather than becoming an empty segment. An
+/// emptied route can still reach a handler (`DELETE /sessions/` answers 404,
+/// which this client reads as "the chat is gone"), so a wiring bug would look
+/// like a successful delete; loud here, at the boundary.
 export function seg(value) {
-  return encodeURIComponent(String(value ?? ''))
+  const id = value == null ? '' : String(value)
+  if (!id) throw new Error('a request path needs an id, and this one is empty')
+  return encodeURIComponent(id)
 }
 
 /// A string from a field that should have been one. A number or a boolean
@@ -34,6 +41,15 @@ export function text(value) {
 /// already covers null and undefined; this also survives an object or a
 /// string where the daemon sent the wrong shape, which used to reach
 /// `.filter` and throw.
+///
+/// The empty list is the safe answer, but on its own it reads as "there are
+/// none" rather than "the daemon sent nonsense". A development build says so
+/// once; a release build stays quiet, because a warning nobody can act on is
+/// noise and the view already renders the same empty state either way.
 export function list(value) {
-  return Array.isArray(value) ? value : []
+  if (Array.isArray(value)) return value
+  if (value != null && import.meta.env?.DEV) {
+    console.warn('openremote: expected a list from the daemon, got', typeof value)
+  }
+  return []
 }

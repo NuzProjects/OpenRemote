@@ -41,9 +41,11 @@ test('the sheet explains the leave-the-chat rule where bindings are explained', 
   const at = sheet.indexOf('Actions that leave the chat')
   assert.ok(at > 0, 'the sentence is in the sheet')
   assert.ok(at > sheet.indexOf('kb-sheet-grid'), 'below the list, not at the top of the sheet')
+  // The clause that carries the rule, not the whole sentence: the sheet owns
+  // its wording, and a copy edit there should not fail this test.
   assert.match(
     sheet.slice(at),
-    /Actions that leave the chat \(New chat, Archive, Close pane, and the view switches\) wait until\s+the caret leaves the message box, so a half-written message is never lost\./,
+    /wait until\s+the caret leaves the message box, so a half-written message is never lost\./,
   )
 })
 

@@ -208,11 +208,13 @@ export function blocksWhileTyping(actionId) {
 /// no Ctrl, Alt or function modifier never reaches the dispatcher while a text
 /// field has focus, so storing one would draw a key on this page that never
 /// runs where the user writes. Esc and the function keys are the exceptions
-/// the dispatcher already delivers while typing.
+/// the dispatcher already delivers while typing. The sentence names the field
+/// rather than the character, because some of these keys (Delete, Tab, Home)
+/// are never typed at all: the field takes them and OpenRemote does not.
 export function captureRefusal(combo) {
   if (!validCombo(combo)) return 'That is not a key OpenRemote can bind.'
   if (firesWhileTyping(combo)) return null
-  return 'A key with no modifier is typed into the message box rather than run, so it cannot be a shortcut. Add Ctrl, Alt or a function key.'
+  return 'A key with no modifier goes to the field you are typing in, not to OpenRemote, so it cannot be a shortcut. Add Ctrl, Alt or a function key.'
 }
 
 // The user's changes to the default map: { actionId: combo | null }, null

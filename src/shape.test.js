@@ -19,8 +19,13 @@ test('an encoded id stays in its segment, where a raw one changes the route', ()
   // A plugin id is a name and a marketplace, and the @ survives as data.
   assert.equal(seg('clash@local'), 'clash%40local')
   assert.equal(new URL(`http://daemon/plugins/${seg('a/../b')}/enabled`).pathname, '/plugins/a%2F..%2Fb/enabled')
-  assert.equal(seg(null), '')
+  // A missing id is a wiring bug, not an empty segment: `DELETE /sessions/`
+  // answers 404 and this client reads that as "already gone".
+  assert.throws(() => seg(null), /needs an id/)
+  assert.throws(() => seg(undefined), /needs an id/)
+  assert.throws(() => seg(''), /needs an id/)
   assert.equal(seg(7), '7')
+  assert.equal(seg(0), '0', 'a zero id is still an id')
 })
 
 test('text gives a string for anything, and empty for a shape that has none', () => {

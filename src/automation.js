@@ -37,17 +37,28 @@ export { formDiffers } from './form-dirty.js'
 /** The only line the list shows when there is nothing to filter yet. */
 export const RULE_EMPTY_NONE = 'No rules yet. Write one.'
 
-// The count at which the field carries its hint. Rules are short rows and the
-// panel shows about six of them above the pill; below that the list fits in a
-// glance and a placeholder would be noise, at that many it starts to help.
+// The count at which the list gets its search field, and so its hint: the
+// field and the placeholder arrive together. Six is a chosen number, not a
+// measurement. A rule row is about one line, six of them is roughly what a
+// person takes in without scanning, and below that a search field would be a
+// control over a list that already fits at a glance. Change it by eye if the
+// panel's height changes; nothing measures it.
 export const RULE_SEARCH_HINT_FROM = 6
 
-/** The words the row puts on screen for this rule, lowercased. */
-export function ruleHaystack(rule) {
+/** The words the row puts on screen for this rule, one entry per field,
+ *  lowercased. Kept apart rather than joined because a query word must not be
+ *  able to match across the boundary between two fields. */
+export function ruleParts(rule) {
   return [rule?.name, whenSentence(rule?.trigger), harnessName(rule?.harness)]
     .filter((part) => typeof part === 'string' && part.length > 0)
-    .join(' ')
-    .toLowerCase()
+    .map((part) => part.toLowerCase())
+}
+
+/** The words the row puts on screen for this rule, lowercased, as one string
+ *  for anything that wants to show what was searched. Matching does not use it:
+ *  see matchesRule. */
+export function ruleHaystack(rule) {
+  return ruleParts(rule).join(' ')
 }
 
 /** The query's words, trimmed and lowercased; [] means no filter. */
@@ -59,12 +70,14 @@ export function queryWords(query) {
     .filter(Boolean)
 }
 
-/** Whether one rule shows what the query asks for. */
+/** Whether one rule shows what the query asks for. Each word is tested against
+ *  each field on its own: a joined string would answer "andu" for the name
+ *  "Stand" and the harness "Up", a result the row does not visibly contain. */
 export function matchesRule(rule, query) {
   const words = queryWords(query)
   if (!words.length) return true
-  const hay = ruleHaystack(rule)
-  return words.every((word) => hay.includes(word))
+  const parts = ruleParts(rule)
+  return words.every((word) => parts.some((part) => part.includes(word)))
 }
 
 /** The rules to draw, in the order the list already had them. */

@@ -8,16 +8,18 @@ import { readFileSync } from 'node:fs'
 
 const source = (file) => readFileSync(new URL(`./${file}`, import.meta.url), 'utf8')
 
-test('one search field over the list, and only when there is a list', () => {
+test('one search field over the list, and the field and its hint arrive together', () => {
   const view = source('AutomationsView.jsx')
   assert.match(view, /import \{[\s\S]{0,220}ruleSearchHint,/)
   assert.match(view, /import \{[\s\S]{0,220}searchRules,/)
   assert.match(view, /const shown = useMemo\(\(\) => searchRules\(rules, query\), \[rules, query\]\)/)
-  assert.match(view, /\{rules\.length > 0 && \(\s*<div className="am-toolbar">/)
+  // The threshold is the rule's: below it there is no field, so the box can
+  // never be an icon with no words in it.
+  assert.match(view, /\{rules\.length >= RULE_SEARCH_HINT_FROM && \(\s*<div className="am-toolbar">/)
+  assert.match(view, /import \{[\s\S]{0,220}RULE_SEARCH_HINT_FROM,/)
   assert.match(view, /className="am-search-input"/)
   assert.match(view, /aria-label="Search rules"/)
-  // The hint is the rule's, not a hardcoded string: it appears only when the
-  // list is long enough for it.
+  // The hint is the rule's, not a hardcoded string.
   assert.match(view, /placeholder=\{ruleSearchHint\(rules\.length\)\}/)
   assert.doesNotMatch(view, /placeholder="Search rules"/)
 })

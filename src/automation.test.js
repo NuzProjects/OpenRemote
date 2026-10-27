@@ -78,6 +78,26 @@ test('a query does not match what the row does not show', () => {
   assert.equal(matchesRule(rule, 'm1'), false)
 })
 
+test('a word cannot match across the boundary between two printed fields', () => {
+  // The name and the harness are separate things on the row. Joined into one
+  // string they would answer "andu" for the name "Stand" and the harness
+  // "Up", a result the reader cannot find anywhere on the row.
+  const split = ruleOf({ name: 'Stand', harness: 'up' })
+  assert.equal(matchesRule(split, 'andu'), false)
+  assert.equal(matchesRule(split, 'stand'), true, 'each field still matches on its own')
+  assert.equal(matchesRule(split, 'up'), true)
+})
+
+test('the search field arrives with its hint, at the chosen threshold', () => {
+  // The field and the hint are one thing in the view: below the threshold
+  // there is no field, so the helper answers nothing; from the threshold the
+  // field shows the hint. Six is chosen by eye, not measured.
+  assert.equal(ruleSearchHint(RULE_SEARCH_HINT_FROM - 1), '')
+  assert.equal(ruleSearchHint(0), '')
+  assert.equal(ruleSearchHint(RULE_SEARCH_HINT_FROM), 'Search rules')
+  assert.equal(ruleSearchHint(RULE_SEARCH_HINT_FROM + 4), 'Search rules')
+})
+
 test('case and whitespace do not matter, and an empty query filters nothing', () => {
   const rule = ruleOf()
   assert.equal(matchesRule(rule, '  MORNING  '), true)

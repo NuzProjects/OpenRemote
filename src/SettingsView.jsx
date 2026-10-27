@@ -1186,9 +1186,11 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
               ))
             )}
             {kb.staleBindings?.length > 0 && (
-              // A saved key whose action this build no longer has. The action
-              // is gone, so the row names no action: it shows the key and a
-              // way to forget it, which is all that can honestly be said.
+              // A saved key whose action this build no longer has. Deliberately
+              // outside the filtered groups: it is not an action, so a search
+              // for actions must not hide it, and its "Saved" label is what
+              // keeps it from reading as a match. It names no action - the
+              // action is gone - so it shows the key and a way to forget it.
               <div className="pn-list pn-list--tight kb-set">
                 <div className="kb-group-label">Saved</div>
                 <div className="pn-row" data-stg="keyboard-stale">

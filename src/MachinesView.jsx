@@ -13,8 +13,12 @@ import { list as asList, text } from './shape.js'
 import './devices.css'
 
 function detail(device) {
-  const platform = platformLabel(device.platform)
-  return [platform, kindLabel(device), device.app_version].filter(Boolean).join(' · ')
+  // The card prints what the list sorts, so it reads through the same
+  // coercions: a malformed row must not throw inside the pane it opens.
+  const platform = platformLabel(text(device?.platform))
+  return [platform, kindLabel({ kind: text(device?.kind) }), text(device?.app_version)]
+    .filter(Boolean)
+    .join(' · ')
 }
 
 export default function MachinesView({ onOpenChat, openDevice = null }) {
