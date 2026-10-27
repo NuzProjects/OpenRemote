@@ -192,6 +192,27 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
   // them, so the group follows it the same way the strip does.
   const [tabs, setTabs] = useState(() => getState().tabs)
   useEffect(() => subscribe(() => setTabs(getState().tabs)), [])
+  // The Browser rows, in their own memo, the way chatActions below builds its
+  // two rows apart: a page reports its title, its url, its favicon and its
+  // loading state one at a time, and every one of those changes the tab list.
+  // The group has to follow them; the action, chat, project and rule rows do
+  // not, so they are not rebuilt for it. The key is the tab list plus the
+  // mount - a mounted browser with no tabs and an unmounted one both mean no
+  // group, but they are different facts and the mount can change under an open
+  // palette. Until either changes the rows keep their identity.
+  const browserIsMounted = browserMounted()
+  const tabRows = useMemo(
+    () =>
+      browserTabs({ tabs, mounted: browserIsMounted }).map((tab) => ({
+        key: `tab:${tab.key}`,
+        section: BROWSER_GROUP,
+        name: tab.name,
+        sub: tab.sub,
+        icon: <Globe size={15} />,
+        run: { tab: tab.key },
+      })),
+    [tabs, browserIsMounted],
+  )
   const onScreen = typeof location === 'undefined' ? '' : location.hash.replace(/^#/, '')
   const currentChat = (sessions ?? []).some((session) => session.id === onScreen) ? onScreen : null
 
@@ -495,19 +516,6 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
           run: { ruleRun: rule.id },
         }))
       : []
-    // The browser's open pages, in the strip's own order: a tab is a place
-    // Ctrl+K can send a person to, but only one that is on screen now - the
-    // group exists only while the view that owns the pages is mounted, and
-    // palette-tabs.js decides that and builds the rows (the same module the
-    // tab strip's words come from).
-    const tabRows = browserTabs({ tabs, mounted: browserMounted() }).map((tab) => ({
-      key: `tab:${tab.key}`,
-      section: BROWSER_GROUP,
-      name: tab.name,
-      sub: tab.sub,
-      icon: <Globe size={15} />,
-      run: { tab: tab.key },
-    }))
     return {
       actions: [...stopRow, ...harnessRow, ...raceRow, ...sinceRow, ...layoutRow, ...layoutsRow, ...renameRow, ...presetRow, ...reopenRow, ...review, ...markdown, ...jobRow, ...pages, ...actions],
       chats: chatRows,
@@ -515,9 +523,8 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
       machines,
       harnessRows,
       ruleRows,
-      tabRows,
     }
-  }, [kb, sessions, archived, projects, devices, thisDevice, capabilities, machines, raceFree, moved, panes, savedLayouts, onScreen, reviewChat, markdownChat, hasFileChanges, focusedChatId, onRenameChat, rulesCanRun, automations, machinesAnswered, tabs])
+  }, [kb, sessions, archived, projects, devices, thisDevice, capabilities, machines, raceFree, moved, panes, savedLayouts, onScreen, reviewChat, markdownChat, hasFileChanges, focusedChatId, onRenameChat, rulesCanRun, automations, machinesAnswered])
 
   const sections = useMemo(() => {
     if (page === 'layouts') {
@@ -692,13 +699,13 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
         ...(suggested.length ? [{ label: 'Suggestions', items: suggested }] : []),
       ]
     }
-    const all = [...everything.actions, ...everything.chats, ...everything.projectRows, ...everything.machines, ...everything.ruleRows, ...everything.tabRows]
+    const all = [...everything.actions, ...everything.chats, ...everything.projectRows, ...everything.machines, ...everything.ruleRows, ...tabRows]
     const ranked = rankMatches(query, all, (r) => r.name)
     return SECTION_ORDER.map((label) => ({
       label,
       items: ranked.filter((r) => r.section === label).slice(0, SECTION_CAP),
     })).filter((s) => s.items.length)
-  }, [page, query, everything, recentChatIds, kb, stopPhase, moved, harnessStopId, harnessPhase, savedLayouts, armedLayout])
+  }, [page, query, everything, tabRows, recentChatIds, kb, stopPhase, moved, harnessStopId, harnessPhase, savedLayouts, armedLayout])
 
   const flat = sections.flatMap((s) => s.items)
 

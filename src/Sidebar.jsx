@@ -533,7 +533,12 @@ export default function Sidebar({
       }}
       onContextMenu={(e) => {
         e.preventDefault()
-        setMenu({ x: e.clientX, y: e.clientY, row })
+        // The rows are built here, once, and kept with the menu. A menu must
+        // not change under the person: the copy row is gated on the chat's
+        // transcript being in this window, and a transcript arriving while the
+        // menu is open would otherwise insert a row and shift every later one
+        // (the menu highlights by index), moving the target under the keyboard.
+        setMenu({ x: e.clientX, y: e.clientY, items: menuItems(row) })
       }}
     >
       <button
@@ -969,7 +974,9 @@ export default function Sidebar({
         </div>
       </footer>
       {menu && (
-        <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.row)} onClose={() => setMenu(null)} />
+        // The menu's own rows, held from the moment it opened: see the
+        // onContextMenu above for why they are not rebuilt here.
+        <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />
       )}
       {deleting && (
         <DeleteChatModal

@@ -156,3 +156,13 @@ test('a chat row offers Copy as Markdown where the copy can work', () => {
   assert.match(source, /setCopyNote\('Could not copy: this window has no clipboard\.'\)/)
   assert.match(source, /\{copyNote && \(\s*<div className="chat-undo" role="status">/)
 })
+test('a row menu keeps the items it opened with', () => {
+  // The copy item is gated on the chat's transcript being in this window, and
+  // a transcript can arrive while the menu is open. Rebuilding the rows then
+  // would insert one in the middle and shift every later index, and the menu
+  // moves its highlight by index - so the target would move under the
+  // keyboard. The rows are built once, when the menu opens, and kept with it.
+  assert.match(source, /setMenu\(\{ x: e\.clientX, y: e\.clientY, items: menuItems\(row\) \}\)/)
+  assert.match(source, /items=\{menu\.items\}/, 'the menu draws the rows it was given')
+  assert.doesNotMatch(source, /menuItems\(menu\.row\)/, 'the open menu never rebuilds its rows')
+})
