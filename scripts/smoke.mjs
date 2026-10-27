@@ -19,9 +19,10 @@
 //
 // WHAT IT DOES NOT COVER: it never exercises the daemon's write path (no chat
 // is created and no task is typed, so the stream and the transcript are never
-// read), it opens no split pane, and it checks only first contact with the
-// shell. A green run says the window, its chrome and its overlays are alive;
-// it does not say the app works.
+// read), it opens no split pane, and it reads what each view draws rather than
+// proving the view's own controls do anything beyond being there. A green run
+// says every view opens, draws and keeps the boundary panel away; it does not
+// say the app works.
 
 const port = process.env.OPENREMOTE_CDP_PORT ?? '9333'
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -157,6 +158,17 @@ if (!shellUp) {
   ws.close()
   process.exit(1)
 }
+
+// Start from a known place. The app remembers the last view and a previous run
+// may have left a popup over it, so a click measured against whatever was on
+// screen would be a check on a different window than the one it names.
+await evaluate(`(() => {
+  const b = [...document.querySelectorAll('.sidebar button')].find((x) => (x.textContent || '').trim() === 'New chat');
+  b?.click();
+  return 'reset';
+})()`)
+await waitFor("location.hash === '#new'", { timeout: 5000 })
+await sleep(300)
 
 // 1. The sidebar, and the New chat tile on it.
 const newChat = await evaluate(`(() => {
@@ -325,7 +337,142 @@ record(
       : 'no .chat-row in the sidebar to rename',
 )
 
+// Every view, opened by the app's own route.
+//
+// A view that cannot render is invisible to every other gate: the tests pass
+// because a call site with no import is still valid text, and the build is
+// happy because the identifier is only unresolved at runtime. The boundary
+// panel catches it in the window, and this walks into every view to make sure
+// the panel never appears: no crash panel, a heading or a first control, and
+// the pane's own words rather than the boundary's. The route is checked too,
+// because a view that was never opened would otherwise pass on the previous
+// view's pane - a green line over a visit that did not happen.
+//
+// Three kinds of destination: routed views (the shell writes the hash), popup
+// views (settings, metrics and mobile open over the app, so the hash stays put
+// and the check looks inside the popup), and machines, which is Cloud's and is
+// visited from Cloud mode.
+const paneState = (selector) =>
+  evaluate(`(() => {
+    const area = document.querySelector('${selector}');
+    if (!area) return { why: 'no ${selector}' };
+    const vb = area.querySelector('.vb');
+    const boundary = vb ? (vb.querySelector('.vb-detail-msg')?.textContent ?? 'the crash panel, with no message') : null;
+    const headings = [...area.querySelectorAll('h1, .dv-title, [role="heading"]')]
+      .map((h) => (h.textContent || '').trim())
+      .filter(Boolean);
+    const controls = [...area.querySelectorAll('button, input, textarea, select, [tabindex]')]
+      .filter((el) => !(vb && vb.contains(el)) && el.getClientRects().length > 0);
+    const text = (area.innerText || '').replace(/\\s+/g, ' ').trim();
+    return {
+      hash: location.hash,
+      boundary,
+      heading: headings[0] ?? null,
+      controls: controls.length,
+      text: text.slice(0, 140),
+      crash: text.includes('This view could not be drawn'),
+    };
+  })()`)
+
+const drewOk = (state) =>
+  !state?.why && !state.boundary && !state.crash && (Boolean(state.heading) || state.controls > 0)
+
+const skips = []
+const skip = (name, reason) => {
+  skips.push({ name, reason })
+  console.log(`SKIP  view "${name}" - ${reason}`)
+}
+
+const clickSidebar = (match) =>
+  evaluate(`(() => {
+    const b = [...document.querySelectorAll('.sidebar button')].find((x) => ${match});
+    if (!b) return false;
+    b.click();
+    return true;
+  })()`)
+
+const ROUTED = [
+  { name: 'new chat', match: `(x.textContent || '').trim() === 'New chat'`, hash: '#new' },
+  { name: 'plugins', match: `(x.textContent || '').trim() === 'Plugins'`, hash: '#plugins' },
+  { name: 'automations', match: `(x.textContent || '').trim() === 'Automations'`, hash: '#automations' },
+  { name: 'account', match: `(x.getAttribute('aria-label') || '').trim() === 'Account'`, hash: '#account' },
+]
+for (const view of ROUTED) {
+  if (!(await clickSidebar(view.match))) {
+    record(`view "${view.name}" draws with no boundary panel`, false, 'the sidebar has no control for it')
+    continue
+  }
+  const reached = await waitFor(`location.hash === '${view.hash}'`, { timeout: 5000 })
+  await sleep(300)
+  const state = await paneState('.split-body')
+  record(
+    `view "${view.name}" draws with no boundary panel`,
+    reached && drewOk(state),
+    !reached
+      ? `the route did not move: expected ${view.hash}, the window is on ${state?.hash}; pane said "${state?.text ?? ''}"`
+      : drewOk(state)
+        ? `${state.hash}, heading "${state.heading ?? '(none)'}", ${state.controls} control(s), pane said "${state.text.slice(0, 60)}"`
+        : `boundary: "${state.boundary ?? '(none)'}", ${state.hash}; pane said "${state.text}"`,
+  )
+}
+
+// Machines lives in Cloud mode: the sidebar tile only routes once the mode has
+// switched, so the visit is the two clicks a person makes.
+const switched = await clickSidebar(`(x.textContent || '').trim() === 'Cloud'`)
+await sleep(500)
+const machinesClicked = switched && (await clickSidebar(`(x.textContent || '').trim() === 'Machines'`))
+if (!machinesClicked) {
+  skip('machines', 'the sidebar has no Machines tile in this mode')
+} else {
+  const reached = await waitFor("location.hash === '#machines'", { timeout: 5000 })
+  await sleep(300)
+  const state = await paneState('.split-body')
+  record(
+    'view "machines" draws with no boundary panel',
+    reached && drewOk(state),
+    !reached
+      ? `the route did not move: expected #machines, the window is on ${state?.hash}; pane said "${state?.text ?? ''}"`
+      : drewOk(state)
+        ? `${state.hash}, heading "${state.heading ?? '(none)'}", ${state.controls} control(s)`
+        : `boundary: "${state.boundary ?? '(none)'}"; pane said "${state.text}"`,
+  )
+  await clickSidebar(`(x.textContent || '').trim() === 'Local'`)
+  await sleep(400)
+}
+
+// The popup views: settings, metrics and mobile open over the app rather than
+// becoming the route, so the panel itself is what has to draw.
+const POPUPS = [
+  { name: 'settings', label: 'Settings' },
+  { name: 'metrics', label: 'Metrics' },
+  { name: 'mobile', label: 'Mobile' },
+]
+for (const view of POPUPS) {
+  const clicked = await clickSidebar(`(x.getAttribute('aria-label') || '').trim() === '${view.label}' || (x.title || '').trim() === '${view.label}'`)
+  const opened = clicked && (await waitFor(`!!document.querySelector('.vp-window')`, { timeout: 4000 }))
+  if (!opened) {
+    record(`view "${view.name}" draws with no boundary panel`, false, clicked ? 'the popup never opened' : 'the sidebar has no control for it')
+    continue
+  }
+  await sleep(300)
+  const state = await paneState('.vp-body')
+  const title = await evaluate(`document.querySelector('.vp-window')?.getAttribute('aria-label') ?? null`)
+  record(
+    `view "${view.name}" draws with no boundary panel`,
+    drewOk(state),
+    drewOk(state)
+      ? `popup "${title}", heading "${state.heading ?? '(none)'}", ${state.controls} control(s)`
+      : `popup "${title}": boundary "${state.boundary ?? '(none)'}", text "${state.text}"`,
+  )
+  // Escape closes one layer at a time, and the popup owns its own.
+  await key({ key: 'Escape', code: 'Escape', vk: 27 })
+  await waitFor("!document.querySelector('.vp-window')", { timeout: 4000 })
+  await sleep(200)
+}
+
 const passed = results.filter((r) => r.pass).length
-console.log(`\n${passed} of ${results.length} checks passed`)
+console.log(
+  `\n${passed} of ${results.length} checks passed${skips.length ? `, ${skips.length} skipped (${skips.map((s) => s.name).join(', ')})` : ''}`,
+)
 ws.close()
 process.exit(passed === results.length ? 0 : 1)

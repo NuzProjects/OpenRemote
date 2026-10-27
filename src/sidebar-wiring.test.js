@@ -77,3 +77,20 @@ test('the generic empty lines yield to a registered project', () => {
     'and no line talks about chats outside projects when there are no chats at all',
   )
 })
+
+test('the chat list is one Tab stop, and the arrows walk it', () => {
+  // A Tab per row plus a Tab per row's hover archive button put the view's
+  // first control 40-odd Tabs away once the list held a few dozen chats, which
+  // made the console unusable from the keyboard. One row carries the stop and
+  // the arrows move inside the list, the way a listbox behaves.
+  assert.match(source, /const \[rovingId, setRovingId\] = useState\(null\)/, 'the roving stop has a home')
+  assert.match(source, /const rovingRow = rovingId && order\.includes\(rovingId\) \? rovingId : order\[0\]/)
+  assert.match(source, /data-chat-row=\{row\.id\}/, 'a row can be found again after a re-render')
+  assert.match(source, /tabIndex=\{rovingRow === row\.id \? 0 : -1\}/, 'exactly one row is in the Tab order')
+  assert.match(source, /moveRoving\(row\.id, to\)/, 'the arrows move between rows')
+  assert.match(source, /'ArrowDown' \? 1 : e\.key === 'ArrowUp' \? -1/, 'up and down walk the list')
+  // The hover archive button is a pointer shortcut: archiving from the
+  // keyboard is Mod+Shift+A or the palette's row, and leaving the button in
+  // the order would double the cost of every row again.
+  assert.match(source, /className="chat-archive"[\s\S]{0,220}tabIndex=\{-1\}/, 'the archive button stays out of the Tab order')
+})
