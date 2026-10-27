@@ -22,6 +22,8 @@ use std::process::ExitCode;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
+use openremote_cloud::https::HttpError;
+
 /// The MCP revision this server speaks when the client names none.
 const PROTOCOL: &str = "2025-06-18";
 
@@ -205,23 +207,30 @@ fn port_now(config: &Config) -> u16 {
 /// later, and a tool call that lands between them is a connection refused
 /// rather than a wrong answer. The fresh value is kept in the config, so the
 /// rest of the session falls back to a port that is alive.
-async fn with_fresh_port<T, A, Fut>(config: &mut Config, attempt: A) -> Result<T, String>
+async fn with_fresh_port<T, A, Fut>(config: &mut Config, attempt: A) -> Result<T, HttpError>
 where
     A: Fn(u16) -> Fut,
-    Fut: std::future::Future<Output = Result<T, String>>,
+    Fut: std::future::Future<Output = Result<T, HttpError>>,
 {
     let port = port_now(config);
     config.port = port;
-    match attempt(port).await {
-        Ok(answer) => Ok(answer),
-        Err(first) => match published_port(&config.data_dir) {
-            Ok(fresh) if fresh != port => {
-                config.port = fresh;
-                attempt(fresh).await
-            }
-            // Nothing fresher to try: the failure the caller already knows.
-            _ => Err(first),
-        },
+    let first = attempt(port).await;
+    // Only a connection failure retries. That is the restart gap: the old
+    // daemon's clean stop removed the port file and the new one has not
+    // written its own yet, so the call is refused instantly. A timeout is a
+    // daemon that took too long to answer, and retrying it would double the
+    // harness's wait on the same wedged daemon; a protocol or URL error would
+    // fail the same way twice.
+    if !matches!(first, Err(HttpError::Connect(_))) {
+        return first;
+    }
+    match published_port(&config.data_dir) {
+        Ok(fresh) if fresh != port => {
+            config.port = fresh;
+            attempt(fresh).await
+        }
+        // Nothing fresher to try: the failure the caller already knows.
+        _ => first,
     }
 }
 
@@ -246,26 +255,48 @@ async fn call(config: &mut Config, token: &str, params: &Value) -> Value {
             let http = openremote_cloud::https::Http::new();
             let response = http
                 .request("GET", &url, &[("authorization", bearer.as_str())], None)
-                .await
-                .map_err(|e| e.to_string())?;
+                .await?;
             Ok((response.status, response.body))
         }
     };
     match with_fresh_port(config, attempt).await {
-        Ok((status, body)) => {
-            let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-            if status == 200 {
-                let text = body.get("text").and_then(Value::as_str).unwrap_or("");
-                json!({"content": [{"type": "text", "text": text}]})
-            } else {
-                failure(
-                    body.get("error")
-                        .and_then(Value::as_str)
-                        .unwrap_or("OpenRemote refused the read"),
-                )
-            }
-        }
+        Ok((status, body)) => answer(status, &body),
         Err(e) => failure(&format!("OpenRemote is not reachable: {e}")),
+    }
+}
+
+/// What one answer from the daemon means to the tool: the chat's text, or a
+/// failure the harness can read.
+///
+/// A 200 is never assumed to be a chat. The route promises JSON with a `text`
+/// string, so a 200 that is not JSON (a proxy page, a truncated write) and a
+/// 200 whose JSON has no `text` are both malformed answers, and a harness that
+/// cannot see them would read the chat as empty rather than unreadable. An
+/// empty string under the key is different: that is the route saying the chat
+/// has nothing to read, and it stays a success.
+fn answer(status: u16, body: &[u8]) -> Value {
+    let parsed = serde_json::from_slice::<Value>(body).map_err(|e| e.to_string());
+    if status == 200 {
+        return match parsed {
+            Ok(body) => match body.get("text").and_then(Value::as_str) {
+                Some(text) => json!({"content": [{"type": "text", "text": text}]}),
+                None => failure("OpenRemote answered with JSON that carries no chat text"),
+            },
+            Err(e) => failure(&format!(
+                "OpenRemote answered 200 with something that is not JSON: {e}"
+            )),
+        };
+    }
+    match parsed {
+        // The daemon's own sentence for a refusal, when it managed to send one.
+        Ok(body) => failure(
+            body.get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("OpenRemote refused the read"),
+        ),
+        Err(_) => failure(&format!(
+            "OpenRemote answered {status} with something that is not JSON"
+        )),
     }
 }
 
@@ -300,6 +331,51 @@ mod tests {
         dir
     }
 
+    #[test]
+    fn a_200_that_is_not_json_is_a_tool_error_not_an_empty_chat() {
+        // What a proxy page or a truncated write looks like to the tool: the
+        // answer must say so, or a harness reads an unreadable chat as empty.
+        let html = answer(200, b"<html><body>Bad Gateway</body></html>");
+        assert_eq!(html["isError"], true, "{html}");
+        assert!(
+            html["content"][0]["text"]
+                .as_str()
+                .is_some_and(|t| t.contains("not JSON")),
+            "{html}"
+        );
+
+        // JSON without the key the route promises is the same kind of answer:
+        // malformed, not empty.
+        let missing = answer(200, br#"{"chat":"c1"}"#);
+        assert_eq!(missing["isError"], true, "{missing}");
+        assert!(
+            missing["content"][0]["text"]
+                .as_str()
+                .is_some_and(|t| t.contains("no chat text")),
+            "{missing}"
+        );
+
+        // An empty string IS the route's answer for a chat with nothing to
+        // read: the key is there, so this stays a success.
+        let empty = answer(200, br#"{"text":""}"#);
+        assert!(empty.get("isError").is_none(), "{empty}");
+        assert_eq!(empty["content"][0]["text"], "");
+
+        // A non-200 keeps the daemon's own sentence; a non-JSON one names the
+        // status instead of inventing a sentence.
+        let refusal = answer(403, br#"{"error":"this chat was not pointed at"}"#);
+        assert_eq!(
+            refusal["content"][0]["text"],
+            "this chat was not pointed at"
+        );
+        let garbled = answer(502, b"<html>bad gateway</html>");
+        assert!(
+            garbled["content"][0]["text"]
+                .as_str()
+                .is_some_and(|t| t.contains("502")),
+            "{garbled}"
+        );
+    }
     #[test]
     fn reads_its_flags_and_encodes_a_chat_name() {
         // The flag still works on its own: an older invocation, or a folder
@@ -459,7 +535,7 @@ mod tests {
                 if port == STALE {
                     // The new daemon came up between the two attempts.
                     write_port_file(&publish, FRESH).unwrap();
-                    Err("connection refused".to_string())
+                    Err(HttpError::Connect("127.0.0.1".to_string()))
                 } else {
                     Ok(format!("answer from {port}"))
                 }
@@ -468,6 +544,52 @@ mod tests {
         .await;
         assert_eq!(answer.unwrap(), format!("answer from {FRESH}"));
         assert_eq!(config.port, FRESH, "the fresh port is kept for the session");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_timeout_is_not_retried_even_when_the_port_moved() {
+        // A wedged daemon that accepts and then stalls is a timeout, not the
+        // restart gap: retrying it would double the harness's wait on the same
+        // daemon. The file moving under the first attempt is exactly the case
+        // the old any-error retry would have retried, so this fails on it.
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        const FIRST: u16 = 6006;
+        const SECOND: u16 = 6007;
+        let dir = temp_dir("timeout");
+        write_port_file(&dir, FIRST).unwrap();
+        let mut config = Config {
+            session: "s1".to_string(),
+            port: 4567,
+            data_dir: dir.clone(),
+        };
+        let publish = dir.clone();
+        let tries = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&tries);
+        let err = with_fresh_port(&mut config, move |port| {
+            let counted = Arc::clone(&counted);
+            let publish = publish.clone();
+            async move {
+                counted.fetch_add(1, Ordering::SeqCst);
+                if port == FIRST {
+                    // The daemon republished its port while the call was pending.
+                    write_port_file(&publish, SECOND).unwrap();
+                }
+                Err::<String, HttpError>(HttpError::Timeout)
+            }
+        })
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, HttpError::Timeout),
+            "the timeout itself comes back, not a retry: {err}"
+        );
+        assert_eq!(
+            tries.load(Ordering::SeqCst),
+            1,
+            "a timeout is not the restart gap and must not be retried"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -486,17 +608,17 @@ mod tests {
         };
         let tries = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&tries);
-        let err: String = with_fresh_port(&mut config, move |port| {
+        let err = with_fresh_port(&mut config, move |port| {
             let counted = Arc::clone(&counted);
             async move {
                 counted.fetch_add(1, Ordering::SeqCst);
                 assert_eq!(port, STALE);
-                Err::<String, String>("connection refused".to_string())
+                Err::<String, HttpError>(HttpError::Connect("127.0.0.1".to_string()))
             }
         })
         .await
         .unwrap_err();
-        assert_eq!(err, "connection refused");
+        assert!(err.to_string().contains("127.0.0.1"), "{err}");
         assert_eq!(
             tries.load(Ordering::SeqCst),
             1,
@@ -511,12 +633,12 @@ mod tests {
             port: STALE,
             data_dir: dir.clone(),
         };
-        let err: String = with_fresh_port(&mut config, |port| async move {
-            Err::<String, String>(format!("dead on {port}"))
+        let err = with_fresh_port(&mut config, |port| async move {
+            Err::<String, HttpError>(HttpError::Connect(format!("dead on {port}")))
         })
         .await
         .unwrap_err();
-        assert_eq!(err, "dead on 6005");
+        assert!(err.to_string().contains("dead on 6005"), "{err}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
