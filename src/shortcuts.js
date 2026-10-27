@@ -27,7 +27,11 @@ const modelSwitches = Array.from({ length: 9 }, (_, i) => ({
 }))
 
 export const ACTIONS = [
-  { id: 'new-chat', group: 'navigation', label: 'New chat', keys: 'Mod+N' },
+  // `navigates: true` marks an action that leaves a chat: it can unmount the
+  // composer, and a draft lives in that view (not in the shell), so firing it
+  // from inside a field would lose text the dispatcher cannot see. The rule is
+  // here, in the catalog, rather than in each handler: see blocksWhileTyping.
+  { id: 'new-chat', group: 'navigation', label: 'New chat', keys: 'Mod+N', navigates: true },
   { id: 'palette', group: 'navigation', label: 'Command palette', keys: 'Mod+K' },
   { id: 'cheat-sheet', group: 'navigation', label: 'Keyboard shortcuts', keys: 'Mod+/' },
   { id: 'search-chats', group: 'navigation', label: 'Search chats', keys: 'Mod+F' },
@@ -35,18 +39,18 @@ export const ACTIONS = [
   { id: 'prev-chat', group: 'navigation', label: 'Previous chat', keys: 'Alt+Up' },
   { id: 'first-chat', group: 'navigation', label: 'First chat', keys: 'Alt+Home' },
   { id: 'last-chat', group: 'navigation', label: 'Last chat', keys: 'Alt+End' },
-  { id: 'view-settings', group: 'navigation', label: 'Settings', keys: 'Mod+,' },
-  { id: 'view-automations', group: 'navigation', label: 'Automations', keys: null },
-  { id: 'view-plugins', group: 'navigation', label: 'Plugins', keys: null },
-  { id: 'view-machines', group: 'navigation', label: 'Machines', keys: null },
-  { id: 'view-account', group: 'navigation', label: 'Account', keys: null },
-  { id: 'view-mobile', group: 'navigation', label: 'Mobile', keys: null },
-  { id: 'view-metrics', group: 'navigation', label: 'Metrics', keys: null },
+  { id: 'view-settings', group: 'navigation', label: 'Settings', keys: 'Mod+,', navigates: true },
+  { id: 'view-automations', group: 'navigation', label: 'Automations', keys: null, navigates: true },
+  { id: 'view-plugins', group: 'navigation', label: 'Plugins', keys: null, navigates: true },
+  { id: 'view-machines', group: 'navigation', label: 'Machines', keys: null, navigates: true },
+  { id: 'view-account', group: 'navigation', label: 'Account', keys: null, navigates: true },
+  { id: 'view-mobile', group: 'navigation', label: 'Mobile', keys: null, navigates: true },
+  { id: 'view-metrics', group: 'navigation', label: 'Metrics', keys: null, navigates: true },
   { id: 'focus-composer', group: 'chat', label: 'Focus the composer', keys: 'Mod+L' },
   { id: 'steer', group: 'chat', label: 'Steer', keys: 'Mod+Enter' },
   { id: 'interrupt', group: 'chat', label: 'Interrupt the turn', keys: 'Esc' },
   { id: 'stop', group: 'chat', label: 'Stop the session', keys: 'Mod+Shift+X' },
-  { id: 'archive', group: 'chat', label: 'Archive the chat', keys: 'Mod+Shift+A' },
+  { id: 'archive', group: 'chat', label: 'Archive the chat', keys: 'Mod+Shift+A', navigates: true },
   { id: 'pick-model', group: 'pickers', label: 'Model', keys: 'Mod+M' },
   { id: 'pick-effort', group: 'pickers', label: 'Effort', keys: 'Mod+E' },
   { id: 'pick-permission', group: 'pickers', label: 'Permission', keys: 'Mod+P' },
@@ -54,7 +58,7 @@ export const ACTIONS = [
   { id: 'toggle-fast', group: 'pickers', label: 'Fast on or off', keys: 'Mod+Shift+F' },
   ...modelSwitches,
   { id: 'toggle-sidebar', group: 'layout', label: 'Show or hide the sidebar', keys: 'Mod+B' },
-  { id: 'toggle-mode', group: 'layout', label: 'Switch Local and Cloud', keys: 'Mod+Shift+M' },
+  { id: 'toggle-mode', group: 'layout', label: 'Switch Local and Cloud', keys: 'Mod+Shift+M', navigates: true },
   { id: 'split-right', group: 'layout', label: 'Split right', keys: 'Mod+\\' },
   { id: 'split-down', group: 'layout', label: 'Split down', keys: 'Mod+Shift+\\' },
   // The panes in reading order, the way VS Code numbers editor groups.
@@ -62,7 +66,7 @@ export const ACTIONS = [
   { id: 'focus-pane-2', group: 'layout', label: 'Focus the second pane', keys: 'Mod+2' },
   { id: 'focus-pane-3', group: 'layout', label: 'Focus the third pane', keys: 'Mod+3' },
   { id: 'focus-pane-4', group: 'layout', label: 'Focus the fourth pane', keys: 'Mod+4' },
-  { id: 'close-pane', group: 'layout', label: 'Close the pane', keys: 'Mod+W' },
+  { id: 'close-pane', group: 'layout', label: 'Close the pane', keys: 'Mod+W', navigates: true },
 ]
 
 // macOS keeps Cmd+H (hide), Cmd+M (minimize) and Cmd+W (close the
@@ -178,6 +182,26 @@ export function comboLabel(combo, mac) {
 export function firesWhileTyping(combo) {
   const { mods, key } = splitCombo(combo)
   return mods.some((m) => m === 'Mod' || m === 'Ctrl' || m === 'Alt') || key === 'Esc' || /^F\d+$/.test(key)
+}
+
+/// Whether a focused element is a text field, so the dispatcher can tell
+/// "typing" from "looking at the app". Element-shaped rather than DOM-bound:
+/// the keyboard layer hands it `document.activeElement`, and the same test is
+/// used with plain objects.
+export function typesIn(el) {
+  if (!el) return false
+  return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable === true
+}
+
+/// Whether an action must stand down while the caret is in a text field. Only
+/// the actions that leave a chat do: a draft lives in the composer's own view,
+/// not in the shell, so navigation fired from inside a field unmounts the text
+/// with nothing able to save it first. Steering, stopping, switching panes,
+/// the palette and the cheat sheet all keep the composer mounted, so they are
+/// unaffected and keep working while the user types.
+export function blocksWhileTyping(actionId) {
+  const action = ACTIONS.find((a) => a.id === actionId)
+  return Boolean(action?.navigates)
 }
 
 // The user's changes to the default map: { actionId: combo | null }, null

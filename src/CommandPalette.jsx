@@ -27,6 +27,7 @@ import {
   UserCircle,
 } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
+import { useDialog } from './dialog-focus.js'
 import { useKeyboard, isMac } from './keyboard.jsx'
 import { ACTIONS, comboFromEvent, comboLabel, rankMatches } from './shortcuts.js'
 import { activeSessions } from './archive.js'
@@ -110,6 +111,13 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
   const [harnessResult, setHarnessResult] = useState(null)
   const listRef = useRef(null)
   const inputRef = useRef(null)
+  const panelRef = useRef(null)
+  // The palette is a dialog like the others: focus in on open, Tab stays
+  // inside, the app behind goes inert, and the opener gets the focus back when
+  // it closes. `esc: false` on purpose - Escape here also steps back out of a
+  // page, so the palette keeps its own handler for that and the shared hook
+  // must not consume the key first.
+  useDialog(panelRef, onClose, { esc: false })
 
   // What moved while nobody was reading: unread.js owns the record of what has
   // been seen, so this reads it once per palette and hands the same map to the
@@ -701,7 +709,15 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
         if (e.target === e.currentTarget) onClose()
       }}
     >
-      <div className="kb-palette" role="dialog" aria-modal="true" aria-label="Command palette" onKeyDown={onKeyDown}>
+      <div
+        className="kb-palette"
+        ref={panelRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
+        onKeyDown={onKeyDown}
+      >
         <div className="kb-search">
           <MagnifyingGlass size={15} />
           {page && <span className="kb-crumb">{kb.source(page)?.title ?? PAGE_TITLES[page]}</span>}

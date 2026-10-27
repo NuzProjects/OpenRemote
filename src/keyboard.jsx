@@ -9,6 +9,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import {
   actionForCombo,
+  blocksWhileTyping,
   comboFromEvent,
   comboLabel,
   effectiveBindings,
@@ -17,6 +18,7 @@ import {
   rebind,
   resetOne,
   saveOverrides,
+  typesIn,
   unbind,
 } from './shortcuts.js'
 import { isMobile } from './platform.js'
@@ -27,9 +29,6 @@ export const isMac =
 // While one of these is open it owns the keyboard: Esc closes it, the
 // arrows move inside it, and no app shortcut fires underneath.
 const OVERLAY = '[role="dialog"], .nc-menu, .ctx-menu'
-
-const typingIn = (el) =>
-  Boolean(el) && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
 
 const KeyboardContext = createContext(null)
 
@@ -85,7 +84,17 @@ export function KeyboardProvider({ children }) {
       const id = actionForCombo(bindingsRef.current, combo)
       if (!id) return
       if (document.querySelector(OVERLAY)) return
-      if (typingIn(document.activeElement) && !firesWhileTyping(combo)) return
+      const typing = typesIn(document.activeElement)
+      if (typing && !firesWhileTyping(combo)) return
+      // An action that leaves the chat does not fire while the caret is in a
+      // field: the draft lives in the composer's view, and the shell cannot
+      // save text it cannot read, so the navigation would unmount it. A Mod
+      // combo is still swallowed here, so the browser never opens its own
+      // window in the app's place.
+      if (typing && blocksWhileTyping(id)) {
+        if (/(^|\+)(Mod|Ctrl)\+/.test(combo)) e.preventDefault()
+        return
+      }
       // A Ctrl/Cmd key the app owns never falls through to the webview's
       // own accelerators (Ctrl+P would print) even when nothing can act on
       // it here; Esc and Alt keys do fall through, keeping their meaning.

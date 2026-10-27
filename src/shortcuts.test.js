@@ -11,6 +11,7 @@ globalThis.localStorage = {
 
 const {
   ACTIONS,
+  blocksWhileTyping,
   comboFromEvent,
   comboLabel,
   firesWhileTyping,
@@ -24,6 +25,7 @@ const {
   fuzzyScore,
   rankMatches,
   defaultKey,
+  typesIn,
 } = await import('./shortcuts.js')
 
 const key = (code, mods = {}) => ({
@@ -157,4 +159,28 @@ test('macOS keeps its own Cmd+H, Cmd+M and Cmd+W: those defaults move to Option+
   assert.equal(defaultKey('close-pane', true), 'Mod+Alt+W')
   const moved = rebind({}, 'stop', 'Mod+Alt+W', true).overrides
   assert.equal(effectiveBindings(resetOne(moved, 'close-pane', true), true)['close-pane'], 'Mod+Alt+W')
+})
+
+// ---- a shortcut that leaves a chat does not fire while typing ----
+
+test('typing is a field, not a button', () => {
+  assert.equal(typesIn({ tagName: 'TEXTAREA' }), true, 'the composer')
+  assert.equal(typesIn({ tagName: 'INPUT' }), true, 'a search or rename field')
+  assert.equal(typesIn({ tagName: 'DIV', isContentEditable: true }), true, 'a rich field')
+  assert.equal(typesIn({ tagName: 'BUTTON' }), false)
+  assert.equal(typesIn({ tagName: 'DIV' }), false)
+  assert.equal(typesIn(null), false)
+})
+
+test('only the actions that leave the chat stand down while typing', () => {
+  // The draft lives in the composer's view, so a navigation fired from a field
+  // unmounts text the shell cannot save. Everything that keeps the composer
+  // mounted keeps working while the user types.
+  for (const id of ['new-chat', 'archive', 'close-pane', 'view-settings', 'view-metrics', 'toggle-mode']) {
+    assert.equal(blocksWhileTyping(id), true, `${id} navigates away from the chat`)
+  }
+  for (const id of ['steer', 'interrupt', 'stop', 'palette', 'cheat-sheet', 'focus-composer', 'split-right', 'focus-pane-1']) {
+    assert.equal(blocksWhileTyping(id), false, `${id} keeps the composer where it is`)
+  }
+  assert.equal(blocksWhileTyping('no-such-action'), false, 'an unknown id has no policy')
 })
