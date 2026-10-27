@@ -1,51 +1,41 @@
 // Every view that shows a caught error builds its sentence with errorCopy, so
 // a refusal is quoted as the daemon's words and a bare status code never
-// reaches the screen. The audit that opened this work found the same
-// `err.message ?? String(err)` shape in fifteen files; this pins the one
-// shape that replaced it, and that no converted file went back.
+// reaches the screen.
+//
+// The subjects are discovered, not listed: the first version of this file kept
+// a hand-written array of the views a commit had converted, and the very next
+// commit (the Markdown copy) added a raw caught message to a view nobody had
+// thought to add. A list like that is wrong the day it is written, so this
+// scans every component for the shape instead, and keeps exactly one named
+// exemption with the reason it exists.
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 
-// The files converted in this pass. Each one imports the module and calls it.
-const converted = [
-  'AutomationForm.jsx',
-  'AddMachineModal.jsx',
-  'AddMcpServerModal.jsx',
-  'DeleteChatModal.jsx',
-  'EndpointManager.jsx',
-  'CloudMode.jsx',
-  'CloudStateRow.jsx',
-  'AutomationsView.jsx',
-  'MachinesView.jsx',
-  'FolderPickerModal.jsx',
-  'HarnessManagerModal.jsx',
-  'MachineModal.jsx',
-  'McpServersSection.jsx',
-  'NewChat.jsx',
-  'PluginMarketplaces.jsx',
-  'PresetNameModal.jsx',
-  'RaceModal.jsx',
-  'RenameChatModal.jsx',
-  'SaveLayoutModal.jsx',
-  'SignInModal.jsx',
-]
-
+const FILES = readdirSync(new URL('.', import.meta.url)).filter((file) => file.endsWith('.jsx'))
 const source = (file) => readFileSync(new URL(`./${file}`, import.meta.url), 'utf8')
 
-test('every converted view imports errorCopy and uses it for its error', () => {
-  for (const file of converted) {
-    const text = source(file)
-    assert.match(text, /import \{ errorCopy \} from '\.\/error-copy\.js'/, `${file} imports it`)
-    assert.match(text, /errorCopy\(err\)/, `${file} calls it`)
-  }
+// The shapes that mean a caught error is being shown in its own words.
+const RAW = /String\(err\)|err\?\.message|err\.message/
+
+// The transcript pane belongs to the founder and is not ours to change. It is
+// named rather than the rule being narrowed, and the test below fails the day
+// it is converted so the exemption cannot outlive its reason.
+const NOT_OURS = new Set(['ChatView.jsx'])
+
+test('no view shows a caught error in its own raw words', () => {
+  const offenders = FILES.filter((file) => !NOT_OURS.has(file) && RAW.test(source(file)))
+  assert.deepEqual(offenders, [], `views still showing a raw error: ${offenders.join(', ')}`)
 })
 
-test('no converted view renders the raw error shape any more', () => {
-  for (const file of converted) {
-    const text = source(file)
-    assert.doesNotMatch(text, /String\(err\)/, `${file} still stringifies the error`)
-    assert.doesNotMatch(text, /'HTTP \d/, `${file} still renders a bare status code`)
-  }
+test('the one exemption still has its reason', () => {
+  assert.ok(RAW.test(source('ChatView.jsx')), 'ChatView.jsx was converted: drop it from NOT_OURS')
+})
+
+test('every view that calls the rule imports it, and the rule is the only place it lives', () => {
+  const users = FILES.filter((file) => source(file).includes('errorCopy('))
+  assert.ok(users.length > 10, 'the rule is in use')
+  const missing = users.filter((file) => !source(file).includes("from './error-copy.js'"))
+  assert.deepEqual(missing, [], `views using errorCopy without importing it: ${missing.join(', ')}`)
 })

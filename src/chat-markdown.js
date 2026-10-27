@@ -15,11 +15,13 @@
 import { decisionText } from './question-line.js'
 import { harnessName } from './harness-names.js'
 
-// One tool's output is capped: a chat that pasted a whole log should copy as
-// something a person can paste. The cap is generous enough for a useful
-// result and small enough that one runaway tool cannot make the copy
+// One tool's input or output is capped: a chat that pasted a whole log should
+// copy as something a person can paste. The cap is generous enough for a
+// useful result and small enough that one runaway tool cannot make the copy
 // unusable; the marker under it says how much was left out, and the answer
-// line counts how many sections were shortened.
+// line counts how many sections were shortened. Inputs are capped too: a
+// single large write is as long as any output, and a copy is only useful if
+// the whole of it is.
 export const TOOL_CAP = 4000
 
 // The fence a block needs: one backtick more than the longest run inside it,
@@ -40,15 +42,19 @@ export function thousands(n) {
 
 const text = (value) => (typeof value === 'string' && value.trim() ? value : '')
 
-// The fenced block for one tool output, capped with a marker that says what
-// was left out. `shortened` comes back so the caller can count sections.
-function fencedOutput(output) {
-  const body = String(output ?? '')
-  if (body.length <= TOOL_CAP) return { block: `${fenceFor(body)}\n${body}\n${fenceFor(body)}`, shortened: false }
-  const kept = body.slice(0, TOOL_CAP)
+// The fenced block for one tool input or output, capped with a marker that
+// says what was left out. `shortened` comes back so the caller can count
+// sections; `lang` is the fence's own language tag.
+function fenced(body, lang = '') {
+  const whole = String(body ?? '')
+  if (whole.length <= TOOL_CAP) {
+    const fence = fenceFor(whole)
+    return { block: `${fence}${lang}\n${whole}\n${fence}`, shortened: false }
+  }
+  const kept = whole.slice(0, TOOL_CAP)
   const fence = fenceFor(kept)
-  const marker = `[... truncated: ${thousands(body.length)} characters total, ${thousands(TOOL_CAP)} kept ...]`
-  return { block: `${fence}\n${kept}\n${marker}\n${fence}`, shortened: true }
+  const marker = `[... truncated: ${thousands(whole.length)} characters total, ${thousands(TOOL_CAP)} kept ...]`
+  return { block: `${fence}${lang}\n${kept}\n${marker}\n${fence}`, shortened: true }
 }
 
 // A tool's input, as the harness gave it: the command when there is one
@@ -75,11 +81,14 @@ function toolItem(item, out) {
   if (!input && !result && !failure) return false
   out.push(`**Tool: ${name}${failure ? ' (failed)' : ''}**`, '')
   if (input) {
-    const fence = fenceFor(input.body)
-    out.push(`${fence}${input.lang}\n${input.body}\n${fence}`, '')
+    // The input is capped by the same rule as the output: a write of one big
+    // file would otherwise make the copy as long as the file.
+    const { block, shortened } = fenced(input.body, input.lang)
+    out.push(block, '')
+    if (shortened) out.shortened += 1
   }
   if (result) {
-    const { block, shortened } = fencedOutput(result)
+    const { block, shortened } = fenced(result)
     out.push('Result:', '', block, '')
     if (shortened) out.shortened += 1
   }

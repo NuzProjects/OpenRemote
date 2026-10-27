@@ -3,7 +3,7 @@
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { UNREACHABLE, errorCopy } from './error-copy.js'
+import { UNREACHABLE, consoleError, errorCopy } from './error-copy.js'
 
 const failed = (status, message) => Object.assign(new Error(message), { status })
 
@@ -36,5 +36,24 @@ test('the console repeats its own sentence instead of quoting it', () => {
 test('an unknown cause says so, and a stranger\'s words are quoted', () => {
   assert.equal(errorCopy(null), 'The console does not know why this failed. Try again.')
   assert.equal(errorCopy(new Error('')), 'The console does not know why this failed. Try again.')
-  assert.equal(errorCopy('a string was thrown'), 'Something outside the console answered: “a string was thrown”.')
+  assert.equal(errorCopy('a string was thrown'), 'The console could not do this: “a string was thrown”.')
+})
+
+test('a field-naming validation sentence survives being quoted', () => {
+  // The daemon's 422 names the field; quoting must not shorten or replace it.
+  const line = errorCopy(failed(422, 'workspace must be an absolute path'))
+  assert.equal(line, 'The daemon refused this: “workspace must be an absolute path”.')
+})
+
+test("the console's own check is repeated without quotes, and blamed on nobody", () => {
+  const line = errorCopy(consoleError('An archive needs a .zip, .tar.gz or .tgz name.'))
+  assert.equal(line, 'The console could not do this: An archive needs a .zip, .tar.gz or .tgz name.')
+  assert.doesNotMatch(line, /“/)
+  assert.doesNotMatch(line, /something outside/i)
+})
+
+test('an unmarked error from nowhere in particular names no culprit', () => {
+  const line = errorCopy(new Error('the disk is full'))
+  assert.equal(line, 'The console could not do this: “the disk is full”.')
+  assert.doesNotMatch(line, /something outside/i)
 })

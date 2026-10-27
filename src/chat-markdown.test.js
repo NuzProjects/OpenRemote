@@ -112,6 +112,21 @@ test('a fence grows when the output already holds one', () => {
   assert.equal(fenceFor('a ```` run'), '`````')
 })
 
+test('a large tool input is capped like an output, and counted', () => {
+  const huge = 'x'.repeat(TOOL_CAP + 250)
+  const one = chatMarkdown(chatOf([tool({ input: { command: huge }, result: 'ok' })]))
+  assert.equal(one.shortened, 1)
+  assert.match(one.text, /\[\.\.\. truncated: 4,250 characters total, 4,000 kept \.\.\.\]/)
+  // Both halves cut in one call: two sections, as the answer line says.
+  const both = chatMarkdown(chatOf([tool({ input: { command: huge }, result: huge })]))
+  assert.equal(both.shortened, 2)
+  assert.match(copiedLine(both), /\(2 sections shortened\)\.$/)
+  // A small input stays whole, with its language tag.
+  const small = chatMarkdown(chatOf([tool({ input: { command: 'ls -la' }, result: 'ok' })]))
+  assert.match(small.text, /```sh\nls -la\n```/)
+  assert.equal(small.shortened, 0)
+})
+
 test('the answer line counts the lines and the shortened sections', () => {
   assert.equal(copiedLine({ lines: 1 }), 'Copied 1 line.')
   assert.equal(copiedLine({ lines: 42 }), 'Copied 42 lines.')
@@ -125,12 +140,15 @@ test('the answer line counts the lines and the shortened sections', () => {
 
 const palette = readFileSync(new URL('./CommandPalette.jsx', import.meta.url), 'utf8')
 
-test('the palette offers the copy for the chat on screen, and only while it has items', () => {
+test('the palette offers the copy for the focused chat, and only while it has items', () => {
   assert.match(palette, /import \{ chatMarkdown, copiedLine \} from '\.\/chat-markdown\.js'/)
   assert.match(palette, /name: 'Copy this chat as Markdown'/)
-  // The chat is the address's, the same reading the changes row uses, and a
-  // chat with no items is not offered at all.
-  assert.match(palette, /const markdown = reviewChat && \(reviewChat\.timeline \?\? \[\]\)\.length > 0/)
+  // The chat is the focused pane's, not the address's: a split can show one
+  // chat in the primary view and another under the focus, and copying the
+  // wrong transcript is the one way a copy can lie.
+  assert.match(palette, /const markdownChat = focusedChatId \? chats\?\.\[focusedChatId\] \?\? null : null/)
+  assert.match(palette, /const markdown = markdownChat && \(markdownChat\.timeline \?\? \[\]\)\.length > 0/)
+  assert.doesNotMatch(palette, /const markdown = reviewChat/)
   assert.match(palette, /\.\.\.review, \.\.\.markdown,/)
 })
 
@@ -143,7 +161,9 @@ test('copying writes the clipboard and answers with the module line, in the pale
 
 test('a clipboard that refuses is said in one sentence, never silently', () => {
   assert.match(palette, /Could not copy: this window has no clipboard\./)
-  assert.match(palette, /\.catch\(\(err\) => setCopied\(`Could not copy: \$\{err\?\.message \?\? err\}`\)\)/)
+  // A refused write goes through the console's one error rule, so a caught
+  // message is never pasted in as if the app had said it.
+  assert.match(palette, /\.catch\(\(err\) => setCopied\(errorCopy\(err\)\)\)/)
   // And a chat that turns out to have nothing to write says so rather than
   // copying an empty document.
   assert.match(palette, /Nothing to copy in this chat\./)
