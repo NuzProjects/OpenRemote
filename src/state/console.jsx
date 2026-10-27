@@ -4,7 +4,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { DaemonApi, clearConnection, loadConnection, nextRetryDelay, sameDaemon, saveConnection, sessionGone } from '../api/daemon.js'
-import { chatFromSession, foldEvent, mergeSessionIntoChat, vanishedChatIds } from './reducer.js'
+import { chatFromSession, foldEvents, mergeSessionIntoChat, vanishedChatIds } from './reducer.js'
 import { createBeatLoop } from './beat.js'
 import { samePayload } from './same.js'
 import { errorCopy } from '../error-copy.js'
@@ -29,6 +29,17 @@ const SIGNIN_POLL_MISSES = 40
 // harness before READY), but the waiting screen is patient copy rather than a
 // verdict, so it is cheaper to show it early than to leave the app wordless.
 const BOOT_GRACE_MS = 2500
+
+// The frame the events wait for. A stream can deliver a replay of hundreds of
+// events in one tick (a chat reopened, a reconnect, a fast harness), and every
+// event used to copy the chat and its whole timeline. Queueing the events and
+// folding the frame's batch against one copy is the same fold in the same
+// order, published once per frame. The fallback keeps this working where
+// there is no frame clock (a test, a headless harness).
+const nextFrame =
+  typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (fn) => setTimeout(fn, 16)
+const cancelFrame =
+  typeof cancelAnimationFrame === 'function' ? cancelAnimationFrame : (id) => clearTimeout(id)
 
 export function ConsoleProvider({ children }) {
   const [api, setApi] = useState(() => {
@@ -117,6 +128,10 @@ export function ConsoleProvider({ children }) {
   const [archived, setArchived] = useState(loadArchived)
   const streamsRef = useRef(new Map())
   const chatsRef = useRef({})
+  // The events of the frame being gathered, one queue per chat, and the frame
+  // that will fold them. See nextFrame above for why they wait.
+  const pendingRef = useRef(new Map())
+  const frameRef = useRef(null)
   // Ids a poll has carried at least once - what tells a chat gone from
   // this beat (deleted elsewhere) from one not yet in any beat (created
   // between polls, fresher than the list).
@@ -547,6 +562,39 @@ export function ConsoleProvider({ children }) {
     })
   }, [])
 
+  // One published state per frame: the queued events are folded, in the order
+  // they arrived, against one copy of each chat and its timeline. The fold is
+  // `foldEvents` - the same `foldEvent` calls, in the same sequence - so the
+  // transcript is the one per-event folding produced (reducer.test.js folds a
+  // recorded stream both ways and compares).
+  const flushEvents = useCallback(() => {
+    frameRef.current = null
+    const queued = pendingRef.current
+    if (queued.size === 0) return
+    pendingRef.current = new Map()
+    setChats((current) => {
+      let next = null
+      for (const [id, events] of queued) {
+        const chat = (next ?? current)[id]
+        if (!chat) continue
+        const folded = foldEvents({ ...chat, timeline: [...chat.timeline] }, events)
+        next = next === null ? { ...current, [id]: folded } : { ...next, [id]: folded }
+      }
+      return next ?? current
+    })
+  }, [])
+
+  const queueEvent = useCallback(
+    (id, event) => {
+      const queued = pendingRef.current
+      const list = queued.get(id)
+      if (list) list.push(event)
+      else queued.set(id, [event])
+      if (frameRef.current === null) frameRef.current = nextFrame(flushEvents)
+    },
+    [flushEvents],
+  )
+
   // One stream per watched chat: load its decisions, replay what it hasn't
   // folded yet, then follow it live, reconnecting from its cursor. The
   // cursor is the fold's (`foldedSeq`), never a separate transport count: an
@@ -558,11 +606,9 @@ export function ConsoleProvider({ children }) {
       const apply = (event) => {
         // The wire is talking again: the next close starts the ladder over.
         stream.retryDelay = 0
-        setChats((current) => {
-          const chat = current[id]
-          if (!chat) return current
-          return { ...current, [id]: foldEvent({ ...chat, timeline: [...chat.timeline] }, event) }
-        })
+        // The fold waits for the frame: a replay hands over hundreds of events
+        // in one tick, and the copy belongs to the frame, not each event.
+        queueEvent(id, event)
       }
       const follow = (after) => {
         stream.stop = api.events(id, {
@@ -606,10 +652,14 @@ export function ConsoleProvider({ children }) {
         stream.cancelled = true
         clearTimeout(stream.retry)
         stream.stop?.()
+        // Events the frame had not folded yet are dropped with the stream: the
+        // chat is not watched any more, and the cursor still sits at the last
+        // folded seq, so a later open asks for them again and folds them once.
+        pendingRef.current.delete(id)
       }
       return stream
     },
-    [api],
+    [api, queueEvent],
   )
 
   // A new connection (or none) drops every stream; the next effect reopens
@@ -619,6 +669,11 @@ export function ConsoleProvider({ children }) {
     return () => {
       for (const stream of streams.values()) stream.close()
       streams.clear()
+      pendingRef.current.clear()
+      if (frameRef.current !== null) {
+        cancelFrame(frameRef.current)
+        frameRef.current = null
+      }
     }
   }, [connection.state, openStream])
 

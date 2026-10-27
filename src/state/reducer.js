@@ -471,6 +471,17 @@ export function foldEvent(chat, event) {
   return chat
 }
 
+/// Fold a batch of events in one pass. The caller copies the chat and its
+/// timeline once for the batch and publishes the result, so a burst of events
+/// costs one copy rather than one per event; the fold itself is the same
+/// function called in the same order, so the timeline, the statuses and the
+/// counters are the ones per-event folding produced. reducer.test.js folds one
+/// recorded stream both ways and compares the results.
+export function foldEvents(chat, events) {
+  for (const event of events ?? []) foldEvent(chat, event)
+  return chat
+}
+
 /// The rail the ChatView renders - the timeline itself, in event order.
 export function railItems(chat) {
   return chat.timeline

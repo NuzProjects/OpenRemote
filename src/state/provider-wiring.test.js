@@ -46,3 +46,28 @@ test('pointing at another daemon clears what the last one answered', () => {
   assert.match(connect, /resetDaemonData\(\)/, 'a switch resets the daemon-owned lists')
   assert.match(disconnect, /resetDaemonData\(\)/, 'and so does a disconnect')
 })
+
+test('a frame of stream events is folded once, against one copy', () => {
+  // A replay hands a whole history over in one tick, and the fold used to copy
+  // the chat and its timeline for every event. The events are queued per chat
+  // and folded once per animation frame; that the result is the same
+  // transcript is reducer.test.js's comparison, and this pins the wiring.
+  assert.match(source, /import \{ chatFromSession, foldEvents, mergeSessionIntoChat, vanishedChatIds \} from '\.\/reducer\.js'/)
+  const apply = between('const apply = (event) => {', 'const follow = (after) => {')
+  assert.match(apply, /queueEvent\(id, event\)/, 'an event is queued, not folded where it lands')
+  assert.doesNotMatch(apply, /setChats/, 'and no state is published per event')
+  assert.doesNotMatch(apply, /\bfoldEvent\(/, 'nor copied per event')
+  const flush = between('const flushEvents = useCallback', 'const queueEvent = useCallback')
+  assert.match(flush, /foldEvents\(\{ \.\.\.chat, timeline: \[\.\.\.chat\.timeline\] \}, events\)/, 'the frame folds one batch against one copy')
+  assert.match(flush, /setChats\(\(current\) =>/, 'and publishes once')
+  // One frame is scheduled until it runs, and the queue is per chat.
+  const queue = between('const queueEvent = useCallback', '// One stream per watched chat')
+  assert.match(queue, /pendingRef\.current/)
+  assert.match(queue, /if \(frameRef\.current === null\) frameRef\.current = nextFrame\(flushEvents\)/)
+  // A closed stream drops what the frame had not folded: the cursor still sits
+  // at the last folded seq, so a later open asks for those events again.
+  assert.match(between('stream.close = () => {', 'return stream'), /pendingRef\.current\.delete\(id\)/)
+  // A connection change cancels the pending frame and empties the queue.
+  assert.match(source, /cancelFrame\(frameRef\.current\)/)
+  assert.match(source, /pendingRef\.current\.clear\(\)/)
+})

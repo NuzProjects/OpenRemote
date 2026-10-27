@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { chatFromSession, chatStatus, foldEvent, mergeSessionIntoChat, railItems, titleFrom, vanishedChatIds, workspaceName } from './reducer.js'
+import { chatFromSession, chatStatus, foldEvent, foldEvents, mergeSessionIntoChat, railItems, titleFrom, vanishedChatIds, workspaceName } from './reducer.js'
 
 const session = (over = {}) => ({
   id: 's1',
@@ -665,4 +665,109 @@ test('a stream gap leaves one note where the history is incomplete', () => {
   // this one.
   foldEvent(chat, { type: 'stream_gap' })
   assert.equal(chat.timeline.filter((i) => i.text === note.text).length, 2)
+})
+
+// ---- folding a stream in batches is folding it one event at a time ----
+//
+// The provider copies a chat and its timeline once per animation frame and
+// folds that frame's whole batch against the copy, instead of copying per
+// event. That is only safe if the batch is the same fold: one recorded stream
+// folded both ways has to produce the same transcript, the same counts and
+// the same statuses.
+
+// One turn's worth of every kind the fold knows, in the order a harness sends
+// them: a session, reasoning and reply deltas settling into whole items, a
+// tool, a decision answered, a note, a gap, an interrupted turn, and a
+// duplicate seq a replay must ignore. This is the recorded stream the two
+// fold shapes are compared on.
+const recordedStream = () => [
+  event(1, { type: 'session.created', session: session({ status: 'working' }) }),
+  event(2, { type: 'session.status_changed', status: 'working', reason: null }),
+  event(3, { type: 'message.added', message: { id: 'm1', turn: 0, role: 'user', text: 'run the migration' } }),
+  event(4, { type: 'reasoning.delta', turn: 0, text: 'thinking about ' }),
+  event(5, { type: 'reasoning.delta', turn: 0, text: 'the schema' }),
+  event(6, { type: 'reasoning.added', turn: 0, text: 'Think about the schema.' }),
+  event(7, { type: 'message.delta', turn: 0, text: 'First ' }),
+  event(8, { type: 'message.delta', turn: 0, text: 'part.' }),
+  event(9, { type: 'tool.started', turn: 0, name: 'Bash', input: { command: 'cargo test' } }),
+  event(10, { type: 'tool.result', turn: 0, name: 'Bash', output: 'ok', is_error: false }),
+  event(11, { type: 'message.added', message: { id: 'm2', turn: 0, role: 'assistant', text: 'First part.' } }),
+  event(12, { type: 'context.used', used: 1200, window: 200000 }),
+  event(13, { type: 'usage.cost', cost_usd: 0.02 }),
+  event(14, { type: 'thinking.tokens', tokens: 42 }),
+  event(15, { type: 'queue.changed', queue: [{ id: 'q1' }], paused: false }),
+  event(16, { type: 'session.updated', session: session({ status: 'working', title: 'run the migration' }) }),
+  event(17, { type: 'note.added', text: 'a note from the harness' }),
+  event(18, {
+    type: 'decision.requested',
+    decision: {
+      id: 'd1',
+      state: 'pending',
+      harness_request: { tool_name: 'Bash', input: { command: 'rm -rf build' } },
+      options: [{ id: 'allow', label: 'Allow' }],
+    },
+  }),
+  event(19, { type: 'decision.responded', decision_id: 'd1', choice: 'allow' }),
+  event(20, { type: 'message.delta', turn: 1, text: 'Second turn ' }),
+  event(21, { type: 'stream_gap' }),
+  event(22, { type: 'daemon.error', message: 'a hiccup' }),
+  event(23, { type: 'turn.completed', turn: 1, outcome: 'interrupted' }),
+  event(24, { type: 'session.status_changed', status: 'stopped', reason: null }),
+  event(25, { type: 'session.status_changed', status: 'failed', reason: 'the harness exited' }),
+  // A seq at or below the cursor: a replay, which the fold must ignore.
+  event(24, { type: 'message.added', message: { id: 'dup', turn: 1, role: 'assistant', text: 'duplicate' } }),
+  event(26, { type: 'turn.started' }),
+]
+
+// The shape the provider used before: a fresh chat and timeline per event.
+function foldPerEvent(base, stream) {
+  let chat = base
+  for (const event of stream) chat = foldEvent({ ...chat, timeline: [...chat.timeline] }, event)
+  return chat
+}
+
+// The shape it uses now: a fresh chat and timeline per frame, and every event
+// of that frame folded against the one copy.
+function foldPerFrame(base, stream, perFrame) {
+  let chat = base
+  for (let i = 0; i < stream.length; i += perFrame) {
+    chat = { ...chat, timeline: [...chat.timeline] }
+    foldEvents(chat, stream.slice(i, i + perFrame))
+  }
+  return chat
+}
+
+test('a stream folded in frames has the transcript of one folded per event', () => {
+  const stream = recordedStream()
+  const base = chatFromSession(session({ status: 'working' }))
+  const once = foldPerEvent(base, stream)
+
+  for (const perFrame of [1, 3, 7, stream.length]) {
+    const framed = foldPerFrame(base, stream, perFrame)
+    assert.deepEqual(framed, once, `a ${perFrame}-event frame folds to the same chat`)
+    // The numbers a person sees, spelled out so a failure says which one moved.
+    assert.equal(framed.timeline.length, once.timeline.length, 'same transcript length')
+    assert.equal(framed.status, once.status, 'same status')
+    assert.equal(framed.running, once.running, 'same running flag')
+    assert.equal(framed.pendingDecisionId, once.pendingDecisionId, 'same pending decision')
+    assert.equal(framed.lastError, once.lastError, 'same failure sentence')
+    assert.equal(framed.costUsd, once.costUsd, 'same running cost')
+    assert.equal(framed.thinkingTokens, once.thinkingTokens, 'same thinking total')
+    assert.equal(framed.foldedSeq, once.foldedSeq, 'same fold cursor')
+    const census = (chat) =>
+      chat.timeline.reduce((all, item) => ({ ...all, [item.kind + (item.role ? `:${item.role}` : '')]: (all[item.kind + (item.role ? `:${item.role}` : '')] ?? 0) + 1 }), {})
+    assert.deepEqual(census(framed), census(once), 'same items, in the same kinds')
+  }
+})
+
+test('batching does not double a replayed event or lose a settled one', () => {
+  const stream = recordedStream()
+  const once = foldPerEvent(chatFromSession(session({ status: 'working' })), stream)
+  // The duplicate seq produced no row on either path, and the interrupted
+  // turn's live item was retired by both.
+  const kinds = once.timeline.map((item) => item.kind)
+  assert.equal(kinds.filter((kind) => kind === 'stream').length, 0, 'the interrupted stream was retired')
+  assert.equal(once.timeline.some((item) => item.text === 'duplicate'), false, 'the replay added nothing')
+  const framed = foldPerFrame(chatFromSession(session({ status: 'working' })), stream, 5)
+  assert.equal(framed.timeline.filter((item) => item.kind === 'message').length, once.timeline.filter((item) => item.kind === 'message').length)
 })
