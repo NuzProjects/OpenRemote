@@ -20,6 +20,7 @@ import {
   FloppyDisk,
   FolderOpen,
   GearSix,
+  Globe,
   HardDrives,
   Keyboard,
   Lightning,
@@ -37,7 +38,8 @@ import { useConsole } from './state/console.jsx'
 import { useDialog } from './dialog-focus.js'
 import { useKeyboard, isMac } from './keyboard.jsx'
 import { ACTIONS, comboFromEvent, comboLabel, rankMatches } from './shortcuts.js'
-import { reopenAvailable, reopenClosed } from './browser-store.js'
+import { reopenAvailable, reopenClosed, browserMounted, getState, setState, subscribe } from './browser-store.js'
+import { BROWSER_GROUP, browserTabs } from './palette-tabs.js'
 import { activeSessions } from './archive.js'
 import { hasFileChanges } from './changes.js'
 import { chatMarkdown, copiedLine } from './chat-markdown.js'
@@ -103,7 +105,7 @@ const PAGES = [
 
 // Rules sit right under Actions: a person who opens the palette to run one has
 // ten of them, and the alternative is scrolling past every chat first.
-const SECTION_ORDER = ['Actions', 'Rules', 'Chats', 'Views', 'Projects', 'Machines']
+const SECTION_ORDER = ['Actions', 'Rules', 'Chats', 'Views', 'Projects', 'Machines', 'Browser']
 const SECTION_CAP = 8
 
 // The pages with no keyboard source behind them, so the crumb has a name.
@@ -184,6 +186,12 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
   // What the Rules group answered: one line under the search field, in the
   // same shape every command that asked nothing uses.
   const [ruleRunState, setRuleRunState] = useState(null)
+  // The browser's tabs, live. The Browser group lists pages, and a page that
+  // closed (or a title that arrived) while the palette is open would otherwise
+  // leave a row pointing at a tab that is gone: the store is the one list of
+  // them, so the group follows it the same way the strip does.
+  const [tabs, setTabs] = useState(() => getState().tabs)
+  useEffect(() => subscribe(() => setTabs(getState().tabs)), [])
   const onScreen = typeof location === 'undefined' ? '' : location.hash.replace(/^#/, '')
   const currentChat = (sessions ?? []).some((session) => session.id === onScreen) ? onScreen : null
 
@@ -487,6 +495,19 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
           run: { ruleRun: rule.id },
         }))
       : []
+    // The browser's open pages, in the strip's own order: a tab is a place
+    // Ctrl+K can send a person to, but only one that is on screen now - the
+    // group exists only while the view that owns the pages is mounted, and
+    // palette-tabs.js decides that and builds the rows (the same module the
+    // tab strip's words come from).
+    const tabRows = browserTabs({ tabs, mounted: browserMounted() }).map((tab) => ({
+      key: `tab:${tab.key}`,
+      section: BROWSER_GROUP,
+      name: tab.name,
+      sub: tab.sub,
+      icon: <Globe size={15} />,
+      run: { tab: tab.key },
+    }))
     return {
       actions: [...stopRow, ...harnessRow, ...raceRow, ...sinceRow, ...layoutRow, ...layoutsRow, ...renameRow, ...presetRow, ...reopenRow, ...review, ...markdown, ...jobRow, ...pages, ...actions],
       chats: chatRows,
@@ -494,8 +515,9 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
       machines,
       harnessRows,
       ruleRows,
+      tabRows,
     }
-  }, [kb, sessions, archived, projects, devices, thisDevice, capabilities, machines, raceFree, moved, panes, savedLayouts, onScreen, reviewChat, markdownChat, hasFileChanges, focusedChatId, onRenameChat, rulesCanRun, automations, machinesAnswered])
+  }, [kb, sessions, archived, projects, devices, thisDevice, capabilities, machines, raceFree, moved, panes, savedLayouts, onScreen, reviewChat, markdownChat, hasFileChanges, focusedChatId, onRenameChat, rulesCanRun, automations, machinesAnswered, tabs])
 
   const sections = useMemo(() => {
     if (page === 'layouts') {
@@ -670,7 +692,7 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
         ...(suggested.length ? [{ label: 'Suggestions', items: suggested }] : []),
       ]
     }
-    const all = [...everything.actions, ...everything.chats, ...everything.projectRows, ...everything.machines, ...everything.ruleRows]
+    const all = [...everything.actions, ...everything.chats, ...everything.projectRows, ...everything.machines, ...everything.ruleRows, ...everything.tabRows]
     const ranked = rankMatches(query, all, (r) => r.name)
     return SECTION_ORDER.map((label) => ({
       label,
@@ -733,6 +755,15 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
   const choose = (row) => {
     if (!row) return
     const r = row.run
+    if (r.tab) {
+      // The strip's own switch: the store's active tab is what every surface
+      // reads (the strip, the address bar, the page the pane shows), so this is
+      // the same call a click on the strip makes, and the palette closes
+      // because the place the person chose is the browser behind it.
+      setState(() => ({ active: r.tab }))
+      onClose()
+      return
+    }
     if (r.ruleRun) {
       // The rule keeps the palette open while the daemon is asked: the answer
       // is the one line under the field, first "Running ...", then "Started."

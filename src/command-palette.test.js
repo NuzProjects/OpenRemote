@@ -55,11 +55,40 @@ const palette = readFileSync(new URL('./CommandPalette.jsx', import.meta.url), '
 
 test('a token event does not rebuild the palette rows', () => {
   // The row list's dependencies no longer include the chat records, whose
-  // every mutation used to rebuild two hundred rows.
-  assert.match(palette, /\}, \[kb, sessions, archived, projects, devices, thisDevice, capabilities, machines, raceFree, moved, panes, savedLayouts, onScreen, reviewChat, markdownChat, hasFileChanges, focusedChatId, onRenameChat, rulesCanRun, automations, machinesAnswered\]\)/)
+  // every mutation used to rebuild two hundred rows. The browser's tabs are in
+  // the list: a page opening or closing while the palette is open has to
+  // change the Browser group, and that is the store's own list, not a chat.
+  assert.match(palette, /\}, \[kb, sessions, archived, projects, devices, thisDevice, capabilities, machines, raceFree, moved, panes, savedLayouts, onScreen, reviewChat, markdownChat, hasFileChanges, focusedChatId, onRenameChat, rulesCanRun, automations, machinesAnswered, tabs\]\)/)
   assert.doesNotMatch(palette, /\}, \[kb, sessions, chats,/)
   // The two timeline-reading rows are built apart and stabilised by their own
   // key, so an unchanged answer reuses the same row objects.
   assert.match(palette, /const chatActions = useMemo\(\(\) => \{/)
   assert.match(palette, /if \(chatActionsRef\.current\.key !== chatActions\.key\) chatActionsRef\.current = chatActions/)
+})
+
+test('the browser group is wired to the store the strip already uses', () => {
+  const palette = source('CommandPalette.jsx')
+  // The rows come from palette-tabs.js, not from a second tab reader.
+  assert.match(palette, /import \{ BROWSER_GROUP, browserTabs \} from '\.\/palette-tabs\.js'/)
+  assert.match(palette, /const tabRows = browserTabs\(\{ tabs, mounted: browserMounted\(\) \}\)\.map\(\(tab\) => \(\{/)
+  assert.match(palette, /section: BROWSER_GROUP,/)
+  assert.match(palette, /run: \{ tab: tab\.key \},/)
+  // The group appears only while a browser view is mounted: the store's own
+  // registration says so (registerReopen, made by the view while it is on
+  // screen), and reopenAvailable is not used for it because that one also
+  // needs a closed tab.
+  assert.match(palette, /import \{ reopenAvailable, reopenClosed, browserMounted, getState, setState, subscribe \} from '\.\/browser-store\.js'/)
+  assert.match(palette, /const \[tabs, setTabs\] = useState\(\(\) => getState\(\)\.tabs\)/)
+  assert.match(palette, /useEffect\(\(\) => subscribe\(\(\) => setTabs\(getState\(\)\.tabs\)\), \[\]\)/)
+  // Choosing a row is the strip's own switch: the store's active tab, then
+  // the palette closes because the place chosen is behind it.
+  assert.match(palette, /if \(r\.tab\) \{/)
+  assert.match(palette, /setState\(\(\) => \(\{ active: r\.tab \}\)\)/)
+  // It rides the same ranking as every other group, and the section order
+  // knows its name.
+  assert.match(palette, /\.\.\.everything\.tabRows\]/)
+  assert.match(palette, /const SECTION_ORDER = \['Actions', 'Rules', 'Chats', 'Views', 'Projects', 'Machines', 'Browser'\]/)
+  // And the store gained the mounted getter the group asks for.
+  const store = source('browser-store.js')
+  assert.match(store, /export function browserMounted\(\) \{\s*return Boolean\(reopenHandler\)/)
 })

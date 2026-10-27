@@ -179,6 +179,15 @@ export function reopenAvailable() {
   return Boolean(reopenHandler) && getState().closed.length > 0
 }
 
+/// Whether a browser view is on screen right now. The palette's Browser group
+/// asks this rather than `reopenAvailable` above: pages are worth listing
+/// whether or not a closed one exists, and a tab nobody can see is not a place
+/// a command can send a person. Both facts come from the one registration the
+/// view makes while it is mounted.
+export function browserMounted() {
+  return Boolean(reopenHandler)
+}
+
 export function reopenClosed() {
   reopenHandler?.()
 }

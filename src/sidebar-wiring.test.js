@@ -130,3 +130,29 @@ test('a row that vanishes under the keyboard hands its place to its neighbour', 
   assert.ok(source.includes('}, [orderKey])'), 'keyed on the order string, not the array')
   assert.ok(source.includes('focusedRow.current = row.id'), 'the row says it holds the keyboard')
 })
+test('a chat row offers Copy as Markdown where the copy can work', () => {
+  // The rule, the write and the two sentences are chat-markdown.js's, the
+  // same module the palette's row reads, so the two ways in cannot drift.
+  assert.match(source, /import \{ canCopyChat, chatMarkdown, copiedLine \} from '\.\/chat-markdown\.js'/)
+  assert.match(source, /import \{ errorCopy \} from '\.\/error-copy\.js'/)
+  // The item sits directly after Rename, and only where there is something to
+  // write: a row that answered "nothing to copy" after a press is worse than
+  // one that is not offered.
+  const menu = source.slice(source.indexOf('const menuItems = (row) => {'), source.indexOf('// The Mobile tile'))
+  const renameAt = menu.indexOf("label: 'Rename'")
+  const copyAt = menu.indexOf("label: 'Copy as Markdown'")
+  assert.ok(renameAt > 0 && copyAt > renameAt, 'the copy follows Rename')
+  assert.match(menu, /canCopyChat\(chats\?\.\[row\.id\]\)/, 'and is gated on the module rule')
+  assert.ok(copyAt < menu.indexOf("label: 'Split right'"), 'the split order stays after it')
+  assert.ok(copyAt < menu.indexOf("label: 'Archive'"))
+  assert.ok(copyAt < menu.indexOf("label: 'Delete chat'"))
+  assert.ok(copyAt < menu.indexOf("label: 'Copy title'"))
+  // The write is the window's own clipboard, and the answer is the module's
+  // sentence, announced in the sidebar's transient line rather than dropped.
+  assert.match(source, /navigator\.clipboard\?\.writeText\?\.\(file\.text\)/)
+  assert.match(source, /write\.then\(\(\) => setCopyNote\(copiedLine\(file\)\)\)/)
+  assert.match(source, /\.catch\(\(err\) => setCopyNote\(errorCopy\(err\)\)\)/)
+  assert.match(source, /setCopyNote\('Nothing to copy in this chat\.'\)/)
+  assert.match(source, /setCopyNote\('Could not copy: this window has no clipboard\.'\)/)
+  assert.match(source, /\{copyNote && \(\s*<div className="chat-undo" role="status">/)
+})

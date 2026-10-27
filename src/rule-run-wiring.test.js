@@ -18,7 +18,7 @@ test('the palette has a Rules group, under Actions, only while a view can run on
   assert.match(palette, /import \{[\s\S]*?RULES_SECTION,[\s\S]*?\} from '\.\/rule-run\.js'/)
   assert.match(
     palette,
-    /const SECTION_ORDER = \['Actions', 'Rules', 'Chats', 'Views', 'Projects', 'Machines'\]/,
+    /const SECTION_ORDER = \['Actions', 'Rules', 'Chats', 'Views', 'Projects', 'Machines', 'Browser'\]/,
     'a person looking for a rule does not scroll past every chat first',
   )
   // The group exists only with the seam registered, and follows it coming and
@@ -28,7 +28,9 @@ test('the palette has a Rules group, under Actions, only while a view can run on
   assert.match(palette, /const ruleRows = rulesCanRun\s*\n\s*\? ruleRunRows\(automations, machines, \{ answered: machinesAnswered \}\)/)
   assert.match(palette, /section: RULES_SECTION,/)
   assert.match(palette, /run: \{ ruleRun: rule\.id \},/)
-  assert.match(palette, /\.\.\.everything\.ruleRows\]/, 'the rows ride the same ranking as every other group')
+  // In the one list the ranker walks. The array has other groups after it
+  // (the browser's tabs), so this pins membership rather than the tail.
+  assert.match(palette, /\.\.\.everything\.ruleRows/, 'the rows ride the same ranking as every other group')
 })
 
 test('choosing a rule shows the answer line and asks the view, not the daemon', () => {

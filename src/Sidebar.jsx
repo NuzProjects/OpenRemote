@@ -8,6 +8,7 @@ import {
   CaretDown,
   ChartBar,
   ChatCircle,
+  ClipboardText,
   Cloud,
   Copy,
   Desktop,
@@ -38,6 +39,8 @@ import { HarnessMark } from './brand-marks.jsx'
 import ContextMenu from './ContextMenu.jsx'
 import DeleteChatModal from './DeleteChatModal.jsx'
 import { shownTitle } from './rename-chat.js'
+import { canCopyChat, chatMarkdown, copiedLine } from './chat-markdown.js'
+import { errorCopy } from './error-copy.js'
 import { usePrivacyMode } from './privacy.js'
 import { useHint, useShortcut } from './keyboard.jsx'
 import './sidebar.css'
@@ -45,6 +48,10 @@ import './sidebar.css'
 // How long the archived line stays. Long enough to catch a mispress on a
 // hover control, short enough that the sidebar keeps no history of its own.
 const UNDO_MS = 8000
+
+// How long the copy's line stays. Shorter than the archive's: it reports what
+// just happened rather than offering a way back from it.
+const COPY_NOTE_MS = 4000
 
 // No overlay, as one stable value: a fresh object here would rebuild the rows
 // memo on every render of a sidebar with no rename in flight.
@@ -93,6 +100,16 @@ export default function Sidebar({
     const timer = setTimeout(() => setUndo(null), UNDO_MS)
     return () => clearTimeout(timer)
   }, [undo])
+
+  // The copy's own transient line: the same rule as the archive's, a little
+  // shorter, because it reports a thing that already happened rather than
+  // offering a way back from one.
+  const [copyNote, setCopyNote] = useState(null)
+  useEffect(() => {
+    if (!copyNote) return
+    const timer = setTimeout(() => setCopyNote(null), COPY_NOTE_MS)
+    return () => clearTimeout(timer)
+  }, [copyNote])
   // What this console has looked at, per chat: the stamp each chat showed
   // the last time it was read. Read once at mount from this computer's own
   // key, never on the boot path, so a damaged record cannot take the first
@@ -407,6 +424,26 @@ export default function Sidebar({
     setUndo(null)
   }
 
+  // Copying a chat as Markdown from its own row. The rule and the two
+  // sentences live in chat-markdown.js (the same module the palette's row
+  // reads), so the two ways in cannot say different things; this only asks,
+  // writes, and shows what came back. A refusal names itself rather than
+  // leaving the row silently unchanged.
+  const copyChat = (id) => {
+    const chat = chats?.[id] ?? null
+    const file = chat ? chatMarkdown(chat) : null
+    if (!file) {
+      setCopyNote('Nothing to copy in this chat.')
+      return
+    }
+    const write = navigator.clipboard?.writeText?.(file.text)
+    if (!write) {
+      setCopyNote('Could not copy: this window has no clipboard.')
+      return
+    }
+    write.then(() => setCopyNote(copiedLine(file))).catch((err) => setCopyNote(errorCopy(err)))
+  }
+
   // Right-click on a chat: the same actions as the hover buttons, plus the
   // split directions - the same four words the pane header and the main
   // area's own menu use.
@@ -425,6 +462,18 @@ export default function Sidebar({
               label: 'Rename',
               icon: <PencilSimple size={14} />,
               onSelect: () => onRenameChat(row.id),
+            },
+          ]
+        : []),
+      // Where the copy can work, and only there: a chat with nothing to write
+      // here gets no row rather than one that answers "nothing to copy" after
+      // a press. canCopyChat is the palette's rule as well.
+      ...(canCopyChat(chats?.[row.id])
+        ? [
+            {
+              label: 'Copy as Markdown',
+              icon: <ClipboardText size={14} />,
+              onSelect: () => copyChat(row.id),
             },
           ]
         : []),
@@ -662,6 +711,15 @@ export default function Sidebar({
           >
             Undo
           </button>
+        </div>
+      )}
+
+      {/* The copy's answer, in the same slot and the same voice as the archive
+          line above: one sentence, announced rather than shown as a toast. It
+          is the sidebar's own line, so it stays where the row that asked is. */}
+      {copyNote && (
+        <div className="chat-undo" role="status">
+          <span className="chat-undo-text pv">{copyNote}</span>
         </div>
       )}
 
