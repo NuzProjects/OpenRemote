@@ -9,7 +9,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
 
-// The four that showed the way, then the ten that used to answer the key
+// The four that showed the way, then the nine that used to answer the key
 // themselves. Settings is not here on purpose: ViewPopup, which wraps it,
 // holds the layer, and the Esc handlers inside it belong to its fields.
 const MODALS = [

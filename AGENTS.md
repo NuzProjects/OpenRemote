@@ -34,9 +34,11 @@ the project's own map.
   `src/PairingSection.jsx`; the design note is
   `docs/superpowers/specs/2026-10-26-qr-pairing-design.md`.
 - `scripts/` - design instrumentation (fps, latency, clearance), plus
-  `check-tab-acl.mjs`, the capability-scope guard CI runs (no arguments; it
-  exits 1 and names the capability that widened). Not build tooling; the
-  one build script is `sync-daemon.mjs`.
+  `check-tab-acl.mjs`, the capability-scope guard CI runs. Run bare it
+  prints `tab acl ok: 2 capability file(s)` and exits 0, or exits 1 and
+  names the capability that widened; `--self-test` checks the check itself,
+  and `--root` points it at another tree. Not build tooling; the one build
+  script is `sync-daemon.mjs`.
 - `DESIGN.md` - the design contract. The console transcribes it, never
   improvises past it.
 - `Archive/` - measured-and-killed experiments. Consult before
@@ -47,7 +49,7 @@ the project's own map.
 ```sh
 npm install
 npm test               # console tests (node --test)
-node scripts/check-tab-acl.mjs   # the tab capability scope (no arguments)
+node scripts/check-tab-acl.mjs   # the tab capability scope (bare; --self-test, --root)
 npm run dev            # browser only (port 5175)
 npx tauri dev          # desktop shell
 npm run daemon         # build + stage the daemon sidecar
@@ -82,12 +84,16 @@ the shell. `cargo fmt --all --check` reports eight files across four crates
 `openremote-daemon/src/app.rs`, `openremote-daemon/src/http.rs`,
 `openremote-daemon/src/registry.rs`, `openremote-grok/src/config.rs`,
 `openremote-opencode/src/driver.rs`, `openremote-opencode/src/resolve.rs`,
-counted as one path per `Diff in` line that command prints), and
-`cargo clippy --all-targets --locked -- -D warnings` stops on three lints
-(counted as three `error:` lines, all in `openremote-daemon`). `cargo fmt
---check` inside `src-tauri` alone is green, because the shell's own files
-are formatted; `--all` also formats this crate's path dependencies under
-`../daemon`, which is why both workspaces report the same eight.
+counted as the distinct paths among its `Diff in` lines, one line per hunk,
+so the lines outnumber the files), and `cargo clippy --all-targets --locked
+-- -D warnings` stops on three lints
+(`openremote-daemon/src/http.rs:376`, `openremote-daemon/src/http.rs:614`,
+`openremote-daemon/src/supervisor.rs:1215`), which the run prints as five
+`error:` lines: those three and the two `could not compile` lines after
+them. `cargo fmt --check` inside `src-tauri` alone is green, because the
+shell's own files are formatted; `--all` also formats this crate's path
+dependencies under `../daemon`, which is why both workspaces report the
+same eight.
 
 ## The sidecar, and its two copies
 
@@ -217,4 +223,6 @@ warnings` (lists the three lints). The route and tier claims in "Cloud's
 trust model" are counted from `PEER_ROUTES` in
 `daemon/crates/openremote-daemon/src/http.rs`, the peer paths are driven in
 `daemon/crates/openremote-daemon/tests/e2e_cloud_mesh.rs`, and
-`docs/cloud-trust-model.md` ends with the rows it could not exercise.
+`docs/cloud-trust-model.md` keeps the rows it could not exercise under
+"Unverified on this page", a section before the closing "If you are
+changing this".

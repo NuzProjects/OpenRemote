@@ -185,8 +185,7 @@ refused outright: the route below is, and a peer can still delete a synced chat 
 `sync.tombstone` note in the section above, which is also a deletion and also one-way. What is
 refused on every path, route and note alike, is touching a private chat.
 
-- Deleting a chat through its route (`DELETE /sessions/{id}`; a peer cannot call it, and the note
-  channel is the deletion it can reach instead), reading a chat directly (`GET /sessions/{id}`,
+- Deleting a chat through its route (`DELETE /sessions/{id}`), reading a chat directly (`GET /sessions/{id}`,
   `GET /sessions/{id}/events`), listing chats (`GET /sessions`), archiving, and `POST /sessions/{id}/sync`.
 - Plugins, marketplaces, MCP servers, automations, receipts, and browser routes.
 - Writing model endpoints (`POST /model-endpoints` and its siblings), deleting a machine
