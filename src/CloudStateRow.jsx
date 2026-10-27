@@ -5,9 +5,15 @@
 
 import { useState } from 'react'
 import { useConsole } from './state/console.jsx'
-import { cloudAlert, signedIn, daemonReason } from './cloud.js'
+import { cloudAlert, cloudAnswered, signedIn, daemonReason } from './cloud.js'
 import './panels.css'
 import { errorCopy } from './error-copy.js'
+
+// What signing out does to this device's copy, said where the person is about
+// to press it. The revoked row next door already explains the same consequence
+// for the removal case; this is the half a person can choose.
+const SIGN_OUT_NOTE =
+  'Signing out removes the chats this computer copied from your Cloud here. Private chats stay on this computer.'
 
 const signedName = (email) =>
   email ? (
@@ -22,6 +28,11 @@ const signedName = (email) =>
 // its door; this is the quiet, in-list version.
 function words(cloud, one) {
   const email = cloud?.account?.email
+  // Not asked yet: the console starts before the daemon has said anything,
+  // and a signed-in person must not read "Not signed in" for that gap.
+  if (!cloudAnswered(cloud)) {
+    return { name: 'Checking the Cloud sign-in', detail: 'Asking the daemon on this computer.' }
+  }
   switch (cloud?.state) {
     case 'signing_in':
       return {
@@ -65,11 +76,17 @@ export default function CloudStateRow({ one = 'computer' }) {
   const { cloud, connection, signInCloud, cancelCloudSignIn, signOutCloud } = useConsole()
   const [link, setLink] = useState(null)
   const [busy, setBusy] = useState(false)
+  const [signingOut, setSigningOut] = useState(false)
   const [error, setError] = useState(null)
   const [confirmSignOut, setConfirmSignOut] = useState(false)
   const inCloud = signedIn(cloud)
   const signingIn = cloud?.state === 'signing_in'
-  const { name, detail } = words(cloud, one)
+  const answers = words(cloud, one)
+  // While the confirm is up or the sign-out is running, the row says what the
+  // button is about to do and then what it is doing, instead of continuing to
+  // describe a Cloud state that is being left.
+  const name = signingOut ? 'Signing out' : confirmSignOut ? 'Sign out?' : answers.name
+  const detail = signingOut || confirmSignOut ? SIGN_OUT_NOTE : answers.detail
   // A failed click answers with the daemon's own sentence, which is often
   // the row's detail already: the alert drops it rather than saying it twice.
   const alert = cloudAlert({ clickError: error, cloud, body: detail, signingIn })
@@ -85,6 +102,23 @@ export default function CloudStateRow({ one = 'computer' }) {
       setError(errorCopy(err))
     } finally {
       setBusy(false)
+    }
+  }
+
+  // Signing out is a click that can fail (the daemon may be restarting, the
+  // request may be refused) and the row must not keep claiming the account
+  // state it is trying to leave: the words above switch to "Signing out"
+  // while it runs, and a rejection surfaces the way a failed sign-in does.
+  const signOut = async () => {
+    setConfirmSignOut(false)
+    setSigningOut(true)
+    setError(null)
+    try {
+      await signOutCloud()
+    } catch (err) {
+      setError(errorCopy(err))
+    } finally {
+      setSigningOut(false)
     }
   }
 
@@ -116,14 +150,7 @@ export default function CloudStateRow({ one = 'computer' }) {
         ) : inCloud ? (
           confirmSignOut ? (
             <div className="pn-actions">
-              <button
-                type="button"
-                className="pn-btn"
-                onClick={async () => {
-                  setConfirmSignOut(false)
-                  await signOutCloud()
-                }}
-              >
+              <button type="button" className="pn-btn" onClick={signOut} disabled={busy}>
                 Sign out
               </button>
               <button type="button" className="pn-btn" onClick={() => setConfirmSignOut(false)}>
@@ -131,7 +158,12 @@ export default function CloudStateRow({ one = 'computer' }) {
               </button>
             </div>
           ) : (
-            <button type="button" className="pn-btn" onClick={() => setConfirmSignOut(true)}>
+            <button
+              type="button"
+              className="pn-btn"
+              onClick={() => setConfirmSignOut(true)}
+              disabled={signingOut}
+            >
               Sign out
             </button>
           )

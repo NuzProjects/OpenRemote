@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
-import { chatAccess, machinePickerItems, sessionsForMode, signedIn } from './cloud.js'
+import { chatAccess, cloudAnswered, machinePickerItems, sessionsForMode, signedIn } from './cloud.js'
 
 const me = 'dev-me'
 const devices = [
@@ -138,4 +139,43 @@ test('a device row with the wrong shape cannot throw the machine picker', () => 
   // The list itself can arrive as the wrong shape too.
   assert.deepEqual(machinePickerItems({}, me).map((i) => i.name), ['This computer'])
   assert.deepEqual(machinePickerItems(null, me).map((i) => i.name), ['This computer'])
+})
+
+test('an unanswered Cloud view is not a signed-out one', () => {
+  // The poll gap at every start and every daemon restart: nothing has been
+  // asked yet, so nobody may be told they are signed out.
+  assert.equal(cloudAnswered(null), false)
+  assert.equal(cloudAnswered(undefined), false)
+  assert.equal(cloudAnswered({}), false)
+  assert.equal(cloudAnswered({ account: { email: 'a@b.c' } }), false, 'an email without a state is not an answer')
+  // Once the daemon says a state, whatever it is, the view has been answered.
+  for (const state of ['online', 'offline', 'connecting', 'signing_in', 'relink', 'revoked', 'signed_out']) {
+    assert.equal(cloudAnswered({ state }), true, state)
+  }
+})
+
+test('the two surfaces that show the sign-in state use the one rule for it', () => {
+  // Wiring pin, source text: the rule above is only worth having if both
+  // surfaces ask it. A regression that goes back to `cloud?.state` in one of
+  // them would leave this suite green otherwise, because the rule's own tests
+  // would still pass.
+  const row = readFileSync(new URL('./CloudStateRow.jsx', import.meta.url), 'utf8')
+  const account = readFileSync(new URL('./AccountView.jsx', import.meta.url), 'utf8')
+  assert.match(row, /cloudAnswered\(cloud\)/, 'the account row asks whether Cloud has answered')
+  assert.match(row, /Checking the Cloud sign-in/, 'and says it is checking, not signed out')
+  assert.match(account, /cloudAnswered\(cloud\)/, 'the account view asks the same question')
+  assert.match(account, /'Checking'/, 'and shows the same waiting word')
+})
+
+test('signing out reports its own failure instead of claiming success', () => {
+  // Wiring pin, source text: the sign-out handler is inline, so the properties
+  // that matter are that it catches, that it sets the row's error, and that it
+  // says "Signing out" while it runs. A rejected promise used to leave the row
+  // reading "Signed in ... reachable".
+  const row = readFileSync(new URL('./CloudStateRow.jsx', import.meta.url), 'utf8')
+  const handler = row.split('const signOut = async () => {')[1]?.split('const cancel')[0] ?? ''
+  assert.ok(handler.includes('await signOutCloud()'), 'the handler awaits the sign-out')
+  assert.match(handler, /catch \(err\)/, 'and catches a rejection')
+  assert.match(handler, /setError\(errorCopy\(err\)\)/, 'and shows it the way a failed sign-in is shown')
+  assert.match(row, /'Signing out'/, 'the row says what it is doing while it runs')
 })

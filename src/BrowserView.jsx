@@ -34,7 +34,7 @@ import { hasTauri, isMobile } from './platform.js'
 import { PICKER_CANCEL, PICKER_SOURCE, formatPicked } from './browser-pick.js'
 import { insertToComposer } from './composer-insert.js'
 import { omnibox, security, shownAddress } from './browser-omnibox.js'
-import { closeOthers, closeTab, closeToRight, cycle, newTab, openBelongs, rememberClosed, stripPlan, takeClosed, tabTitle } from './browser-tabs.js'
+import { closeOthers, closeTab, closeToRight, cycle, canUse, extrasMissing, newTab, openBelongs, rememberClosed, stripPlan, takeClosed, tabTitle } from './browser-tabs.js'
 import { adopt, call, getState, onKey, patchTab, registerReopen, setState, subscribe } from './browser-store.js'
 import { FLOATING, covered } from './browser-occlusion.js'
 import { DEVICES, fitDevice, fileName, nextZoom, zoomLabel } from './browser-chrome.js'
@@ -142,11 +142,22 @@ export default function BrowserView({ onClosePane = null }) {
   const busy = downloads.some((d) => d.state === 'started')
   // Whether this build's shell implements a browser feature: find, element
   // picking, device view and forgetting a site are Windows-only in the
-  // shell, which reports what it has. A shell that has not answered yet is
-  // assumed to have everything: the answer lands a moment after the pane
-  // first draws, and controls flashing off and on is worse than one frame
-  // of optimism.
-  const can = (name) => (features ? Boolean(features[name]) : true)
+  // shell, which reports what it has. An answer that never landed is not
+  // optimism: the control reads as unavailable and says so, because a button
+  // that draws as working and then does nothing is the worse half of the pair.
+  // `canUse` and `extrasMissing` live in browser-tabs.js so the rule is tested.
+  const can = (name) => canUse(features, name)
+  // Said once per visit to the pane, and only when the shell answered with
+  // none of the extras: the controls each name their own refusal, and this is
+  // the one place that says what the missing set is.
+  const saidExtras = useRef(false)
+  useEffect(() => {
+    if (saidExtras.current || !extrasMissing(features)) return
+    saidExtras.current = true
+    notify(
+      "Find in page, the element picker, device view and forgetting a site need this build's shell support; they are not available here.",
+    )
+  }, [features])
 
   // The address bar follows the tab unless the user is typing in it.
   useEffect(() => {

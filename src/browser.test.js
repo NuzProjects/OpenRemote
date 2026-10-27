@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { omnibox, security } from './browser-omnibox.js'
-import { closeTab, cycle, insertAfter, newTab, openBelongs, popupBelongs, tabTitle } from './browser-tabs.js'
+import { closeTab, canUse, cycle, extrasMissing, insertAfter, newTab, openBelongs, popupBelongs, tabTitle } from './browser-tabs.js'
 import { covered } from './browser-occlusion.js'
 import { DEVICES, fileName, fitDevice, nextZoom, zoomLabel } from './browser-chrome.js'
 
@@ -122,4 +122,22 @@ test('a popup lands beside a tab this console has, and nowhere otherwise', () =>
   // list to reappear as a stray tab on the next load.
   assert.equal(popupBelongs([a], 'tab-2'), false)
   assert.equal(popupBelongs([a, b], null), false)
+})
+
+test('a capability that was never answered reads as unavailable, not as available', () => {
+  // The shell's answer or nothing: unknown must not be yes, or a control the
+  // shell would refuse is drawn as if it worked and its click does nothing.
+  assert.equal(canUse(null, 'find'), false)
+  assert.equal(canUse(undefined, 'devtools'), false)
+  assert.equal(canUse({}, 'viewport'), false, 'the store keeps a failed ask as an empty answer')
+  assert.equal(canUse({ find: true }, 'find'), true)
+  assert.equal(canUse({ find: false }, 'find'), false)
+  assert.equal(canUse({ find: true }, 'devtools'), false, 'a key that is absent is not a yes')
+})
+
+test('the extras line is for an answer with no extras, not for a missing answer', () => {
+  assert.equal(extrasMissing(null), false, 'nothing to say before the shell has answered')
+  assert.equal(extrasMissing({}), true, 'a failed ask is exactly when the line is owed')
+  assert.equal(extrasMissing({ find: false, devtools: false }), true)
+  assert.equal(extrasMissing({ find: true, devtools: false }), false)
 })

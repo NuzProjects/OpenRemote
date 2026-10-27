@@ -17,6 +17,18 @@ export function needsSignIn(cloud) {
 }
 
 /**
+ * Whether the daemon has answered about this machine's Cloud sign-in yet. A
+ * null view (and a view with no state in it) is "not asked", not "signed out":
+ * every start and every daemon restart spends a poll in that gap, and a
+ * signed-in person who reads "Not signed in" for it is reading a guess. The
+ * account row and the account view both ask this, so the two cannot disagree
+ * about whether there is anything to say yet.
+ */
+export function cloudAnswered(cloud) {
+  return typeof cloud?.state === 'string'
+}
+
+/**
  * Why a sign-in ended, in the daemon's own words, capitalised for a sentence
  * slot. The daemon knows the reason (a relay that answered 401, a file it
  * could not read); the door and the account row both show this, so neither

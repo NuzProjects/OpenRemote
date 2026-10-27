@@ -157,6 +157,23 @@ export const NEW_TAB_WIDTH = 28
 /// A strip narrower than one tab plus the button (230px at these numbers)
 /// still answers one tab: the strip is a pane and nothing in it may shrink, so
 /// below that width the CSS clips the tab's right edge rather than pretending
+/// Whether this build's shell implements a browser feature. `features` is the
+/// shell's own answer or null when the ask never landed; unknown is not yes,
+/// because a control the shell would refuse must not be drawn as if it worked.
+/// The view names each refusal, so a false here is what makes the control say
+/// "not in this build" instead of doing nothing when pressed.
+export function canUse(features, name) {
+  return Boolean(features && features[name])
+}
+
+/// Whether the shell answered and has none of the extras (find in page, the
+/// element picker, device view, forgetting a site). Used for the one line the
+/// view says when the browser is otherwise working without them.
+export function extrasMissing(features) {
+  if (features == null) return false
+  return !Object.values(features).some(Boolean)
+}
+
 /// the tab is not there.
 export function stripPlan({ width = 0, count = 0, active = 0, tabWidth = TAB_WIDTH, gap = TAB_GAP } = {}) {
   if (count <= 0) return { start: 0, shown: 0, hidden: 0 }

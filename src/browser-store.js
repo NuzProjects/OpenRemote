@@ -144,9 +144,12 @@ async function wire() {
   // What this build's shell can do with a tab: find in page, the DevTools
   // bridge (element picking), device view and forgetting a site are written
   // against Windows' engine, and a control the shell would refuse must not
-  // be drawn as if it worked. Asked once, before the first page.
+  // be drawn as if it worked. Asked once, before the first page. An ask that
+  // never landed is stored as "answers none", not left as "no answer": unknown
+  // must not read as yes downstream, and the view says so once rather than
+  // drawing controls that would do nothing.
   const features = await call('browser_features')
-  if (features) setState(() => ({ features }))
+  setState(() => ({ features: features ?? {} }))
   // The console reloaded while the shell kept its pages (a development
   // reload, a crash of the console's page): take them back, hidden until
   // the view shows one, rather than leave them on screen, orphaned.

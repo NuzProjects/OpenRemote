@@ -4,7 +4,7 @@
 // fact, so nothing here is ever dead.
 
 import { useConsole } from './state/console.jsx'
-import { kindLabel, platformLabel, signedIn } from './cloud.js'
+import { cloudAnswered, kindLabel, platformLabel, signedIn } from './cloud.js'
 import { isMobile } from './platform.js'
 import CloudStateRow from './CloudStateRow.jsx'
 import './devices.css'
@@ -13,6 +13,7 @@ import './panels.css'
 export default function AccountView({ onOpenMachines }) {
   const { cloud, devices, thisDevice } = useConsole()
   const inCloud = signedIn(cloud)
+  const answered = cloudAnswered(cloud)
   const one = isMobile ? 'phone' : 'computer'
   // The devices list knows the version; the cloud view answers even
   // while it is empty. Whichever holds the fact, the row shows it.
@@ -28,7 +29,19 @@ export default function AccountView({ onOpenMachines }) {
         <div>
           <h1 className="dv-title">Account</h1>
           <p className="dv-meta">
-            {inCloud ? (cloud.account?.email ? <span className="pv">{cloud.account.email}</span> : 'Signed in') : 'Not signed in'}
+            {!answered ? (
+              // The daemon has not answered yet: say that, rather than telling a
+              // signed-in person they are signed out for a poll.
+              'Checking'
+            ) : inCloud ? (
+              cloud.account?.email ? (
+                <span className="pv">{cloud.account.email}</span>
+              ) : (
+                'Signed in'
+              )
+            ) : (
+              'Not signed in'
+            )}
           </p>
         </div>
       </header>
