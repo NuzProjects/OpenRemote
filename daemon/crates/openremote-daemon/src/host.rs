@@ -5,6 +5,7 @@
 use std::sync::{Arc, Weak};
 
 use axum::body::Body;
+use futures_util::StreamExt;
 use futures_util::future::BoxFuture;
 use openremote_cloud::rpc::{Request, Response};
 use openremote_cloud::{CloudHost, PeerContext};
@@ -17,6 +18,35 @@ use crate::app::App;
 /// Marks a request as coming from another of the user's devices.
 #[derive(Clone, Debug)]
 pub struct PeerOrigin(pub PeerContext);
+
+/// How reading a response body for the link ended.
+enum BodyRead {
+    Read(Vec<u8>),
+    /// Past the ceiling one link response carries.
+    TooLarge,
+    /// The body could not be read: the peer gets a failure, not an empty 200.
+    Failed,
+}
+
+/// Reads a response body the way the link can carry it. The ceiling exists
+/// because `rpc::MAX_RESPONSE` is what the peer accepts before it resets the
+/// stream, so answering past it could never arrive.
+async fn read_body(body: Body) -> BodyRead {
+    let mut out = Vec::new();
+    let mut stream = body.into_data_stream();
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(chunk) => {
+                if out.len() + chunk.len() > openremote_cloud::rpc::MAX_RESPONSE {
+                    return BodyRead::TooLarge;
+                }
+                out.extend_from_slice(&chunk);
+            }
+            Err(_) => return BodyRead::Failed,
+        }
+    }
+    BodyRead::Read(out)
+}
 
 pub struct DaemonHost {
     pub app: Weak<App>,
@@ -47,11 +77,29 @@ impl CloudHost for DaemonHost {
                 .get(axum::http::header::CONTENT_TYPE)
                 .and_then(|v| v.to_str().ok())
                 .map(str::to_string);
-            let body =
-                axum::body::to_bytes(response.into_body(), openremote_cloud::rpc::MAX_RESPONSE)
-                    .await
-                    .map(|b| b.to_vec())
-                    .unwrap_or_default();
+            let body = match read_body(response.into_body()).await {
+                BodyRead::Read(body) => body,
+                // An empty 200 would tell the peer its request worked and hide
+                // the cause, so each failure answers with what happened: 413
+                // when the answer cannot fit in one link response, 502 when it
+                // cannot be read at all.
+                BodyRead::TooLarge => {
+                    return Response::json(
+                        413,
+                        &serde_json::json!({
+                            "error": "this answer is too large to send to another device; ask for less at a time"
+                        }),
+                    );
+                }
+                BodyRead::Failed => {
+                    return Response::json(
+                        502,
+                        &serde_json::json!({
+                            "error": "this computer could not read the answer; try again"
+                        }),
+                    );
+                }
+            };
             Response {
                 status,
                 content_type,
@@ -83,6 +131,45 @@ impl CloudHost for DaemonHost {
         if let Some(app) = self.app.upgrade() {
             let mut store = crate::supervisor::lock_recovering(&app.store);
             let _ = store.purge_synced();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_util::stream;
+
+    /// An answer past the link's ceiling is refused as too large. It used to
+    /// come back as an empty 200, which reads to the peer as success.
+    #[tokio::test]
+    async fn a_body_the_link_cannot_carry_is_too_large_not_an_empty_success() {
+        let over = openremote_cloud::rpc::MAX_RESPONSE + 1;
+        match read_body(Body::from(vec![0u8; over])).await {
+            BodyRead::TooLarge => {}
+            _ => panic!("a body past the ceiling must not be read into memory"),
+        }
+    }
+
+    /// A body that cannot be read at all is a failure with a sentence, not an
+    /// empty 200.
+    #[tokio::test]
+    async fn a_body_that_cannot_be_read_is_a_failure_not_an_empty_success() {
+        let broken = stream::once(async {
+            Err::<Vec<u8>, std::io::Error>(std::io::Error::other("the reader went away"))
+        });
+        match read_body(Body::from_stream(broken)).await {
+            BodyRead::Failed => {}
+            _ => panic!("a body that cannot be read must not pass as empty"),
+        }
+    }
+
+    /// The ordinary case is unchanged: everything inside the ceiling arrives.
+    #[tokio::test]
+    async fn a_body_that_fits_is_read_in_full() {
+        match read_body(Body::from(vec![7u8; 1024])).await {
+            BodyRead::Read(body) => assert_eq!(body.len(), 1024),
+            _ => panic!("a body inside the ceiling is carried whole"),
         }
     }
 }

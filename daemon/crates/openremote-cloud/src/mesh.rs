@@ -95,6 +95,10 @@ struct Call {
 struct Inbound {
     request: Request,
     deadline: Instant,
+    /// The END arrived and the work is running: the slot is held until the
+    /// response is sealed, so the window counts work in flight rather than
+    /// half-written requests.
+    dispatched: bool,
 }
 
 #[derive(Default)]
@@ -104,6 +108,9 @@ struct State {
     waiters: HashMap<DeviceId, Vec<oneshot::Sender<()>>>,
     calls: HashMap<(DeviceId, u32), Call>,
     inbound: HashMap<(DeviceId, u32), Inbound>,
+    /// A link attempt is in flight to this peer until the deadline: what
+    /// keeps a nudging device from spawning a task per nudge frame.
+    attempts: HashMap<DeviceId, Instant>,
     next_stream: u32,
     auto_update: bool,
     online: std::collections::HashSet<DeviceId>,
@@ -126,6 +133,16 @@ pub struct Mesh {
 
 const MAX_INBOUND_PER_PEER: usize = 32;
 const LINK_ATTEMPT: Duration = Duration::from_secs(4);
+/// `ensure_link` tries this many times, `LINK_ATTEMPT` apart.
+const LINK_ATTEMPTS: u32 = 3;
+/// How long a link attempt counts as in flight for the nudge coalescing: the
+/// whole retry budget, because every retry is still one attempt from the
+/// nudging device's point of view.
+const ATTEMPT_WINDOW: Duration = Duration::from_secs(12);
+/// The largest frame the relay may hand us. Every frame the protocol builds
+/// fits in one Noise message (65535 bytes plus the framing), so this is a
+/// bound on memory per socket, not on anything legitimate.
+const MAX_FRAME: usize = 128 * 1024;
 /// How long an inbound stream may wait for its END before its slot is
 /// reclaimed. It must outlast the peer's own request timeout (a harness
 /// install may answer slowly) so a live request never loses its slot; the
@@ -441,7 +458,24 @@ impl Mesh {
     }
 
     async fn ensure_link(&self, peer: DeviceId) -> Result<(), MeshError> {
-        for attempt in 0..3 {
+        // Record the attempt before the first frame goes out: a nudge that
+        // arrives while this runs must not start a second one, or a device of
+        // the account could spawn as many attempts as it sends frames.
+        let window = Instant::now() + ATTEMPT_WINDOW;
+        self.state().attempts.insert(peer, window);
+        let result = self.attempt_links(peer).await;
+        {
+            let mut st = self.state();
+            // Only clear our own window: a later attempt may hold it by now.
+            if st.attempts.get(&peer) == Some(&window) {
+                st.attempts.remove(&peer);
+            }
+        }
+        result
+    }
+
+    async fn attempt_links(&self, peer: DeviceId) -> Result<(), MeshError> {
+        for attempt in 0..LINK_ATTEMPTS {
             let rx = {
                 let mut st = self.state();
                 if st.links.get(&peer).is_some_and(Link::is_up) {
@@ -474,6 +508,18 @@ impl Mesh {
             };
             if matches!(tokio::time::timeout(LINK_ATTEMPT, rx).await, Ok(Ok(()))) {
                 return Ok(());
+            }
+            // The attempt timed out and its receiver is gone, so the sender it
+            // left behind is dead weight. Only a handshake that completes
+            // empties `waiters`, and a peer that never completes one would
+            // otherwise grow this vector for the life of the process: one
+            // entry per call for a device that is online and never answers.
+            let mut st = self.state();
+            if let Some(waiters) = st.waiters.get_mut(&peer) {
+                waiters.retain(|tx| !tx.is_closed());
+            }
+            if st.waiters.get(&peer).is_some_and(Vec::is_empty) {
+                st.waiters.remove(&peer);
             }
         }
         let name = self
@@ -626,6 +672,19 @@ impl Mesh {
                 }
             }
             NUDGE if link::initiates(self.me, from) => {
+                let now = Instant::now();
+                {
+                    let mut st = self.state();
+                    st.attempts.retain(|_, until| now < *until);
+                    if st.attempts.contains_key(&from) {
+                        // An attempt to this peer is already in flight, and its
+                        // own retries cover this nudge. Coalescing here is what
+                        // keeps a device of the account from costing one task
+                        // per frame it sends.
+                        return;
+                    }
+                    st.attempts.insert(from, now + ATTEMPT_WINDOW);
+                }
                 let mesh = Arc::clone(self);
                 tokio::spawn(async move {
                     let _ = mesh.ensure_link(from).await;
@@ -661,6 +720,7 @@ impl Mesh {
                             Inbound {
                                 request: r,
                                 deadline: now + INBOUND_TTL,
+                                dispatched: false,
                             },
                         );
                     }
@@ -672,11 +732,13 @@ impl Mesh {
             }
             rpc::DATA => {
                 let too_big = match st.inbound.get_mut(&(from, stream)) {
-                    Some(r) => {
+                    // A stream whose work has started takes no more body: its
+                    // request is already where the work reads it.
+                    Some(r) if !r.dispatched => {
                         r.request.body.extend_from_slice(body);
                         r.request.body.len() > rpc::MAX_REQUEST
                     }
-                    None => false,
+                    _ => false,
                 };
                 if too_big {
                     st.inbound.remove(&(from, stream));
@@ -685,10 +747,21 @@ impl Mesh {
                 }
             }
             rpc::END => {
-                let Some(inbound) = st.inbound.remove(&(from, stream)) else {
+                let Some(inbound) = st.inbound.get_mut(&(from, stream)) else {
                     return;
                 };
-                let request = inbound.request;
+                if inbound.dispatched {
+                    return;
+                }
+                // The slot stays taken until the response is sealed. The
+                // window is here to bound the work this daemon does for one
+                // peer, and work that has been asked for but not answered is
+                // work in flight: freeing the slot at END would cap
+                // half-written requests instead, and a peer could make this
+                // daemon run as many chats, folder listings and installers at
+                // once as it can send ENDs.
+                inbound.dispatched = true;
+                let request = inbound.request.clone();
                 let context = self.context(&st, from);
                 drop(st);
                 let mesh = Arc::clone(self);
@@ -704,6 +777,10 @@ impl Mesh {
                             break;
                         }
                     }
+                    // The answer is out (or its link is gone): give the slot
+                    // back. The TTL sweep is the only other way it comes back,
+                    // for a dispatch that never returns at all.
+                    st.inbound.remove(&(from, stream));
                 });
             }
             rpc::HEAD => {
@@ -746,7 +823,17 @@ impl Mesh {
                 }
             }
             rpc::RESET => {
-                st.inbound.remove(&(from, stream));
+                // A reset abandons a stream that has not started; once the
+                // work is running the slot stays until it answers, or a peer
+                // could END then RESET to reopen its window on top of running
+                // work.
+                if st
+                    .inbound
+                    .get(&(from, stream))
+                    .is_some_and(|i| !i.dispatched)
+                {
+                    st.inbound.remove(&(from, stream));
+                }
                 if let Some(mut call) = st.calls.remove(&(from, stream)) {
                     if let Some(done) = call.done.take() {
                         let _ = done.send(Err(MeshError::Reset(String::new())));
@@ -779,6 +866,11 @@ fn reclaim_expired(inbound: &mut HashMap<(DeviceId, u32), Inbound>, now: Instant
 /// Drops a peer's link and fails everything in flight with it.
 fn fail_peer(st: &mut State, peer: DeviceId, _why: &str) {
     st.links.remove(&peer);
+    // A waiter is waiting for a link that will not come up: drop it rather
+    // than leave the sender behind. The attempt window goes too, so the next
+    // nudge starts a fresh attempt instead of being coalesced into this one.
+    st.waiters.remove(&peer);
+    st.attempts.remove(&peer);
     let keys: Vec<(DeviceId, u32)> = st
         .calls
         .keys()
@@ -1019,23 +1111,30 @@ async fn relay_session(
         cloud.set_phase(Phase::Offline, Some(UNREACHABLE.into()));
         return (false, Ended::Retry);
     };
-    let ws = match tokio_tungstenite::client_async(request, stream).await {
-        Ok((ws, _)) => ws,
-        Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
-            return match response.status().as_u16() {
-                401 => {
-                    cloud.set_phase(Phase::Relink, Some(crate::SIGN_IN_AGAIN.into()));
-                    (false, Ended::Stop)
-                }
-                410 => {
-                    cloud.removed(&*mesh.host);
-                    (false, Ended::Stop)
-                }
-                _ => (false, Ended::Retry),
-            };
-        }
-        Err(_) => return (false, Ended::Retry),
-    };
+    // The relay carries sealed frames, and the protocol keeps every one inside
+    // one Noise message, so a 128 KiB ceiling costs nothing legitimate and
+    // stops a relay (or anything in its place) from making this process
+    // allocate a 64 MiB message first.
+    let ws_config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
+        .max_message_size(Some(MAX_FRAME));
+    let ws =
+        match tokio_tungstenite::client_async_with_config(request, stream, Some(ws_config)).await {
+            Ok((ws, _)) => ws,
+            Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+                return match response.status().as_u16() {
+                    401 => {
+                        cloud.set_phase(Phase::Relink, Some(crate::SIGN_IN_AGAIN.into()));
+                        (false, Ended::Stop)
+                    }
+                    410 => {
+                        cloud.removed(&*mesh.host);
+                        (false, Ended::Stop)
+                    }
+                    _ => (false, Ended::Retry),
+                };
+            }
+            Err(_) => return (false, Ended::Retry),
+        };
     let (mut sink, mut stream) = ws.split();
     let mut ping = tokio::time::interval(Duration::from_secs(25));
     ping.tick().await;
@@ -1162,9 +1261,22 @@ mod tests {
     /// A mesh over a throwaway pins file, in the temp dir the way this
     /// workspace's other unit tests do it.
     fn test_mesh() -> (Mesh, std::path::PathBuf) {
+        let (mesh, _out, dir) = mesh_over(Arc::new(Nop));
+        (mesh, dir)
+    }
+
+    /// The same, over a host the test chooses, with the relay side of the
+    /// `out` channel kept.
+    fn mesh_over(
+        host: Arc<dyn CloudHost>,
+    ) -> (
+        Mesh,
+        mpsc::UnboundedReceiver<(DeviceId, Vec<u8>)>,
+        std::path::PathBuf,
+    ) {
         let dir = std::env::temp_dir().join(format!("or-mesh-{}", uuid::Uuid::new_v4()));
         openremote_core::fsx::create_private_dir(&dir).unwrap();
-        let (out, _rx) = mpsc::unbounded_channel();
+        let (out, rx) = mpsc::unbounded_channel();
         let mesh = Mesh {
             me: DeviceId::new(),
             account: "test".into(),
@@ -1172,12 +1284,68 @@ mod tests {
             kind: Mutex::new("desktop".into()),
             out,
             state: Mutex::new(State::default()),
-            host: Arc::new(Nop),
+            host,
             pins_file: dir.join("peers.json"),
             refresh: Notify::new(),
             wake: Notify::new(),
         };
-        (mesh, dir)
+        (mesh, rx, dir)
+    }
+
+    /// A listed, online peer with a real key: the state the link code finds
+    /// before it tries to talk to a device.
+    fn listed(id: DeviceId) -> Peer {
+        Peer {
+            id,
+            name: "peer".into(),
+            platform: "linux".into(),
+            kind: "machine".into(),
+            online: true,
+            app_version: None,
+            last_seen_at: None,
+            created_via: None,
+            auto_update: true,
+            auto_update_override: None,
+            problem: None,
+            pubkey: decode(&key()),
+        }
+    }
+
+    /// A device of the account, listed and online, and never answered by
+    /// anything: the shape of a peer that makes this daemon wait.
+    fn listed_and_online(mesh: &Mesh) -> DeviceId {
+        let id = DeviceId::new();
+        let mut st = mesh.state();
+        st.peers.insert(id, listed(id));
+        st.online.insert(id);
+        id
+    }
+
+    /// A host whose work parks until the test lets it answer, so a test can
+    /// hold a peer's window open and count what got in.
+    struct Parked {
+        started: Arc<std::sync::atomic::AtomicUsize>,
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    impl CloudHost for Parked {
+        fn dispatch(&self, _: PeerContext, _: Request) -> BoxFuture<'static, Response> {
+            let started = Arc::clone(&self.started);
+            let release = Arc::clone(&self.release);
+            Box::pin(async move {
+                started.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                release.notified().await;
+                Response {
+                    status: 200,
+                    content_type: None,
+                    body: Vec::new(),
+                }
+            })
+        }
+        fn note(&self, _: PeerContext, _: Value) {}
+        fn linked(&self, _: DeviceId) {}
+        fn online(&self, _: DeviceId) {}
+        fn revoked(&self) {}
     }
 
     /// A fresh X25519 public key, base64url, exactly as the registry
@@ -1568,6 +1736,7 @@ mod tests {
             (a, 1),
             Inbound {
                 request: live(),
+                dispatched: false,
                 deadline: now - Duration::from_secs(1),
             },
         );
@@ -1575,6 +1744,7 @@ mod tests {
             (a, 2),
             Inbound {
                 request: live(),
+                dispatched: false,
                 deadline: now, // exactly at the deadline: gone
             },
         );
@@ -1582,6 +1752,7 @@ mod tests {
             (a, 3),
             Inbound {
                 request: live(),
+                dispatched: false,
                 deadline: now + Duration::from_secs(60),
             },
         );
@@ -1589,6 +1760,7 @@ mod tests {
             (b, 1),
             Inbound {
                 request: live(),
+                dispatched: false,
                 deadline: now + Duration::from_secs(60),
             },
         );
@@ -1622,6 +1794,7 @@ mod tests {
                 body: Vec::new(),
             },
             deadline,
+            dispatched: false,
         };
         {
             let mut st = mesh.state();
@@ -1666,6 +1839,104 @@ mod tests {
             "and the stream over the cap is still refused"
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// An attempt that times out must take its dead sender with it. Only a
+    /// completed handshake ever empties `waiters`, so a peer that is listed,
+    /// online and never answers used to leave one sender behind per call, for
+    /// the life of the process. This test pays the real price of the timeout
+    /// path: three attempts, four seconds apart.
+    #[tokio::test]
+    async fn a_timed_out_link_attempt_leaves_no_sender_behind() {
+        let (mesh, _dir) = test_mesh();
+        let mesh = Arc::new(mesh);
+        let peer = listed_and_online(&mesh);
+        assert!(
+            matches!(mesh.ensure_link(peer).await, Err(MeshError::Unreachable(_))),
+            "nothing answered, so there is no link"
+        );
+        let st = mesh.state();
+        assert_eq!(
+            st.waiters.get(&peer).map_or(0, Vec::len),
+            0,
+            "the timed-out attempts took their senders with them"
+        );
+        assert!(
+            !st.attempts.contains_key(&peer),
+            "and the window closed, so the next nudge starts a fresh attempt"
+        );
+    }
+
+    /// A nudging device may send as fast as it likes. Without coalescing every
+    /// frame spawns an attempt task, and every task parks a sender in
+    /// `waiters` for its own four seconds: a listed peer that never answers
+    /// grows this process with every frame it sends.
+    #[tokio::test]
+    async fn a_flood_of_nudges_leaves_one_attempt_in_flight() {
+        let (mesh, _dir) = test_mesh();
+        let mesh = Arc::new(mesh);
+        // The higher-numbered device nudges, so ours has to be the lower one
+        // for the frame to be acted on at all.
+        let mut peer = DeviceId::new();
+        while peer.to_bytes() <= mesh.me.to_bytes() {
+            peer = DeviceId::new();
+        }
+        {
+            let mut st = mesh.state();
+            st.peers.insert(peer, listed(peer));
+            st.online.insert(peer);
+        }
+        for _ in 0..200 {
+            mesh.on_frame(peer, &[NUDGE]);
+        }
+        // Long enough for every spawned task to have run up to its first
+        // await, which is where a sender sits in `waiters`.
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let pending = mesh.state().waiters.get(&peer).map_or(0, Vec::len);
+        assert!(
+            pending <= 1,
+            "one attempt, not one per nudge: {pending} senders are waiting"
+        );
+    }
+
+    /// The window is a cap on the work this daemon does for one peer, not on
+    /// half-written requests. A peer that OPENs and ENDs a stream at once gets
+    /// its request running, and the slot stays held until the answer is
+    /// sealed: 32 at a time however fast it ENDs them, and the 33rd waits.
+    #[tokio::test]
+    async fn an_ended_stream_keeps_its_slot_until_its_answer_is_sealed() {
+        let started = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let release = Arc::new(tokio::sync::Notify::new());
+        let host = Arc::new(Parked {
+            started: Arc::clone(&started),
+            release: Arc::clone(&release),
+        });
+        let (mesh, _out, _dir) = mesh_over(host);
+        let mesh = Arc::new(mesh);
+        let peer = DeviceId::new();
+        let header = br#"{"method":"GET","path":"/devices"}"#;
+        for stream in 0..=MAX_INBOUND_PER_PEER as u32 {
+            mesh.on_rpc(peer, &rpc::frame(rpc::OPEN, stream, header));
+            mesh.on_rpc(peer, &rpc::frame(rpc::END, stream, b""));
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        assert_eq!(
+            mesh.state().inbound.len(),
+            MAX_INBOUND_PER_PEER,
+            "the streams that started keep their slots while they run"
+        );
+        assert_eq!(
+            started.load(std::sync::atomic::Ordering::SeqCst),
+            MAX_INBOUND_PER_PEER,
+            "and only 32 requests are running here, not 33"
+        );
+        release.notify_waiters();
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        assert_eq!(
+            mesh.state().inbound.len(),
+            0,
+            "the slots come back when the answers are sealed"
+        );
     }
 
     /// A mesh that cannot be built says so. `mesh::start` used to answer
