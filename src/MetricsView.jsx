@@ -7,15 +7,28 @@
 
 import { useConsole } from './state/console.jsx'
 import { harnessName } from './harness-names.js'
-import { createdPerDay, harnessCounts, machinePresence, statusSentence, syncSplit } from './metrics.js'
+import {
+  createdPerDay,
+  harnessCounts,
+  machinePresence,
+  newChatsLine,
+  presenceLine,
+  statusSentence,
+  syncSplit,
+} from './metrics.js'
 import './devices.css'
 import './panels.css'
 import './metrics.css'
 
+// The one date format both captions read in, so a bar's tooltip and the line
+// under the strip never disagree about how a day is written.
+const dayLabel = (ms) =>
+  new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+
 // One quiet bar: the count as height against the window's busiest day,
 // never lower than the zero stub.
 function DayBar({ band, max }) {
-  const day = new Date(band.start).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  const day = dayLabel(band.start)
   return (
     <span
       className={`mx-bar${band.count === 0 ? ' mx-bar--zero' : ''}`}
@@ -114,7 +127,9 @@ export default function MetricsView() {
                   <DayBar key={band.key} band={band} max={dayMax} />
                 ))}
               </div>
-              <p className="mx-cap">the last 14 days</p>
+              {/* The bars carry no numbers, so the line under them says what
+                  the window is and which day in it was the busiest. */}
+              <p className="mx-cap">{newChatsLine(days, dayLabel)}</p>
             </>
           )}
         </>
@@ -127,8 +142,16 @@ export default function MetricsView() {
             {presence.map((on, i) => (
               <span key={i} className={`mx-cell${on ? ' mx-cell--on' : ''}`} />
             ))}
+            {/* The band ends at now; the hairline is where that is, and the
+                caption's right-hand word names it. */}
+            <span className="mx-now" aria-hidden="true" />
           </div>
-          <p className="mx-cap">the last 24 hours - each cell is half an hour</p>
+          {/* One line for the number the band only shows as colour: the hours
+              it was online, and what one cell is worth. */}
+          <p className="mx-cap mx-cap--band">
+            <span>{presenceLine(presence)}</span>
+            <span className="mx-now-label">now</span>
+          </p>
         </>
       )}
     </div>

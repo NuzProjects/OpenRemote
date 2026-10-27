@@ -4,6 +4,8 @@ import {
   createdPerDay,
   harnessCounts,
   machinePresence,
+  newChatsLine,
+  presenceLine,
   statusCounts,
   statusSentence,
   syncSplit,
@@ -132,4 +134,56 @@ test('the presence band is this machine\'s, null until the poll answers', () => 
   assert.equal(machinePresence([{ machine: { id: 'm-2', this_machine: true } }]), null)
   assert.equal(machinePresence(undefined), null)
   assert.equal(machinePresence([]), null)
+})
+
+// The strip and the band are bars with no numbers on them, so the caption is
+// the only thing that says what a bar is. The date comes in as a labeller, so
+// these sentences are pinned without depending on the machine's locale.
+const label = (ms) => `day${ms}`
+
+test('the strip\'s caption names the window and its busiest day', () => {
+  const days = [
+    { start: 1, count: 2 },
+    { start: 2, count: 6 },
+    { start: 3, count: 0 },
+    { start: 4, count: 1 },
+  ]
+  assert.equal(newChatsLine(days, label), '4 days to day4, busiest 6 chats on day2')
+})
+
+test('one chat is not "chats", and a tie names the most recent busiest day', () => {
+  assert.equal(
+    newChatsLine([{ start: 1, count: 1 }], label),
+    '1 day to day1, busiest 1 chat on day1',
+  )
+  assert.equal(
+    newChatsLine(
+      [
+        { start: 10, count: 3 },
+        { start: 20, count: 3 },
+        { start: 30, count: 0 },
+      ],
+      label,
+    ),
+    '3 days to day30, busiest 3 chats on day20',
+  )
+})
+
+test('a window with no chats in it still names its end', () => {
+  assert.equal(newChatsLine([{ start: 7, count: 0 }], label), '1 day to day7')
+  assert.equal(newChatsLine([], label), '')
+  assert.equal(newChatsLine(undefined, label), '')
+})
+
+test('the band\'s caption counts the hours it was online', () => {
+  const cells = (on) => Array.from({ length: 48 }, (_, i) => i < on)
+  assert.equal(
+    presenceLine(cells(19)),
+    'online 9.5 hours of the last 24, each cell is half an hour',
+  )
+  assert.equal(presenceLine(cells(48)), 'online 24 hours of the last 24, each cell is half an hour')
+  assert.equal(presenceLine(cells(2)), 'online 1 hour of the last 24, each cell is half an hour')
+  assert.equal(presenceLine(cells(0)), 'online 0 hours of the last 24, each cell is half an hour')
+  assert.equal(presenceLine(undefined), '')
+  assert.equal(presenceLine([]), '')
 })

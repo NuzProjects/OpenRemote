@@ -90,6 +90,51 @@ export function syncSplit(sessions, thisDevice) {
 }
 
 /**
+ * The busiest day in the strip's window, the most recent one on a tie (the
+ * nearer day is the one a person is thinking about), null when no day has a
+ * chat.
+ */
+function busiestDay(days) {
+  let best = null
+  for (const day of days ?? []) {
+    if (!(day?.count > 0)) continue
+    if (!best || day.count >= best.count) best = day
+  }
+  return best
+}
+
+/**
+ * "14 days to Oct 27, busiest 6 chats on Oct 24" - the strip's caption, which
+ * names the window it draws and the peak inside it. `label` turns a band's
+ * `start` into a date the way the view already prints one, so this stays a pure
+ * sentence with no locale of its own.
+ */
+export function newChatsLine(days, label) {
+  if (!Array.isArray(days) || days.length === 0) return ''
+  const last = days[days.length - 1]
+  const peak = busiestDay(days)
+  const window = `${days.length} ${days.length === 1 ? 'day' : 'days'} to ${label(last.start)}`
+  if (!peak) return window
+  const chats = peak.count === 1 ? '1 chat' : `${peak.count} chats`
+  return `${window}, busiest ${chats} on ${label(peak.start)}`
+}
+
+/**
+ * "online 9.5 hours of the last 24" - the presence band's caption. The band is
+ * 48 half-hour cells (the daemon's own view), so a count of cells is twice the
+ * hours; the sentence says the cell size too, because a reader who is told the
+ * span and the total will want to know what one cell is.
+ */
+export function presenceLine(presence) {
+  if (!Array.isArray(presence) || presence.length === 0) return ''
+  const hours = presence.filter(Boolean).length / 2
+  const span = presence.length / 2
+  const hoursText = Number.isInteger(hours) ? String(hours) : hours.toFixed(1)
+  const spanText = Number.isInteger(span) ? String(span) : span.toFixed(1)
+  return `online ${hoursText} ${hours === 1 ? 'hour' : 'hours'} of the last ${spanText}, each cell is half an hour`
+}
+
+/**
  * This computer's 24-hour agent-presence band, straight from the daemon's
  * own machine view in the poll: 48 half-hour slices, oldest first. Null
  * until the poll answers - the section stays away, never a dead band.
