@@ -75,13 +75,15 @@ on:
   workflow_dispatch:
     inputs:
       channel:
-        description: 'build-only publishes nothing; nightly publishes the rolling nightly from this branch'
+        description: 'a manual run builds and leaves the files on the run; only a tag or the schedule publishes'
         type: choice
         options: [build-only, nightly]
         default: build-only
 
 permissions:
-  contents: write
+  # Read for every job, and the write the publisher needs granted on that
+  # one job: a build has no reason to be able to write to the repository.
+  contents: read
 
 jobs:
   release:
@@ -636,8 +638,8 @@ jobs:
     if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     # `actions: read` is what lets `gh run download` pull this run's own
-    # artifacts; the token needs nothing else here beyond the release write
-    # the workflow already declares.
+    # artifacts; this is the only job that needs to write to the repository, so
+    # the write is granted here and the workflow default stays read.
     permissions:
       contents: write
       actions: read
