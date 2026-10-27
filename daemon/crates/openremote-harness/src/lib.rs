@@ -61,6 +61,46 @@ pub fn creation_flags() -> u32 {
     CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
 }
 
+/// What a harness CLI calls its own version: `<program> <leading> --version`,
+/// first non-empty line, trimmed, capped. `None` when the CLI did not answer
+/// in time or could not be started at all.
+///
+/// This exists so an answer to one of our own handshakes that we do not
+/// recognise can be reported as "claude 2.1.0 answered a shape this build
+/// does not speak" instead of "this harness ships no models". Those are two
+/// different problems with two different fixes, and only the version tells
+/// them apart. `--version` prints and exits: no model runs and no account is
+/// reached. A version is worth putting in a failure sentence, never worth
+/// failing over, which is why the answer is an `Option` and not a `Result`.
+pub async fn cli_version(
+    program: &std::path::Path,
+    leading: &[std::ffi::OsString],
+) -> Option<String> {
+    const DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+    const CAP: usize = 120;
+    let mut command = tokio::process::Command::new(program);
+    command
+        .args(leading)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        // A CLI that hangs on the flag must not outlive this probe.
+        .kill_on_drop(true);
+    // Windows: no console flash, no Ctrl-C from a shared console; the why
+    // lives on creation_flags above.
+    #[cfg(windows)]
+    command.creation_flags(creation_flags());
+    let output = tokio::time::timeout(DEADLINE, command.output())
+        .await
+        .ok()?
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
+    let capped: String = line.chars().take(CAP).collect();
+    Some(capped.trim_end().to_string())
+}
+
 /// A resolved custom endpoint for one spawn: metadata plus the secret.
 /// The secret's own Debug stays redacted, so spawn options never log it.
 #[derive(Clone, Debug)]
@@ -198,6 +238,27 @@ pub struct AgentDescriptor {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_version_probe_reads_the_first_line_of_both_answers() {
+        // `cargo` is the one program guaranteed to exist in the process
+        // doing the asking, and `cargo --version` is a print-and-exit:
+        // the probe must read it, not hang on it.
+        let version = cli_version(std::path::Path::new(env!("CARGO")), &[]).await;
+        let version = version.expect("cargo answers --version");
+        assert!(
+            version.starts_with("cargo "),
+            "unexpected version line: {version}"
+        );
+        // A program that cannot be started is no version, never a panic.
+        let missing = cli_version(std::path::Path::new("no-such-harness-cli-xyz"), &[]).await;
+        assert_eq!(missing, None);
+    }
 }
 
 /// What a harness offers a composer: its commands and its agents.

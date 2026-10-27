@@ -368,6 +368,28 @@ async fn kill_and_reap(
     }
 }
 
+/// "claude 2.1.0" for a failure sentence about an answer this build does not
+/// speak, or a phrase that says the version could not be read.
+///
+/// The version is the whole point of the sentence: an unrecognised answer to
+/// our own handshake is nearly always a CLI older than this build, and
+/// without the number the console cannot tell that from a harness that
+/// genuinely advertises nothing. The probe is `--version`, which prints and
+/// exits, so no model runs and no account is touched.
+async fn named_cli(resolution: &Resolution) -> String {
+    let version = match resolution {
+        Resolution::Executable(path) => openremote_harness::cli_version(path, &[]).await,
+        Resolution::NodeScript { node, script } => {
+            openremote_harness::cli_version(node, &[script.as_os_str().to_os_string()]).await
+        }
+        Resolution::Unavailable => None,
+    };
+    match version {
+        Some(version) => format!("claude {version}"),
+        None => "claude (its version could not be read)".to_string(),
+    }
+}
+
 /// The model catalog for `/harnesses/claude/models`: a short-lived CLI
 /// process, the SDK's `initialize` handshake in, its `models` array out -
 /// the same list the CLI's own `/model` picker serves (pick words, display
@@ -378,10 +400,25 @@ pub async fn models(
     resolution: &Resolution,
 ) -> Result<Vec<openremote_harness::ModelDescriptor>, DriverError> {
     let Some(response) = handshake(resolution, None, &[], "models").await? else {
-        return Ok(Vec::new());
+        // The CLI read the handshake and exited without answering it: our
+        // own `initialize` shape is not one it speaks, which nearly always
+        // means a CLI older than this build. An empty catalog here would
+        // have reached the console as "this harness ships no models", a
+        // sentence about the wrong thing entirely.
+        return Err(DriverError::Protocol(format!(
+            "{} did not answer the initialize handshake this build speaks; it may be older than this console expects",
+            named_cli(resolution).await
+        )));
     };
     let Some(list) = catalog_list(&response) else {
-        return Ok(Vec::new()); // a shape we don't speak; empty beats a guess
+        // The handshake answered, the catalog did not: a newer or older
+        // shape than the one read here. Naming the CLI and its version is
+        // what makes the failure actionable instead of looking like an
+        // empty shelf.
+        return Err(DriverError::Protocol(format!(
+            "{} answered a model list this build does not speak; update the harness CLI",
+            named_cli(resolution).await
+        )));
     };
     Ok(list.iter().filter_map(catalog_entry).collect())
 }
@@ -714,6 +751,15 @@ fn build_argv(opts: &SpawnOptions) -> Result<Vec<std::ffi::OsString>, DriverErro
         argv.push(dir.as_os_str().to_owned());
     }
     if let Some(id) = &opts.resume {
+        // A chat whose harness never named a conversation carries an empty
+        // ref. Passing it on builds `--resume=`, which the CLI reads as a
+        // flag with no id and answers with a usage error that names
+        // nothing; refusing here says what is actually missing.
+        if id.trim().is_empty() {
+            return Err(DriverError::Spawn(
+                "this chat has no session to resume: the harness never reported one".to_string(),
+            ));
+        }
         argv.push(format!("--resume={id}").into());
     }
     if opts.include_deltas {
@@ -977,6 +1023,55 @@ mod tests {
         // equals form: the id cannot smuggle a second flag
         assert!(argv.iter().any(|s| *s == std::ffi::OsStr::new("--resume=abc; --dangerously-skip-permissions")));
         assert!(joined.contains("--include-partial-messages"));
+    }
+
+    #[tokio::test]
+    async fn a_version_that_cannot_be_read_is_said_rather_than_guessed() {
+        // A CLI that will not start cannot name its version, and the
+        // sentence must say so instead of inventing one. It still names
+        // the harness, because the console shows one harness at a time and
+        // needs to know whose catalog failed.
+        let name = named_cli(&Resolution::Executable(std::path::PathBuf::from(
+            "no-such-claude-cli-xyz",
+        )))
+        .await;
+        assert_eq!(name, "claude (its version could not be read)");
+    }
+
+    #[tokio::test]
+    async fn a_known_version_reaches_the_sentence_beside_the_harness_name() {
+        // `cargo` stands in for a harness CLI here: it is the one program
+        // the process doing the asking is guaranteed to have, and its
+        // `--version` is a print-and-exit like the harnesses'. What this
+        // pins is the join, a read version arriving in the sentence the
+        // console shows rather than being dropped on the way.
+        let name = named_cli(&Resolution::Executable(std::path::PathBuf::from(env!(
+            "CARGO"
+        ))))
+        .await;
+        assert!(name.starts_with("claude cargo "), "unexpected: {name}");
+    }
+
+    #[test]
+    fn an_empty_resume_ref_is_refused_with_a_sentence_not_a_bare_flag() {
+        // The daemon passes on whatever ref it recorded. A harness that
+        // never named a conversation leaves an empty string, and
+        // `--resume=` reaches the CLI as a flag with no id: its own usage
+        // error names nothing a person can act on. Refusing here says what
+        // is actually missing.
+        for empty in [String::new(), "   ".to_string()] {
+            let opts = SpawnOptions {
+                cwd: std::path::PathBuf::from("/w"),
+                resume: Some(empty),
+                ..Default::default()
+            };
+            let err = build_argv(&opts).expect_err("an empty ref is refused");
+            let text = err.to_string();
+            assert!(
+                text.contains("no session to resume"),
+                "unexpected text: {text}"
+            );
+        }
     }
 
     #[test]
