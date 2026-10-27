@@ -29,8 +29,16 @@ use crate::supervisor::lock_recovering;
 const RANGE_BYTES: usize = 256 * 1024;
 /// Head notices for one chat go out at most this often.
 const HEAD_EVERY: Duration = Duration::from_millis(1000);
-/// A pull that lost its range waits this long before its one retry: long
-/// enough for a reconnect to start, short enough to stay inside one request.
+/// How long one range request (and every other peer request this module makes
+/// through `get`) is allowed to take. Named because `PULL_RETRY_DELAY` is
+/// bounded by it, and the pull's slot wait is the same figure.
+const GET_TIMEOUT: Duration = Duration::from_secs(60);
+/// A pull that lost its range waits this long before its one retry: long enough
+/// for a reconnect to start, and far enough below `GET_TIMEOUT` (60 s) that the
+/// retried range is a fresh request inside the peer's live link rather than a
+/// second wait added to a caller that is already at its limit. Raising this
+/// past a fraction of `GET_TIMEOUT` turns a pull that recovers into a pull that
+/// times out, which is why the test beside it pins the relation.
 const PULL_RETRY_DELAY: Duration = Duration::from_secs(5);
 /// How often this device compares notes with the peers that are up. This is the
 /// beat a link event does not give: a tombstone this device refused (the stop
@@ -181,13 +189,22 @@ async fn get(mesh: &Mesh, peer: DeviceId, path: String) -> Option<Value> {
                 content_type: None,
                 body: Vec::new(),
             },
-            Duration::from_secs(60),
+            GET_TIMEOUT,
         )
         .await
         .ok()?;
     (response.status == 200)
         .then(|| serde_json::from_slice(&response.body).ok())
         .flatten()
+}
+
+/// Whether a pull that just lost its range may wait and try once more. One
+/// retry, then the beat: a pull that re-armed this would hold the chat's slot
+/// and keep re-asking a peer that is gone, which is the shape the sleep and the
+/// log line were meant to be a single occurrence of. A pure rule so the guard
+/// is pinned without a network.
+pub fn may_retry_pull(already_retried: bool) -> bool {
+    !already_retried
 }
 
 /// Copies what `peer` has of chat `id` beyond this device's head. One pull
@@ -217,15 +234,15 @@ pub async fn pull(app: &Arc<App>, peer: DeviceId, id: SessionId, runner: DeviceI
             // away between two chunks, not the end of the chat: say so once and
             // try once more before leaving the copy behind for the retry beat
             // to pick up.
-            if !retried {
-                retried = true;
-                eprintln!(
-                    "openremote-daemon: pulling chat {id} from {peer} was cut off after seq {from}; trying once more"
-                );
-                tokio::time::sleep(PULL_RETRY_DELAY).await;
-                continue;
+            if !may_retry_pull(retried) {
+                break;
             }
-            break;
+            retried = true;
+            eprintln!(
+                "openremote-daemon: pulling chat {id} from {peer} was cut off after seq {from}; trying once more"
+            );
+            tokio::time::sleep(PULL_RETRY_DELAY).await;
+            continue;
         };
         let events: Vec<Value> = range["events"].as_array().cloned().unwrap_or_default();
         let theirs = range["head"].as_u64().unwrap_or(0);
@@ -681,6 +698,27 @@ mod tests {
         // device-list refresher; a longer one would leave a refused delete
         // waiting for a restart that may never come.
         assert!(RETRY_EVERY <= Duration::from_secs(300));
+    }
+
+    #[test]
+    fn a_lost_range_gets_one_more_try_and_then_the_beat() {
+        // The guard the sleep sits behind: one retry, never a loop. Without
+        // this pin, turning `retried` into a loop or a reset would look like a
+        // resilience improvement and would hold the chat's slot forever.
+        assert!(may_retry_pull(false), "the first loss may retry");
+        assert!(!may_retry_pull(true), "the second loss waits for the beat");
+    }
+
+    #[test]
+    fn the_pull_retry_delay_stays_inside_the_request_timeout() {
+        // A raise past the range timeout would make "retry once" mean "add a
+        // second wait to a caller already at its limit", which is a silent
+        // timeout rather than a recovery. The relation is the reason the two
+        // constants sit next to each other.
+        assert!(
+            PULL_RETRY_DELAY * 4 <= GET_TIMEOUT,
+            "the retry sleep must stay well under GET_TIMEOUT"
+        );
     }
 
     #[test]

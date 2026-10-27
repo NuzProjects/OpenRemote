@@ -21,8 +21,16 @@ use std::sync::Arc;
 use openremote_cloud::{Cloud, CloudConfig};
 use openremote_daemon::app::{self, App, AppOptions};
 
-/// sysexits' EX_CONFIG: not enrolled, and retrying won't change that.
+/// sysexits' EX_CONFIG (78) for a machine that is not in Cloud: a service
+/// manager stops retrying, because the next start would say the same thing.
 const NOT_ENROLLED: u8 = 78;
+
+/// The same code for the other configuration the machine cannot fix by being
+/// restarted - a data folder that cannot take the token, a path that is not
+/// writable. Its own name so the code and the sentence in the docs stay about
+/// the same thing: 78 means "configuration, do not retry", not always
+/// "not enrolled".
+const EX_CONFIG: u8 = 78;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -77,9 +85,7 @@ async fn serve(agent: bool) -> ExitCode {
                 "openremote-daemon: cannot use the data folder {} - {e}. Fix its permissions, or point OPENREMOTE_DATA_DIR at a writable folder",
                 data_dir.display()
             );
-            // sysexits' EX_CONFIG, the same code the not-enrolled path uses:
-            // retrying will not change this.
-            return ExitCode::from(NOT_ENROLLED);
+            return ExitCode::from(EX_CONFIG);
         }
     };
     // Bind early so the port is known before the app is assembled (the
@@ -307,6 +313,17 @@ fn unenroll_answer(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_unretryable_exit_is_one_code_with_two_names() {
+        // AGENTS.md tells a reader "exits 78 when not enrolled", and a service
+        // manager keys on the number whatever the constant is called. Both
+        // names must stay 78: the enrolment path keeps its own name so that
+        // sentence stays true, and a configuration failure uses the general
+        // one instead of borrowing the enrolment's.
+        assert_eq!(NOT_ENROLLED, 78);
+        assert_eq!(EX_CONFIG, 78);
+    }
 
     #[test]
     fn status_agrees_with_itself_about_an_enrolled_machine_without_a_name() {
