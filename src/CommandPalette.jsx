@@ -25,6 +25,7 @@ import {
   Lightning,
   MagnifyingGlass,
   PencilSimple,
+  Play,
   PuzzlePiece,
   Repeat,
   SquaresFour,
@@ -73,6 +74,14 @@ import { loadSeen, recordSeen, storeSeen } from './unread.js'
 import { markAllSeen, movedLine, sinceLastLook, whatHappened, whenLabel } from './since-last-look.js'
 import { capacityLine, loadLayouts, restoreShape, saveLayouts, withoutLayout } from './layouts.js'
 import { armRow, clearRow, rowIsArmed } from './row-confirm.js'
+import {
+  RULES_SECTION,
+  ruleAnswer,
+  ruleRunAvailable,
+  ruleRunRows,
+  runRule,
+  subscribeRuleRun,
+} from './rule-run.js'
 import './keyboard.css'
 
 const VIEW_ICONS = {
@@ -92,11 +101,13 @@ const PAGES = [
   { kind: 'permission', name: 'Set permission…' },
 ]
 
-const SECTION_ORDER = ['Actions', 'Chats', 'Views', 'Projects', 'Machines']
+// Rules sit right under Actions: a person who opens the palette to run one has
+// ten of them, and the alternative is scrolling past every chat first.
+const SECTION_ORDER = ['Actions', 'Rules', 'Chats', 'Views', 'Projects', 'Machines']
 const SECTION_CAP = 8
 
 // The pages with no keyboard source behind them, so the crumb has a name.
-const PAGE_TITLES = { since: 'Since your last look', 'caught-up': 'Since your last look', layouts: 'Layouts' }
+const PAGE_TITLES = { since: 'Since your last look', 'caught-up': 'Since your last look', layouts: 'Layouts', 'rule-run': 'Rules' }
 
 const projectLabel = (p) => p.folders[0].split(/[\\/]/).filter(Boolean).pop()
 
@@ -104,7 +115,7 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
   // One line on purpose: the stop-everything wiring test reads this call to
   // prove the palette stops chats through the action a single chat already
   // uses. The two new names sit before `stopChat`, which stays last.
-  const { sessions, chats, archived, projects, devices, thisDevice, capabilities, machines, stopChat } = useConsole()
+  const { sessions, chats, archived, projects, devices, thisDevice, capabilities, machines, automations, machinesAnswered, stopChat } = useConsole()
   const kb = useKeyboard()
   const [query, setQuery] = useState('')
   const [page, setPage] = useState(null)
@@ -165,6 +176,14 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
   const [savedLayouts, setSavedLayouts] = useState(() => loadLayouts())
   const [armedLayout, setArmedLayout] = useState(null)
   const [layoutNote, setLayoutNote] = useState(null)
+  // The Rules group exists only while the Automations view is mounted to run
+  // one: the action is a register/request pair (rule-run.js), and a group of
+  // rows whose press does nothing is worse than a group that is not there.
+  const [rulesCanRun, setRulesCanRun] = useState(() => ruleRunAvailable())
+  useEffect(() => subscribeRuleRun(() => setRulesCanRun(ruleRunAvailable())), [])
+  // What the Rules group answered: one line under the search field, in the
+  // same shape every command that asked nothing uses.
+  const [ruleRunState, setRuleRunState] = useState(null)
   const onScreen = typeof location === 'undefined' ? '' : location.hash.replace(/^#/, '')
   const currentChat = (sessions ?? []).some((session) => session.id === onScreen) ? onScreen : null
 
@@ -455,14 +474,28 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
           },
         ]
       : []
+    // The view's own list, filtered to what can actually run: a paused rule,
+    // or one whose machine is gone or has not come online, is not offered
+    // (rule-run.js owns that rule and its copy).
+    const ruleRows = rulesCanRun
+      ? ruleRunRows(automations, machines, { answered: machinesAnswered }).map((rule) => ({
+          key: `rule-run:${rule.id}`,
+          section: RULES_SECTION,
+          name: rule.name,
+          sub: rule.sub,
+          icon: <Play size={15} weight="fill" />,
+          run: { ruleRun: rule.id },
+        }))
+      : []
     return {
       actions: [...stopRow, ...harnessRow, ...raceRow, ...sinceRow, ...layoutRow, ...layoutsRow, ...renameRow, ...presetRow, ...reopenRow, ...review, ...markdown, ...jobRow, ...pages, ...actions],
       chats: chatRows,
       projectRows,
       machines,
       harnessRows,
+      ruleRows,
     }
-  }, [kb, sessions, archived, projects, devices, thisDevice, capabilities, machines, raceFree, moved, panes, savedLayouts, onScreen, reviewChat, markdownChat, hasFileChanges, focusedChatId, onRenameChat])
+  }, [kb, sessions, archived, projects, devices, thisDevice, capabilities, machines, raceFree, moved, panes, savedLayouts, onScreen, reviewChat, markdownChat, hasFileChanges, focusedChatId, onRenameChat, rulesCanRun, automations, machinesAnswered])
 
   const sections = useMemo(() => {
     if (page === 'layouts') {
@@ -507,6 +540,16 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
               run: { caughtClose: true },
             },
           ],
+        },
+      ]
+    }
+    if (page === 'rule-run') {
+      // The answer is the page: one line above, and the only row left is the
+      // way out, so Enter or Esc both end it without touching the answer.
+      return [
+        {
+          label: 'Rules',
+          items: [{ key: 'rule-run:close', section: 'Rules', name: 'Close', run: { caughtClose: true } }],
         },
       ]
     }
@@ -627,7 +670,7 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
         ...(suggested.length ? [{ label: 'Suggestions', items: suggested }] : []),
       ]
     }
-    const all = [...everything.actions, ...everything.chats, ...everything.projectRows, ...everything.machines]
+    const all = [...everything.actions, ...everything.chats, ...everything.projectRows, ...everything.machines, ...everything.ruleRows]
     const ranked = rankMatches(query, all, (r) => r.name)
     return SECTION_ORDER.map((label) => ({
       label,
@@ -690,6 +733,20 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
   const choose = (row) => {
     if (!row) return
     const r = row.run
+    if (r.ruleRun) {
+      // The rule keeps the palette open while the daemon is asked: the answer
+      // is the one line under the field, first "Running ...", then "Started."
+      // or the daemon's own refusal. The run itself is the Automations view's
+      // Run now, lent through rule-run.js's seam, so this branch carries no
+      // run path of its own - only the two things the palette owns: the line
+      // and the wait.
+      setRuleRunState({ phase: 'running', name: row.name })
+      setPage('rule-run')
+      runRule(r.ruleRun).then((result) => {
+        setRuleRunState({ phase: result.ok ? 'started' : 'refused', name: row.name, error: result.error })
+      })
+      return
+    }
     if (r.markdown) {
       // The copy keeps the palette open: the answer is one line, and a palette
       // that closed to say it would need somewhere else to say it. The chat
@@ -1015,6 +1072,17 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
             <div className="kb-stop">
               <p className="kb-stop-question" role="status">
                 {layoutNote}
+              </p>
+            </div>
+          )}
+          {page === 'rule-run' && ruleRunState && (
+            // The answer to running a rule: one line, the same slot a copy or a
+            // layout refusal uses. It changes in place from "Running ..." to
+            // "Started." or the daemon's sentence, so nothing moves under the
+            // cursor while the daemon is asked.
+            <div className="kb-stop">
+              <p className="kb-stop-question" role="status">
+                {ruleAnswer(ruleRunState)}
               </p>
             </div>
           )}

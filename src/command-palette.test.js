@@ -56,7 +56,7 @@ const palette = readFileSync(new URL('./CommandPalette.jsx', import.meta.url), '
 test('a token event does not rebuild the palette rows', () => {
   // The row list's dependencies no longer include the chat records, whose
   // every mutation used to rebuild two hundred rows.
-  assert.match(palette, /\}, \[kb, sessions, archived, projects, devices, thisDevice, capabilities, machines, raceFree, moved, panes, savedLayouts, onScreen, reviewChat, markdownChat, hasFileChanges, focusedChatId, onRenameChat\]\)/)
+  assert.match(palette, /\}, \[kb, sessions, archived, projects, devices, thisDevice, capabilities, machines, raceFree, moved, panes, savedLayouts, onScreen, reviewChat, markdownChat, hasFileChanges, focusedChatId, onRenameChat, rulesCanRun, automations, machinesAnswered\]\)/)
   assert.doesNotMatch(palette, /\}, \[kb, sessions, chats,/)
   // The two timeline-reading rows are built apart and stabilised by their own
   // key, so an unchanged answer reuses the same row objects.

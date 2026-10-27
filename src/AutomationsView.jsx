@@ -3,7 +3,7 @@
 // path by hand. The pill at the bottom drafts rules from a sentence -
 // a keyword brain behind the same action card.
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowUpRight,
   Check,
@@ -42,6 +42,7 @@ import './pill.css'
 import { pickable } from './harness-manager.js'
 import { ranLabel } from './ran-label.js'
 import { errorCopy } from './error-copy.js'
+import { RULE_GONE, registerRuleRun } from './rule-run.js'
 
 export default function AutomationsView({ onOpenChat }) {
   const {
@@ -62,6 +63,10 @@ export default function AutomationsView({ onOpenChat }) {
   const [editing, setEditing] = useState(null) // null | {} (new) | rule
   const [busyId, setBusyId] = useState(null)
   const [error, setError] = useState(null)
+  // The sentence a failed action produced, kept where the caller of `run` can
+  // read it after the fact: the palette runs a rule through this view and has
+  // to answer with the daemon's own words.
+  const lastFailure = useRef(null)
   // The rule waiting on a "remove?" answer. A rule is user-written text with a
   // schedule behind it, and there is no undo for one this conversation did not
   // create, so the trash icon asks once in place before it acts: the same
@@ -129,10 +134,16 @@ export default function AutomationsView({ onOpenChat }) {
     setArmed(clearRow())
     setBusyId(id ?? 'view')
     setError(null)
+    // The failure's sentence, kept where a caller can read it after the run:
+    // the palette runs a rule through this same path and has to answer with
+    // the daemon's words rather than only painting them on this view.
+    lastFailure.current = null
     try {
       return await action(...args)
     } catch (err) {
-      setError(errorCopy(err))
+      const message = errorCopy(err)
+      lastFailure.current = message
+      setError(message)
       return null
     } finally {
       setBusyId(null)
@@ -142,7 +153,21 @@ export default function AutomationsView({ onOpenChat }) {
   const runNow = async (rule) => {
     const session = await run(() => runAutomation(rule.id), rule.id)
     if (session) onOpenChat?.(session.id)
+    return session ?? null
   }
+
+  // The palette's way in: it offers rules only while this view is mounted,
+  // because the run action lives here (it is the same Run now, and it opens
+  // the chat that started). The handler is a ref so the seam registers once
+  // and always runs against the current state.
+  const paletteRun = useRef(null)
+  paletteRun.current = async (id) => {
+    const rule = (rules ?? []).find((r) => r.id === id)
+    if (!rule) return { ok: false, error: RULE_GONE }
+    const session = await runNow(rule)
+    return session ? { ok: true } : { ok: false, error: lastFailure.current ?? null }
+  }
+  useEffect(() => registerRuleRun((id) => paletteRun.current(id)), [])
 
   // ---- the pill ----
 
