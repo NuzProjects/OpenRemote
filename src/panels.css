@@ -102,21 +102,24 @@
 }
 
 /* The destructive button, in the one red the contract names (the diff's
-   #F87171): red text and border so it reads as dangerous before it is pressed,
-   a wash on hover, and nothing else - no fill, no shadow, no animation. It
-   marks a control that deletes: an armed in-place confirm ("Remove it"), or a
-   button whose press opens the delete dialog (the archived list's "Delete").
-   The row beside it still wears a plain .pn-btn until it is armed. It lives
-   beside the button it modifies, and the hover names its own state so file
-   order cannot turn it white. */
+   #F87171, held in the --red token): red text and border so it reads as
+   dangerous before it is pressed, a wash on hover, and nothing else - no
+   fill, no shadow, no animation. It marks a control that deletes: an armed
+   in-place confirm ("Remove it"), or a button whose press opens the delete
+   dialog (the archived list's "Delete"). The row beside it still wears a
+   plain .pn-btn until it is armed. It lives beside the button it modifies,
+   and the hover names its own state so file order cannot turn it white.
+   The colour is read from the token with the same fallback the rest of the
+   tree uses, so a sheet loaded without the root block still gets the red and
+   a move of the token carries this button with it. */
 .pn-btn--danger {
-  color: #f87171;
+  color: var(--red, #f87171);
   border-color: rgba(248, 113, 113, 0.4);
 }
 
 .pn-btn--danger:hover:not(:disabled) {
   background: rgba(248, 113, 113, 0.1);
-  color: #f87171;
+  color: var(--red, #f87171);
 }
 
 .pn-log {

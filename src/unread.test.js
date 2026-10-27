@@ -59,6 +59,20 @@ test('the polled status counts too, when the live one is not there', () => {
   assert.equal(isUnread({ 'chat-1': 1 }, row({ status: undefined, polledStatus: 'waiting' })), true)
 })
 
+test('a poll-only mid-turn chat is not marked, though the sidebar calls a missing live status idle', () => {
+  // The row Sidebar.jsx actually builds: liveStatus null until the chat has a
+  // record, status that null filled in as 'idle', and the poll's own word for
+  // what the harness is doing. Reading status before the poll sees 'idle' and
+  // marks a turn that has not finished, on the first paint after a load.
+  const working = row({ liveStatus: null, status: 'idle', polledStatus: 'running', updatedAt: 200 })
+  assert.equal(isBusy(working), true, 'the poll says the harness is mid-turn')
+  assert.equal(isUnread({ 'chat-1': 1 }, working), false, 'so nothing has arrived to read yet')
+  // The same row, waiting: the question has arrived, so the move marks.
+  const waiting = row({ liveStatus: null, status: 'idle', polledStatus: 'waiting', updatedAt: 200 })
+  assert.equal(isBusy(waiting), false)
+  assert.equal(isUnread({ 'chat-1': 1 }, waiting), true)
+})
+
 test('a row with no activity stamp, or no id, is never marked', () => {
   assert.equal(isUnread({ 'chat-1': 1 }, row({ updatedAt: 0 })), false)
   assert.equal(isUnread({ 'chat-1': 1 }, row({ updatedAt: undefined })), false)

@@ -107,10 +107,13 @@ test('an MCP server removal is a two-step confirm too', () => {
 test('an armed row ends when it leaves the viewport or loses focus', () => {
   const hook = source('use-armed-row.js')
   // Scrolled out of view: an IntersectionObserver on the armed button itself,
-  // armed by a callback ref so it follows the row rather than the list.
+  // armed by a callback ref so it follows the row rather than the list. The id
+  // is read at event time (`armedRef.current`) because an observer callback
+  // that lands after a re-render must compare against the arm that is live
+  // now, not the one that was under it when the observer was built.
   assert.match(hook, /new IntersectionObserver\(/)
   assert.match(hook, /!entry\.isIntersecting/)
-  assert.match(hook, /armAfter\(current, armed, \{ visible: false \}\)/)
+  assert.match(hook, /armAfter\(current, armedRef\.current, \{ visible: false \}\)/)
   // Focus leaving ends it too.
   assert.match(hook, /armAfter\(current, armed, \{ focused: false \}\)/)
   // The observer is taken down on unmount and when another row arms, so no
@@ -120,7 +123,7 @@ test('an armed row ends when it leaves the viewport or loses focus', () => {
   // second copy of the condition.
   assert.doesNotMatch(hook, /setArmed\(clearRow\(\)\)/)
   // Every armed destructive row in the console watches its arm.
-  for (const pane of ['EndpointManager.jsx', 'McpServersSection.jsx', 'PluginsView.jsx']) {
+  for (const pane of ['EndpointManager.jsx', 'McpServersSection.jsx', 'PluginsView.jsx', 'AutomationsView.jsx']) {
     assert.match(source(pane), /useArmedRow\(/, `${pane} must watch its armed row`)
   }
 })

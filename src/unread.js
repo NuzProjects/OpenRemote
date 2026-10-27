@@ -32,9 +32,19 @@ export function activityAt(row) {
   return typeof stamp === 'number' && Number.isFinite(stamp) && stamp > 0 ? stamp : 0
 }
 
-/** Whether a harness is mid-turn on this chat, so nothing has arrived yet. */
+/**
+ * Whether a harness is mid-turn on this chat, so nothing has arrived yet.
+ *
+ * The live field comes first: a chat on screen carries `liveStatus`, and the
+ * sidebar's `status` is that field with 'idle' filled in for a chat with no
+ * record yet, so reading `status` first would call a poll-only `working` chat
+ * idle on the first paint after a load (Sidebar.jsx sets all three). The
+ * poll's own word is next, and `status` stays as the fallback for a row built
+ * without either.
+ */
 export function isBusy(row) {
-  return BUSY_STATUSES.includes(row?.status ?? row?.polledStatus)
+  const status = row?.liveStatus ?? row?.polledStatus ?? row?.status
+  return BUSY_STATUSES.includes(status)
 }
 
 /**
@@ -90,11 +100,13 @@ export function recordSeen(seen, id, stamp) {
 }
 
 /**
- * Whether this row should carry the quiet mark: it has moved since its
- * record, it has no record (never opened here), or it is mid-turn.
+ * Whether this row should carry the quiet mark: it has a record, has moved
+ * since that record, and nothing is still running on it.
  *
- * A chat with no record is not marked: it was never "seen then changed",
- * and `seedSeen` gives it a record the moment this console lists it.
+ * A chat with no record is not marked: it was never "seen then changed", and
+ * `seedSeen` gives it a record the moment this console lists it. A busy chat
+ * is not marked either: nothing has arrived to read yet, and its stamp moves
+ * on every event of the turn (see isBusy).
  */
 export function isUnread(seen, row) {
   if (!row?.id) return false

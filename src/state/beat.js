@@ -8,11 +8,12 @@
 // what makes the cadence and the one-beat-at-a-time rule testable with the
 // runner's mocked timers (see beat.test.js) rather than with sleeps.
 
-// The lists a beat must have an answer from before it can call the daemon
-// alive. `sessions` alone would keep the sidebar honest, but a daemon whose
-// machine or rule routes throw is not healthy enough to keep the banner
-// off. The other calls a beat makes ride along and never decide this - it is
-// the rule the bare interval kept inline, moved here so it can be tested.
+// The lists that decide whether a beat heard from the daemon at all. One of
+// them answering is enough to keep the banner off: a daemon whose machines
+// route throws while its sessions answer is a busy daemon, not a gone one,
+// and the next beat reads whichever route was unhappy. The other calls a beat
+// makes ride along and never decide this - it is the rule the bare interval
+// kept inline, moved here so it can be tested.
 export const BEAT_LISTS = ['sessions', 'machines', 'mcpServers', 'automations']
 
 // The beat interval, in ms. Measured from the previous beat settling, not
@@ -25,8 +26,9 @@ export const BEAT_INTERVAL_MS = 2500
 // Consecutive beats with no answer before the connection is called dead.
 // Three beats is about 7.5 s: long enough that one wedged request is not an
 // incident, short enough that the banner is on screen while the user is
-// still looking at it. Two of the four lists answering keeps the banner off,
-// which is why a partly failing daemon heals rather than flashing an error.
+// still looking at it. One of the four lists answering is enough to keep the
+// banner off, so only a beat where all four were silent counts as a miss -
+// that is why a partly failing daemon heals rather than flashing an error.
 export const MISSES_TO_BANNER = 3
 
 /// What one settled beat heard, from the shape `Promise.allSettled` returns.

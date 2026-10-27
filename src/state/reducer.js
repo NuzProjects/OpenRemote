@@ -138,10 +138,14 @@ export function mergeSessionIntoChat(existing, session) {
 }
 
 /// Whether two chat records carry the same values, which is what lets the
-/// merge above hand back the old one. Arrays (the queue, the approved
-/// tools) are re-allocated from every payload, so they are compared item by
-/// item; anything deeper is a folded object the merge passes through by
-/// reference, so identity is the right test for it.
+/// merge above hand back the old one. The comparison starts from identity,
+/// which is free and covers every field the merge passes through by
+/// reference (the transcript, the decisions, the context), then falls back
+/// to values: arrays item by item, because the queue and the approved tools
+/// are re-allocated from every payload, and plain objects key by key, for
+/// the same reason. Only the keys of the new record are compared, so the
+/// field set is the merge's: a field it stopped writing is not a change
+/// until one of the keys it does write moves.
 function sameRecord(next, existing) {
   for (const key of Object.keys(next)) {
     if (!sameValue(next[key], existing[key])) return false
