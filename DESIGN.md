@@ -107,11 +107,16 @@ spacing.
   is only ever read in the chat. The line summarises and never answers - the
   sidebar offers no approve, deny or dismiss anywhere, since a decision is
   answered where its options and what an approval wants to run are on screen
-  together. Then Projects (every registered project, each with collapse caret
-  and count, the `+` in the section head, unregister on hover, which asks once
-  before it acts; a project's chats grouped under it, and a project with none
-  keeping its row with a zero and one line saying it has no chats yet) and the
-  flat Chats list (every chat that belongs to no project), each row led by
+  together. Then Projects (every registered project, each with its collapse
+  caret and a line saying what it holds: the chat count while the project is
+  collapsed, and how many of its chats are waiting whenever any is - in the
+  status column's amber, counted from the same rows the Needs you group draws,
+  so the two can never disagree; the `+` in the section head, unregister on
+  hover, which asks once before it acts; a project's chats grouped under it,
+  and a project with none keeping its row with "0 chats" and one line saying it
+  has no chats yet). An expanded project with chats and nothing waiting shows
+  just its name, because the list under it is the answer. Then the flat Chats
+  list (every chat that belongs to no project), each row led by
   its harness's brand mark with the status dot at the row's right edge; the
   footer is an icon row - Account, Mobile, Metrics, Settings - spaced evenly.
   A chat that moved after it was last read lifts one white-alpha step (3%):
@@ -134,14 +139,24 @@ spacing.
   dashboards.
 - **Panes (the split view), modelled on VS Code's editor groups:**
   - One pane is the whole main area and carries no header. Two or more
-    panes each get a 30px header (`--bg-side`, one hairline under it): the
-    pane's title on the left, then on the right the split action and an
+    panes each get a 30px header (`--bg-side`, one hairline under it). On
+    the left the header says whose pane it is: a pane holding a chat carries
+    the sidebar's own language - its harness mark, the chat's title, its
+    project when one of the registered projects holds the chat's folder, and
+    the status dot in the same classes and colours the sidebar row uses -
+    while a pane holding no chat keeps the role's name ("New chat",
+    "Plugins"). On the right the Layouts button, then the split action and an
     overflow that names every direction in words - "Split right", "Split
     down", "Split left", "Split up", each with its shortcut - then close
     on every pane but the primary. Direction is a word, never a bare
     directional glyph: the one icon-only button is split right and wears
     VS Code's split-editor shape (a page divided down the middle), which
-    the titlebar's split toggle shares.
+    the titlebar's split toggle shares. The Layouts menu reads the saved
+    shapes when it opens, so one saved a moment ago from the palette is
+    already there; each entry carries its pane count, an entry this window
+    cannot hold stays in the menu disabled with its reason under it (an entry
+    that vanishes teaches nothing), and "Save this layout…" is offered only
+    once the window is already split.
   - Five ways to split, in the order people find them: the titlebar's
     split toggle at the bar's right end, `Ctrl+\` (right) and
     `Ctrl+Shift+\` (down), a chat's context menu in the sidebar or main
@@ -173,9 +188,10 @@ spacing.
     remembers itself across a reload the same way: the stored shape is
     validated before it is drawn, a phone never restores one, and a pane whose
     chat is gone becomes a New chat rather than pointing at nothing. Both
-    halves are reached from the command palette, which saves the current
-    shape and restores a saved one; saving opens the family's own dialog with
-    one field for the name.
+    halves are reached from two places: the command palette (a shape saved or
+    put back from its Layouts page) and the Layouts button in a split pane's
+    header (a shape put back, or saved once the window is already split).
+    Saving opens the family's own dialog with one field for the name.
   - A phone has no panes: one view, no headers.
 
 ## Components
@@ -225,21 +241,27 @@ spacing.
 - **PickerMenu:** the one dropdown engine - opens at the cursor, searches,
   optional groups, keyboard-navigated, viewport-clamped.
 - **Command palette (`Ctrl+K`):** the one search over everything the console
-  can do - actions, chats, views, projects, machines - grouped and ranked,
-  each row with its key on the right; an empty query shows recent chats and
-  suggestions. It is where actions live, in two shapes: a row opens a page
-  inside the palette (a question first, its answers as rows, Esc to step back
-  out - the footer says which), or it hands off to the surface that owns the
-  action. The pages are Switch model, Set effort, Set permission, Stop all
-  running chats, Stop one harness's chats and Since your last look; the
-  hand-offs are Changes in this chat (the review), Race a prompt across
+  can do - actions, rules, chats, views, projects, machines - grouped and
+  ranked, each row with its key on the right; an empty query shows recent chats
+  and suggestions. It is where actions live, in three shapes: a row opens a
+  page inside the palette (a question first, its answers as rows, Esc to step
+  back out - the footer says which), it hands off to the surface that owns the
+  action, or it answers in one line under the field and leaves the palette
+  open. The pages are Switch model, Set effort, Set permission, Stop all
+  running chats, Stop one harness's chats, Layouts and Since your last look;
+  the hand-offs are Changes in this chat (the review), Race a prompt across
   harnesses (the race), Copy this chat as Markdown (the transcript, in the
   app's own rendering, with long tool output and long tool input shortened and
-  counted) and Turn this chat into a recurring job (the rule
-  editor, already filled). A row that would lie is not rendered: the changes
-  row appears only while the chat on screen has file changes to read, the
-  stop rows only while something runs, since-last-look only while something
-  moved.
+  counted) and Turn this chat into a recurring job (the rule editor, already
+  filled). The one-line answers are the transcript copy and the Rules group,
+  which runs a rule through the Automations view's own Run now (never a second
+  run path and never a new route) and answers "Running ...", then "Started."
+  or the daemon's own refusal.
+  A row that would lie is not rendered: the changes row appears only
+  while the chat on screen has file changes to read, the stop rows only while
+  something runs, since-last-look only while something moved, and the Rules
+  group only while the Automations view is mounted to run one - a paused rule,
+  or one whose machine has not come online, is not offered at all.
 - **Stop everything:** a palette page, one command that ends every running
   chat. It asks with the number ("Stop 3 chats?"), names them oldest first -
   four, then "and N more" - and puts the safe answer first ("Keep them
@@ -583,14 +605,16 @@ from the film's own components:
 ## Checking this contract
 
 Most of this page can be checked without opening the app: `npm test` runs
-the console's rule tests (768 of them the last time this line was checked,
+the console's rule tests (910 of them the last time this line was checked,
 and the run prints the live count) and a handful
 of wiring tests read the source text for the parts only a browser could
 show, such as the modal family and the waiting screen's doors. The rules
 behind the newer surfaces sit in their own modules for that reason - the
 palette's pages, the stop question and its sentences, since-last-look, the
 waiting line and its cut, the unread marks, presets and their repair, named
-layouts and their refusals, the rename rules, the error copy, the
+layouts and their refusals, what a pane's header says, running a rule from
+the palette and the seam that lends it the Automations view's own Run now,
+the one-removal-at-a-time lock, the rename rules, the error copy, the
 daemon notice row, the view boundary, race - so each is tested as rules
 rather than as a screenshot. Colour,
 type and motion are not testable that way, so a change to them is checked
