@@ -12,6 +12,7 @@ import { modelMaker } from './model-maker.js'
 import { ModelMark } from './model-marks.jsx'
 import { projectName } from './projects.js'
 import { formDiffers } from './automation.js'
+import { jobSourceLine } from './chat-to-job.js'
 import './devices.css'
 import './automations.css'
 import { useBack } from './use-back.js'
@@ -46,14 +47,18 @@ export default function AutomationForm({ rule, onClose }) {
     api,
   } = useConsole()
   // A saved rule carries its id (an edit); a prefilled draft from the
-  // starter or the pill carries only fields.
+  // starter, the pill or a chat carries only fields.
   const editing = rule?.id != null
+  // A draft read off a chat: its time and project are the two things a chat
+  // cannot know, so both start empty and the source line asks for them
+  // instead of the form guessing a schedule nobody chose.
+  const fromChat = rule?.fromChat === true
   const available = (capabilities?.harnesses ?? []).filter(pickable)
   const online = (machines ?? []).filter((m) => m.machine.status === 'online')
 
   const [name, setName] = useState(rule?.name ?? '')
   const [kind, setKind] = useState(rule?.trigger?.kind ?? 'schedule')
-  const [time, setTime] = useState(rule?.trigger?.time ?? '09:00')
+  const [time, setTime] = useState(rule?.trigger?.time ?? (fromChat ? '' : '09:00'))
   const [harness, setHarness] = useState(rule?.harness ?? available[0]?.id ?? null)
   const [model, setModel] = useState(rule?.model ?? null)
   // The rule's permission word - the harness's own vocabulary, carried to
@@ -68,8 +73,11 @@ export default function AutomationForm({ rule, onClose }) {
   )
   // The rule's project: picked from the registered ones. A saved rule
   // carries its folder; the picker matches it back to its project and
-  // preselects that.
-  const [workspace, setWorkspace] = useState(rule?.workspace ?? defaultWorkspace(projects))
+  // preselects that. A chat with no folder starts here empty - the first
+  // registered project would be a workspace the chat never ran in.
+  const [workspace, setWorkspace] = useState(
+    rule?.workspace ?? (fromChat ? '' : defaultWorkspace(projects)),
+  )
   const [task, setTask] = useState(rule?.task ?? '')
   const [enabled, setEnabled] = useState(rule?.enabled ?? true)
   const [picker, setPicker] = useState(null)
@@ -78,12 +86,21 @@ export default function AutomationForm({ rule, onClose }) {
   const [managingEndpoints, setManagingEndpoints] = useState(false)
 
   const [models, setModels] = useState([])
+  // The harness the form opened with. A rule's model and permission word
+  // belong to the rule, so the first run of this effect keeps them: only a
+  // switch the person makes clears them, and clearing them on mount would
+  // also mark an untouched prefilled rule dirty (the model and the word are
+  // in the dirty snapshot).
+  const harnessAtOpen = useRef(harness)
   useEffect(() => {
     let cancelled = false
-    setModel(null)
-    // Permission words belong to the harness - a switch resets the
-    // choice, the new harness's own default holds.
-    setPermission(null)
+    if (harness !== harnessAtOpen.current) {
+      setModel(null)
+      // Permission words belong to the harness - a switch resets the
+      // choice, the new harness's own default holds.
+      setPermission(null)
+      harnessAtOpen.current = harness
+    }
     if (!harness) {
       setModels([])
       return
@@ -217,6 +234,20 @@ export default function AutomationForm({ rule, onClose }) {
           />
         </label>
 
+        {/* Where the values came from, and what is still the person's to
+            choose. It rewrites itself as they work, so it never asks for
+            something they have already picked. */}
+        {fromChat && (
+          <p className="af-when-note">
+            {jobSourceLine({
+              shortened: rule?.shortened === true,
+              needsProject: !workspace.trim() && (projects ?? []).length > 0,
+              when: kind,
+              timed: Boolean(time.trim()),
+            })}
+          </p>
+        )}
+
         <div className="af-section">
           <div className="af-label">When</div>
           <div className="af-trigger-row">
@@ -235,28 +266,46 @@ export default function AutomationForm({ rule, onClose }) {
             {kind === 'schedule' && (
               <span className="af-time">
                 {/* Two pickers, one kind each: an hour open on the clock
-                    never answers for the minute beside it. */}
-                <button
-                  type="button"
-                  aria-label="Hour"
-                  aria-haspopup="listbox"
-                  aria-expanded={picker?.kind === 'hour'}
-                  onClick={openPicker('hour')}
-                >
-                  {hour}
-                  <CaretDown size={10} />
-                </button>
-                <span className="af-time-colon" aria-hidden="true">:</span>
-                <button
-                  type="button"
-                  aria-label="Minute"
-                  aria-haspopup="listbox"
-                  aria-expanded={picker?.kind === 'minute'}
-                  onClick={openPicker('minute')}
-                >
-                  {minute}
-                  <CaretDown size={10} />
-                </button>
+                    never answers for the minute beside it. A draft read off
+                    a chat has no time yet, and says so instead of showing a
+                    schedule nobody chose; picking the hour starts it. */}
+                {time ? (
+                  <>
+                    <button
+                      type="button"
+                      aria-label="Hour"
+                      aria-haspopup="listbox"
+                      aria-expanded={picker?.kind === 'hour'}
+                      onClick={openPicker('hour')}
+                    >
+                      {hour}
+                      <CaretDown size={10} />
+                    </button>
+                    <span className="af-time-colon" aria-hidden="true">:</span>
+                    <button
+                      type="button"
+                      aria-label="Minute"
+                      aria-haspopup="listbox"
+                      aria-expanded={picker?.kind === 'minute'}
+                      onClick={openPicker('minute')}
+                    >
+                      {minute}
+                      <CaretDown size={10} />
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="af-time-empty"
+                    aria-label="Time"
+                    aria-haspopup="listbox"
+                    aria-expanded={picker?.kind === 'hour'}
+                    onClick={openPicker('hour')}
+                  >
+                    Pick a time
+                    <CaretDown size={10} />
+                  </button>
+                )}
                 {picker?.kind === 'hour' && (
                   <PickerMenu
                     label="Hour"

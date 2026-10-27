@@ -21,6 +21,7 @@ import {
   Lightning,
   MagnifyingGlass,
   PuzzlePiece,
+  Repeat,
   StopCircle,
   UserCircle,
 } from '@phosphor-icons/react'
@@ -29,6 +30,7 @@ import { useKeyboard, isMac } from './keyboard.jsx'
 import { ACTIONS, comboFromEvent, comboLabel, rankMatches } from './shortcuts.js'
 import { activeSessions } from './archive.js'
 import { hasFileChanges } from './changes.js'
+import { planJob, requestJob } from './chat-to-job.js'
 import { openChanges } from './ChangesModal.jsx'
 import {
   elsewhereAside,
@@ -68,7 +70,10 @@ const SECTION_CAP = 8
 const projectLabel = (p) => p.folders[0].split(/[\\/]/).filter(Boolean).pop()
 
 export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onOpenProject, onOpenMachine }) {
-  const { sessions, chats, archived, projects, devices, thisDevice, stopChat } = useConsole()
+  // One line on purpose: the stop-everything wiring test reads this call to
+  // prove the palette stops chats through the action a single chat already
+  // uses. The two new names sit before `stopChat`, which stays last.
+  const { sessions, chats, archived, projects, devices, thisDevice, capabilities, machines, stopChat } = useConsole()
   const kb = useKeyboard()
   const [query, setQuery] = useState('')
   const [page, setPage] = useState(null)
@@ -164,8 +169,28 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
           },
         ]
       : []
-    return { actions: [...stopRow, ...review, ...pages, ...actions], chats: chatRows, projectRows, machines }
-  }, [kb, sessions, chats, archived, projects, devices, thisDevice])
+    // The chat on screen as a rule. chat-to-job.js decides whether the chat
+    // can seed one at all: with no first task, no harness a rule could name,
+    // no machine online or no workspace to carry, the row is not offered
+    // rather than opening the editor on a hole.
+    const job = planJob(reviewChat, {
+      harnesses: capabilities?.harnesses ?? [],
+      machines: machines ?? [],
+      projects: projects ?? [],
+    })
+    const jobRow = job.offer
+      ? [
+          {
+            key: 'action:chat-job',
+            section: 'Actions',
+            name: 'Turn this chat into a recurring job',
+            icon: <Repeat size={15} />,
+            run: { job: job.draft },
+          },
+        ]
+      : []
+    return { actions: [...stopRow, ...review, ...jobRow, ...pages, ...actions], chats: chatRows, projectRows, machines }
+  }, [kb, sessions, chats, archived, projects, devices, thisDevice, capabilities, machines])
 
   const sections = useMemo(() => {
     if (page === 'stop-all') {
@@ -307,11 +332,17 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
       return
     }
     onClose()
-    // After the palette is gone, so focus and anchors land on the app.
+    // After the palette is gone, so focus and anchors land on the app. The
+    // rule editor lives in the Automations view, so the draft is staged for
+    // it first and the shell is asked for that view second: the view picks
+    // the draft up as it mounts.
     requestAnimationFrame(() => {
       if (r.action) kb.run(r.action)
       else if (r.changes) openChanges(r.changes)
-      else if (r.chat) onOpenChat(r.chat)
+      else if (r.job) {
+        requestJob(r.job)
+        kb.run('view-automations')
+      } else if (r.chat) onOpenChat(r.chat)
       else if (r.project) onOpenProject(r.project)
       else if (r.machine) onOpenMachine(r.machine)
     })

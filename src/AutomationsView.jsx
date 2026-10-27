@@ -3,13 +3,14 @@
 // path by hand. The pill at the bottom drafts rules from a sentence -
 // a keyword brain behind the same action card.
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { ArrowUpRight, Check, Lightning, PencilSimple, Play, TrashSimple } from '@phosphor-icons/react'
 import AutomationForm from './AutomationForm.jsx'
 import PillComposer from './PillComposer.jsx'
 import { useConsole } from './state/console.jsx'
 import { harnessName } from './harness-names.js'
 import { whenSentence, CONNECTOR_KINDS } from './automation.js'
+import { onJobRequest, takeJobRequest } from './chat-to-job.js'
 import { parsePill } from './pill.js'
 import { projectName } from './projects.js'
 import './devices.css'
@@ -28,6 +29,7 @@ export default function AutomationsView({ onOpenChat }) {
   const {
     api,
     automations,
+    automationsAnswered,
     capabilities,
     machines,
     projects,
@@ -45,6 +47,19 @@ export default function AutomationsView({ onOpenChat }) {
   const [removing, setRemoving] = useState(null)
   // The pill's conversation: {role: user|reply|card|done|note, text?, draft?}
   const [thread, setThread] = useState([])
+
+  // A chat can ask for the rule editor to open already filled in. The
+  // request travels through chat-to-job.js because the palette has no prop
+  // for the chat on screen: it stages the draft and asks the shell for this
+  // view, and the view collects it here (the stage is already waiting when
+  // this view mounted for it, and a request that arrives while the view is
+  // already open comes in on the subscription).
+  useEffect(() => {
+    const open = (draft) => setEditing(draft)
+    const waiting = takeJobRequest()
+    if (waiting) open(waiting)
+    return onJobRequest(open)
+  }, [])
 
   const rules = automations ?? []
   const availableIds = new Set(
@@ -180,7 +195,9 @@ export default function AutomationsView({ onOpenChat }) {
         <div>
           <h1 className="dv-title">Automations</h1>
           <p className="dv-meta">
-            {rules.length} {rules.length === 1 ? 'rule' : 'rules'} · {enabledCount} enabled
+            {automationsAnswered
+              ? `${rules.length} ${rules.length === 1 ? 'rule' : 'rules'} · ${enabledCount} enabled`
+              : 'Loading the rules…'}
           </p>
         </div>
         <button type="button" className="dv-act" onClick={() => setEditing({})}>
@@ -189,8 +206,13 @@ export default function AutomationsView({ onOpenChat }) {
       </header>
 
       <div className="am-list">
+        {/* An empty list and a list that has not answered look the same in
+            state, so the sentence follows the flag: "No rules yet. Write one."
+            is only said once the daemon has actually said so. */}
         {rules.length === 0 && (
-          <p className="am-empty">No rules yet. Write one.</p>
+          <p className="am-empty">
+            {automationsAnswered ? 'No rules yet. Write one.' : 'Loading the rules…'}
+          </p>
         )}
         {rules.map((rule) => {
           const missing = !availableIds.has(rule.harness)
