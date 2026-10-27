@@ -331,7 +331,9 @@ async fn stopping_a_chat_ends_the_helpers_its_harness_started() {
     // The fixture's `tree` scenario is a plain session plus one process of
     // its own: the shape of a plugin's MCP server, which OpenRemote never
     // spawned, holds no handle on, and which inherits the chat's environment
-    // and so its data folder.
+    // and so its data folder. The pid it reports is that process, started
+    // without a shell, so it is the leaf of the tree rather than a wrapper
+    // around it: a pass here means the walk reached the end of the tree.
     let (daemon, ws) = pi_daemon(Some("tree")).await;
     let id = create_pi(&daemon, &ws).await;
     let pid = grandchild_pid(&ws.path().join("fixture-grandchild.pid")).await;
