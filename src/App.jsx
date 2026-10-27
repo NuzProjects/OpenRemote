@@ -21,6 +21,7 @@ import CloudNotices from './CloudNotices.jsx'
 import { hasTauri, isMobile } from './platform.js'
 import { connectionNotice } from './connection-notice.js'
 import { keepNav, pruneNav } from './nav.js'
+import { paneChatId } from './pane-header.js'
 import { hashWriteReady } from './settings.js'
 import { Archive, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Copy, X } from '@phosphor-icons/react'
 import { pushBack, useBack } from './use-back.js'
@@ -404,13 +405,10 @@ function Shell() {
   // other view (plugins, settings, ...) belongs to the primary pane.
   const focused = leafById(layout, layout.focus)
   // The chat the focused pane is showing, when it is showing one. The palette's
-  // rename row is about "this chat", and the address cannot answer that: it
-  // names the primary pane's view, and a split can have its focus elsewhere.
-  // With a single pane the route is the pane, so the address is the answer.
-  const focusedChatId =
-    paneCount(layout) === 1
-      ? isChatView(view) ? view : null
-      : focused?.view && isChatView(focused.view) ? focused.view : null
+  // rename row is about "this chat", and the address cannot answer that alone: a
+  // split can have its focus elsewhere, and the primary pane's view is null by
+  // design, so the rule for "which chat is this pane about" lives in one place.
+  const focusedChatId = paneChatId(focused?.view, isChatView(view) ? view : null)
   const openInFocus = (id) => {
     if (focused?.view !== null && (id === 'new' || isChatView(id))) {
       const session = (sessions ?? []).find((s) => s.id === id)

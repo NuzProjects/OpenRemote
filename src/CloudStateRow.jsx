@@ -167,7 +167,7 @@ export default function CloudStateRow({ one = 'computer' }) {
               Sign out
             </button>
           )
-        ) : (
+        ) : !cloudAnswered(cloud) ? null : (
           <button
             type="button"
             className="pn-btn"
