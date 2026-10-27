@@ -53,13 +53,16 @@ test('a daemon that ran and exited gets its own title', () => {
 })
 
 test('a daemon that is alive and quiet is not described as retried', () => {
-  const status = daemonStatus(failure('silent', 'it started and has not answered in 45 seconds'))
+  const status = daemonStatus(failure('silent', 'it started and has not answered in 90 seconds'))
   assert.equal(status.tone, 'failed')
   assert.equal(status.title, 'The daemon is running but silent')
   assert.equal(status.action, 'try-now')
-  // Nothing is retrying this one: the shell is waiting on the same process.
+  // Nothing is retrying this one - the shell is waiting on the same process
+  // - and nothing proves it is wedged either, so the note says both and says
+  // what the button costs.
   assert.doesNotMatch(status.note, /keeps trying/)
-  assert.match(status.note, /still running/)
+  assert.match(status.note, /may still be finishing/)
+  assert.match(status.note, /Try now restarts it/)
 })
 
 test('a reason the rule cannot read claims no more than it can', () => {

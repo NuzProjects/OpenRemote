@@ -43,6 +43,37 @@ test('the waiting screen keeps a way in for a daemon the user runs', () => {
   assert.match(source('Onboarding.jsx'), /startManual \? 'setup' : 'welcome'/)
 })
 
+test('the form the panel opens can be closed again', () => {
+  // The manual branch is the first thing the app renders, so without a way
+  // back the panel (which heals by itself and is the only place with Try
+  // now) is unreachable until the user connects or reloads.
+  const app = source('App.jsx')
+  const wizard = source('Onboarding.jsx')
+  assert.match(app, /onDismiss=\{\(\) => setManualConnect\(false\)\}/)
+  assert.match(wizard, /onDismiss = null/)
+  assert.match(wizard, /\{onDismiss && \(/)
+  assert.match(wizard, /onClick=\{onDismiss\}/)
+})
+
+test('Settings can do what the connection errors point at', () => {
+  // "reconnect from Settings" is only true if Settings opens the form that
+  // takes an address: the connection row can only forget one, and the
+  // address row is read-only.
+  const app = source('App.jsx')
+  const settings = source('SettingsView.jsx')
+  const console = source('state/console.jsx')
+  assert.match(app, /<SettingsView[\s\S]{0,400}?onManualConnect=\{\(\) => setManualConnect\(true\)\}/)
+  assert.match(settings, /onManualConnect = null/)
+  assert.match(settings, /data-stg="daemon-connect"/)
+  assert.match(settings, /onClick=\{onManualConnect\}/)
+  // The row is hidden while a daemon is connected: the form it opens says the
+  // daemon did not answer, which must not be said to a working connection.
+  assert.match(settings, /onManualConnect && connection\.state !== 'connected'/)
+  // Both sentences that name Settings still name it.
+  assert.match(console, /check that it's running, or reconnect from Settings/)
+  assert.match(console, /Restart the app, or reconnect from Settings/)
+})
+
 test('the shell and the console name the status event the same way', () => {
   const desktop = readFileSync(new URL('../src-tauri/src/desktop.rs', import.meta.url), 'utf8')
   assert.match(desktop, /"daemon:status"/)

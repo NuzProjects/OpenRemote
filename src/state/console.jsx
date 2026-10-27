@@ -25,11 +25,10 @@ export function ConsoleProvider({ children }) {
   })
   // Which daemon an answer belongs to. A fetch that was in flight when the
   // connection changed comes back for the daemon that is no longer there,
-  // and its answer must not land on the next one's lists.
+  // and its answer must not land on the next one's lists. The ref is written
+  // where the new api is made, not in an effect: an answer that lands in the
+  // moment right after the switch has to see the new daemon already.
   const apiRef = useRef(api)
-  useEffect(() => {
-    apiRef.current = api
-  }, [api])
   const stillCurrent = useCallback((asked) => apiRef.current === asked, [])
   const [connection, setConnection] = useState(() => {
     const saved = loadConnection()
@@ -76,7 +75,9 @@ export function ConsoleProvider({ children }) {
     setEndpointsByHarness({})
     setCatalog(null)
     saveConnection(url, token)
-    setApi(new DaemonApi(url, token))
+    const next = new DaemonApi(url, token)
+    apiRef.current = next
+    setApi(next)
     setConnection({ state: 'connecting', error: null })
   }, [])
 
@@ -88,7 +89,9 @@ export function ConsoleProvider({ children }) {
     setEndpointsByHarness({})
     setCatalog(null)
     clearConnection()
-    setApi(new DaemonApi(null, null))
+    const next = new DaemonApi(null, null)
+    apiRef.current = next
+    setApi(next)
     setConnection({ state: 'new', error: null })
     setSessions([])
     setChats({})

@@ -74,7 +74,7 @@ const SECTION_ICONS = {
 
 const MAX_RESULTS = 24
 
-export default function SettingsView({ onReplay, onOpenChat, onClose }) {
+export default function SettingsView({ onReplay, onOpenChat, onClose, onManualConnect = null }) {
   const privacy = usePrivacyMode()
   const {
     connection,
@@ -1208,6 +1208,20 @@ export default function SettingsView({ onReplay, onOpenChat, onClose }) {
                   </button>
                 )}
               </div>
+              {/* Only while nothing is connected: the form it opens says the
+                  daemon did not answer, which is not true of a connection
+                  that works. Forget is the row above. */}
+              {onManualConnect && connection.state !== 'connected' && (
+                <div className="pn-row" data-stg="daemon-connect">
+                  <div>
+                    <div className="pn-name">Connect by address</div>
+                    <div className="pn-detail">Type the address and token of a daemon you run yourself.</div>
+                  </div>
+                  <button type="button" className="pn-btn" onClick={onManualConnect}>
+                    Connect
+                  </button>
+                </div>
+              )}
               <div className="pn-row" data-stg="daemon-chats">
                 <div>
                   <div className="pn-name">{(sessions ?? []).length} {(sessions ?? []).length === 1 ? 'chat' : 'chats'} on record</div>

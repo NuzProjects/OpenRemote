@@ -26,9 +26,12 @@ const RESPAWN_WAIT_MAX: Duration = Duration::from_secs(30);
 /// How long a daemon the shell started has to say READY before the shell
 /// stops calling it slow. A process that is alive and silent is a
 /// different failure from one that never ran, and the panel has no other
-/// way to tell them apart: without this it waits, without a reason,
-/// forever.
-const READY_DEADLINE: Duration = Duration::from_secs(45);
+/// way to tell them apart. The number is the console's own patience for a
+/// first answer (it asks for 90 seconds before it shows the waiting
+/// screen): a verdict earlier than that calls a boot stuck while the app
+/// is still willing to wait, and the only thing the panel can offer is a
+/// restart, which would kill it.
+const READY_DEADLINE: Duration = Duration::from_secs(90);
 
 /// The sidecar child the shell owns: the running daemon's handle, or
 /// None while none runs (dead, and not yet respawned). daemon_restart

@@ -15,8 +15,9 @@ const ALL_HARNESSES = new Intl.ListFormat('en', { type: 'conjunction' }).format(
 // beat shows only while it boots (a moment), and the manual connect form
 // is a fallback for when auto-connection genuinely fails (browser mode,
 // a daemon that never answered). `startManual` opens straight on that
-// form, for the waiting screen's "connect by address" link.
-export default function Onboarding({ onDone, startManual = false }) {
+// form, for the waiting screen's "connect by address" link, and
+// `onDismiss` closes it again for someone who opened it to look.
+export default function Onboarding({ onDone, onDismiss = null, startManual = false }) {
   const { connection, capabilities, connect } = useConsole()
   const [step, setStep] = useState(startManual ? 'setup' : 'welcome') // welcome | setup | ready
   const [manual, setManual] = useState(startManual)
@@ -103,6 +104,11 @@ export default function Onboarding({ onDone, startManual = false }) {
               </button>
               {connection.state === 'error' && (
                 <p className="ob-sub">Could not reach it: {connection.error}</p>
+              )}
+              {onDismiss && (
+                <button type="button" className="ob-cta" onClick={onDismiss}>
+                  Back
+                </button>
               )}
             </div>
           </>
