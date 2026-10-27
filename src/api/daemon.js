@@ -5,6 +5,8 @@
 // a daemon that is wedged (alive, but not answering) surfaces as an error
 // instead of a hang.
 
+import { seg } from '../shape.js'
+
 const TOKEN_KEY = 'openremote-daemon-token'
 const URL_KEY = 'openremote-daemon-url'
 
@@ -208,7 +210,7 @@ export class DaemonApi {
 
   /** The same client, aimed at another of the user's devices. */
   device(id) {
-    return id ? new DaemonApi(this.url, this.token, `/devices/${id}`) : this
+    return id ? new DaemonApi(this.url, this.token, `/devices/${seg(id)}`) : this
   }
 
   get ready() {
@@ -292,7 +294,7 @@ export class DaemonApi {
   }
 
   session(id) {
-    return this.call('GET', `/sessions/${id}`)
+    return this.call('GET', `/sessions/${seg(id)}`)
   }
 
   // Creating the chat boots the harness (up to 60 s of CLI cold start
@@ -319,7 +321,7 @@ export class DaemonApi {
 
   /** Syncs a private chat to the user's other devices (it keeps running here). */
   syncSession(id) {
-    return this.call('POST', `/sessions/${id}/sync`, { request_id: newRequestId() })
+    return this.call('POST', `/sessions/${seg(id)}/sync`, { request_id: newRequestId() })
   }
 
   /** Deletes a synced chat on every device. A 404 means the chat is already
@@ -330,7 +332,7 @@ export class DaemonApi {
    *  error: those are things the user has to hear. */
   async deleteSession(id) {
     try {
-      return await this.call('DELETE', `/sessions/${id}`)
+      return await this.call('DELETE', `/sessions/${seg(id)}`)
     } catch (err) {
       if (err?.status === 404) return null
       throw err
@@ -365,11 +367,11 @@ export class DaemonApi {
   }
 
   setDeviceKind(id, kind) {
-    return this.call('POST', `/cloud/devices/${id}/kind`, { request_id: newRequestId(), kind })
+    return this.call('POST', `/cloud/devices/${seg(id)}/kind`, { request_id: newRequestId(), kind })
   }
 
   removeDevice(id) {
-    return this.call('DELETE', `/cloud/devices/${id}?request_id=${encodeURIComponent(newRequestId())}`)
+    return this.call('DELETE', `/cloud/devices/${seg(id)}?request_id=${encodeURIComponent(newRequestId())}`)
   }
 
   createEnrollment() {
@@ -386,7 +388,7 @@ export class DaemonApi {
   // `mentionedChats`: the chats this message points at with @ - from now
   // on the chat's agent may read them, and only them.
   prompt(id, text, mentionedChats = []) {
-    return this.call('POST', `/sessions/${id}/prompts`, {
+    return this.call('POST', `/sessions/${seg(id)}/prompts`, {
       request_id: newRequestId(),
       text,
       ...(mentionedChats.length ? { mentioned_chats: mentionedChats } : {}),
@@ -395,7 +397,7 @@ export class DaemonApi {
 
   // Rename a chat (the composer's /rename).
   rename(id, title) {
-    return this.call('POST', `/sessions/${id}/title`, { request_id: newRequestId(), title })
+    return this.call('POST', `/sessions/${seg(id)}/title`, { request_id: newRequestId(), title })
   }
 
   // What a composer's / and @ menus offer: a chat's own, or a harness's in
@@ -424,7 +426,7 @@ export class DaemonApi {
   // permission word is the same shape: start-time only, so a live chat's
   // change conflicts and a stopped chat's lands on resume.
   updateSettings(id, { model, effort, fast, permissionMode }) {
-    return this.call('POST', `/sessions/${id}/settings`, {
+    return this.call('POST', `/sessions/${seg(id)}/settings`, {
       request_id: newRequestId(),
       ...(model ? { model } : {}),
       ...(effort ? { effort } : {}),
@@ -434,19 +436,19 @@ export class DaemonApi {
   }
 
   stop(id) {
-    return this.call('POST', `/sessions/${id}/stop`, { request_id: newRequestId() })
+    return this.call('POST', `/sessions/${seg(id)}/stop`, { request_id: newRequestId() })
   }
 
   // Interrupt the running turn - the harness cancels, the session stays
   // alive for the next message. Unlike stop, nothing dies.
   interrupt(id) {
-    return this.call('POST', `/sessions/${id}/interrupt`, { request_id: newRequestId() })
+    return this.call('POST', `/sessions/${seg(id)}/interrupt`, { request_id: newRequestId() })
   }
 
   // The chat's queue - the daemon keeps it, so every device sees the same
   // one. A queued message runs as its own turn when the running one ends.
   queue(id, text, mentionedChats = []) {
-    return this.call('POST', `/sessions/${id}/queue`, {
+    return this.call('POST', `/sessions/${seg(id)}/queue`, {
       request_id: newRequestId(),
       text,
       ...(mentionedChats.length ? { mentioned_chats: mentionedChats } : {}),
@@ -454,28 +456,28 @@ export class DaemonApi {
   }
 
   queueRemove(id, item) {
-    return this.call('POST', `/sessions/${id}/queue/${item}/remove`, { request_id: newRequestId() })
+    return this.call('POST', `/sessions/${seg(id)}/queue/${seg(item)}/remove`, { request_id: newRequestId() })
   }
 
   // Steer may start a stopped chat first - the boot budget, like resume.
   queueSteer(id, item) {
     return this.call(
       'POST',
-      `/sessions/${id}/queue/${item}/steer`,
+      `/sessions/${seg(id)}/queue/${seg(item)}/steer`,
       { request_id: newRequestId() },
       { timeoutMs: BOOT_TIMEOUT_MS },
     )
   }
 
   queueResume(id) {
-    return this.call('POST', `/sessions/${id}/queue/resume`, { request_id: newRequestId() }, { timeoutMs: BOOT_TIMEOUT_MS })
+    return this.call('POST', `/sessions/${seg(id)}/queue/resume`, { request_id: newRequestId() }, { timeoutMs: BOOT_TIMEOUT_MS })
   }
 
   // A message straight into the running turn, never through the queue.
   steer(id, text, mentionedChats = []) {
     return this.call(
       'POST',
-      `/sessions/${id}/steer`,
+      `/sessions/${seg(id)}/steer`,
       { request_id: newRequestId(), text, ...(mentionedChats.length ? { mentioned_chats: mentionedChats } : {}) },
       { timeoutMs: BOOT_TIMEOUT_MS },
     )
@@ -484,11 +486,11 @@ export class DaemonApi {
   // Resuming boots the harness again (the same cold-start window as
   // creating) - the boot budget.
   resume(id) {
-    return this.call('POST', `/sessions/${id}/resume`, { request_id: newRequestId() }, { timeoutMs: BOOT_TIMEOUT_MS })
+    return this.call('POST', `/sessions/${seg(id)}/resume`, { request_id: newRequestId() }, { timeoutMs: BOOT_TIMEOUT_MS })
   }
 
   decisions(id) {
-    return this.call('GET', `/sessions/${id}/decisions`)
+    return this.call('GET', `/sessions/${seg(id)}/decisions`)
   }
 
   // ---- machines ----
@@ -502,7 +504,7 @@ export class DaemonApi {
   }
 
   removeMachine(id) {
-    return this.call('DELETE', `/machines/${id}?request_id=${encodeURIComponent(newRequestId())}`)
+    return this.call('DELETE', `/machines/${seg(id)}?request_id=${encodeURIComponent(newRequestId())}`)
   }
 
   // The long one: an installer runs minutes - the receipt carries the
@@ -513,7 +515,7 @@ export class DaemonApi {
   installHarness(machineId, harnessId, { withRuntime = false } = {}) {
     return this.call(
       'POST',
-      `/machines/${machineId}/harnesses`,
+      `/machines/${seg(machineId)}/harnesses`,
       {
         request_id: newRequestId(),
         harness: harnessId,
@@ -542,17 +544,17 @@ export class DaemonApi {
   // own limit, and a client that gave up first would report a failure
   // while the install finished without anyone to show it.
   installStagedPlugin(stageId) {
-    return this.call('POST', `/plugins/stage/${stageId}/install`, { request_id: newRequestId() }, { timeoutMs: null })
+    return this.call('POST', `/plugins/stage/${seg(stageId)}/install`, { request_id: newRequestId() }, { timeoutMs: null })
   }
 
   cancelStagedPlugin(stageId) {
-    return this.call('POST', `/plugins/stage/${stageId}/cancel`, { request_id: newRequestId() })
+    return this.call('POST', `/plugins/stage/${seg(stageId)}/cancel`, { request_id: newRequestId() })
   }
 
   // An installed plugin's id is name@marketplace; a built-in's is the
   // harness id.
   setPluginEnabled(id, enabled) {
-    return this.call('POST', `/plugins/${encodeURIComponent(id)}/enabled`, { request_id: newRequestId(), enabled })
+    return this.call('POST', `/plugins/${seg(id)}/enabled`, { request_id: newRequestId(), enabled })
   }
 
   // Removing deletes the plugin's whole directory: a large plugin on a
@@ -560,7 +562,7 @@ export class DaemonApi {
   // failure for a removal that happened. Bounded rather than exempt,
   // because a daemon that is hung should still give the pane its answer.
   removePlugin(id) {
-    return this.call('POST', `/plugins/${encodeURIComponent(id)}/remove`, { request_id: newRequestId() }, { timeoutMs: 180_000 })
+    return this.call('POST', `/plugins/${seg(id)}/remove`, { request_id: newRequestId() }, { timeoutMs: 180_000 })
   }
 
   // ---- marketplaces (Plugins > Discover, Marketplaces) ----
@@ -582,21 +584,21 @@ export class DaemonApi {
   refreshMarketplace(name) {
     return this.call(
       'POST',
-      `/marketplaces/${encodeURIComponent(name)}/refresh`,
+      `/marketplaces/${seg(name)}/refresh`,
       { request_id: newRequestId() },
       { timeoutMs: 180_000 },
     )
   }
 
   setMarketplaceEnabled(name, enabled) {
-    return this.call('POST', `/marketplaces/${encodeURIComponent(name)}/enabled`, {
+    return this.call('POST', `/marketplaces/${seg(name)}/enabled`, {
       request_id: newRequestId(),
       enabled,
     })
   }
 
   removeMarketplace(name) {
-    return this.call('POST', `/marketplaces/${encodeURIComponent(name)}/remove`, { request_id: newRequestId() })
+    return this.call('POST', `/marketplaces/${seg(name)}/remove`, { request_id: newRequestId() })
   }
 
   // ---- MCP servers (Settings > MCP servers) ----
@@ -617,18 +619,18 @@ export class DaemonApi {
   }
 
   removeMcpServer(id) {
-    return this.call('DELETE', `/mcp-servers/${id}?request_id=${encodeURIComponent(newRequestId())}`)
+    return this.call('DELETE', `/mcp-servers/${seg(id)}?request_id=${encodeURIComponent(newRequestId())}`)
   }
 
   setMcpServerEnabled(id, enabled) {
-    return this.call('POST', `/mcp-servers/${id}/enabled`, {
+    return this.call('POST', `/mcp-servers/${seg(id)}/enabled`, {
       request_id: newRequestId(),
       enabled,
     })
   }
 
   acknowledgeMcpServerKey(id) {
-    return this.call('POST', `/mcp-servers/${id}/key`, { request_id: newRequestId() })
+    return this.call('POST', `/mcp-servers/${seg(id)}/key`, { request_id: newRequestId() })
   }
 
   // ---- automations ----
@@ -656,12 +658,12 @@ export class DaemonApi {
   removeRule(ruleId) {
     return this.call(
       'DELETE',
-      `/automations/${ruleId}?request_id=${encodeURIComponent(newRequestId())}`,
+      `/automations/${seg(ruleId)}?request_id=${encodeURIComponent(newRequestId())}`,
     )
   }
 
   setRuleEnabled(ruleId, enabled) {
-    return this.call('POST', `/automations/${ruleId}/enabled`, {
+    return this.call('POST', `/automations/${seg(ruleId)}/enabled`, {
       request_id: newRequestId(),
       enabled,
     })
@@ -672,7 +674,7 @@ export class DaemonApi {
   runRule(ruleId) {
     return this.call(
       'POST',
-      `/automations/${ruleId}/run`,
+      `/automations/${seg(ruleId)}/run`,
       { request_id: newRequestId() },
       { timeoutMs: BOOT_TIMEOUT_MS },
     )
@@ -698,7 +700,7 @@ export class DaemonApi {
   removeProject(projectId) {
     return this.call(
       'DELETE',
-      `/projects/${projectId}?request_id=${encodeURIComponent(newRequestId())}`,
+      `/projects/${seg(projectId)}?request_id=${encodeURIComponent(newRequestId())}`,
     )
   }
 
@@ -707,7 +709,7 @@ export class DaemonApi {
   // short-lived harness CLI (a 30 s handshake daemon-side) - the boot
   // budget, so a cold CLI is not cut off mid-handshake.
   models(harnessId) {
-    return this.call('GET', `/harnesses/${harnessId}/models`, null, { timeoutMs: BOOT_TIMEOUT_MS })
+    return this.call('GET', `/harnesses/${seg(harnessId)}/models`, null, { timeoutMs: BOOT_TIMEOUT_MS })
   }
 
   // ---- custom model endpoints (machine-local, secret-safe) ----
@@ -739,11 +741,11 @@ export class DaemonApi {
   }
 
   removeEndpoint(id) {
-    return this.call('DELETE', `/model-endpoints/${id}?request_id=${encodeURIComponent(newRequestId())}`)
+    return this.call('DELETE', `/model-endpoints/${seg(id)}?request_id=${encodeURIComponent(newRequestId())}`)
   }
 
   setEndpointEnabled(id, enabled) {
-    return this.call('POST', `/model-endpoints/${id}/enabled`, {
+    return this.call('POST', `/model-endpoints/${seg(id)}/enabled`, {
       request_id: newRequestId(),
       enabled,
     })
@@ -762,13 +764,13 @@ export class DaemonApi {
   // own key. A failing gateway answers as an error, never an empty
   // advertisement the picker could mistake for "none".
   endpointModels(id) {
-    return this.call('GET', `/model-endpoints/${id}/models`, null, { timeoutMs: BOOT_TIMEOUT_MS })
+    return this.call('GET', `/model-endpoints/${seg(id)}/models`, null, { timeoutMs: BOOT_TIMEOUT_MS })
   }
 
   // Point a stopped chat at another endpoint (or back at the harness's
   // own provider with no id). A live chat answers 409 - stop it first.
   setSessionEndpoint(id, endpointId = null) {
-    return this.call('POST', `/sessions/${id}/endpoint`, {
+    return this.call('POST', `/sessions/${seg(id)}/endpoint`, {
       request_id: newRequestId(),
       ...(endpointId ? { endpoint_id: endpointId } : {}),
     })
@@ -780,17 +782,17 @@ export class DaemonApi {
   // the first beat; poll signInView for the CLI's words, feed the human's
   // answers through signInInput.
   startSignIn(harnessId) {
-    return this.call('POST', `/harnesses/${harnessId}/signin`, {
+    return this.call('POST', `/harnesses/${seg(harnessId)}/signin`, {
       request_id: newRequestId(),
     })
   }
 
   signInView(harnessId) {
-    return this.call('GET', `/harnesses/${harnessId}/signin`)
+    return this.call('GET', `/harnesses/${seg(harnessId)}/signin`)
   }
 
   signInInput(harnessId, text) {
-    return this.call('POST', `/harnesses/${harnessId}/signin/input`, {
+    return this.call('POST', `/harnesses/${seg(harnessId)}/signin/input`, {
       request_id: newRequestId(),
       text,
     })
@@ -798,13 +800,13 @@ export class DaemonApi {
 
   // Stop a running sign-in relay - the abandoned-browser-flow answer.
   stopSignIn(harnessId) {
-    return this.call('POST', `/harnesses/${harnessId}/signin/stop`, {
+    return this.call('POST', `/harnesses/${seg(harnessId)}/signin/stop`, {
       request_id: newRequestId(),
     })
   }
 
   answer(decisionId, choice) {
-    return this.call('POST', `/decisions/${decisionId}/answer`, {
+    return this.call('POST', `/decisions/${seg(decisionId)}/answer`, {
       request_id: newRequestId(),
       choice,
     })
@@ -849,7 +851,7 @@ export class DaemonApi {
       let reader = null
       try {
         const query = cursor == null ? '' : `?after=${cursor}`
-        const response = await fetch(`${this.url}${this.prefix}/sessions/${id}/events${query}`, {
+        const response = await fetch(`${this.url}${this.prefix}/sessions/${seg(id)}/events${query}`, {
           headers: { Authorization: `Bearer ${this.token}` },
           // No timeout: this connection's lifetime is the stream itself
           // (the stop handle and the poll decide when it ends).

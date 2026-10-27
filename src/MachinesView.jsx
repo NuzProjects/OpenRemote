@@ -9,6 +9,7 @@ import AddMachineModal from './AddMachineModal.jsx'
 import { useConsole } from './state/console.jsx'
 import { usePrivacyMode } from './privacy.js'
 import { isPhone, kindLabel, platformLabel, selfLabel } from './cloud.js'
+import { list as asList, text } from './shape.js'
 import './devices.css'
 
 function detail(device) {
@@ -26,8 +27,11 @@ export default function MachinesView({ onOpenChat, openDevice = null }) {
     if (openDevice) setOpenId(openDevice.id)
   }, [openDevice?.nonce])
   const [error, setError] = useState(null)
-  const list = [...(devices ?? [])].sort(
-    (a, b) => Number(b.id === thisDevice) - Number(a.id === thisDevice) || a.name.localeCompare(b.name),
+  // The same rule the machine picker follows: a device row is daemon data,
+  // so the list can be the wrong shape and a name can be missing. One bad row
+  // must not throw the view that lists every machine.
+  const list = asList(devices).sort(
+    (a, b) => Number(b.id === thisDevice) - Number(a.id === thisDevice) || text(a.name).localeCompare(text(b.name)),
   )
   const me = list.find((d) => d.id === thisDevice) ?? null
   const onlineCount = list.filter((d) => d.online).length

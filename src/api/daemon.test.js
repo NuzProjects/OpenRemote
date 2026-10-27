@@ -536,3 +536,34 @@ test('a status report for the same daemon is recognised, a changed one is not', 
     'a first connection is not the same daemon',
   )
 })
+
+// ---- an id cannot move the route ----
+
+test('a hostile id cannot change the route a call lands on', async () => {
+  const seen = []
+  const real = globalThis.fetch
+  globalThis.fetch = async (url) => {
+    seen.push(String(url))
+    return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+  }
+  try {
+    const api = new DaemonApi('http://127.0.0.1:9', 'token')
+    await api.session('a/../../automations/abc')
+    await api.deleteSession('../plugins/p')
+    await api.answer('d/../../machines/m', 'allow')
+    await api.device('../sessions/other').session('x')
+  } finally {
+    globalThis.fetch = real
+  }
+  // The route each call lands on is the one the method names: the id is data
+  // inside one segment, so `..` cannot walk out of it.
+  assert.deepEqual(
+    seen.map((url) => new URL(url).pathname),
+    [
+      '/sessions/a%2F..%2F..%2Fautomations%2Fabc',
+      '/sessions/..%2Fplugins%2Fp',
+      '/decisions/d%2F..%2F..%2Fmachines%2Fm/answer',
+      '/devices/..%2Fsessions%2Fother/sessions/x',
+    ],
+  )
+})

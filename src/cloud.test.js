@@ -105,3 +105,20 @@ test('the alert under the door never repeats the body', async () => {
   assert.equal(cloudAlert({ cloud: { state: 'online' }, body: 'Your devices are reachable.' }), null)
   assert.equal(cloudAlert({}), null)
 })
+
+test('a device row with the wrong shape cannot throw the machine picker', () => {
+  // A row with no name used to take `localeCompare` down with a TypeError,
+  // which the boundary showed as the whole New chat view failing.
+  const malformed = [
+    { id: 'dev-box', kind: 'machine', online: true },
+    { id: 'dev-mini', kind: 'machine', online: false, name: 7 },
+    { id: me, kind: 'machine', online: true, name: 'laptop' },
+  ]
+  const items = machinePickerItems(malformed, me)
+  assert.deepEqual(items.map((i) => i.id), [null, 'dev-box', 'dev-mini'])
+  assert.equal(items[1].name, '', 'a missing name is no name, not a throw')
+  assert.equal(items[2].name, '7', 'a number keeps its text')
+  // The list itself can arrive as the wrong shape too.
+  assert.deepEqual(machinePickerItems({}, me).map((i) => i.name), ['This computer'])
+  assert.deepEqual(machinePickerItems(null, me).map((i) => i.name), ['This computer'])
+})

@@ -2,6 +2,8 @@
 // daemon: which chats each mode lists, what can be done from here with a
 // chat that runs on another device, and where a new Cloud chat can run.
 
+import { list, text } from './shape.js'
+
 const SIGNED_IN = new Set(['connecting', 'online', 'offline'])
 
 /** This device is in Cloud (connected or not right now). */
@@ -81,10 +83,14 @@ export function deviceName(devices, id) {
  * one the list is the machines alone.
  */
 export function machinePickerItems(devices, thisDevice, { phone = false } = {}) {
-  const machines = (devices ?? [])
+  // A device row is daemon data: the list can be an object where an array was
+  // promised, and a name can be anything at all. `list` and `text` are the
+  // client's one rule for that shape, so a malformed row sorts and reads
+  // instead of throwing the view that asked for the picker.
+  const machines = list(devices)
     .filter((d) => d.id !== thisDevice && d.kind === 'machine')
-    .sort((a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name))
-    .map((d) => ({ id: d.id, name: d.name, online: Boolean(d.online), platform: d.platform }))
+    .sort((a, b) => Number(b.online) - Number(a.online) || text(a.name).localeCompare(text(b.name)))
+    .map((d) => ({ id: d.id, name: text(d.name), online: Boolean(d.online), platform: d.platform }))
   return phone ? machines : [{ id: null, name: 'This computer', online: true, here: true }, ...machines]
 }
 
