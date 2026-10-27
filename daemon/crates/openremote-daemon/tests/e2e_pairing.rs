@@ -858,24 +858,19 @@ async fn the_production_bind_puts_a_real_network_address_in_the_payload() {
     let mint = match host.mint().await {
         Ok(mint) => mint,
         // A machine with no route off loopback cannot pair a phone, and the
-        // desktop says exactly that. Nothing to assert about an address, and
-        // a green run here is not coverage of the shipped bind, so an offline
-        // run fails unless it says out loud that it meant to be offline: this
-        // is the only test that binds the address a phone would dial, and a
-        // silent skip would leave the shipping path unproved on a build
-        // machine that happens to have no network.
-        Err(openremote_daemon::pairing::MintError::NoNetwork) => {
-            assert!(
-                std::env::var_os("OPENREMOTE_PAIRING_ALLOW_OFFLINE").is_some(),
-                "this machine has no LAN address, so the shipped bind was not exercised; \
-                 set OPENREMOTE_PAIRING_ALLOW_OFFLINE=1 to accept that on purpose"
-            );
-            eprintln!(
-                "SKIPPED the_production_bind_puts_a_real_network_address_in_the_payload: \
-                 this machine has no LAN address, and OPENREMOTE_PAIRING_ALLOW_OFFLINE is set"
-            );
-            return;
-        }
+        // desktop says exactly that. Nothing to assert about an address - and
+        // that is precisely why this row must not pass here: it is the only
+        // proof in the tree that the shipped bind puts this machine's own
+        // address in the payload, so a green run on a machine that has no such
+        // address would be a green suite containing a test that verified
+        // nothing. Ignoring it would be quieter but worse: the row would then
+        // never run anywhere, including on the machines that could prove it.
+        Err(openremote_daemon::pairing::MintError::NoNetwork) => panic!(
+            "this test needs a non-loopback IPv4 address: it pins the shipped bind, which is \
+             this machine's own network address, so on a machine that has none it verifies \
+             nothing. Run this suite where the computer is on a network rather than accepting \
+             a pass here."
+        ),
         Err(err) => panic!("mint: {err:?}"),
     };
     let host_part = mint
