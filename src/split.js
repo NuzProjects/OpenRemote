@@ -147,22 +147,63 @@ export function balanceSplit(layout, splitId) {
 }
 
 /**
+ * The sizes after moving the divider after `index` by `delta` (a fraction of
+ * the split's whole size). Neither neighbour shrinks below MIN_SIZE. Kept
+ * apart from the layout walk so a drag can paint from exactly the numbers it
+ * will later commit.
+ */
+export function movedSizes(sizes, index, delta) {
+  const a = sizes?.[index]
+  const b = sizes?.[index + 1]
+  if (a === undefined || b === undefined) return sizes
+  const moved = Math.max(MIN_SIZE - a, Math.min(b - MIN_SIZE, delta))
+  const next = [...sizes]
+  next[index] = a + moved
+  next[index + 1] = b - moved
+  return next
+}
+
+/**
  * Move the divider after child `index` of a split by `delta` (a fraction of
  * the split's whole size). Neither neighbour shrinks below MIN_SIZE.
  */
 export function resizeSplit(layout, splitId, index, delta) {
   const root = mapNode(layout.root, (node) => {
     if (node.type !== 'split' || node.id !== splitId) return node
-    const a = node.sizes[index]
-    const b = node.sizes[index + 1]
-    if (a === undefined || b === undefined) return node
-    const moved = Math.max(MIN_SIZE - a, Math.min(b - MIN_SIZE, delta))
-    const sizes = [...node.sizes]
-    sizes[index] = a + moved
-    sizes[index + 1] = b - moved
-    return { ...node, sizes }
+    const sizes = movedSizes(node.sizes, index, delta)
+    return sizes === node.sizes ? node : { ...node, sizes }
   })
   return root === layout.root ? layout : { ...layout, root }
+}
+
+/**
+ * One divider drag, driven by pointer positions on one axis. `move` returns
+ * the sizes to paint and never commits anything; `release` returns the delta
+ * to commit, or 0 when the pointer did not move (a double-click on the strip
+ * starts a drag that goes nowhere, and that must not spend a layout commit).
+ *
+ * The controller exists so the rule is testable without a DOM: a drag paints
+ * on every move and hands React one state change, at the end. Committing on
+ * every move re-rendered every pane, transcripts included, at pointer rate.
+ */
+export function createDividerDrag({ sizes, index, total, start }) {
+  const base = sizes ?? []
+  let delta = 0
+  if (!(total > 0)) {
+    return {
+      move: () => ({ sizes: base, delta: 0 }),
+      release: () => 0,
+    }
+  }
+  return {
+    move(at) {
+      delta = (at - start) / total
+      return { sizes: movedSizes(base, index, delta), delta }
+    },
+    release() {
+      return delta
+    },
+  }
 }
 
 /** The chat ids showing in secondary panes (the primary's come from navigation). */

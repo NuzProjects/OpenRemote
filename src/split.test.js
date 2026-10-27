@@ -5,10 +5,12 @@ import {
   MAX_PANES,
   balanceSplit,
   closeLeaf,
+  createDividerDrag,
   dropZone,
   focusByIndex,
   focusLeaf,
   leaves,
+  movedSizes,
   newLayout,
   paneCount,
   resizeSplit,
@@ -188,4 +190,54 @@ test('focus by index walks the panes in reading order', () => {
   assert.equal(focusByIndex(l, 0).focus, 'p1')
   assert.equal(focusByIndex(l, 2).focus, 'p3')
   assert.equal(focusByIndex(l, 9), l)
+})
+
+// ---- one drag paints, one release commits ----
+
+test('a divider drag paints on every move and commits once, on release', () => {
+  // The pane strip follows the pointer, and React hears about the drag once.
+  // Committing per move re-rendered every pane, transcripts included, at
+  // pointer rate; this is the rule that keeps one gesture to one commit.
+  const commits = []
+  const drag = createDividerDrag({ sizes: [0.5, 0.5], index: 0, total: 1000, start: 100 })
+  for (const at of [140, 260, 380]) {
+    const painted = drag.move(at)
+    assert.ok(painted.sizes[0] > 0.5, 'the strip follows the pointer')
+    assert.ok(painted.sizes[0] + painted.sizes[1] === 1, 'and the split stays whole')
+  }
+  assert.deepEqual(commits, [], 'no move commits anything')
+  commits.push(drag.release())
+  assert.equal(commits.length, 1, 'one commit for the whole drag')
+  assert.equal(commits[0], 0.28, 'the delta is the whole gesture, not the last step')
+})
+
+test('a drag that never moved commits nothing (the first half of a double-click)', () => {
+  const drag = createDividerDrag({ sizes: [0.5, 0.5], index: 0, total: 1000, start: 100 })
+  drag.move(100)
+  assert.equal(drag.release(), 0, 'a press and release with no motion is not a resize')
+})
+
+test('a split with no measured size never divides by zero', () => {
+  const base = [0.5, 0.5]
+  const drag = createDividerDrag({ sizes: base, index: 0, total: 0, start: 0 })
+  const painted = drag.move(400)
+  assert.equal(painted.sizes, base, 'nothing is repainted from an unmeasured box')
+  assert.equal(drag.release(), 0)
+})
+
+test('movedSizes clamps both neighbours and leaves other arrays alone', () => {
+  const same = (actual, expected, why) => {
+    assert.equal(actual.length, expected.length, why)
+    actual.forEach((value, i) => {
+      assert.ok(Math.abs(value - expected[i]) < 1e-9, `${why}: ${value} vs ${expected[i]}`)
+    })
+  }
+  same(movedSizes([0.5, 0.5], 0, 0.2), [0.7, 0.3], 'a free move')
+  // Neither side goes below the minimum, in either direction.
+  same(movedSizes([0.2, 0.8], 0, 0.9), [0.85, 0.15], 'clamped at the far side')
+  same(movedSizes([0.8, 0.2], 0, -0.9), [0.15, 0.85], 'clamped at the near side')
+  // An index with no neighbour is not a resize.
+  const sizes = [1]
+  assert.equal(movedSizes(sizes, 0, 0.2), sizes)
+  assert.equal(movedSizes(sizes, 5, 0.2), sizes)
 })

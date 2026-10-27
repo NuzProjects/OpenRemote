@@ -8,6 +8,7 @@ import {
   balanceSplit,
   chatDragPayload,
   closeLeaf,
+  createDividerDrag,
   draggedChat,
   dropZone,
   focusLeaf,
@@ -25,19 +26,34 @@ function SplitNode({ node, setLayout, renderNode }) {
     const box = ref.current?.getBoundingClientRect()
     if (!box) return
     const total = row ? box.width : box.height
-    let last = row ? e.clientX : e.clientY
+    // One controller for the whole gesture: it returns the sizes to paint on
+    // every move and the single delta to commit on release. Painting is two
+    // inline flex values on the cells this strip divides, so dragging beside
+    // a streaming chat does not re-render the transcript at pointer rate.
+    const drag = createDividerDrag({
+      sizes: node.sizes,
+      index,
+      total,
+      start: row ? e.clientX : e.clientY,
+    })
     const target = e.currentTarget
     target.setPointerCapture(e.pointerId)
     const move = (ev) => {
-      const at = row ? ev.clientX : ev.clientY
-      const delta = (at - last) / total
-      last = at
-      setLayout((l) => resizeSplit(l, node.id, index, delta))
+      const { sizes } = drag.move(row ? ev.clientX : ev.clientY)
+      const cells = ref.current?.children
+      if (!cells?.[index] || !cells?.[index + 1]) return
+      cells[index].style.flex = `${sizes[index]} 1 0`
+      cells[index + 1].style.flex = `${sizes[index + 1]} 1 0`
     }
     const done = () => {
       target.removeEventListener('pointermove', move)
       target.removeEventListener('pointerup', done)
       target.removeEventListener('pointercancel', done)
+      // The one layout commit of the drag. A gesture that never moved (the
+      // first half of a double-click on the strip) commits nothing, so it
+      // cannot churn the shell either.
+      const delta = drag.release()
+      if (delta !== 0) setLayout((l) => resizeSplit(l, node.id, index, delta))
     }
     target.addEventListener('pointermove', move)
     target.addEventListener('pointerup', done)
