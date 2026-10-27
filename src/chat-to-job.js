@@ -168,24 +168,36 @@ function rejected(reason) {
 // view, and the view collects the draft when it mounts. A request made while
 // the view is already open (it can sit in a split pane) is delivered to the
 // subscriber instead.
-let pending = null
+//
+// A staged draft does not wait forever. The palette stages it and asks for
+// the view in the same press, so a request nobody collected inside this
+// window means the switch never landed (a crash, a reload that lost the
+// shell's state, a phone). Delivering that draft on a much later visit would
+// open the editor on the values of a chat the person left long ago, which
+// looks like the editor inventing a rule.
+export const JOB_REQUEST_MS = 30_000
+
+let pending = null // { draft, expires } while no listener is open
 const listeners = new Set()
 
 /** Stage a draft for the rule editor, or hand it to the open one. */
-export function requestJob(draft) {
+export function requestJob(draft, now = Date.now()) {
   if (!draft) return
   if (listeners.size === 0) {
-    pending = draft
+    pending = { draft, expires: now + JOB_REQUEST_MS }
     return
   }
   for (const fn of listeners) fn(draft)
 }
 
-/** Collect a draft staged before the editor's view mounted; null if none. */
-export function takeJobRequest() {
-  const draft = pending
+/** Collect a draft staged before the editor's view mounted; null if none.
+ *  An expired request is dropped here, so it can never be delivered twice
+ *  and never arrives stale. */
+export function takeJobRequest(now = Date.now()) {
+  const held = pending
   pending = null
-  return draft
+  if (!held) return null
+  return now < held.expires ? held.draft : null
 }
 
 /** Follow requests while the editor's view is open. Returns the undo. */

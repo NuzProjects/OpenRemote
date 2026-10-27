@@ -85,12 +85,17 @@ test('the source line is one line, and it rewrites itself as the person works', 
 test('an untouched prefilled form is not dirty: nothing clears a rule value on mount', () => {
   // The dirty guard compares every field against the snapshot taken on the
   // first render. The model and the permission word are part of that
-  // snapshot, so the effect that resets them must run only on a harness the
+  // snapshot, so the effect that settles them must run only on a harness the
   // person switched to, or the form would open dirty with nothing touched.
+  // What a switch does has moved: it no longer blanks both fields (a rule then
+  // saved silently on the harness default) but asks harness-carry.js what the
+  // new harness can actually carry, and says once what it could not.
   const form = source('AutomationForm.jsx')
   assert.match(form, /const harnessAtOpen = useRef\(harness\)/)
-  assert.match(form, /if \(harness !== harnessAtOpen\.current\) \{[\s\S]{0,240}setModel\(null\)/)
-  assert.match(form, /if \(harness !== harnessAtOpen\.current\) \{[\s\S]{0,240}setPermission\(null\)/)
+  assert.match(form, /if \(harness !== harnessAtOpen\.current\) \{/)
+  assert.match(form, /carrySetup\(\s*\n?\s*\{ model, permission \},/)
+  assert.match(form, /droppedLine\(dropped, /)
+  assert.match(form, /restoreFromCatalog\(pendingCarry\.current, list \?\? \[\]\)/)
   assert.match(form, /harnessAtOpen\.current = harness/)
   // And the snapshot is still taken once, over every field.
   assert.match(form, /opened\.current = \{ name, kind, time, harness, model, permission, machineId, workspace, task, enabled \}/)

@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  JOB_REQUEST_MS,
   TASK_CAP,
   firstTask,
   jobSourceLine,
@@ -237,4 +238,18 @@ test('a request reaches an open editor, and a subscriber can stand down', () => 
   requestJob(after)
   assert.deepEqual(seen, [draft], 'the unsubscribed listener hears nothing')
   assert.equal(takeJobRequest(), after, 'and the request waits instead')
+})
+
+test('a request the editor never collects expires instead of waiting forever', () => {
+  // The palette stages the draft and asks the shell for the Automations view
+  // in the same press. If that switch never lands (a crash, a reload that
+  // lost the shell's state, a phone), the draft must not still be there on a
+  // much later visit: the editor would open on the values of a chat the
+  // person left long ago, which looks like the editor inventing a rule.
+  const draft = planJob(chatOf(), context()).draft
+  requestJob(draft, 1_000)
+  assert.equal(takeJobRequest(1_000 + JOB_REQUEST_MS - 1), draft, 'inside its lifetime')
+  requestJob(draft, 1_000)
+  assert.equal(takeJobRequest(1_000 + JOB_REQUEST_MS), null, 'expired at the boundary')
+  assert.equal(takeJobRequest(1_000), null, 'and it was dropped, not kept for later')
 })
