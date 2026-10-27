@@ -719,6 +719,10 @@ jobs:
             \( -name '*.msi' -o -name '*.exe' -o -name '*.AppImage' -o -name '*.deb' \
                -o -name '*.dmg' -o -name '*.apk' -o -name 'openremote-daemon-linux-x86_64' \
                -o -name 'THIRD-PARTY_NOTICES.md' -o -name 'SHA256SUMS' \) | sort)
+          have=()
+          for file in "${assets[@]}"; do
+            have+=("$(basename "$file")")
+          done
 
           # A re-pushed tag whose release is already complete: every
           # platform skipped, so this run has no artifacts to add and the
@@ -729,6 +733,30 @@ jobs:
           fi
           if [ "${#assets[@]}" -eq 0 ]; then
             echo "publish: no artifacts were built in this run; refusing to publish an empty release" >&2
+            exit 1
+          fi
+
+          # A name that will be missing should stop the job while nothing is
+          # published, not after: the release page is the first thing a
+          # download link meets, so it may not go live incomplete. For a tag
+          # whose release already exists, the names that release carries count
+          # too - an upload only adds to it.
+          existing=""
+          if [ "$TAG" != "nightly" ] && gh release view "$TAG" > /dev/null 2>&1; then
+            existing="$(gh release view "$TAG" --json assets --jq '.assets[].name' || true)"
+          fi
+          missing=()
+          for name in "${NAMES[@]}"; do
+            if printf '%s\n' "${have[@]}" | grep -qxF "$name"; then
+              continue
+            fi
+            if [ -n "$existing" ] && grep -qxF "$name" <<< "$existing"; then
+              continue
+            fi
+            missing+=("$name")
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "publish: nothing was published; this run and ${TAG} together lack ${missing[*]}" >&2
             exit 1
           fi
 
@@ -743,29 +771,18 @@ jobs:
               --prerelease \
               --title "OpenRemote nightly - $(date -u +%Y-%m-%d)" \
               --notes-file nightly-notes.md
-          elif gh release view "$TAG" > /dev/null 2>&1; then
+          elif [ -n "$existing" ]; then
             # A re-pushed tag with a partial release: the platforms whose
             # asset was missing rebuilt, and their files join the release.
+            # The check above has already proved the union is complete.
             gh release upload "$TAG" --clobber "${assets[@]}"
           else
-            # The first publish for this tag. Every platform built, so a
-            # missing name below means a build that produced something else.
+            # The first publish for this tag: every channel name was just
+            # found in this run, so the create cannot go live incomplete.
             gh release create "$TAG" "${assets[@]}" \
               --title "OpenRemote ${TAG#v}" \
               --notes-file "release-notes/${TAG}.md"
           fi
-
-          # The release must carry all six channel names, or a download
-          # link is dead the moment the release page is live.
-          published="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
-          missing=()
-          for name in "${NAMES[@]}"; do
-            grep -qxF "$name" <<< "$published" || missing+=("$name")
-          done
-          if [ "${#missing[@]}" -gt 0 ]; then
-            echo "publish: ${TAG} is missing ${missing[*]}" >&2
-            exit 1
-          fi
-          echo "publish: ${TAG} carries every channel name"
+          echo "publish: ${TAG} is live"
         env:
           GH_TOKEN: ${{ github.token }}
