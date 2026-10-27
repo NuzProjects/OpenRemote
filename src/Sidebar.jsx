@@ -634,32 +634,37 @@ export default function Sidebar({
                 <span className="project-count">{items.length}</span>
               </button>
               {isArmed ? (
-                /* The trash is replaced in place by the word that acts, so a
-                   second press is a press on the same spot and cannot land on
-                   the `+` two pixels away. It is always visible while armed
-                   (a hover-only confirm is easy to miss) and Escape keeps. */
-                <button
-                  type="button"
-                  className="sb-unregister"
-                  autoFocus
-                  title="Unregister this project. Its chats move to Chats and the folder on disk is never touched."
-                  aria-label={`Unregister ${name}`}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Escape') {
-                      e.preventDefault()
+                <>
+                  {/* The trash is replaced in place by the word that acts, so
+                      a second press is a press on the same spot and cannot
+                      land on the `+` two pixels away. It is always visible
+                      while armed (a hover-only confirm is easy to miss) and
+                      Escape keeps. The line under it says what the press
+                      does; one fragment holds the pair, because a ternary
+                      branch is one expression. */}
+                  <button
+                    type="button"
+                    className="sb-unregister"
+                    autoFocus
+                    title="Unregister this project. Its chats move to Chats and the folder on disk is never touched."
+                    aria-label={`Unregister ${name}`}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') {
+                        e.preventDefault()
+                        setArmed(clearRow())
+                      }
+                    }}
+                    onClick={() => {
                       setArmed(clearRow())
-                    }
-                  }}
-                  onClick={() => {
-                    setArmed(clearRow())
-                    removeProject(project.id)
-                  }}
-                >
-                  Unregister
-                </button>
-                <p className="sb-unregister-note">
-                  The project goes; its chats move to Chats and the folder on disk is never touched.
-                </p>
+                      removeProject(project.id)
+                    }}
+                  >
+                    Unregister
+                  </button>
+                  <p className="sb-unregister-note">
+                    The project goes; its chats move to Chats and the folder on disk is never touched.
+                  </p>
+                </>
               ) : (
                 <>
                   {/* A new chat already in this project, straight from its
