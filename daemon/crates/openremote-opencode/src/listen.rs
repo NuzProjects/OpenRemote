@@ -2,8 +2,8 @@
 //!
 //! v1 prints `opencode server listening on http://127.0.0.1:<port>`.
 //! v2 dropped the product name: `server listening on http://127.0.0.1:<port>`.
-//! The longer prefix has to be tried first, or the v1 line would also
-//! match the v2 prefix.
+//! The v1 prefix is tried first: a line that names the product is a v1
+//! server's.
 
 /// Which serve generation produced the listening line. The HTTP bodies
 /// diverged with it (v2 prompts are `{text}`, not `{prompt:{text}}`).
@@ -15,8 +15,11 @@ pub(crate) enum Wire {
 
 pub(crate) fn parse_listen_line(line: &str) -> Option<(Wire, u16)> {
     let line = line.trim();
-    // The v1 prefix first: it ends with the v2 one, so a v2-first match
-    // would read the v1 line as v2 with a port that starts one word late.
+    // The v1 prefix first: it ends with the v2 one, so a test that only
+    // looked for the shorter prefix could not tell a v1 line from a v2 one,
+    // and reading a v1 server as Wire::V2 sends it v2 bodies. The port is no
+    // clue either way: both lines leave the same `127.0.0.1:<port>` tail and
+    // the last segment is read from it.
     let (wire, rest) = if let Some(rest) = line.strip_prefix("opencode server listening on ") {
         (Wire::V1, rest)
     } else {
