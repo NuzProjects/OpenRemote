@@ -21,6 +21,7 @@ import {
   defaultPreset,
   loadPresets,
   markDefault,
+  onPresetsChanged,
   presetFromState,
   presetSummary,
   removePreset,
@@ -40,6 +41,8 @@ import { claimInserter } from './composer-insert.js'
 import { isMobile } from './platform.js'
 import './newchat.css'
 import './composer.css'
+import { errorCopy } from './error-copy.js'
+import { messageBound } from './send-bound.js'
 
 // The harnesses whose own login command the daemon can relay - the
 // sign-in prompt offers the relay only there; the others say their own
@@ -77,9 +80,12 @@ export default function NewChat({
   const targetOffline = Boolean(target && targetItem && !targetItem.online)
   const [defaults] = useState(() => loadDefaults())
   // The setups this person saved, and the one New chat opens on. Both are
-  // read once, at mount: they are local storage reads, and a preset that
-  // changes under the cursor between two renders would be a surprise.
+  // read once, at mount: they are local storage reads. A preset saved while
+  // this screen is already on screen (a second pane, or a chat saved from the
+  // palette) arrives on presets.js's own channel instead, so the chip appears
+  // without a reload.
   const [presets, setPresets] = useState(() => loadPresets())
+  useEffect(() => onPresetsChanged((list) => setPresets(list)), [])
   const [openingPreset] = useState(() => defaultPreset(loadPresets()))
   // The preset waiting for a harness switch to finish: its slots can only
   // be settled once the new harness has answered with its model list.
@@ -312,12 +318,16 @@ export default function NewChat({
         const waiting = pendingPreset.current
         if (waiting) {
           pendingPreset.current = null
-          const harnessIds = ((target ? targetCaps : capabilities)?.harnesses ?? [])
-            .filter(pickable)
-            .map((h) => h.id)
+          const harnessRows = ((target ? targetCaps : capabilities)?.harnesses ?? []).filter(pickable)
+          const harnessIds = harnessRows.map((h) => h.id)
+          // Which of those harnesses still have a fast mode: fast rides the
+          // harness a preset was saved on, so a preset from a harness that is
+          // gone must not turn it on here (presets.js settles that).
+          const fastIds = harnessRows.filter((h) => h.fast_supported === true).map((h) => h.id)
           if (waiting.harness === currentHarness.id) {
             const { slots, notes } = settlePreset(waiting, {
               harnesses: harnessIds,
+              fastSupported: fastIds,
               models: list ?? [],
               permissions: currentHarness.permission_modes ?? [],
               projects: targetProjects.map((p) => p.id),
@@ -334,6 +344,7 @@ export default function NewChat({
             // travels, and the note says why the rest did not.
             const { slots, notes } = settlePreset(waiting, {
               harnesses: harnessIds,
+              fastSupported: fastIds,
               models: [],
               permissions: [],
               projects: targetProjects.map((p) => p.id),
@@ -390,9 +401,14 @@ export default function NewChat({
   // workspace - the chat runs in the home folder on its machine.
   const workspace = chosenProject?.folders[0] ?? null
 
+  // The composer's own bound, from the same rule the answer's 413 is explained
+  // by: null while the message fits, the sentence when it does not. It counts
+  // the body (the escaped text plus the request's reserve), so a newline-heavy
+  // message is stopped here rather than by the daemon.
+  const bound = messageBound(text)
   const canSend =
     text.trim().length > 0 && !busy && currentHarness && connection.state === 'connected'
-    && !needsSignIn && !targetOffline
+    && !needsSignIn && !targetOffline && !bound
   // The harness's own pre-send facts, each in its own words: what its
   // config says a fresh chat runs (grok's config.toml, agy's settings,
   // claude's priority chain), then its catalog's default marker (codex's
@@ -469,6 +485,7 @@ export default function NewChat({
   const applyPreset = (preset) => {
     if (!preset) return
     setArmedPreset(clearRow())
+    const fastIds = available.filter((h) => h.fast_supported === true).map((h) => h.id)
     const harnessThere = available.some((h) => h.id === preset.harness)
     if (!harnessThere) {
       // The harness is gone, so its model, effort and approval word have
@@ -476,6 +493,7 @@ export default function NewChat({
       // what stayed behind - never a silent partial apply.
       const { slots, notes } = settlePreset(preset, {
         harnesses: available.map((h) => h.id),
+        fastSupported: fastIds,
         models: [],
         permissions: [],
         projects: targetProjects.map((p) => p.id),
@@ -495,6 +513,7 @@ export default function NewChat({
     }
     const { slots, notes } = settlePreset(preset, {
       harnesses: available.map((h) => h.id),
+      fastSupported: fastIds,
       models,
       permissions: permissionWords,
       projects: targetProjects.map((p) => p.id),
@@ -824,7 +843,7 @@ export default function NewChat({
       setText('')
       onOpen(id)
     } catch (err) {
-      setError(err.message ?? String(err))
+      setError(errorCopy(err))
     } finally {
       setBusy(false)
     }
@@ -842,7 +861,7 @@ export default function NewChat({
     } catch (err) {
       // The daemon's own words - a folder that is already a project, a
       // path that is not a folder - surface right beside the flow.
-      setAddProjectError(err.message ?? String(err))
+      setAddProjectError(errorCopy(err))
     }
   }
 
@@ -975,6 +994,14 @@ export default function NewChat({
           autoFocus={!isMobile}
           spellCheck={false}
         />
+        {/* Said above the send control, where the person is looking when the
+            button will not press: the same sentence the rule gives, carrying
+            this message's size and the limit. */}
+        {bound && (
+          <p className="nc-bound" role="status">
+            {bound}
+          </p>
+        )}
         <div className="nc-foot">
           <div className="nc-pickers">
             {modelsPending ? (

@@ -212,9 +212,31 @@ test('a preset whose harness is gone keeps the project, fast and honesty', () =>
   assert.equal(slots.effort, null)
   assert.equal(slots.permission, null)
   assert.equal(slots.projectId, 'proj-1')
-  assert.equal(slots.fast, true)
+  // Fast belonged to the harness that is gone: it must not land on Codex,
+  // which may have no fast mode at all.
+  assert.equal(slots.fast, false)
   assert.equal(notes.length, 1)
   assert.match(notes[0], /stays on Codex/)
+})
+
+test('fast rides the harness it was saved on, and its fast mode where the caller knows it', () => {
+  // The harness is installed and still offers fast: the flag applies.
+  assert.equal(settlePreset(chip({ fast: true }), WORLD).slots.fast, true)
+  // The harness is installed but its fast mode is not usable today.
+  assert.equal(
+    settlePreset(chip({ fast: true }), { ...WORLD, fastSupported: ['codex'] }).slots.fast,
+    false,
+  )
+  // A caller with the list, and the harness on it.
+  assert.equal(
+    settlePreset(chip({ fast: true }), { ...WORLD, fastSupported: ['claude'] }).slots.fast,
+    true,
+  )
+  // A preset that never asked for fast asks for nothing.
+  assert.equal(
+    settlePreset(chip({ fast: false }), { ...WORLD, fastSupported: ['codex'] }).slots.fast,
+    false,
+  )
 })
 
 test('a project that is gone leaves the rest of the preset in place', () => {

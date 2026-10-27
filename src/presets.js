@@ -169,11 +169,15 @@ export function presetSummary(preset, labels = {}) {
  * Settle a preset against what the chosen harness offers today.
  *
  * `world` is plain data:
- *   harnesses   the harness ids installed on this computer
- *   models      the chosen harness's model rows ({ model, reasoning_efforts })
- *   permissions the chosen harness's permission words ([{ w, l }])
- *   projects    the project ids on the machine this chat will run on
- *   labels      what to call the harness, the model and the project in a sentence
+ *   harnesses     the harness ids installed on this computer
+ *   models        the chosen harness's model rows ({ model, reasoning_efforts })
+ *   permissions   the chosen harness's permission words ([{ w, l }])
+ *   projects      the project ids on the machine this chat will run on
+ *   fastSupported the harness ids whose fast mode is usable today, when the
+ *                 caller has that list: a preset's fast flag rides its own
+ *                 harness, and without this list the flag is gated on the
+ *                 harness merely being installed
+ *   labels        what to call the harness, the model and the project in a sentence
  *
  * Returns the slots to apply and one sentence per slot that could not be
  * honoured. The caller applies the slots; nothing here touches storage or
@@ -225,6 +229,17 @@ export function settlePreset(preset, world = {}) {
     else notes.push('Its project is not on this machine any more, so the chat starts without a workspace.')
   }
 
+  // Fast belongs to the harness it was saved on: with that harness gone the
+  // flag would land on whichever harness is selected, which may have no fast
+  // mode at all. So it rides the harness, and where the caller says which
+  // harnesses still have a fast mode, it rides that list too. Nothing is said
+  // about it: the harness sentence above already explains the substitution,
+  // and a second note for a checkbox would be noise.
+  const fastOk =
+    harnessOk &&
+    preset.fast === true &&
+    (!world.fastSupported || (world.fastSupported ?? []).includes(preset.harness))
+
   return {
     slots: {
       harness: harnessOk ? preset.harness : null,
@@ -232,7 +247,7 @@ export function settlePreset(preset, world = {}) {
       effort,
       permission,
       projectId,
-      fast: preset.fast === true,
+      fast: fastOk,
     },
     notes,
   }

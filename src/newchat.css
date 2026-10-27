@@ -188,6 +188,17 @@ html[data-reduce-motion] .newchat::before {
   font-size: 12.5px;
 }
 
+/* The composer's own bound, inside the box above the send button: the same red
+   the error line under the box uses, because it is the same kind of refusal -
+   only this one is said before the send instead of after it. Right-aligned so
+   it reads against the control it explains. */
+.nc-bound {
+  margin: 8px 0 0;
+  color: var(--red, #f87171);
+  font-size: 12.5px;
+  text-align: right;
+}
+
 /* ---- the auth strip: an extension of the chatbox, not a card. It hangs
        directly under the composer with the same width, its top corners
        square into the box and only the bottom two round - one continuous

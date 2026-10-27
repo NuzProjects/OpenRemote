@@ -1,23 +1,45 @@
 // How much one message may carry.
 //
 // The daemon's loopback listener takes the framework's default body limit of
-// 2 MiB, and the JSON envelope around a prompt spends a little of that on the
-// request id, so the honest client bound sits just under the ceiling. A
-// message over it is answered 413 with an empty body, which the client can
-// only report as "HTTP 413" - a number nobody can act on. Both halves live
-// here so the composer that warns and the error that explains cannot drift
-// apart.
+// 2 MiB, and what travels to it is a JSON body: the prompt sits inside a JSON
+// string, so it is escaped on the wire (a newline becomes two bytes, a quote
+// two), and the rest of the request - the id, the workspace, the harness, the
+// model - spends a little more. A message over the ceiling is answered 413
+// with an empty body, which the client can only report as "HTTP 413" - a
+// number nobody can act on. Both halves live here so the composer that warns
+// and the error that explains cannot drift apart.
 
 export const MAX_MESSAGE_BYTES = 2_000_000
+
+// Room for everything in the request that is not the prompt: the JSON keys,
+// the request id, the workspace, the harness and its optional choices. The
+// exact shape belongs to the caller (api/daemon.js), so this is a reserve
+// rather than a measurement: generous enough that a request which passes the
+// bound below cannot reach the ceiling, small enough that it costs no message
+// anyone would notice.
+export const ENVELOPE_RESERVE_BYTES = 4096
 
 function megabytes(bytes) {
   return `${(bytes / 1e6).toFixed(1)} MB`
 }
 
-/// The bytes a message actually takes on the wire, not its character count:
-/// an emoji is four bytes and would otherwise pass a bound it should not.
+/// The bytes a message's text takes on its own, before the envelope: not its
+/// character count (an emoji is four bytes and would pass a bound it should
+/// not), and what a caller counts when it wants the text alone.
 export function messageBytes(text) {
   return typeof text === 'string' ? new TextEncoder().encode(text).length : 0
+}
+
+/// The bytes the text spends inside the request body: its JSON-serialised
+/// form, quotes and every escape the fetch body will carry, plus the envelope
+/// reserve. This is what the bound is measured on, because the daemon measures
+/// the body and not the prompt: a newline-heavy message that passes a bare-text
+/// bound would still be refused. It remains a floor rather than the exact body
+/// - the rest of the envelope belongs to the caller - so a request that passes
+/// it is safe by the reserve, not by a byte count of the whole body.
+export function wireBytes(text) {
+  if (typeof text !== 'string') return 0
+  return new TextEncoder().encode(JSON.stringify(text)).length + ENVELOPE_RESERVE_BYTES
 }
 
 /// The sentence to show before a send, carrying the message's own size and
@@ -32,8 +54,8 @@ export function tooLongMessage(bytes) {
 export const TOO_LONG_SENTENCE = `That message is too long. OpenRemote sends at most ${megabytes(MAX_MESSAGE_BYTES)} in one message. Split it, or attach it as a file.`
 
 /// Null while the message fits, the sentence when it does not. A composer
-/// disables its send control on this and shows the sentence beside it.
+/// disables its send control on this and shows the sentence above it.
 export function messageBound(text) {
-  const bytes = messageBytes(text)
+  const bytes = wireBytes(text)
   return bytes <= MAX_MESSAGE_BYTES ? null : tooLongMessage(bytes)
 }
