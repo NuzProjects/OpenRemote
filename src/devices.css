@@ -572,6 +572,35 @@
   border-color: rgba(255, 255, 255, 0.2);
 }
 
+/* A field whose value is picked rather than typed: the input's box, with the
+   chosen word on the left and the caret that says it opens. */
+.dv-select {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-1);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  cursor: default;
+}
+
+.dv-select:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.dv-select:focus-visible {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
 .dv-host-hint {
   font-weight: 400;
   color: var(--text-3);

@@ -4,7 +4,7 @@
 // its folder is the chat's own working folder.
 
 import { useEffect, useState } from 'react'
-import { X } from '@phosphor-icons/react'
+import { CaretDown, X } from '@phosphor-icons/react'
 import PickerMenu from './PickerMenu.jsx'
 import { useConsole } from './state/console.jsx'
 import { findModel, modelDisplayName, prettyModelName } from './model-display.js'
@@ -102,6 +102,11 @@ export default function AutomationForm({ rule, onClose }) {
 
   const currentHarness = available.find((h) => h.id === harness)
   const currentMachine = online.find((m) => m.machine.id === machineId)
+  // The two halves of the rule's time, as its pickers show them: a saved
+  // minute the list does not carry reads as 00, which is what picking from
+  // that list would have written.
+  const [hour, savedMinute] = splitTime(time)
+  const minute = MINUTES.includes(savedMinute) ? savedMinute : '00'
   // One online machine cannot be chosen - the field still saves its id.
   const oneMachine = online.length <= 1
   // The registered project whose folder the rule's workspace is - the
@@ -199,25 +204,59 @@ export default function AutomationForm({ rule, onClose }) {
             </div>
             {kind === 'schedule' && (
               <span className="af-time">
-                <select
-                  value={splitTime(time)[0]}
+                {/* Two pickers, one kind each: an hour open on the clock
+                    never answers for the minute beside it. */}
+                <button
+                  type="button"
                   aria-label="Hour"
-                  onChange={(e) => setTime(`${e.target.value}:${splitTime(time)[1]}`)}
+                  aria-haspopup="listbox"
+                  aria-expanded={picker?.kind === 'hour'}
+                  onClick={openPicker('hour')}
                 >
-                  {HOURS.map((h) => (
-                    <option key={h} value={h}>{h}</option>
-                  ))}
-                </select>
+                  {hour}
+                  <CaretDown size={10} />
+                </button>
                 <span className="af-time-colon" aria-hidden="true">:</span>
-                <select
-                  value={MINUTES.includes(splitTime(time)[1]) ? splitTime(time)[1] : '00'}
+                <button
+                  type="button"
                   aria-label="Minute"
-                  onChange={(e) => setTime(`${splitTime(time)[0]}:${e.target.value}`)}
+                  aria-haspopup="listbox"
+                  aria-expanded={picker?.kind === 'minute'}
+                  onClick={openPicker('minute')}
                 >
-                  {MINUTES.map((m) => (
-                    <option key={m} value={m}>{m}</option>
-                  ))}
-                </select>
+                  {minute}
+                  <CaretDown size={10} />
+                </button>
+                {picker?.kind === 'hour' && (
+                  <PickerMenu
+                    label="Hour"
+                    searchPlaceholder="Search hours"
+                    items={HOURS.map((h) => ({ id: h, name: h }))}
+                    groups={null}
+                    selectedId={hour}
+                    onChoose={(id) => {
+                      setTime(`${id}:${minute}`)
+                      setPicker(null)
+                    }}
+                    onClose={() => setPicker(null)}
+                    anchor={{ left: picker.x, top: picker.y }}
+                  />
+                )}
+                {picker?.kind === 'minute' && (
+                  <PickerMenu
+                    label="Minute"
+                    searchPlaceholder="Search minutes"
+                    items={MINUTES.map((m) => ({ id: m, name: m }))}
+                    groups={null}
+                    selectedId={minute}
+                    onChoose={(id) => {
+                      setTime(`${hour}:${id}`)
+                      setPicker(null)
+                    }}
+                    onClose={() => setPicker(null)}
+                    anchor={{ left: picker.x, top: picker.y }}
+                  />
+                )}
               </span>
             )}
           </div>
