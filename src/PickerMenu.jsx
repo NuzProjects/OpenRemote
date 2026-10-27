@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Check, ClockCounterClockwise, MagnifyingGlass } from '@phosphor-icons/react'
 import { isMobile } from './platform.js'
 import { useBack } from './use-back.js'
+import { resolvePickerSpot } from './picker-anchor.js'
 import './pickermenu.css'
 
 /**
@@ -17,7 +18,7 @@ export default function PickerMenu({
   selectedId,
   onChoose,
   onClose,
-  anchor, // { x, y }
+  anchor, // { left, top }, from the pointer that opened the menu when there was one
   renderIcon,
   renderTrailing,
   renderSubline, // a muted second line inside the item (efforts, paths)
@@ -28,6 +29,12 @@ export default function PickerMenu({
   const [cursor, setCursor] = useState(0)
   const ref = useRef(null)
   const searchRef = useRef(null)
+  // The spot is decided once, during the first render, while the trigger that
+  // opened the menu still holds focus: a keyboard activation reports no point,
+  // and that is the only moment the trigger is knowable. See picker-anchor.js.
+  const [spot] = useState(() =>
+    resolvePickerSpot(anchor, document.activeElement?.getBoundingClientRect?.() ?? null),
+  )
 
   const filtered = (() => {
     const q = query.trim().toLowerCase()
@@ -139,7 +146,7 @@ export default function PickerMenu({
       className={`nc-menu${wide ? ' nc-menu--wide' : ''}`}
       role="listbox"
       aria-label={label}
-      style={anchor}
+      style={spot}
       onKeyDown={onKeyDown}
     >
       <label className="nc-search">
