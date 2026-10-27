@@ -1190,7 +1190,7 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
               <div className="pn-row" data-stg="daemon-connection">
                 <div>
                   <div className="pn-name">{connection.state === 'connected' ? 'Connected' : 'Not connected'}</div>
-                  <div className="pn-detail">{connection.state === 'connected' ? 'Bearer token accepted.' : connection.error ?? 'Start the app or connect from the first-run steps.'}</div>
+                  <div className="pn-detail">{connection.state === 'connected' ? 'Bearer token accepted.' : connection.error ?? 'Start the app, or use Connect by address below.'}</div>
                 </div>
                 {confirmDisconnect ? (
                   <div className="pn-actions">
