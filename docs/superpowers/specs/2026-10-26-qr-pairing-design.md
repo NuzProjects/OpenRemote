@@ -319,12 +319,15 @@ is read, not proved.
 ## Checking this note
 
 Every claim in the table above is a test, and the whole table is one
-command: `cd daemon && cargo test --locked --test e2e_pairing`. The suite
-holds eleven tests; the table's eleven rows name ten of them, and the
-eleventh is the cancel path. The copy quoted under failure modes is
-verbatim from `pairing_page.rs`, so a quote that does not appear there is a
-fault in this note, not in the page. The route table is `routes()` in
+command: `cd daemon && cargo test --locked --test e2e_pairing`. The table
+names ten of the suite's tests in its eleven rows (one test answers two
+rows), the cancel path has a test no row claims, and the rest cover later
+work this note makes no claim about. So the rule is one row per claim, not
+one row per test: a row with no test, or a claim here with no row, is a
+fault in this note. The copy quoted under failure modes is verbatim from
+`pairing_page.rs`, so a quote that does not appear there is a fault in
+this note, not in the page. The route table is `routes()` in
 `pairing.rs` (four `route` calls), the ports are `PORT_CANDIDATES` (six of
 them), and the formatter paragraph in ruling 8 is
-`cd daemon && cargo fmt --all --check`, which prints the eight paths one
-per `Diff in` line.
+`cd daemon && cargo fmt --all --check`, which names the eight paths across
+its `Diff in` lines, one line per hunk.
