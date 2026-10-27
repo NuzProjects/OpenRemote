@@ -2,7 +2,8 @@
 // machine; a key never leaves it. (Plugins can ship MCP servers of their
 // own - those live with their plugin, not here.)
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { createRemovalLock } from './removal-lock.js'
 import AddMcpServerModal from './AddMcpServerModal.jsx'
 import { useConsole } from './state/console.jsx'
 import { armRow, clearRow, rowIsArmed } from './row-confirm.js'
@@ -42,6 +43,9 @@ export default function McpServersSection() {
   // The row whose removal is in flight, so a second press cannot send a second
   // delete over the same row (the second would answer a 404).
   const [removing, setRemoving] = useState(null)
+  // The lock the press mutates before React renders; `removing` is only what
+  // the row draws. See src/removal-lock.js.
+  const lockRef = useRef(null)
   // The arm ends when the row scrolls out of view or loses focus (see
   // use-armed-row.js), so a first press cannot outlive the user's attention.
   const armWatch = useArmedRow(armed, setArmed)
@@ -62,7 +66,10 @@ export default function McpServersSection() {
   }
 
   const remove = async (id) => {
-    if (removing != null) return
+    // One claim per press: see src/removal-lock.js for why this cannot be the
+    // `removing` state.
+    if (!lockRef.current) lockRef.current = createRemovalLock()
+    if (!lockRef.current.claim(id)) return
     setError(null)
     setArmed(clearRow())
     setRemoving(id)
@@ -71,6 +78,7 @@ export default function McpServersSection() {
     } catch (err) {
       setError(errorCopy(err))
     } finally {
+      lockRef.current.release()
       setRemoving(null)
     }
   }
@@ -135,7 +143,7 @@ export default function McpServersSection() {
                       className="pn-btn pn-btn--danger"
                       ref={armWatch.buttonRef}
                       onBlur={armWatch.onBlur}
-                      disabled={removing === p.id}
+                      disabled={removing != null}
                       onClick={() => remove(p.id)}
                       title="Its launch command and binding go with it, and there is no undo"
                     >

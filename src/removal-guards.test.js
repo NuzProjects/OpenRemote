@@ -16,12 +16,15 @@ for (const [file, row] of [
   test(`${file}: one removal at a time, and the button says so`, () => {
     const pane = source(file)
     assert.match(pane, /const \[removing, setRemoving\] = useState\(null\)/)
-    assert.match(pane, /if \(removing != null\) return/)
+    // The claim is a plain lock set inside the press, not the state: a second
+    // press in the same frame reads the pre-render state and would pass a
+    // state guard twice (see removal-lock.test.js for that case).
+    assert.match(pane, /createRemovalLock\(\)/)
+    assert.match(pane, /if \(!lockRef\.current\.claim\(id\)\) return/)
     assert.match(pane, /setRemoving\(id\)/)
-    assert.match(pane, /finally \{\s*\n\s*setRemoving\(null\)/)
-    // The armed press is disabled while its own removal runs, and every other
-    // row's first press is disabled while one is in flight.
-    assert.match(pane, new RegExp(`disabled=\\{removing === ${row}\\.id\\}`))
+    assert.match(pane, /finally \{\s*\n\s*lockRef\.current\.release\(\)\s*\n\s*setRemoving\(null\)/)
+    // Every armed press is disabled while any removal runs, so no button looks
+    // live and then answers nothing.
     assert.match(pane, /disabled=\{removing != null\}/)
     assert.match(pane, new RegExp(`removing === ${row}\\.id \\? "Removing…" :`))
   })

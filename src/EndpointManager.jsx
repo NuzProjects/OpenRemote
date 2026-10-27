@@ -5,6 +5,7 @@
 // unless the human is setting a new one.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { createRemovalLock } from './removal-lock.js'
 import { CaretDown, X } from '@phosphor-icons/react'
 import PickerMenu from './PickerMenu.jsx'
 import { useConsole } from './state/console.jsx'
@@ -62,6 +63,9 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
   // over the same row, and the second answered a 404 while the first was still
   // settling the list; the button disables and says what it is doing.
   const [removing, setRemoving] = useState(null)
+  // The lock the press mutates before React renders; `removing` is only what
+  // the row draws. See src/removal-lock.js.
+  const lockRef = useRef(null)
   // The fields as they were when this editor opened, and the table's own
   // close hint: the same dirty rule the rule editor uses (form-dirty.js), so a
   // backdrop click or Esc cannot throw away a pasted key.
@@ -176,7 +180,11 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
   }
 
   const remove = async (id) => {
-    if (removing != null) return
+    // The claim, not `removing`: state inside this handler is the render's
+    // state, so a double click would pass a state check twice. The lock is
+    // set synchronously in the press.
+    if (!lockRef.current) lockRef.current = createRemovalLock()
+    if (!lockRef.current.claim(id)) return
     setError(null)
     setArmed(clearRow())
     setRemoving(id)
@@ -187,6 +195,7 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
     } catch (err) {
       setError(errorCopy(err))
     } finally {
+      lockRef.current.release()
       setRemoving(null)
     }
   }
@@ -301,7 +310,7 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
                       className="pn-btn pn-btn--danger"
                       ref={armWatch.buttonRef}
                       onBlur={armWatch.onBlur}
-                      disabled={removing === entry.id}
+                      disabled={removing != null}
                       onClick={() => remove(entry.id)}
                       title="Its saved key goes with it, and there is no undo"
                     >
