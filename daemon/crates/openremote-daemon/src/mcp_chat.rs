@@ -7,8 +7,13 @@
 //!
 //! It also reads the daemon's port from that folder, for the same reason it
 //! reads the token there: a daemon restart moves the port, and a chat's server
-//! outlives the daemon that started it. The `--port` in argv is what the chat
-//! was created with, so it is the fallback rather than the truth.
+//! outlives the daemon that started it. The port is read again on every call
+//! (a few bytes against an HTTP round trip), and a call that could not connect
+//! reads it once more and tries the fresh value - the gap between an old
+//! daemon's clean stop, which removes the file, and a new one's write is
+//! exactly what a harness that stays up through a restart meets. The `--port`
+//! in argv is what the chat was created with, so it is the fallback rather
+//! than the truth.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -50,7 +55,7 @@ fn published_port(data_dir: &Path) -> Result<u16, String> {
     let raw = match std::fs::read_to_string(&path) {
         Ok(raw) => raw,
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            return Err(format!("{} is not there", path.display()))
+            return Err(format!("{} is not there", path.display()));
         }
         Err(e) => return Err(format!("{} could not be read: {e}", path.display())),
     };
@@ -84,9 +89,23 @@ fn parse(args: &[String]) -> Result<(Config, Option<String>), String> {
         None => None,
     };
     match published_port(&data_dir) {
-        Ok(port) => Ok((Config { session, port, data_dir }, None)),
+        Ok(port) => Ok((
+            Config {
+                session,
+                port,
+                data_dir,
+            },
+            None,
+        )),
         Err(why) => match flag {
-            Some(port) => Ok((Config { session, port, data_dir }, Some(why))),
+            Some(port) => Ok((
+                Config {
+                    session,
+                    port,
+                    data_dir,
+                },
+                Some(why),
+            )),
             None => Err(format!(
                 "no port to call the daemon on: {why}, and no --port was given"
             )),
@@ -95,7 +114,7 @@ fn parse(args: &[String]) -> Result<(Config, Option<String>), String> {
 }
 
 pub async fn run(args: &[String]) -> ExitCode {
-    let config = match parse(args) {
+    let mut config = match parse(args) {
         Ok((config, note)) => {
             if let Some(note) = note {
                 // Not fatal: the flag still points at some daemon. Said once,
@@ -142,7 +161,7 @@ pub async fn run(args: &[String]) -> ExitCode {
             })),
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({"tools": [tool()]})),
-            "tools/call" => Ok(call(&config, &token, &params).await),
+            "tools/call" => Ok(call(&mut config, &token, &params).await),
             other => Err(json!({"code": -32601, "message": format!("no method {other}")})),
         };
         let frame = match reply {
@@ -172,30 +191,70 @@ fn tool() -> Value {
     })
 }
 
+/// The port to call now. The daemon publishes its current one in the data
+/// folder and a restart moves it under a running chat, so this is read per
+/// call; the value the flags gave is the fallback for the moment when the file
+/// is not there (between a clean stop removing it and a start writing it).
+fn port_now(config: &Config) -> u16 {
+    published_port(&config.data_dir).unwrap_or(config.port)
+}
+
+/// One call over the port we think is current, and one more after a fresh read
+/// if the first could not connect. The retry is the restart gap: the old
+/// daemon's clean stop deletes the port file, a new one writes its own a moment
+/// later, and a tool call that lands between them is a connection refused
+/// rather than a wrong answer. The fresh value is kept in the config, so the
+/// rest of the session falls back to a port that is alive.
+async fn with_fresh_port<T, A, Fut>(config: &mut Config, attempt: A) -> Result<T, String>
+where
+    A: Fn(u16) -> Fut,
+    Fut: std::future::Future<Output = Result<T, String>>,
+{
+    let port = port_now(config);
+    config.port = port;
+    match attempt(port).await {
+        Ok(answer) => Ok(answer),
+        Err(first) => match published_port(&config.data_dir) {
+            Ok(fresh) if fresh != port => {
+                config.port = fresh;
+                attempt(fresh).await
+            }
+            // Nothing fresher to try: the failure the caller already knows.
+            _ => Err(first),
+        },
+    }
+}
+
 /// The tool's answer: the daemon's condensed chat, or its refusal as a
 /// tool error the agent can read.
-async fn call(config: &Config, token: &str, params: &Value) -> Value {
+async fn call(config: &mut Config, token: &str, params: &Value) -> Value {
     if params.get("name").and_then(Value::as_str) != Some("read_chat") {
         return failure("the only tool here is read_chat");
     }
     let Some(chat) = params.pointer("/arguments/chat").and_then(Value::as_str) else {
         return failure("read_chat needs the chat's id");
     };
-    let url = format!(
-        "http://127.0.0.1:{}/sessions/{}/mentions/{}",
-        config.port,
-        config.session,
-        encode(chat)
-    );
     let bearer = format!("Bearer {token}");
-    let http = openremote_cloud::https::Http::new();
-    match http
-        .request("GET", &url, &[("authorization", bearer.as_str())], None)
-        .await
-    {
-        Ok(response) => {
-            let body: Value = serde_json::from_slice(&response.body).unwrap_or(Value::Null);
-            if response.status == 200 {
+    let session = config.session.clone();
+    let chat = encode(chat);
+    // The request over whichever port this attempt is given, so the retry can
+    // hand it a different one without rebuilding the parse of the answer.
+    let attempt = |port: u16| {
+        let url = format!("http://127.0.0.1:{port}/sessions/{session}/mentions/{chat}");
+        let bearer = bearer.clone();
+        async move {
+            let http = openremote_cloud::https::Http::new();
+            let response = http
+                .request("GET", &url, &[("authorization", bearer.as_str())], None)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok((response.status, response.body))
+        }
+    };
+    match with_fresh_port(config, attempt).await {
+        Ok((status, body)) => {
+            let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+            if status == 200 {
                 let text = body.get("text").and_then(Value::as_str).unwrap_or("");
                 json!({"content": [{"type": "text", "text": text}]})
             } else {
@@ -280,9 +339,14 @@ mod tests {
         .0;
         assert_eq!(config.port, 6001, "the folder wins over the flag");
         // And with no flag at all the folder is enough.
-        let config = parse(&args(&["--session", "s1", "--data-dir", dir.to_str().unwrap()]))
-            .unwrap()
-            .0;
+        let config = parse(&args(&[
+            "--session",
+            "s1",
+            "--data-dir",
+            dir.to_str().unwrap(),
+        ]))
+        .unwrap()
+        .0;
         assert_eq!(config.port, 6001);
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -292,18 +356,28 @@ mod tests {
         let dir = temp_dir("refuse");
         // Missing file, no flag: a refusal that names the file, not a silent
         // exit. The message is what the harness's log will hold.
-        let why = parse(&args(&["--session", "s1", "--data-dir", dir.to_str().unwrap()]))
-            .err()
-            .expect("no port anywhere is an error");
+        let why = parse(&args(&[
+            "--session",
+            "s1",
+            "--data-dir",
+            dir.to_str().unwrap(),
+        ]))
+        .err()
+        .expect("no port anywhere is an error");
         assert!(why.contains(PORT_FILE), "{why}");
         assert!(why.contains("no --port was given"), "{why}");
 
         // A file that is there but is not a port: same refusal, and the reason
         // says what was in it.
         std::fs::write(dir.join(PORT_FILE), "not a port\n").unwrap();
-        let why = parse(&args(&["--session", "s1", "--data-dir", dir.to_str().unwrap()]))
-            .err()
-            .expect("a corrupt file with no flag is an error");
+        let why = parse(&args(&[
+            "--session",
+            "s1",
+            "--data-dir",
+            dir.to_str().unwrap(),
+        ]))
+        .err()
+        .expect("a corrupt file with no flag is an error");
         assert!(why.contains("does not hold a port"), "{why}");
 
         // With the flag behind it, the corrupt file is a warning, not a stop:
@@ -332,10 +406,117 @@ mod tests {
         {
             use std::os::unix::fs::PermissionsExt;
             let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, 0o600, "the port is not a secret, but the folder is owner-only");
+            assert_eq!(
+                mode, 0o600,
+                "the port is not a secret, but the folder is owner-only"
+            );
         }
         remove_port_file(&dir);
-        assert!(!path.exists(), "a clean shutdown leaves no stale port behind");
+        assert!(
+            !path.exists(),
+            "a clean shutdown leaves no stale port behind"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_port_is_read_per_call_and_the_flag_is_the_fallback() {
+        // The reader the reviewer's case needed: a chat that stays up through
+        // a restart asks again every time, and only falls back to the flag
+        // when the file is not there.
+        let dir = temp_dir("per-call");
+        let config = Config {
+            session: "s1".to_string(),
+            port: 4567,
+            data_dir: dir.clone(),
+        };
+        assert_eq!(port_now(&config), 4567, "no file yet: the flag");
+        write_port_file(&dir, 6003).unwrap();
+        assert_eq!(port_now(&config), 6003, "the published port wins per call");
+        remove_port_file(&dir);
+        assert_eq!(port_now(&config), 4567, "and the flag is back when it goes");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_call_that_fails_on_the_stale_port_retries_the_fresh_one_and_keeps_it() {
+        // The restart gap: the old daemon's clean stop removed the file, so the
+        // first attempt uses the flag's stale port; while it is failing, the
+        // new daemon publishes its own. The retry must use it, answer, and keep
+        // it for the rest of the session.
+        const STALE: u16 = 4567;
+        const FRESH: u16 = 6004;
+        let dir = temp_dir("retry");
+        let mut config = Config {
+            session: "s1".to_string(),
+            port: STALE,
+            data_dir: dir.clone(),
+        };
+        let publish = dir.clone();
+        let answer = with_fresh_port(&mut config, move |port| {
+            let publish = publish.clone();
+            async move {
+                if port == STALE {
+                    // The new daemon came up between the two attempts.
+                    write_port_file(&publish, FRESH).unwrap();
+                    Err("connection refused".to_string())
+                } else {
+                    Ok(format!("answer from {port}"))
+                }
+            }
+        })
+        .await;
+        assert_eq!(answer.unwrap(), format!("answer from {FRESH}"));
+        assert_eq!(config.port, FRESH, "the fresh port is kept for the session");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_call_that_fails_twice_reports_the_failure_it_already_reported() {
+        // Nothing fresher to try: the caller gets the same sentence as before,
+        // and only one attempt is made when the published port has not moved.
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        const STALE: u16 = 4567;
+        let dir = temp_dir("twice");
+        let mut config = Config {
+            session: "s1".to_string(),
+            port: STALE,
+            data_dir: dir.clone(),
+        };
+        let tries = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&tries);
+        let err: String = with_fresh_port(&mut config, move |port| {
+            let counted = Arc::clone(&counted);
+            async move {
+                counted.fetch_add(1, Ordering::SeqCst);
+                assert_eq!(port, STALE);
+                Err::<String, String>("connection refused".to_string())
+            }
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(err, "connection refused");
+        assert_eq!(
+            tries.load(Ordering::SeqCst),
+            1,
+            "no retry without a fresh port"
+        );
+
+        // And when the file does move but the new port is dead too, the second
+        // failure is what comes back, not a panic and not the first one hidden.
+        write_port_file(&dir, 6005).unwrap();
+        let mut config = Config {
+            session: "s1".to_string(),
+            port: STALE,
+            data_dir: dir.clone(),
+        };
+        let err: String = with_fresh_port(&mut config, |port| async move {
+            Err::<String, String>(format!("dead on {port}"))
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(err, "dead on 6005");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
