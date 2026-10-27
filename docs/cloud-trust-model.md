@@ -70,7 +70,7 @@ sessions.
 
 All 13 require a machine, and a chat that is synced and executing here. What they share: none of them
 can touch a private chat, create or delete a chat, change its folder, or read a log through these
-paths (the Sync tier is what reads logs).
+paths (the Sync tier reads logs, the note channel appends them; see One-way notes).
 
 | route | tier | what a peer can do | what it cannot |
 |---|---|---|---|
@@ -87,6 +87,38 @@ paths (the Sync tier is what reads logs).
 | `POST /sessions/{id}/resume` | Chat | start the chat again, which re-passes its stored model and permission word | choose new settings as part of the resume |
 | `POST /sessions/{id}/title` | Chat | rename the chat, which every device shows | - |
 | `POST /decisions/{id}/answer` | Chat | answer any pending approval or question in the chat: allow, deny, or an "always allow" that stores a tool grant for the chat | answer a decision belonging to a private chat (404), or forge a decision id that is not pending here |
+
+## One-way notes, which are not rows
+
+Some of what a peer can do is not a route. The mesh also carries notes, handled by `on_note` in
+`daemon/crates/openremote-daemon/src/sync.rs`, so `PEER_ROUTES` does not gate them and no tier
+applies. Four types reach it, and none of the four can touch a private chat:
+
+| note | what it does on this computer | a private chat |
+|---|---|---|
+| `sync.watch` | subscribes the sender to a chat's live events, so its turns stream to that device. Accepted only when this computer runs the chat (`executes_here`); the same note with `on: false` unsubscribes | ignored: a private chat has no executor, so the note fails the `runs_here` check |
+| `sync.events` | appends events to a chat's log, attributed to the sender. The store takes them only from the chat's executor and only in sequence, and a gap makes this computer pull the missing range (`store.rs`, `append_replicated`) | refused: a private chat names no executor, so the attribution cannot match |
+| `sync.head` | makes this computer pull from the sender when the sender's head is ahead of its own (`pull`) | nothing happens: it writes nothing itself, and what comes back is checked the same way as an append |
+| `sync.tombstone` | deletes a synced chat: stops it if it is running here, records the tombstone, and stops syncing it (`apply_tombstone`) | returns before it stops, tombstones or forgets anything |
+
+The tombstone is a deletion, and it is the one that matters. It is also how a deletion crosses
+devices: the computer where a synced chat was deleted sends one, the copies apply it, and that is why
+the chat disappears on the other device. A peer that sends one deletes any synced chat id here,
+running or stopped, and the code does not check that the sender is that chat's executor. It also
+lands on an id this computer never held: the tombstone is recorded anyway, and a chat with that id
+that syncs here later is refused from then on. Nothing in the route table above does that, and no
+route undoes it: after a tombstone, `/sync/sessions/{id}/events` answers 410 and every summary skips
+the chat, so deletion here is a one-way door.
+
+One thing follows that a reader should not have to discover: `sync.events` naming an id this
+computer does not hold is not only an append. The store accepts a copy that opens with a
+`session.created` and names the sender as its runner, so a peer can make a synced chat appear in
+this computer's Cloud list, the same shape the Sync tier's pull already allows.
+
+The private-chat refusal is by construction in each of the four paths, not one shared check. Only
+the tombstone path has a test (`sync.rs`,
+`a_tombstone_naming_a_private_chat_is_refused_and_its_data_survives`); the other three are read
+from `on_note` and `append_replicated`.
 
 ## The uncomfortable part
 
@@ -117,7 +149,8 @@ peer rows), not from driving a chat.
 - Removal is real. A revoked device's synced chats are purged here (`host.rs`, `revoked`), and its
   key stops matching the pin.
 - Private chats stay private. They never leave the computer, are invisible to peers on every route
-  above, and the answer is 404 rather than 403 so a peer cannot even learn one exists.
+  above, and the answer is 404 rather than 403 so a peer cannot even learn one exists. The note
+  channel refuses them too (see One-way notes).
 - A chat runs where it was created, and only on machines. A desktop that is not a machine refuses to
   be driven at all (409 `not_a_machine`). A phone cannot run chats.
 - Every action lands in the chat's own event stream: prompts, queueing, interrupts, settings
@@ -137,7 +170,8 @@ peer rows), not from driving a chat.
   or stops the chat, and no layer checks that the word is a cautious one.
 - Anything on this page being "not available to your other devices". The gate is a list; a route
   added to `PEER_ROUTES` is open to every device of the account from that commit onwards, with no
-  second check.
+  second check. The note channel is not in that list at all, so no "cannot" column above describes
+  what a note can do (see One-way notes).
 - The pins file as a last line of defence: `pins()` treats an unreadable `peers.json` as no pins at
   all, so a corrupted file re-pins whatever the registry serves (`mesh.rs:310-315`). It is a detection
   mechanism, not an authority.
@@ -146,9 +180,13 @@ peer rows), not from driving a chat.
 
 Kept here so the next reader does not have to re-derive it. These are console routes: a peer asking
 gets 403 (`not available to your other devices`), and Cloud's own routes are not routed for a peer at
-all (404, pinned by `tests/e2e_cloud_mesh.rs`).
+all (404, pinned by `tests/e2e_cloud_mesh.rs`). This section is about routes. Deleting a chat is not
+refused outright: the route below is, and a peer can still delete a synced chat here through the
+`sync.tombstone` note in the section above, which is also a deletion and also one-way. What is
+refused on every path, route and note alike, is touching a private chat.
 
-- Deleting a chat (`DELETE /sessions/{id}`), reading a chat directly (`GET /sessions/{id}`,
+- Deleting a chat through its route (`DELETE /sessions/{id}`; a peer cannot call it, and the note
+  channel is the deletion it can reach instead), reading a chat directly (`GET /sessions/{id}`,
   `GET /sessions/{id}/events`), listing chats (`GET /sessions`), archiving, and `POST /sessions/{id}/sync`.
 - Plugins, marketplaces, MCP servers, automations, receipts, and browser routes.
 - Writing model endpoints (`POST /model-endpoints` and its siblings), deleting a machine

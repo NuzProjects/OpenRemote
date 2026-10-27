@@ -157,8 +157,10 @@ an old process is still alive; find it before re-running).
   is reachable by every device of the account.
 - What a peer can therefore do is more than drive: it can create a chat
   here with an approval-bypassing permission word, change a stopped
-  chat's word so the next resume runs with it, and answer the approval
-  prompts through `/decisions/{id}/answer`. The approval gate guards
+  chat's word so the next resume runs with it, answer the approval
+  prompts through `/decisions/{id}/answer`, and delete a synced chat
+  through a `sync.tombstone` note, which is not a route and so sits
+  outside `PEER_ROUTES` (`on_note`, `sync.rs`). The approval gate guards
   against a harness, not against a device; it is not a promise that a
   peer cannot answer. `docs/cloud-trust-model.md` is the route-by-route
   table, with what does protect the user instead.
