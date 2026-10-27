@@ -94,21 +94,27 @@ cargo clippy --all-targets --locked -- -D warnings
 cargo fmt --all --check        # CI runs this and the lint; the lint is red here
 ```
 
-`cargo fmt --all --check` is green, and so is the shell's own `cargo
-fmt --check` inside `src-tauri`. The one gate that does not pass is the
-lint: `cargo clippy --all-targets --locked -- -D warnings` stops on three
-lints (`openremote-daemon/src/http.rs:376`, unneeded cloning of iterator
-items; `openremote-daemon/src/http.rs:624`, unneeded late initialization;
-`openremote-daemon/src/supervisor.rs:1215`, a function with 9 arguments
-where 7 is the limit), which the run prints as five `error:` lines: those
-three and the two `could not compile` lines after them. Each of the three
-sits in a file whose work is still in flux, so the repair is the same one
-`cargo fmt` needed: land those edits, then run the linter over them.
+Both gates are red on the committed tree, and neither failure is in the
+shell. `cargo fmt --all --check` reports eight files across four crates
+(`openremote-core/src/model.rs`, `openremote-core/src/store.rs`,
+`openremote-daemon/src/app.rs`, `openremote-daemon/src/http.rs`,
+`openremote-daemon/src/registry.rs`, `openremote-grok/src/config.rs`,
+`openremote-opencode/src/driver.rs`, `openremote-opencode/src/resolve.rs`),
+counted as the distinct paths among its `Diff in` lines. Those are exactly
+the files carrying uncommitted work, so a working tree can pass this check
+while the commit does not: check it on a clean checkout before believing a
+green run. `cargo clippy --all-targets --locked -- -D warnings` stops on
+three lints (`openremote-daemon/src/http.rs:376`, unneeded cloning of
+iterator items; `openremote-daemon/src/http.rs:624`, unneeded late
+initialization; `openremote-daemon/src/supervisor.rs:1215`, a function with
+9 arguments where 7 is the limit), printed as five `error:` lines: those
+three and the two `could not compile` lines after them.
+`cargo fmt --check` inside `src-tauri` alone is green, because the shell's
+own files are formatted.
 
-The format gate went red for a night and is green again: the unenroll change
-landed in a shape rustfmt wants to rewrap, and one `cargo fmt` inside `daemon`
-cleared it. That is the shape of the remaining repairs too - a small edit in a
-file that is being worked on, rather than a reformat of the workspace.
+The repair is one `cargo fmt` across the daemon workspace and three lint
+fixes, once the work in those files has landed. Reformatting them first
+would rewrite someone's in-flight edits, which is why it has waited.
 
 ## The sidecar, and its two copies
 
@@ -229,11 +235,12 @@ an old process is still alive; find it before re-running).
 ## Checking this file
 
 Four commands check what this page claims, and a reader can run all of them
-from the repo root: `npm test` (prints a count; 912 the last time this line
+from the repo root: `npm test` (prints a count; 938 the last time this line
 was checked, and the run is the truth rather than this number), `node
 scripts/check-tab-acl.mjs` (says `tab acl ok: 2 capability file(s), every
 non-phone one scoped to the main webview, every declared command (27)
-granted`), `cd daemon && cargo fmt --all --check` (exits 0 on this tree), and
+granted`), `cd daemon && cargo fmt --all --check` (on a clean checkout,
+lists the eight files named under Commands), and
 `cd daemon && cargo clippy --all-targets --locked -- -D warnings` (lists the
 three lints). The route and tier claims in "Cloud's
 trust model" are counted from `PEER_ROUTES` in
