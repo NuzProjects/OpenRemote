@@ -5,13 +5,25 @@
 // set up by hand live in Settings, under MCP servers.
 
 import { useState } from 'react'
+import { MagnifyingGlass, X } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
 import { HarnessMark } from './brand-marks.jsx'
 import InstallPluginModal from './InstallPluginModal.jsx'
 import PluginDiscover from './PluginDiscover.jsx'
 import PluginIcon from './PluginIcon.jsx'
 import PluginMarketplaces from './PluginMarketplaces.jsx'
-import { POWER_SHORT, RUNTIME_LABEL, clashes, notSandboxed, sourceLabel } from './plugins.js'
+import {
+  INSTALLED_EMPTY_NONE,
+  POWER_SHORT,
+  RUNTIME_LABEL,
+  clashes,
+  installedCountLine,
+  installedEmptyLine,
+  installedSearchHint,
+  notSandboxed,
+  searchInstalled,
+  sourceLabel,
+} from './plugins.js'
 import { useArmedRow } from './use-armed-row.js'
 import './devices.css'
 import './panels.css'
@@ -107,8 +119,13 @@ function InstalledPlugins({ onUpdate }) {
   // instead.
   const [removing, setRemoving] = useState(null)
   const [error, setError] = useState(null)
+  // The installed list's search. It narrows what the list draws and never
+  // reorders it; plugins.js owns what a word may match.
+  const [query, setQuery] = useState('')
   const builtin = plugins?.builtin ?? []
   const installed = plugins?.installed ?? []
+  const shown = searchInstalled(installed, query)
+  const filtering = query.trim().length > 0
   const entries = new Map((catalog?.entries ?? []).map((e) => [e.id, e]))
   const known = new Set((marketplaces ?? []).map((m) => m.name))
   const clashing = clashes(installed)
@@ -159,14 +176,58 @@ function InstalledPlugins({ onUpdate }) {
       </div>
 
       <h2 className="pn-section">Installed</h2>
-      {installed.length === 0 && (
-        <p className="pn-empty">
-          Nothing installed yet. Find plugins under Discover, or install one from a folder, a git repo
-          or an archive.
-        </p>
+      {/* The list's one way in. A field over an empty list would be a control
+          with nothing to act on, so it appears with the first installed
+          plugin; its hint appears only once the list is long enough that a
+          person scans it. Escape clears the query, then leaves the field, the
+          way the Discover search and the sidebar search do. */}
+      {installed.length > 0 && (
+        <div className="pg-installed-toolbar">
+          <div className="pg-search-box">
+            <MagnifyingGlass size={15} className="pg-search-icon" />
+            <input
+              type="text"
+              className="pg-search-input"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key !== 'Escape') return
+                e.preventDefault()
+                if (query) setQuery('')
+                else e.currentTarget.blur()
+              }}
+              placeholder={installedSearchHint(installed.length)}
+              spellCheck={false}
+              autoComplete="off"
+              aria-label="Search installed plugins"
+            />
+            {query && (
+              <button
+                type="button"
+                className="pg-search-clear"
+                onClick={() => setQuery('')}
+                aria-label="Clear search"
+                title="Clear search"
+              >
+                <X size={13} weight="bold" />
+              </button>
+            )}
+          </div>
+          {/* The count only while a query is on: at rest the section has no
+              count of its own and a second one would be noise. */}
+          {filtering && shown.length > 0 && (
+            <p className="pg-installed-count">{installedCountLine(shown.length, installed.length)}</p>
+          )}
+        </div>
+      )}
+      {installed.length === 0 && <p className="pn-empty">{INSTALLED_EMPTY_NONE}</p>}
+      {/* A query that found nothing is not an empty list: it names the query
+          rather than inviting an install. */}
+      {filtering && installed.length > 0 && shown.length === 0 && (
+        <p className="pn-empty">{installedEmptyLine(query)}</p>
       )}
       <div className="pn-list pg-list-full">
-        {installed.map((p) => {
+        {shown.map((p) => {
           const entry = entries.get(p.id)
           const orphaned = p.marketplace !== 'local' && !known.has(p.marketplace)
           const author = p.author ?? entry?.author

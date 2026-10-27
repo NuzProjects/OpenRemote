@@ -19,6 +19,14 @@ import {
   searchEntries,
   sourceLabel,
   sourceRequest,
+  INSTALLED_EMPTY_NONE,
+  INSTALLED_SEARCH_HINT_FROM,
+  installedCountLine,
+  installedEmptyLine,
+  installedFields,
+  installedSearchHint,
+  matchesInstalled,
+  searchInstalled,
 } from './plugins.js'
 
 test('a plugin that runs programs itself is labelled not sandboxed', () => {
@@ -451,5 +459,96 @@ test('a failed install sends the user back to reading the source', () => {
   assert.doesNotMatch(said, /press install/i)
 })
 
+// ---- the Installed tab's search ----
+
+// An installed plugin as the daemon lists it: the name, the runtime, the
+// source it came from, and the powers it was given.
+const pluginOf = (over = {}) => ({
+  id: 'p1',
+  name: 'Docker tools',
+  runtime: 'content',
+  powers: [],
+  source: { kind: 'folder', path: 'C:\\work\\docker-tools' },
+  ...over,
+})
+
+test('the search reads only the fields an installed row prints', () => {
+  const plugin = pluginOf()
+  // The name, the runtime chip's words, the source line: three fields.
+  assert.deepEqual(installedFields(plugin), [
+    'docker tools',
+    'claude plugin',
+    'folder: c:\\work\\docker-tools',
+  ])
+  for (const query of ['docker', 'claude plugin', 'docker-tools']) {
+    assert.equal(matchesInstalled(plugin, query), true, query)
+  }
+})
+
+test('a word cannot be assembled from the end of one field and the start of another', () => {
+  // The name ends in "docker" and the runtime begins with "claude plugin": a
+  // joined string would contain "dockerclaude" and match it, while the row
+  // shows those words apart. Per-field matching must refuse it.
+  const plugin = pluginOf({ name: 'Docker', runtime: 'content' })
+  assert.equal(matchesInstalled(plugin, 'dockerclaude'), false)
+  // Two real words are still fine, because each is found inside one field.
+  assert.equal(matchesInstalled(plugin, 'docker claude'), true)
+})
+
+test('nothing hidden is searched: no id, no powers, no version', () => {
+  const plugin = pluginOf({ id: 'secret-id', version: '9.9.9', powers: ['network'] })
+  for (const query of ['secret-id', 'network', '9.9.9']) {
+    assert.equal(matchesInstalled(plugin, query), false, query)
+  }
+})
+
+test('each source kind is searchable by what its line says', () => {
+  const git = pluginOf({ source: { kind: 'git', url: 'https://example.test/tools.git' } })
+  assert.equal(matchesInstalled(git, 'example.test'), true)
+  const archive = pluginOf({ source: { kind: 'archive', location: 'C:\\downloads\\tools.zip' } })
+  assert.equal(matchesInstalled(archive, 'tools.zip'), true)
+  const market = pluginOf({ source: { kind: 'marketplace', marketplace: 'moreweb', from: 'tools@1.2.0' } })
+  assert.equal(matchesInstalled(market, 'moreweb'), true)
+  assert.equal(matchesInstalled(market, 'tools@1.2.0'), true)
+})
+
+test('case and whitespace do not matter, and an empty query filters nothing', () => {
+  const plugin = pluginOf()
+  assert.equal(matchesInstalled(plugin, '  DOCKER  '), true)
+  assert.equal(matchesInstalled(plugin, 'docker   tools'), true)
+  assert.equal(matchesInstalled(plugin, 'docker podman'), false)
+  for (const empty of ['', '   ', null, undefined]) {
+    assert.equal(matchesInstalled(plugin, empty), true)
+  }
+})
+
+test('the search keeps the list order and drops only non-matches', () => {
+  const installed = [
+    pluginOf({ id: 'a', name: 'Docker tools', source: { kind: 'folder', path: 'C:\\a' } }),
+    pluginOf({ id: 'b', name: 'Notes', runtime: 'js', source: { kind: 'folder', path: 'C:\\b' } }),
+    pluginOf({ id: 'c', name: 'Docker compose', source: { kind: 'folder', path: 'C:\\c' } }),
+  ]
+  assert.deepEqual(searchInstalled(installed, 'docker').map((p) => p.id), ['a', 'c'])
+  assert.deepEqual(searchInstalled(installed, 'javascript').map((p) => p.id), ['b'])
+  assert.deepEqual(searchInstalled(installed, '').map((p) => p.id), ['a', 'b', 'c'])
+  assert.deepEqual(searchInstalled(null, 'docker'), [])
+})
+
+test('the count line and the two empty answers stay apart', () => {
+  assert.equal(installedCountLine(3, 12), '3 of 12 plugins')
+  assert.equal(installedCountLine(1, 1), '1 of 1 plugin')
+  assert.equal(installedEmptyLine(''), INSTALLED_EMPTY_NONE)
+  assert.equal(installedEmptyLine('   '), INSTALLED_EMPTY_NONE)
+  assert.match(INSTALLED_EMPTY_NONE, /^Nothing installed yet\./)
+  assert.equal(installedEmptyLine('  podman '), 'No plugins match “podman”.')
+  assert.notEqual(installedEmptyLine('podman'), INSTALLED_EMPTY_NONE)
+})
+
+test('the hint appears when the list is long enough to need one', () => {
+  for (const total of [0, 1, 4]) assert.equal(installedSearchHint(total), '')
+  assert.equal(INSTALLED_SEARCH_HINT_FROM, 5)
+  for (const total of [5, 9, 30]) assert.equal(installedSearchHint(total), 'Search installed plugins')
+  assert.equal(installedSearchHint(undefined), '')
+})
 
 

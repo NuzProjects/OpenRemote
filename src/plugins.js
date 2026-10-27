@@ -307,3 +307,74 @@ export function installFailedNote(message) {
   const why = said || 'The install did not go through.'
   return `${why} Nothing was installed. The staged copy is used up as soon as an install starts, so read the same source again to retry.`
 }
+
+// ---- the Installed tab's search ----
+//
+// Installed is where a person goes when they have ten plugins and want one,
+// and it is a flat list; Discover's search only searches the catalogs. The
+// rule is the rules list's rule with one difference that matters here: a word
+// has to appear inside ONE of the fields an installed row prints, not anywhere
+// in a joined string, so a search can never match text assembled across two
+// fields whose letters happen to sit side by side on the row - the thing you
+// found is then visibly the thing you found.
+//
+// The fields are the row's own: the plugin's name, its runtime (the chip's
+// words) and its source (the folder, the repo, or the marketplace and its
+// package). Nothing hidden is searched: the install id, the powers, the path
+// keys and the version are all printed or not, but none of them is a name a
+// person would type to find a plugin.
+
+/** The line the Installed tab shows when nothing is installed yet. */
+export const INSTALLED_EMPTY_NONE =
+  'Nothing installed yet. Find plugins under Discover, or install one from a folder, a git repo or an archive.'
+
+// The count at which the field carries its hint. An installed row prints a
+// description, an action row, a chips row and a source line, so it is about
+// twice the height of a rule row in Automations (whose hint appears at six):
+// four of these fit above the fold on a laptop, and five is one before the
+// list stops fitting in a glance.
+export const INSTALLED_SEARCH_HINT_FROM = 5
+
+/** The words one installed row prints, one lowercased string per field. */
+export function installedFields(plugin) {
+  const runtime = RUNTIME_LABEL[plugin?.runtime] ?? plugin?.runtime ?? ''
+  return [plugin?.name, runtime, sourceLabel(plugin?.source)]
+    .filter((field) => typeof field === 'string' && field.trim().length > 0)
+    .map((field) => field.toLowerCase())
+}
+
+/** Whether one installed plugin shows what the query asks for. */
+export function matchesInstalled(plugin, query) {
+  const words = String(query ?? '')
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+  if (!words.length) return true
+  const fields = installedFields(plugin)
+  return words.every((word) => fields.some((field) => field.includes(word)))
+}
+
+/** The plugins to draw, in the order the list already had them. */
+export function searchInstalled(installed, query) {
+  return (Array.isArray(installed) ? installed : []).filter((plugin) => matchesInstalled(plugin, query))
+}
+
+/** The quiet line beside the field while a query is on: "3 of 12 plugins". */
+export function installedCountLine(shown, total) {
+  return `${shown} of ${total} plugin${total === 1 ? '' : 's'}`
+}
+
+/** The answer when a query matches nothing: it names the query. */
+export function installedEmptyLine(query) {
+  const words = String(query ?? '').trim()
+  return words ? `No plugins match “${words}”.` : INSTALLED_EMPTY_NONE
+}
+
+/**
+ * The field's hint, or '' when the list is short enough that it needs none.
+ * `total` is how many plugins are installed, not how many a search shows.
+ */
+export function installedSearchHint(total) {
+  return (total ?? 0) >= INSTALLED_SEARCH_HINT_FROM ? 'Search installed plugins' : ''
+}
