@@ -34,7 +34,7 @@ import { hasTauri, isMobile } from './platform.js'
 import { PICKER_CANCEL, PICKER_SOURCE, formatPicked } from './browser-pick.js'
 import { insertToComposer } from './composer-insert.js'
 import { omnibox, security, shownAddress } from './browser-omnibox.js'
-import { closeTab, cycle, newTab, openBelongs, tabTitle } from './browser-tabs.js'
+import { closeOthers, closeTab, closeToRight, cycle, newTab, openBelongs, rememberClosed, stripPlan, takeClosed, tabTitle } from './browser-tabs.js'
 import { adopt, call, getState, onKey, patchTab, setState, subscribe } from './browser-store.js'
 import { FLOATING, covered } from './browser-occlusion.js'
 import { DEVICES, fitDevice, fileName, nextZoom, zoomLabel } from './browser-chrome.js'
@@ -116,6 +116,19 @@ export default function BrowserView({ onClosePane = null }) {
   const noticeTimer = useRef(0)
   const shownNative = useRef(null)
   const mounted = useRef(true)
+  // The strip's measured width, so the tabs that do not fit move behind one
+  // overflow control instead of shrinking to slivers. Measured, not assumed:
+  // the browser lives in a pane, and a pane is whatever width the divider
+  // left it.
+  const stripRef = useRef(null)
+  const [stripWidth, setStripWidth] = useState(0)
+  useEffect(() => {
+    const strip = stripRef.current
+    if (!strip) return
+    const ro = new ResizeObserver(([entry]) => setStripWidth(entry.contentRect.width))
+    ro.observe(strip)
+    return () => ro.disconnect()
+  }, [])
   // The page a pick is waiting on: leaving the view has to stand that page's
   // picker down, or the next pick on that page answers nothing at once.
   const pickingTab = useRef(null)
@@ -402,17 +415,43 @@ export default function BrowserView({ onClosePane = null }) {
     if (tab?.native) call('browser_close', { tab: tab.native })
     setState((s) => {
       const next = closeTab(s.tabs, key, s.active)
-      const url = next.closed?.url
-      return { tabs: next.tabs, active: next.active, closed: url ? [url, ...s.closed].slice(0, 25) : s.closed }
+      return { tabs: next.tabs, active: next.active, closed: rememberClosed(s.closed, next.closed) }
     })
   }
 
+  // Close several at once, keeping `keep` if it is still in the list: the
+  // strip's own two bulk commands, and the page of every closed tab really
+  // closes in the shell, not only in this list.
+  const closeMany = (keys, keep = null) => {
+    if (!keys.length) return
+    const gone = new Set(keys)
+    for (const t of getState().tabs) if (gone.has(t.key) && t.native) call('browser_close', { tab: t.native })
+    setState((s) => {
+      let closed = s.closed
+      for (const t of s.tabs) if (gone.has(t.key)) closed = rememberClosed(closed, t)
+      const rest = s.tabs.filter((t) => !gone.has(t.key))
+      if (!rest.length) {
+        const fresh = newTab()
+        return { tabs: [fresh], active: fresh.key, closed }
+      }
+      const active = rest.some((t) => t.key === s.active)
+        ? s.active
+        : rest.some((t) => t.key === keep)
+          ? keep
+          : rest[0].key
+      return { tabs: rest, active, closed }
+    })
+  }
+
+  // A closed tab's shell page is gone with the close, so reopening builds a
+  // new tab and takes it to the address the tab had. The new tab page leaves
+  // nothing behind, so an empty list is the only nothing-to-do case.
   const reopen = () => {
-    const [url, ...rest] = getState().closed
-    if (!url) return
+    const taken = takeClosed(getState().closed)
+    if (!taken) return
     const tab = newTab()
-    setState((s) => ({ closed: rest, tabs: [...s.tabs, tab], active: tab.key }))
-    requestAnimationFrame(() => go(url))
+    setState((s) => ({ closed: taken.rest, tabs: [...s.tabs, tab], active: tab.key }))
+    requestAnimationFrame(() => go(taken.entry.url))
   }
 
   const onNative = (command, extra = {}) => {
@@ -718,6 +757,30 @@ export default function BrowserView({ onClosePane = null }) {
         }),
       ]
     }
+    if (menu.kind === 'tab') {
+      const key = menu.key
+      const right = closeToRight(tabs, key)
+      return [
+        { header: tabTitle(tabs.find((t) => t.key === key) ?? {}) },
+        { label: 'Close tab', hint: 'Ctrl+W', onSelect: () => close(key) },
+        {
+          label: 'Close others',
+          disabled: tabs.length < 2,
+          onSelect: () => closeMany(closeOthers(tabs, key), key),
+        },
+        {
+          label: 'Close to the right',
+          disabled: right.length === 0,
+          onSelect: () => closeMany(right, key),
+        },
+        {
+          label: 'Reopen closed tab',
+          hint: 'Ctrl+Shift+T',
+          disabled: !closed.length,
+          onSelect: reopen,
+        },
+      ]
+    }
     if (menu.kind === 'tabs') {
       return [
         { header: `${tabs.length} open ${tabs.length === 1 ? 'tab' : 'tabs'}` },
@@ -732,11 +795,22 @@ export default function BrowserView({ onClosePane = null }) {
     return []
   }
 
+  // What the strip draws: whole tabs only, with what does not fit behind the
+  // one overflow control, and the active tab always inside the window. The
+  // counting is a pure rule in browser-tabs.js so it can be tested without a
+  // window.
+  const plan = stripPlan({
+    width: stripWidth,
+    count: tabs.length,
+    active: Math.max(0, tabs.findIndex((t) => t.key === active)),
+  })
+  const shownTabs = tabs.slice(plan.start, plan.start + plan.shown)
+
   return (
     <div className="bw">
       <div className="bw-tabs" role="tablist" aria-label="Tabs" onPointerEnter={precapture}>
-        <div className="bw-tabs-scroll">
-          {tabs.map((t) => (
+        <div className="bw-tabs-scroll" ref={stripRef}>
+          {shownTabs.map((t) => (
             <div
               key={t.key}
               role="tab"
@@ -747,6 +821,10 @@ export default function BrowserView({ onClosePane = null }) {
                   e.preventDefault()
                   close(t.key)
                 } else if (e.button === 0) setState(() => ({ active: t.key }))
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                setMenu({ kind: 'tab', key: t.key, ...anchorOf(e.currentTarget) })
               }}
               title={tabTitle(t)}
             >
@@ -775,11 +853,13 @@ export default function BrowserView({ onClosePane = null }) {
         </div>
         <button
           type="button"
-          className="bw-btn bw-tabsearch"
-          title="Your tabs"
+          className={plan.hidden ? 'bw-btn bw-tabsearch is-more' : 'bw-btn bw-tabsearch'}
+          title={plan.hidden ? `${plan.hidden} more ${plan.hidden === 1 ? 'tab' : 'tabs'}` : 'Your tabs'}
+          aria-label={plan.hidden ? `${plan.hidden} more tabs` : 'Your tabs'}
           onClick={(e) => setMenu({ kind: 'tabs', ...anchorOf(e.currentTarget) })}
         >
           <CaretDown size={14} />
+          {plan.hidden > 0 && <span className="bw-tab-more-count">{plan.hidden}</span>}
         </button>
         {onClosePane && (
           <button type="button" className="bw-btn bw-tabsearch" title="Close the browser pane" onClick={onClosePane}>

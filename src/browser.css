@@ -25,7 +25,10 @@
   align-items: flex-end;
   gap: 2px;
   min-width: 0;
-  overflow-x: auto;
+  /* No slivers and no hidden scroll: the tabs that do not fit are behind the
+     strip's one overflow control, counted in browser-tabs.js against the
+     measured width and the fixed tab width below. */
+  overflow-x: hidden;
   scrollbar-width: none;
 }
 
@@ -35,10 +38,13 @@
 
 .bw-tab {
   display: flex;
-  flex: 0 1 230px;
+  /* A tab keeps its width: 200px here is TAB_WIDTH in browser-tabs.js, and the
+     two have to agree or the strip draws more tabs than fit. */
+  flex: 0 0 auto;
+  width: 200px;
+  min-width: 200px;
   align-items: center;
   gap: 8px;
-  min-width: 72px;
   height: 34px;
   padding: 0 6px 0 11px;
   border-radius: 10px 10px 0 0;
