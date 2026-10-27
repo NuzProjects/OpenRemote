@@ -93,3 +93,14 @@ test('Settings: the archived Delete goes through the chat delete dialog', () => 
   assert.match(settings, /onClick=\{\(\) => setDeleting\(s\)\}/)
   assert.match(settings, /<DeleteChatModal/)
 })
+test('the chat delete says when the other devices learn of it', () => {
+  const modal = source('DeleteChatModal.jsx')
+  assert.match(modal, /is deleted here\. Any other device it is synced to\s+deletes its copy the next time it connects\./)
+  assert.match(modal, /The files it changed on disk stay where they\s+are\./)
+})
+
+test('the sync mark promises the setting, not a delivery', () => {
+  const side = source('Sidebar.jsx')
+  assert.match(side, /aria-label="Syncs to your devices"/)
+  assert.doesNotMatch(side, /aria-label="Synced to your devices"/)
+})

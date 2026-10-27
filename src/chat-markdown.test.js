@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
-import { TOOL_CAP, chatMarkdown, copiedLine, fenceFor, thousands } from './chat-markdown.js'
+import { TOOL_CAP, canCopyChat, chatMarkdown, copiedLine, fenceFor, thousands } from './chat-markdown.js'
 
 const chatOf = (timeline, over = {}) => ({ id: 'c1', title: 'Triage the failing tests', harness: 'claude', timeline, ...over })
 
@@ -167,4 +167,27 @@ test('a clipboard that refuses is said in one sentence, never silently', () => {
   // And a chat that turns out to have nothing to write says so rather than
   // copying an empty document.
   assert.match(palette, /Nothing to copy in this chat\./)
+})
+
+test('a chat can be copied only while this window holds a transcript for it', () => {
+  // The offer rule both surfaces ask: the copy reads this window's own record
+  // and fetches nothing, so a chat with no transcript here cannot be offered a
+  // copy it would fail to make.
+  assert.equal(canCopyChat(null), false)
+  assert.equal(canCopyChat(undefined), false)
+  assert.equal(canCopyChat({ id: 'c1', title: 'T' }), false, 'a row with no transcript')
+  assert.equal(canCopyChat({ id: 'c1', timeline: [] }), false, 'an opened chat with no turns')
+  assert.equal(canCopyChat(chatOf([message('agent', '   ')])), false, 'turns that render to nothing')
+  assert.equal(canCopyChat(chatOf([message('human', 'Fix the failing test.')])), true)
+  assert.equal(canCopyChat(chatOf([tool({ result: 'ok. 12 passed' })])), true, 'a tool-only chat still copies')
+  // Another device's chat is offered only because its transcript is here.
+  assert.equal(canCopyChat(chatOf([message('human', 'Hi.')], { executor: 'machine-2' })), true)
+})
+
+test('the sentence after a copy says the count, and the shortened sections when there are any', () => {
+  assert.equal(copiedLine({ lines: 42 }), 'Copied 42 lines.')
+  assert.equal(copiedLine({ lines: 1 }), 'Copied 1 line.')
+  assert.equal(copiedLine({ lines: 1200 }), `Copied ${thousands(1200)} lines.`)
+  assert.equal(copiedLine({ lines: 42, shortened: 1 }), 'Copied 42 lines (1 section shortened).')
+  assert.equal(copiedLine({ lines: 42, shortened: 3 }), 'Copied 42 lines (3 sections shortened).')
 })

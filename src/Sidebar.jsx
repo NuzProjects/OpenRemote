@@ -151,6 +151,14 @@ export default function Sidebar({
   // something else.
   const needs = useMemo(() => needsYou(rows), [rows])
 
+  // The chat list is one Tab stop, not one per row. A working sidebar holds
+  // dozens of chats, and a Tab per row (plus a Tab for each row's hover archive
+  // button) put the first control of the view 40-odd Tabs away, which makes
+  // the whole console unusable from the keyboard. Exactly one row carries
+  // tabindex 0; the arrows move between rows, Home and End go to the ends, and
+  // the archive button stays a pointer shortcut (Mod+Shift+A and the palette
+  // already own archiving from the keyboard).
+  const [rovingId, setRovingId] = useState(null)
   // What each waiting chat is holding, one line each, read once per question.
   // There is no clock here of its own: the sessions beat is the only thing
   // that changes `needs`, an answer is cached under the stamp it was read at,
@@ -235,6 +243,22 @@ export default function Sidebar({
   useShortcut('prev-chat', step((at) => order[at === -1 ? order.length - 1 : Math.max(at - 1, 0)]))
   useShortcut('first-chat', step(() => order[0]))
   useShortcut('last-chat', step(() => order[order.length - 1]))
+
+  // The row that holds the list's single Tab stop, and the arrows that move it.
+  // `order` is the same sequence the next/prev-chat shortcuts walk and the same
+  // order the rows are drawn in, so a row that is collapsed away cannot hold a
+  // stop no one can see.
+  const rovingRow = rovingId && order.includes(rovingId) ? rovingId : order[0] ?? null
+  const moveRoving = (fromId, to) => {
+    if (!order.length) return
+    const at = order.indexOf(fromId)
+    if (at < 0) return
+    const next = to === 'first' ? 0 : to === 'last' ? order.length - 1 : at + to
+    const id = order[Math.max(0, Math.min(order.length - 1, next))]
+    if (!id || id === fromId) return
+    setRovingId(id)
+    document.querySelector(`[data-chat-row="${CSS.escape(id)}"]`)?.focus()
+  }
   useShortcut('search-chats', () => {
     if (!open) onReveal?.()
     // After the reveal renders, so the field is there to take focus.
@@ -422,6 +446,18 @@ export default function Sidebar({
         // not a colour and not a number. The status column keeps its own
         // language, so "not read" and "waiting" cannot be mistaken.
         data-unread={unread.has(row.id) ? 'true' : undefined}
+        // The list's single Tab stop lives on one row (see rovingRow); the
+        // arrows walk the whole list from wherever focus is, Home and End go
+        // to the ends, and Enter is the button's own.
+        data-chat-row={row.id}
+        tabIndex={rovingRow === row.id ? 0 : -1}
+        onFocus={() => setRovingId(row.id)}
+        onKeyDown={(e) => {
+          const to = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : e.key === 'Home' ? 'first' : e.key === 'End' ? 'last' : null
+          if (to == null) return
+          e.preventDefault()
+          moveRoving(row.id, to)
+        }}
         onClick={() => onSelect(row.id)}
       >
         {/* the harness's mark leads - every harness, one
@@ -444,19 +480,25 @@ export default function Sidebar({
           <span className="chat-device pv">{row.device}</span>
         )}
         {mode === 'local' && row.synced && (
-          <Cloud size={11} className="chat-synced" aria-label="Synced to your devices" />
+          // What is true right now: the chat is set to sync. Its first copy
+          // may still be on its way, so the mark promises the setting rather
+          // than a delivery the next device has not confirmed.
+          <Cloud size={11} className="chat-synced" aria-label="Syncs to your devices" />
         )}
         <span
           className={`dot dot--${row.offline ? 'offline' : row.status}`}
           title={row.offline ? (privacy ? 'Offline' : `${row.device} is offline`) : undefined}
         />
       </button>
-      {/* Archive hides the chat from this list; Settings keeps it. */}
+      {/* Archive hides the chat from this list; Settings keeps it. A pointer
+          shortcut only: the row keeps the list's one Tab stop, and archiving
+          from the keyboard is Mod+Shift+A or the palette's own row. */}
       <button
         type="button"
         className="chat-archive"
         title="Archive this chat"
         aria-label={`Archive ${row.title}`}
+        tabIndex={-1}
         onClick={() => archive(row.id)}
       >
         <Archive size={12} />

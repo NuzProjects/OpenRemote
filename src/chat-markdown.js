@@ -160,3 +160,12 @@ export function copiedLine({ lines = 0, shortened = 0 } = {}) {
   if (!shortened) return `${body}.`
   return `${body} (${shortened} ${shortened === 1 ? 'section' : 'sections'} shortened).`
 }
+
+/// Whether this window can copy a chat at all, so both the palette's row and
+/// the sidebar's own menu ask one question. The copy reads this window's own
+/// record and fetches nothing, so a chat with no transcript here has nothing to
+/// give, and a chat whose only turns render to nothing is the same case.
+export function canCopyChat(chat) {
+  if (!Array.isArray(chat?.timeline) || chat.timeline.length === 0) return false
+  return chatMarkdown(chat) !== null
+}
