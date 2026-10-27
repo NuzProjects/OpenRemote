@@ -30,7 +30,10 @@ const RETRIED = 'It keeps trying on its own, every half minute at worst. Try now
 const NOTES = {
   start: RETRIED,
   stopped: RETRIED,
-  silent: 'It is still running. Try now starts it again.',
+  // Nothing is retrying this process, and nothing proves it is stuck: a
+  // first run on a busy machine can take this long and still finish. Try
+  // now is a restart, so the sentence has to say what it costs.
+  silent: 'It may still be finishing. Try now restarts it.',
 }
 
 /**
