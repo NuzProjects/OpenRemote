@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { keepNav, sameNav } from './nav.js'
+import { keepNav, pruneNav, sameNav } from './nav.js'
 
 const nav = (...history) => ({ history, hIndex: history.length - 1 })
 
@@ -50,4 +50,33 @@ test('keepNav is identity-preserving exactly when the state is unchanged', () =>
   // The shell calls it as a state updater: an unchanged beat must hand back
   // the very object React already has.
   assert.equal(keepNav(keepNav(a, same), same), a)
+})
+
+// ---- pruning the steps whose chat is gone ----
+
+test('nothing known gone leaves the very object, so a beat cannot re-render', () => {
+  const a = nav('new', 'chat-1', 'chat-2')
+  assert.equal(pruneNav(a, new Set()), a)
+  assert.equal(pruneNav(a, new Set(['chat-9'])), a, 'a gone id that is not a step is not a change')
+  assert.equal(pruneNav(a, null), a)
+})
+
+test('a chat gone from the middle keeps the user where they are', () => {
+  // new > chat-1 > chat-2, standing on chat-2. chat-1 is deleted elsewhere:
+  // the step goes, and chat-2 stays the current view.
+  const pruned = pruneNav({ history: ['new', 'chat-1', 'chat-2'], hIndex: 2 }, new Set(['chat-1']))
+  assert.deepEqual(pruned, { history: ['new', 'chat-2'], hIndex: 1 })
+})
+
+test('a chat gone under the user falls back to the previous step, not to the top', () => {
+  const pruned = pruneNav({ history: ['new', 'chat-1', 'chat-2'], hIndex: 2 }, new Set(['chat-2']))
+  assert.deepEqual(pruned, { history: ['new', 'chat-1'], hIndex: 1 }, 'the step before the deleted one')
+  // The first step gone while the user is on it: the next remaining one.
+  const head = pruneNav({ history: ['chat-1', 'new'], hIndex: 0 }, new Set(['chat-1']))
+  assert.deepEqual(head, { history: ['new'], hIndex: 0 })
+})
+
+test('every step gone leaves nothing to stand on', () => {
+  const pruned = pruneNav({ history: ['chat-1', 'chat-2'], hIndex: 1 }, new Set(['chat-1', 'chat-2']))
+  assert.deepEqual(pruned, { history: [], hIndex: 0 })
 })

@@ -3,8 +3,10 @@
 // the open chat (resuming from its cursor across reconnects).
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { DaemonApi, clearConnection, loadConnection, nextRetryDelay, saveConnection, sessionGone } from '../api/daemon.js'
+import { DaemonApi, clearConnection, loadConnection, nextRetryDelay, sameDaemon, saveConnection, sessionGone } from '../api/daemon.js'
 import { chatFromSession, foldEvent, mergeSessionIntoChat, vanishedChatIds } from './reducer.js'
+import { createBeatLoop } from './beat.js'
+import { samePayload } from './same.js'
 import { isMobile, openExternal } from '../platform.js'
 import { loadArchived, saveArchived, withArchived } from '../archive.js'
 
@@ -30,10 +32,17 @@ export function ConsoleProvider({ children }) {
   // moment right after the switch has to see the new daemon already.
   const apiRef = useRef(api)
   const stillCurrent = useCallback((asked) => apiRef.current === asked, [])
+  // The running beat, so the waiting screen's retry can ask now instead of
+  // waiting out the interval.
+  const beatLoopRef = useRef(null)
   const [connection, setConnection] = useState(() => {
     const saved = loadConnection()
     return { state: saved.url && saved.token ? 'connecting' : 'new', error: null }
   })
+  // What the beat asks about at settle time: the state at the moment the
+  // answer lands, never the value captured when the loop started.
+  const connectionRef = useRef(connection.state)
+  connectionRef.current = connection.state
   // What the shell last said about the daemon, including why it is not
   // running. Null until it answers once.
   const [daemon, setDaemon] = useState(null)
@@ -54,6 +63,23 @@ export function ConsoleProvider({ children }) {
   // The registered projects - daemon-side, the one list every surface
   // reads (the sidebar's groups, the composer's picker, the pill).
   const [projects, setProjects] = useState([])
+  // Whether each collection has answered at least once. An empty list means
+  // "there are none" only after the daemon said so: before the first answer
+  // the same [] would read as an empty state ("No rules yet") rather than a
+  // list still on its way. Set by whichever read lands first, the boot's or
+  // a beat's, and cleared when the console points at another daemon.
+  const [machinesAnswered, setMachinesAnswered] = useState(false)
+  const [mcpServersAnswered, setMcpServersAnswered] = useState(false)
+  const [automationsAnswered, setAutomationsAnswered] = useState(false)
+  const [projectsAnswered, setProjectsAnswered] = useState(false)
+  // A daemon the console has not heard from yet: whatever list is left on
+  // screen belongs to the previous one, so the flags go back to loading.
+  const resetAnswered = useCallback(() => {
+    setMachinesAnswered(false)
+    setMcpServersAnswered(false)
+    setAutomationsAnswered(false)
+    setProjectsAnswered(false)
+  }, [])
   const [chats, setChats] = useState({})
   const [modelsByHarness, setModelsByHarness] = useState({})
   // Cloud: this computer's account state, and the account's devices.
@@ -71,19 +97,38 @@ export function ConsoleProvider({ children }) {
   // between polls, fresher than the list).
   const polledIdsRef = useRef(new Set())
 
+  // Everything one connection's daemon answered, back to the empty state.
+  // Pointing the console at another daemon must not leave that daemon's
+  // machines, rules, plugins or devices on screen as if they were its own:
+  // the boot fills what it can, and the beat heals whatever failed.
+  const resetDaemonData = useCallback(() => {
+    setCapabilities(null)
+    setMachines([])
+    setMcpServers([])
+    setPlugins(null)
+    setMarketplaces([])
+    setCatalog(null)
+    setAutomations([])
+    setProjects([])
+    setCloud(null)
+    setDevices([])
+    setCapabilitiesByDevice({})
+    resetAnswered()
+  }, [resetAnswered])
+
   const connect = useCallback((url, token) => {
     // A catalog belongs to the daemon that answered it: the next connection
     // may be another machine's daemon, with other harnesses and endpoints.
     commandCache.current.clear()
     setModelsByHarness({})
     setEndpointsByHarness({})
-    setCatalog(null)
+    resetDaemonData()
     saveConnection(url, token)
     const next = new DaemonApi(url, token)
     apiRef.current = next
     setApi(next)
     setConnection({ state: 'connecting', error: null })
-  }, [])
+  }, [resetDaemonData])
 
   const disconnect = useCallback(() => {
     // The same, on the way out: nothing this daemon answered may be shown
@@ -91,7 +136,7 @@ export function ConsoleProvider({ children }) {
     commandCache.current.clear()
     setModelsByHarness({})
     setEndpointsByHarness({})
-    setCatalog(null)
+    resetDaemonData()
     clearConnection()
     const next = new DaemonApi(null, null)
     apiRef.current = next
@@ -100,7 +145,7 @@ export function ConsoleProvider({ children }) {
     setSessions([])
     setChats({})
     setWatched([])
-  }, [])
+  }, [resetDaemonData])
 
   // One way in for everything the shell says about the daemon, whether it
   // arrives as an answer to daemon_info or on the shell's own event. A
@@ -112,7 +157,12 @@ export function ConsoleProvider({ children }) {
       if (!info) return
       setDaemon(info)
       if (info.url && info.token) {
-        connect(info.url, info.token)
+        // The same daemon, reported again (a spawn that reused its port, a
+        // retry that found it already up): re-pointing at it would tear down
+        // every live stream and replay every transcript for no change. The
+        // boot and the beat are already dialing that address, so the report
+        // is news about nothing.
+        if (!sameDaemon(apiRef.current, info.url, info.token)) connect(info.url, info.token)
         return
       }
       if (info.error) {
@@ -129,6 +179,9 @@ export function ConsoleProvider({ children }) {
       const { invoke } = await import('@tauri-apps/api/core')
       await invoke('daemon_restart')
       setDaemon((d) => (d ? { ...d, error: null } : d))
+      // A retry takes the pending beat's place: the answer is worth having
+      // now, not up to one interval from now.
+      beatLoopRef.current?.kick()
     } catch {
       /* the screen keeps saying what it said */
     }
@@ -240,50 +293,73 @@ export function ConsoleProvider({ children }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Verify the connection, then load capabilities + sessions.
+  // Verify the connection, then load what the daemon has. Every read settles
+  // on its own: one route that answers an error (a half-written MCP config, a
+  // rules file the daemon cannot parse, a harness list mid-install) must not
+  // cost the console its session list, its capabilities, or the connection
+  // itself. The connection follows the health lists alone - the same four the
+  // beat watches (BEAT_LISTS in beat.js) - and a beat refills whatever failed
+  // here, so an unhappy route catches up without a restart.
   useEffect(() => {
-    if (!api.ready || connection.state === 'connected') return
+    if (!api.ready || connection.state === 'connected') return undefined
     let cancelled = false
     ;(async () => {
-    try {
-      await api.health()
-      const caps = await api.capabilities()
-      const list = await api.sessions()
-      const machineList = await api.machines()
-      const mcpList = await api.mcpServers()
-      const pluginList = await api.plugins().catch(() => null)
-      const marketList = await api.marketplaces().catch(() => [])
-      const catalogList = await api.marketplaceCatalog().catch(() => null)
-      const rules = await api.automations()
-      const projectList = await api.projects().catch(() => [])
-      // Cloud is optional: a daemon without it still connects.
-      const [cloudView, deviceList] = await Promise.allSettled([api.cloud(), api.cloudDevices()])
-      if (cancelled) return
-      if (cloudView.status === 'fulfilled') setCloud(cloudView.value)
-      if (deviceList.status === 'fulfilled') setDevices(deviceList.value?.devices ?? [])
-      setCapabilities(caps)
-      setSessions(list ?? [])
-      setMachines(machineList ?? [])
-      setMcpServers(mcpList ?? [])
-      setPlugins(pluginList)
-      setMarketplaces(marketList ?? [])
-      setCatalog(catalogList)
-      setAutomations(rules ?? [])
-      setProjects(projectList ?? [])
-      setConnection({ state: 'connected', error: null })
-    } catch (err) {
-        if (cancelled) return
-        // A fetch that never answered is the daemon being unreachable -
-        // say that, not the browser's own "Failed to fetch". Anything the
-        // daemon answered with (a refused token, a status) is its words.
+      const [health, caps, list, machineList, mcpList, pluginList, marketList, catalogList, rules, projectList, cloudView, deviceList] =
+        await Promise.allSettled([
+          api.health(),
+          api.capabilities(),
+          api.sessions(),
+          api.machines(),
+          api.mcpServers(),
+          api.plugins(),
+          api.marketplaces(),
+          api.marketplaceCatalog(),
+          api.automations(),
+          api.projects(),
+          api.cloud(),
+          api.cloudDevices(),
+        ])
+      if (cancelled || !stillCurrent(api)) return
+      const healthLists = [list, machineList, mcpList, rules]
+      if (!healthLists.some((result) => result.status === 'fulfilled')) {
+        // Nothing the console reads as health arrived: the daemon is
+        // unreachable or refusing. The words are the ones the serial chain
+        // used, so the waiting screen says the same thing it did before.
+        const first = [...healthLists, health].find((result) => result.status === 'rejected')
+        const err = first?.reason
         const unreachable = err instanceof TypeError
         setConnection({
           state: 'error',
           error: unreachable
             ? "The daemon didn't answer - check that it's running, or reconnect from Settings."
-            : err.message ?? String(err),
+            : err?.message ?? String(err),
         })
+        return
       }
+      if (caps.status === 'fulfilled') setCapabilities(caps.value ?? null)
+      if (cloudView.status === 'fulfilled') setCloud(cloudView.value)
+      if (deviceList.status === 'fulfilled') setDevices(deviceList.value?.devices ?? [])
+      if (list.status === 'fulfilled') setSessions(list.value ?? [])
+      if (machineList.status === 'fulfilled') {
+        setMachines(machineList.value ?? [])
+        setMachinesAnswered(true)
+      }
+      if (mcpList.status === 'fulfilled') {
+        setMcpServers(mcpList.value ?? [])
+        setMcpServersAnswered(true)
+      }
+      if (rules.status === 'fulfilled') {
+        setAutomations(rules.value ?? [])
+        setAutomationsAnswered(true)
+      }
+      if (projectList.status === 'fulfilled') {
+        setProjects(projectList.value ?? [])
+        setProjectsAnswered(true)
+      }
+      if (pluginList.status === 'fulfilled') setPlugins(pluginList.value)
+      if (marketList.status === 'fulfilled') setMarketplaces(marketList.value ?? [])
+      if (catalogList.status === 'fulfilled') setCatalog(catalogList.value)
+      setConnection({ state: 'connected', error: null })
     })()
     return () => {
       cancelled = true
@@ -291,51 +367,84 @@ export function ConsoleProvider({ children }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, connection.state])
 
-  // Poll the live lists while a daemon is configured (the sidebar's
-  // truth; machines, MCP servers, and rules ride the same beat). A single
-  // dropped call is nothing - but three beats with no answer at all
-  // means the daemon is gone, and the connection says so instead of
-  // freezing quietly on stale data. The poll keeps watching: the first
-  // answering beat heals it, and no screen has to be reloaded.
+  // The beat: the sidebar's truth, machines, MCP servers and rules ride it,
+  // and capabilities ride it too so a harness installed, removed or signed in
+  // after the connection appears without a restart. The cadence and the death
+  // rule live in beat.js, tested there with mocked timers; this effect owns
+  // the calls and the state writes. A beat never starts before the previous
+  // one settled, so a slow daemon is not asked again while its answer is
+  // still out, and three silent beats still trip the banner.
   useEffect(() => {
-    if (!api.ready) return
-    let misses = 0
-    const poll = setInterval(async () => {
-      const [sessionList, machineList, mcpList, ruleList, projectList, cloudView, deviceList] =
-        await Promise.allSettled([
-          api.sessions(),
-          api.machines(),
-          api.mcpServers(),
-          api.automations(),
-          api.projects(),
-          api.cloud(),
-          api.cloudDevices(),
-        ])
-      if (cloudView.status === 'fulfilled') setCloud(cloudView.value)
-      if (deviceList.status === 'fulfilled') setDevices(deviceList.value?.devices ?? [])
-      if (sessionList.status === 'fulfilled') setSessions(sessionList.value ?? [])
-      if (machineList.status === 'fulfilled') setMachines(machineList.value ?? [])
-      if (mcpList.status === 'fulfilled') setMcpServers(mcpList.value ?? [])
-      if (ruleList.status === 'fulfilled') setAutomations(ruleList.value ?? [])
-      if (projectList.status === 'fulfilled') setProjects(projectList.value ?? [])
-      const answered = [sessionList, machineList, mcpList, ruleList].some(
-        (r) => r.status === 'fulfilled',
-      )
-      if (answered) {
-        misses = 0
-        if (connection.state === 'error') setConnection({ state: 'connected', error: null })
-      } else {
-        misses += 1
-        if (misses >= 3 && connection.state === 'connected') {
+    if (!api.ready) return undefined
+    const beat = createBeatLoop({
+      currentConnection: () => connectionRef.current,
+      run: async () => {
+        const [sessionList, machineList, mcpList, ruleList, projectList, cloudView, deviceList, caps] =
+          await Promise.allSettled([
+            api.sessions(),
+            api.machines(),
+            api.mcpServers(),
+            api.automations(),
+            api.projects(),
+            api.cloud(),
+            api.cloudDevices(),
+            api.capabilities(),
+          ])
+        // A beat from the daemon this console has left decides nothing.
+        if (!stillCurrent(api)) return null
+        if (cloudView.status === 'fulfilled') setCloud(cloudView.value)
+        if (deviceList.status === 'fulfilled') setDevices(deviceList.value?.devices ?? [])
+        if (sessionList.status === 'fulfilled') setSessions(sessionList.value ?? [])
+        if (machineList.status === 'fulfilled') {
+          setMachines(machineList.value ?? [])
+          setMachinesAnswered(true)
+        }
+        if (mcpList.status === 'fulfilled') {
+          setMcpServers(mcpList.value ?? [])
+          setMcpServersAnswered(true)
+        }
+        if (ruleList.status === 'fulfilled') {
+          setAutomations(ruleList.value ?? [])
+          setAutomationsAnswered(true)
+        }
+        if (projectList.status === 'fulfilled') {
+          setProjects(projectList.value ?? [])
+          setProjectsAnswered(true)
+        }
+        // Harness status words move with installs and sign-ins. A fresh
+        // payload replaces the old one; an identical one keeps its identity,
+        // because a new array every 2.5 s re-renders every harness row.
+        if (caps.status === 'fulfilled') {
+          setCapabilities((current) => (samePayload(current, caps.value) ? current : caps.value ?? null))
+        }
+        return {
+          sessions: sessionList,
+          machines: machineList,
+          mcpServers: mcpList,
+          automations: ruleList,
+          projects: projectList,
+          cloud: cloudView,
+          cloudDevices: deviceList,
+          capabilities: caps,
+        }
+      },
+      onBeat: ({ connection: next }) => {
+        if (next === 'connected') setConnection({ state: 'connected', error: null })
+        else if (next === 'error') {
           setConnection({
             state: 'error',
             error: 'The daemon stopped answering - it may have exited. Restart the app, or reconnect from Settings.',
           })
         }
-      }
-    }, 2500)
-    return () => clearInterval(poll)
-  }, [api, connection.state])
+      },
+    })
+    beatLoopRef.current = beat
+    beat.start()
+    return () => {
+      beat.stop()
+      if (beatLoopRef.current === beat) beatLoopRef.current = null
+    }
+  }, [api, stillCurrent])
 
   // Keep chat records in step with the polled session list: merge
   // identities (status/workspace) without disturbing folded transcripts.
@@ -375,12 +484,14 @@ export function ConsoleProvider({ children }) {
   }, [])
 
   // One stream per watched chat: load its decisions, replay what it hasn't
-  // folded yet, then follow it live, reconnecting from its cursor.
+  // folded yet, then follow it live, reconnecting from its cursor. The
+  // cursor is the fold's (`foldedSeq`), never a separate transport count: an
+  // event that arrived while the chat had no record was not folded, and a
+  // transport cursor would move past it and into a permanent gap.
   const openStream = useCallback(
     (id) => {
-      const stream = { cancelled: false, stop: null, retry: null, cursor: null, retryDelay: 0 }
+      const stream = { cancelled: false, stop: null, retry: null, retryDelay: 0 }
       const apply = (event) => {
-        stream.cursor = event.seq
         // The wire is talking again: the next close starts the ladder over.
         stream.retryDelay = 0
         setChats((current) => {
@@ -400,13 +511,13 @@ export function ConsoleProvider({ children }) {
             // the dead id every 800ms forever. The pane lets go of the
             // chat on its own once the polled session list drops it.
             if (sessionGone(err)) return
-            // The daemon replays anything missed from the cursor. The
-            // wait doubles on every close in a row, so a daemon that
+            // The daemon replays everything past the client's fold cursor.
+            // The wait doubles on every close in a row, so a daemon that
             // keeps dying is not dialed twice a second forever, and a
             // stream that talked resets it.
             stream.retryDelay = nextRetryDelay(stream.retryDelay)
             stream.retry = setTimeout(() => {
-              if (!stream.cancelled) follow(stream.cursor ?? chatsRef.current[id]?.foldedSeq ?? null)
+              if (!stream.cancelled) follow(chatsRef.current[id]?.foldedSeq ?? null)
             }, stream.retryDelay)
           },
         })
@@ -537,13 +648,17 @@ export function ConsoleProvider({ children }) {
       if (!api.ready || modelsByHarness[key]?.length) return modelsByHarness[key] ?? []
       try {
         const list = (await api.device(deviceId).models(harnessId)) ?? []
+        // An answer from a daemon this console has left describes another
+        // machine's catalog: the picker must not offer it, and the cache must
+        // not keep it (it is only ever filled once per key).
+        if (!stillCurrent(api)) return list
         if (list.length) setModelsByHarness((current) => ({ ...current, [key]: list }))
         return list
       } catch {
         return []
       }
     },
-    [api, modelsByHarness],
+    [api, modelsByHarness, stillCurrent],
   )
 
   // The custom model endpoints on a machine, metadata only (the keys
@@ -556,13 +671,14 @@ export function ConsoleProvider({ children }) {
       if (!api.ready) return endpointsByHarness[key] ?? []
       try {
         const list = (await api.device(deviceId).modelEndpoints({ harness: harnessId })) ?? []
+        if (!stillCurrent(api)) return list
         setEndpointsByHarness((current) => ({ ...current, [key]: list }))
         return list
       } catch {
         return endpointsByHarness[key] ?? []
       }
     },
-    [api, endpointsByHarness],
+    [api, endpointsByHarness, stillCurrent],
   )
 
   const refreshEndpoints = useCallback(
@@ -570,13 +686,14 @@ export function ConsoleProvider({ children }) {
       const key = `${deviceId ?? ''}:${harnessId}`
       try {
         const list = (await api.device(deviceId).modelEndpoints({ harness: harnessId })) ?? []
+        if (!stillCurrent(api)) return list
         setEndpointsByHarness((current) => ({ ...current, [key]: list }))
         return list
       } catch {
         return endpointsByHarness[key] ?? []
       }
     },
-    [api, endpointsByHarness],
+    [api, endpointsByHarness, stillCurrent],
   )
 
   // The models one custom endpoint lists today, fetched live through
@@ -609,20 +726,22 @@ export function ConsoleProvider({ children }) {
       if (!deviceId) return capabilities
       try {
         const caps = await api.device(deviceId).capabilities()
+        if (!stillCurrent(api)) return caps
         setCapabilitiesByDevice((current) => ({ ...current, [deviceId]: caps }))
         return caps
       } catch {
         return capabilitiesByDevice[deviceId] ?? null
       }
     },
-    [api, capabilities, capabilitiesByDevice],
+    [api, capabilities, capabilitiesByDevice, stillCurrent],
   )
 
   const refreshCloud = useCallback(async () => {
     const [view, list] = await Promise.allSettled([api.cloud(), api.cloudDevices()])
+    if (!stillCurrent(api)) return
     if (view.status === 'fulfilled') setCloud(view.value)
     if (list.status === 'fulfilled') setDevices(list.value?.devices ?? [])
-  }, [api])
+  }, [api, stillCurrent])
 
   // Sign-in happens in the system browser, which the daemon opens; the
   // poll picks up the result when the browser comes back. On a phone the
@@ -783,11 +902,16 @@ export function ConsoleProvider({ children }) {
 
   const refreshMachines = useCallback(async () => {
     try {
-      setMachines((await api.machines()) ?? [])
+      const list = (await api.machines()) ?? []
+      // A list from the daemon this console has left is another machine's
+      // machines; the beat that owns the new one fills it.
+      if (!stillCurrent(api)) return
+      setMachines(list)
+      setMachinesAnswered(true)
     } catch {
       /* the poll heals */
     }
-  }, [api])
+  }, [api, stillCurrent])
 
   const createMachine = useCallback(
     async (name, platform) => {
@@ -1032,11 +1156,14 @@ export function ConsoleProvider({ children }) {
 
   const refreshMcpServers = useCallback(async () => {
     try {
-      setMcpServers((await api.mcpServers()) ?? [])
+      const list = (await api.mcpServers()) ?? []
+      if (!stillCurrent(api)) return
+      setMcpServers(list)
+      setMcpServersAnswered(true)
     } catch {
       /* the poll heals */
     }
-  }, [api])
+  }, [api, stillCurrent])
 
   const addMcpServer = useCallback(
     async (machineId, entry) => {
@@ -1075,11 +1202,14 @@ export function ConsoleProvider({ children }) {
 
   const refreshAutomations = useCallback(async () => {
     try {
-      setAutomations((await api.automations()) ?? [])
+      const list = (await api.automations()) ?? []
+      if (!stillCurrent(api)) return
+      setAutomations(list)
+      setAutomationsAnswered(true)
     } catch {
       /* the poll heals */
     }
-  }, [api])
+  }, [api, stillCurrent])
 
   const saveAutomation = useCallback(
     async (rule) => {
@@ -1120,11 +1250,14 @@ export function ConsoleProvider({ children }) {
 
   const refreshProjects = useCallback(async () => {
     try {
-      setProjects((await api.projects()) ?? [])
+      const list = (await api.projects()) ?? []
+      if (!stillCurrent(api)) return
+      setProjects(list)
+      setProjectsAnswered(true)
     } catch {
       /* the poll heals */
     }
-  }, [api])
+  }, [api, stillCurrent])
 
   // Add a project - one folder this release, registered on the machine
   // that owns it (`apiFor(deviceId)` aims there in Cloud).
@@ -1177,6 +1310,10 @@ export function ConsoleProvider({ children }) {
       removeMarketplace,
       automations,
       projects,
+      machinesAnswered,
+      mcpServersAnswered,
+      automationsAnswered,
+      projectsAnswered,
       chats,
       watchChats,
       connect,
@@ -1260,6 +1397,10 @@ export function ConsoleProvider({ children }) {
       removeMarketplace,
       automations,
       projects,
+      machinesAnswered,
+      mcpServersAnswered,
+      automationsAnswered,
+      projectsAnswered,
       chats,
       watchChats,
       connect,

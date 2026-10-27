@@ -134,15 +134,74 @@ export function newRequestId() {
   return globalThis.crypto?.randomUUID?.() ?? `req-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
+// Wire one request's fetch signal: the timeout and the caller's own stop
+// each abort one controller, and this function owns both listeners so that
+// neither outlives the request. The symmetry is the point - a listener left
+// behind holds the whole call alive until its signal eventually fires - so
+// it is its own function, exported and tested against a fake pair of
+// signals instead of a real timer.
+//
+// `timeoutSignal` is injectable for that test; production never passes it,
+// and the budget remains the only way a timeout is made, which is what the
+// request-budget test watches.
+export function linkAbort({ timeoutMs = null, signal = null, timeoutSignal = null } = {}) {
+  const controller = new AbortController()
+  let timedOut = false
+  const onTimeout = () => {
+    timedOut = true
+    controller.abort()
+  }
+  const timer = timeoutSignal ?? (timeoutMs == null ? null : AbortSignal.timeout(timeoutMs))
+  if (timer != null) {
+    if (timer.aborted) onTimeout()
+    else timer.addEventListener('abort', onTimeout, { once: true })
+  }
+  const forward = signal == null ? null : () => controller.abort()
+  if (signal != null) {
+    if (signal.aborted) controller.abort()
+    else signal.addEventListener('abort', forward, { once: true })
+  }
+  return {
+    // The signal fetch gets: a browser reads a signal, and a request with
+    // neither a budget nor a caller stop asks for none (the installer).
+    signal: timer == null && signal == null ? null : controller.signal,
+    get timedOut() {
+      return timedOut
+    },
+    // Whatever ended the request, both listeners come off here. One that
+    // already fired is off by its own `once`, so this is safe on every path.
+    detach() {
+      if (timer != null) timer.removeEventListener('abort', onTimeout)
+      if (signal != null && forward != null) signal.removeEventListener('abort', forward)
+    },
+  }
+}
+
+// The address the client dials: a trailing slash is not part of it, and a
+// manual entry without a scheme is read as http (without one, fetch treats
+// the address as a relative path and fails confusingly). One function, so
+// the constructor and the comparison below cannot disagree.
+export function normaliseUrl(url) {
+  let clean = url?.replace(/\/+$/, '') ?? null
+  if (clean && !/^https?:\/\//.test(clean)) clean = `http://${clean}`
+  return clean
+}
+
+/// Whether a status report describes the daemon the console is already
+/// pointed at. The shell reports on start, on failure and on a respawn, and
+/// a report carrying the same address and token is the same daemon: taking
+/// it as a new one would tear down every live stream and replay every
+/// transcript to arrive where the console already was.
+export function sameDaemon(current, url, token) {
+  if (!current?.url) return false
+  return current.url === normaliseUrl(url) && current.token === token
+}
+
 export class DaemonApi {
   // `prefix` points every call at another of the user's devices, through
   // this daemon (`/devices/<id>`): the same API, answered over there.
   constructor(url, token, prefix = '') {
-    let clean = url?.replace(/\/+$/, '') ?? null
-    // Manual entry often omits the scheme; without one, fetch treats the
-    // address as a relative path and fails confusingly.
-    if (clean && !/^https?:\/\//.test(clean)) clean = `http://${clean}`
-    this.url = clean
+    this.url = normaliseUrl(url)
     this.token = token
     this.prefix = prefix
   }
@@ -156,36 +215,13 @@ export class DaemonApi {
     return Boolean(this.url && this.token)
   }
 
-  async call(method, path, body, { timeoutMs = CALL_TIMEOUT_MS, signal = null } = {}) {
+  async call(method, path, body, { timeoutMs = CALL_TIMEOUT_MS, signal = null, as = 'json' } = {}) {
     let response
     let text = ''
     // The timeout and the caller's own stop (an unmounting folder
-    // picker, say) each end the request, whichever fires first. The
-    // two aborts are told apart by who aborted: the timeout's error is
-    // "not answering", the caller's is a deliberate cancel the stopper
-    // ignores.
-    let timedOut = false
-    let controller = null
-    let forward = null
-    let fetchSignal = null
-    if (timeoutMs != null) {
-      const timeoutSignal = AbortSignal.timeout(timeoutMs)
-      controller = new AbortController()
-      const onTimeout = () => {
-        timedOut = true
-        controller.abort()
-      }
-      if (timeoutSignal.aborted) onTimeout()
-      else timeoutSignal.addEventListener('abort', onTimeout, { once: true })
-      fetchSignal = controller.signal
-    }
-    if (signal != null) {
-      controller ??= new AbortController()
-      forward = () => controller.abort()
-      if (signal.aborted) controller.abort()
-      else signal.addEventListener('abort', forward, { once: true })
-      fetchSignal = controller.signal
-    }
+    // picker, say) each end the request, whichever fires first. `linked`
+    // owns both listeners and takes them off however the request ends.
+    const linked = linkAbort({ timeoutMs, signal })
     try {
       response = await fetch(`${this.url}${this.prefix}${path}`, {
         method,
@@ -196,7 +232,7 @@ export class DaemonApi {
         body: body ? JSON.stringify(body) : undefined,
         // `null` opts out (the calls whose wait is the point); otherwise
         // the request must answer within `timeoutMs`.
-        signal: fetchSignal ?? undefined,
+        signal: linked.signal ?? undefined,
       })
       text = await response.text()
     } catch (err) {
@@ -205,7 +241,7 @@ export class DaemonApi {
       // have err.message to show - the browser's own "signal timed out"
       // says nothing. A caller's own stop is a deliberate cancel, not a
       // failure: the raw error rides through and the stopper ignores it.
-      if (timedOut) {
+      if (linked.timedOut) {
         throw new Error('The daemon did not answer in time')
       }
       if (signal?.aborted) {
@@ -216,7 +252,7 @@ export class DaemonApi {
       }
       throw err
     } finally {
-      if (forward != null && signal != null) signal.removeEventListener('abort', forward)
+      linked.detach()
     }
     let json = null
     try {
@@ -229,7 +265,10 @@ export class DaemonApi {
       error.status = response.status
       throw error
     }
-    return json
+    // One route answers a document rather than JSON (the third-party
+    // notices): same timeout, same abort rules, same error shape, and the
+    // caller gets the text it actually reads.
+    return as === 'text' ? text : json
   }
 
   health() {
@@ -237,15 +276,11 @@ export class DaemonApi {
   }
 
   // The one route that answers a document rather than JSON: the
-  // third-party notices, served as plain text because they are read,
-  // not parsed. Same token as everything else.
-  async notices() {
-    const response = await fetch(`${this.url}${this.prefix}/notices`, {
-      headers: { Authorization: `Bearer ${this.token}` },
-      signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
-    })
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    return response.text()
+  // third-party notices, served as plain text because they are read, not
+  // parsed. It rides call() so the timeout, the caller's stop and the
+  // error shape are the same ones every other route has.
+  notices() {
+    return this.call('GET', '/notices', null, { as: 'text' })
   }
 
   capabilities() {
@@ -287,9 +322,19 @@ export class DaemonApi {
     return this.call('POST', `/sessions/${id}/sync`, { request_id: newRequestId() })
   }
 
-  /** Deletes a synced chat on every device. */
-  deleteSession(id) {
-    return this.call('DELETE', `/sessions/${id}`)
+  /** Deletes a synced chat on every device. A 404 means the chat is already
+   *  gone - a second click, or a delete that landed from another device -
+   *  which is the outcome asked for, so it resolves instead of raising an
+   *  error over a row that is about to disappear anyway. Every other
+   *  answer (a chat that is not synced, a signed-out daemon) stays an
+   *  error: those are things the user has to hear. */
+  async deleteSession(id) {
+    try {
+      return await this.call('DELETE', `/sessions/${id}`)
+    } catch (err) {
+      if (err?.status === 404) return null
+      throw err
+    }
   }
 
   // Cloud mode: this computer's account and devices.

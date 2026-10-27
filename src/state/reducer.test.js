@@ -584,3 +584,68 @@ test('a session that dies mid-reply retires the live reply with no turn event', 
   foldEvent(waiting, event(3, { type: 'session.status_changed', status: 'waiting', reason: null }))
   assert.equal(railItems(waiting)[0].kind, 'stream')
 })
+
+test('a beat that says nothing new hands back the same record', () => {
+  // The poll lands every 2.5 s. A merge that allocates on every beat gives
+  // the shell a new chat object each time, and every view keyed on the chat
+  // re-renders while a turn is streaming. Identity is the signal that the
+  // beat had nothing to say, so it has to survive the merge.
+  const payload = session({ status: 'working', title: 'Release triage', updated_at: 1000 })
+  const chat = chatFromSession(payload)
+  foldEvent(chat, event(1, { type: 'message.delta', turn: 1, text: 'thinking out' }))
+
+  const merged = mergeSessionIntoChat(chat, { ...payload })
+  assert.equal(merged, chat, 'an unchanged beat is the same object, not a copy')
+
+  // A payload re-allocated from JSON counts as unchanged too: the arrays a
+  // beat carries (approved tools, the queue) are new references every time.
+  const withArrays = session({
+    approved_tools: ['Bash', 'Edit'],
+    queue: [{ id: 'q1', text: 'run the tests' }],
+    queue_paused: false,
+  })
+  const first = mergeSessionIntoChat(chatFromSession(withArrays), withArrays)
+  const again = mergeSessionIntoChat(first, {
+    ...withArrays,
+    approved_tools: ['Bash', 'Edit'],
+    queue: [{ id: 'q1', text: 'run the tests' }],
+  })
+  assert.equal(again, first, 'equal array contents are not a change')
+})
+
+test('a beat with a new fact is a new record, and the fold keeps its timeline', () => {
+  const chat = chatFromSession(session({ status: 'working' }))
+  foldEvent(chat, event(1, { type: 'message.delta', turn: 1, text: 'still writing' }))
+
+  // A fact the merge copies (the model) changed; nothing about the turn did,
+  // so the transcript array comes through by reference and the record is new
+  // because the beat had something to say.
+  const merged = mergeSessionIntoChat(chat, session({ status: 'working', model: 'opus' }))
+  assert.notEqual(merged, chat, 'a beat that changed a fact is a new record')
+  assert.equal(merged.model, 'opus')
+  assert.equal(merged.status, 'running')
+  assert.equal(merged.timeline, chat.timeline, 'an unchanged transcript array rides along by reference')
+
+  // A beat that ends the turn is also a new record, and there the merge
+  // retires the live block, which is a new array on purpose (pinned above).
+  const ended = mergeSessionIntoChat(chat, session({ status: 'idle' }))
+  assert.notEqual(ended, chat)
+  assert.equal(ended.status, 'idle')
+  assert.equal(ended.timeline.at(-1).kind, 'message')
+})
+
+test('a beat still wins over a fold when the two disagree', () => {
+  // The beat is the fresher snapshot for the identity facts. A stream event
+  // that moved the status in between must not turn the next beat into a
+  // no-op: the beat's value is the one that wins, which is why the merge
+  // compares values rather than trusting the payload to be unchanged.
+  const payload = session({ status: 'working', updated_at: 1000 })
+  const chat = chatFromSession(payload)
+  foldEvent(chat, event(1, { type: 'session.status_changed', status: 'stopped', reason: null }))
+  assert.equal(chat.status, 'stopped')
+
+  const merged = mergeSessionIntoChat(chat, { ...payload })
+  assert.notEqual(merged, chat)
+  assert.equal(merged.status, 'running', 'the beat reasserts what it says')
+  assert.equal(merged.running, true)
+})

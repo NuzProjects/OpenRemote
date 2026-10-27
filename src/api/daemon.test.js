@@ -5,9 +5,12 @@ import {
   DaemonApi,
   KEEP_ALIVE_MS,
   STREAM_IDLE_MS,
+  linkAbort,
   nextRetryDelay,
+  normaliseUrl,
   parseCursor,
   parseSseFrame,
+  sameDaemon,
   sessionGone,
 } from './daemon.js'
 
@@ -504,4 +507,32 @@ test('a device-scoped client streams that device, not this daemon', async () => 
     'http://daemon/devices/machine-7/sessions/s1/events',
     'http://daemon/devices/machine-7/sessions/s1/events?after=4',
   ])
+})
+
+// ---- the same daemon, reported twice ----
+
+test('an address is normalised once, so two spellings are one daemon', () => {
+  assert.equal(normaliseUrl('http://127.0.0.1:5175/'), 'http://127.0.0.1:5175')
+  assert.equal(normaliseUrl('127.0.0.1:5175'), 'http://127.0.0.1:5175')
+  assert.equal(normaliseUrl('https://daemon.example//'), 'https://daemon.example')
+  assert.equal(normaliseUrl(null), null)
+  // The client dials the same normalised form, which is why the comparison
+  // below can be a plain equality.
+  assert.equal(new DaemonApi('127.0.0.1:5175/', 'token').url, 'http://127.0.0.1:5175')
+})
+
+test('a status report for the same daemon is recognised, a changed one is not', () => {
+  // The shell reports the daemon on start, on failure and on a respawn. The
+  // same address and token is the same daemon: a reconnect would tear down
+  // every stream for nothing.
+  const api = new DaemonApi('http://127.0.0.1:5175', 'token')
+  assert.equal(sameDaemon(api, 'http://127.0.0.1:5175', 'token'), true)
+  assert.equal(sameDaemon(api, '127.0.0.1:5175/', 'token'), true, 'the same address, typed another way')
+  assert.equal(sameDaemon(api, 'http://127.0.0.1:5176', 'token'), false, 'a respawn on a new port')
+  assert.equal(sameDaemon(api, 'http://127.0.0.1:5175', 'other-token'), false, 'a new token')
+  assert.equal(
+    sameDaemon(new DaemonApi(null, null), 'http://127.0.0.1:5175', 'token'),
+    false,
+    'a first connection is not the same daemon',
+  )
 })

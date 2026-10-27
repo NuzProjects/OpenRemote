@@ -93,6 +93,15 @@ export function chatFromSession(session) {
 /// total, so nothing else can restore them). The title is the one fact the
 /// stamp decides: the daemon's name is the truth, but a beat taken before a
 /// rename this console already folded must not take the newer name back.
+///
+/// A beat that changes nothing returns the record it was given. The poll
+/// lands every 2.5 s, so a merge that always allocates would hand the
+/// shell a new chat object on every beat and re-render the whole app while
+/// a turn is streaming: identity here is the difference between "the beat
+/// said the same thing" and "the beat said something new", and the views
+/// are keyed on it. The check is on values, not on the payload, because a
+/// fold can change a record between beats (a rename, a status event) and
+/// the beat must still win in exactly the cases it won before.
 export function mergeSessionIntoChat(existing, session) {
   const fresh = chatFromSession(session)
   // The session's last-write stamp says when this snapshot was taken, so a
@@ -125,7 +134,33 @@ export function mergeSessionIntoChat(existing, session) {
     retireLiveItems({ timeline }, null)
     merged.timeline = timeline
   }
-  return merged
+  return sameRecord(merged, existing) ? existing : merged
+}
+
+/// Whether two chat records carry the same values, which is what lets the
+/// merge above hand back the old one. Arrays (the queue, the approved
+/// tools) are re-allocated from every payload, so they are compared item by
+/// item; anything deeper is a folded object the merge passes through by
+/// reference, so identity is the right test for it.
+function sameRecord(next, existing) {
+  for (const key of Object.keys(next)) {
+    if (!sameValue(next[key], existing[key])) return false
+  }
+  return true
+}
+
+function sameValue(a, b) {
+  if (Object.is(a, b)) return true
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) return false
+    return a.every((item, i) => sameValue(item, b[i]))
+  }
+  if (a && b && typeof a === 'object' && typeof b === 'object') {
+    const keys = Object.keys(a)
+    if (keys.length !== Object.keys(b).length) return false
+    return keys.every((key) => sameValue(a[key], b[key]))
+  }
+  return false
 }
 
 /// The chats whose sessions the polled list no longer carries - a chat

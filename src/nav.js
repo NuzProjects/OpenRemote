@@ -27,3 +27,25 @@ export function sameNav(a, b) {
 export function keepNav(previous, next) {
   return sameNav(previous, next) ? previous : next
 }
+
+/// Take the steps whose chat is known gone out of the history. A chat the
+/// console has not heard of yet is not gone - the first beat after a
+/// reconnect is empty, and treating that as a deletion would wipe the back
+/// stack on every reconnect - so the caller names the gone ones and nothing
+/// else is touched. The user keeps standing on the same view when it
+/// survived, and on the nearest remaining step before it when it did not.
+/// Returns the object it was given when there was nothing to prune, so a
+/// beat cannot re-render the shell by rebuilding the same history.
+export function pruneNav(nav, gone) {
+  if (!gone || gone.size === 0) return nav
+  const history = nav?.history ?? []
+  if (!history.some((view) => gone.has(view))) return nav
+  let hIndex = 0
+  const kept = []
+  for (let i = 0; i < history.length; i += 1) {
+    if (gone.has(history[i])) continue
+    if (i <= (nav.hIndex ?? 0)) hIndex = kept.length
+    kept.push(history[i])
+  }
+  return { history: kept, hIndex: Math.min(hIndex, Math.max(kept.length - 1, 0)) }
+}
