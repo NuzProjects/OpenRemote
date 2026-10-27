@@ -1,0 +1,64 @@
+// The rules list's search, wired: one field, one filtered list, the count
+// line only while filtering, and the two empty answers kept apart. The
+// matching itself lives in automation.js and is pinned in automation.test.js.
+
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import { readFileSync } from 'node:fs'
+
+const source = (file) => readFileSync(new URL(`./${file}`, import.meta.url), 'utf8')
+
+test('one search field over the list, and only when there is a list', () => {
+  const view = source('AutomationsView.jsx')
+  assert.match(view, /import \{[\s\S]{0,220}ruleSearchHint,/)
+  assert.match(view, /import \{[\s\S]{0,220}searchRules,/)
+  assert.match(view, /const shown = useMemo\(\(\) => searchRules\(rules, query\), \[rules, query\]\)/)
+  assert.match(view, /\{rules\.length > 0 && \(\s*<div className="am-toolbar">/)
+  assert.match(view, /className="am-search-input"/)
+  assert.match(view, /aria-label="Search rules"/)
+  // The hint is the rule's, not a hardcoded string: it appears only when the
+  // list is long enough for it.
+  assert.match(view, /placeholder=\{ruleSearchHint\(rules\.length\)\}/)
+  assert.doesNotMatch(view, /placeholder="Search rules"/)
+})
+
+test('Escape clears the field, then leaves it, like the sidebar search', () => {
+  const view = source('AutomationsView.jsx')
+  assert.match(view, /if \(e\.key !== 'Escape'\) return/)
+  assert.match(view, /if \(query\) setQuery\(''\)/)
+  assert.match(view, /else e\.currentTarget\.blur\(\)/)
+  // And the field has its own clear button while there is something to clear.
+  assert.match(view, /className="am-search-clear"/)
+})
+
+test('the list draws what the query matched, in the order it already had', () => {
+  const view = source('AutomationsView.jsx')
+  assert.match(view, /\{shown\.map\(\(rule\) => \{/)
+  assert.doesNotMatch(view, /\{rules\.map\(\(rule\) => \{/)
+  // The header still counts every rule: the search narrows the list, not the
+  // inventory.
+  assert.match(view, /rules\.length === 1 \? 'rule' : 'rules'\} · \$\{enabledCount\} enabled/)
+})
+
+test('the count line appears while filtering, and the empty answers stay apart', () => {
+  const view = source('AutomationsView.jsx')
+  assert.match(view, /const filtering = query\.trim\(\)\.length > 0/)
+  assert.match(view, /filtering && shown\.length > 0 && \(/)
+  assert.match(view, /ruleCountLine\(shown\.length, rules\.length\)/)
+  // No rules at all: the invitation, only once the daemon has answered.
+  assert.match(view, /\{automationsAnswered \? RULE_EMPTY_NONE : 'Loading the rules…'\}/)
+  // A query that found nothing: its own sentence, and never the invitation.
+  assert.match(view, /filtering && rules\.length > 0 && shown\.length === 0/)
+  assert.match(view, /ruleEmptyLine\(query\)/)
+})
+
+test('the field and the count have styles of their own, motion covered twice', () => {
+  const css = source('automations.css')
+  for (const rule of ['.am-toolbar', '.am-search', '.am-search-input', '.am-search-clear', '.am-count']) {
+    assert.match(css, new RegExp(rule.replace('.', '\\.')), `${rule} is styled`)
+  }
+  // The field fades its border on focus like every other field; the two
+  // motion switches cover it.
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{\s*\.am-search-input \{/)
+  assert.match(css, /html\[data-reduce-motion\] \.am-search-input \{/)
+})

@@ -518,6 +518,91 @@ html[data-reduce-motion] .am-row-actions {
   width: min(640px, 100%);
 }
 
+/* The list's search sits in the same column as the rules, so the field's
+   edges line up with theirs; the count is a line under it, quiet enough to
+   read as a fact about the list rather than a new heading. */
+.am-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: min(640px, 100%);
+  margin-top: 14px;
+}
+
+.am-search {
+  position: relative;
+  display: flex;
+  flex: 1;
+  align-items: center;
+  min-width: 180px;
+}
+
+.am-search-icon {
+  position: absolute;
+  left: 10px;
+  color: var(--text-3);
+  pointer-events: none;
+}
+
+.am-search-input {
+  width: 100%;
+  height: 34px;
+  padding: 0 30px 0 32px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-app);
+  color: var(--text-1);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+  transition: border-color 120ms ease;
+}
+
+.am-search-input::placeholder {
+  color: var(--text-3);
+}
+
+.am-search-input:focus {
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+.am-search-clear {
+  position: absolute;
+  right: 6px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: default;
+}
+
+.am-search-clear:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.am-count {
+  flex: none;
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .am-search-input {
+    transition: none;
+  }
+}
+
+html[data-reduce-motion] .am-search-input {
+  transition: none;
+}
+
 .am-empty {
   margin: 28px 0 0;
   font-size: 13.5px;

@@ -4,12 +4,29 @@
 // a keyword brain behind the same action card.
 
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowUpRight, Check, Lightning, PencilSimple, Play, TrashSimple } from '@phosphor-icons/react'
+import {
+  ArrowUpRight,
+  Check,
+  Lightning,
+  MagnifyingGlass,
+  PencilSimple,
+  Play,
+  TrashSimple,
+  X,
+} from '@phosphor-icons/react'
 import AutomationForm from './AutomationForm.jsx'
 import PillComposer from './PillComposer.jsx'
 import { useConsole } from './state/console.jsx'
 import { harnessName } from './harness-names.js'
-import { whenSentence, CONNECTOR_KINDS } from './automation.js'
+import {
+  CONNECTOR_KINDS,
+  RULE_EMPTY_NONE,
+  ruleCountLine,
+  ruleEmptyLine,
+  ruleSearchHint,
+  searchRules,
+  whenSentence,
+} from './automation.js'
 import { onJobRequest, takeJobRequest } from './chat-to-job.js'
 import { parsePill } from './pill.js'
 import { projectName } from './projects.js'
@@ -51,6 +68,10 @@ export default function AutomationsView({ onOpenChat }) {
   const armWatch = useArmedRow(armed, setArmed)
   // The pill's conversation: {role: user|reply|card|done|note, text?, draft?}
   const [thread, setThread] = useState([])
+  // The list's search. It narrows what the list draws; it never reorders it,
+  // and it is the list's only way in (no sort, no filters), so it matches
+  // exactly what a row prints - see searchRules.
+  const [query, setQuery] = useState('')
 
   // A chat can ask for the rule editor to open already filled in. The
   // request travels through chat-to-job.js because the palette has no prop
@@ -66,6 +87,10 @@ export default function AutomationsView({ onOpenChat }) {
   }, [])
 
   const rules = automations ?? []
+  // What the list draws: every rule, or the ones the query matches. The
+  // search narrows; it never sorts.
+  const shown = useMemo(() => searchRules(rules, query), [rules, query])
+  const filtering = query.trim().length > 0
   const availableIds = new Set(
     (capabilities?.harnesses ?? []).filter(pickable).map((h) => h.id),
   )
@@ -212,16 +237,63 @@ export default function AutomationsView({ onOpenChat }) {
         </button>
       </header>
 
+      {/* The list's one way in. A field over an empty list would be a control
+          with nothing to act on, so it appears with the first rule; its hint
+          appears only once the list is long enough that a person scans it -
+          searchHint owns the threshold. Escape clears it, then leaves it, the
+          way the sidebar's own search does. */}
+      {rules.length > 0 && (
+        <div className="am-toolbar">
+          <label className="am-search">
+            <MagnifyingGlass size={14} className="am-search-icon" />
+            <input
+              className="am-search-input"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key !== 'Escape') return
+                e.preventDefault()
+                if (query) setQuery('')
+                else e.currentTarget.blur()
+              }}
+              placeholder={ruleSearchHint(rules.length)}
+              spellCheck={false}
+              autoComplete="off"
+              aria-label="Search rules"
+            />
+            {query && (
+              <button
+                type="button"
+                className="am-search-clear"
+                onClick={() => setQuery('')}
+                aria-label="Clear search"
+                title="Clear search"
+              >
+                <X size={12} weight="bold" />
+              </button>
+            )}
+          </label>
+          {/* The count only while a query is on: at rest the header already
+              counts the list, and two counts would say it twice. */}
+          {filtering && shown.length > 0 && (
+            <p className="am-count">{ruleCountLine(shown.length, rules.length)}</p>
+          )}
+        </div>
+      )}
+
       <div className="am-list">
         {/* An empty list and a list that has not answered look the same in
-            state, so the sentence follows the flag: "No rules yet. Write one."
-            is only said once the daemon has actually said so. */}
+            state, so the sentence follows the flag: the invitation to write
+            one is only said once the daemon has actually said so. */}
         {rules.length === 0 && (
-          <p className="am-empty">
-            {automationsAnswered ? 'No rules yet. Write one.' : 'Loading the rules…'}
-          </p>
+          <p className="am-empty">{automationsAnswered ? RULE_EMPTY_NONE : 'Loading the rules…'}</p>
         )}
-        {rules.map((rule) => {
+        {/* A query that found nothing is not an empty list: it says which
+            query came up empty rather than inviting a new rule. */}
+        {filtering && rules.length > 0 && shown.length === 0 && (
+          <p className="am-empty">{ruleEmptyLine(query)}</p>
+        )}
+        {shown.map((rule) => {
           const missing = !availableIds.has(rule.harness)
           return (
             <div key={rule.id} className={`am-rule${rule.enabled ? '' : ' off'}`}>
