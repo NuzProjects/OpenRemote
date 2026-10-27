@@ -775,6 +775,15 @@ impl PluginHost {
 /// Nothing there: let the record go, which is how the plugin list gets rid of
 /// one of these.
 ///
+/// A record can be safe and still stuck: one whose name resolves to a folder
+/// that is not this plugin's - `...`, say, which is the marketplace folder on
+/// Windows - is refused every time it is asked, so it stays in the list and
+/// nothing in the UI can drop it. The way out is the one the refusal names, by
+/// hand, and for that shape it means deleting a folder this plugin does not
+/// own. Leaving the record there is the price of never deleting a folder it did
+/// not name, and it is the honest limit of this rule rather than a claim that
+/// every record has a way out.
+///
 /// A check that failed: refuse too. A folder this daemon cannot stat is not an
 /// absent folder, and dropping the record would leave it as an orphan nothing
 /// looks at again.
@@ -2445,14 +2454,30 @@ mod tests {
             // It no longer claims the name is not a plugin folder.
             assert!(!err.contains("is not a plugin folder"), "{name:?}: {err}");
         }
-        // A folder that cannot be stat-ed is not an absent one: it keeps the
-        // record and says the check failed. Provoking a real stat error is not
-        // portable - Windows truncates a name at a NUL byte and reports no
-        // such folder, which would read as "nothing there" - so that arm is
-        // checked where it is pure, below.
+        // A folder whose existence cannot be checked keeps the record; what
+        // `unremovable` does with that answer is the test above, and what
+        // removal does to get the answer is `a_name_that_cannot_be_checked_keeps_the_record`.
         assert_eq!(
             std::fs::read_to_string(data.path().join("keep/me.txt")).unwrap(),
             "keep"
+        );
+    }
+
+    #[test]
+    fn a_name_that_cannot_be_checked_keeps_the_record() {
+        // The question itself has to be able to fail, or the arm above is
+        // never reached in the app: `Path::exists` folds a failed check into
+        // "no", which drops the record and leaves the folder it names as an
+        // orphan nothing looks at again. A NUL byte in the name is the
+        // portable way to make the check fail - no file system can be asked
+        // about such a path, so the stat errors on every platform - and this
+        // is the only test that reaches the arm through the real call.
+        let data = tempfile::tempdir().unwrap();
+        let host = PluginHost::new(data.path());
+        let said = host.uninstall("official", "a\0b").unwrap_err().to_string();
+        assert!(
+            said.contains("could not check whether this plugin's folder"),
+            "{said}"
         );
     }
 
