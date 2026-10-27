@@ -406,7 +406,11 @@ function Shell() {
   // The chat the focused pane is showing, when it is showing one. The palette's
   // rename row is about "this chat", and the address cannot answer that: it
   // names the primary pane's view, and a split can have its focus elsewhere.
-  const focusedChatId = focused?.view && isChatView(focused.view) ? focused.view : null
+  // With a single pane the route is the pane, so the address is the answer.
+  const focusedChatId =
+    paneCount(layout) === 1
+      ? isChatView(view) ? view : null
+      : focused?.view && isChatView(focused.view) ? focused.view : null
   const openInFocus = (id) => {
     if (focused?.view !== null && (id === 'new' || isChatView(id))) {
       const session = (sessions ?? []).find((s) => s.id === id)
@@ -1048,6 +1052,11 @@ function Shell() {
                 renderPane={renderPane}
                 onDropInPane={dropInPane}
                 canSplit={panesCanSplit}
+                onSaveLayout={() => setSavingLayout(true)}
+                onRestoreLayout={applySavedLayout}
+                // A saved "chat" pane comes back holding the chat on screen, so
+                // the header can also say whose pane it is while it is split.
+                currentChat={isChatView(view) ? view : null}
               />
               {/* The browser docked right: beside the chat, never instead
                   of it. The floating bar (on the homepage) and the sidebar

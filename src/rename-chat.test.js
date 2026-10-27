@@ -132,8 +132,11 @@ test('the shell hosts the dialog and owns the one-beat overlay', () => {
   assert.match(app, /onRenameChat={openRename}/)
   assert.match(app, /renamedTitles=\{Object\.fromEntries\(/)
   // The focused pane's chat, not the address: a split can have focus on a
-  // chat the primary view is not showing.
-  assert.match(app, /const focusedChatId = focused\?\.view && isChatView\(focused\.view\)/)
+  // chat the primary view is not showing. With a single pane the route IS the
+  // pane, so the address answers there - without that arm the palette's rename
+  // and copy rows never appeared in the ordinary case of one chat on screen.
+  assert.match(app, /paneCount\(layout\) === 1/)
+  assert.match(app, /const focusedChatId =[\s\S]{0,240}focused\?\.view && isChatView\(focused\.view\)/)
   assert.match(app, /const openRename = \(id = focusedChatId\) => \{/)
   // The write is the console's own rename call, optimistic for one beat and
   // taken back when it fails, so the dialog stays open with the reason.
