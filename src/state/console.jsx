@@ -69,6 +69,7 @@ export function ConsoleProvider({ children }) {
   // list still on its way. Set by whichever read lands first, the boot's or
   // a beat's, and cleared when the console points at another daemon.
   const [machinesAnswered, setMachinesAnswered] = useState(false)
+  const [sessionsAnswered, setSessionsAnswered] = useState(false)
   const [mcpServersAnswered, setMcpServersAnswered] = useState(false)
   const [automationsAnswered, setAutomationsAnswered] = useState(false)
   const [projectsAnswered, setProjectsAnswered] = useState(false)
@@ -76,6 +77,7 @@ export function ConsoleProvider({ children }) {
   // screen belongs to the previous one, so the flags go back to loading.
   const resetAnswered = useCallback(() => {
     setMachinesAnswered(false)
+    setSessionsAnswered(false)
     setMcpServersAnswered(false)
     setAutomationsAnswered(false)
     setProjectsAnswered(false)
@@ -339,7 +341,10 @@ export function ConsoleProvider({ children }) {
       if (caps.status === 'fulfilled') setCapabilities(caps.value ?? null)
       if (cloudView.status === 'fulfilled') setCloud(cloudView.value)
       if (deviceList.status === 'fulfilled') setDevices(deviceList.value?.devices ?? [])
-      if (list.status === 'fulfilled') setSessions(list.value ?? [])
+      if (list.status === 'fulfilled') {
+        setSessions(list.value ?? [])
+        setSessionsAnswered(true)
+      }
       if (machineList.status === 'fulfilled') {
         setMachines(machineList.value ?? [])
         setMachinesAnswered(true)
@@ -394,7 +399,10 @@ export function ConsoleProvider({ children }) {
         if (!stillCurrent(api)) return null
         if (cloudView.status === 'fulfilled') setCloud(cloudView.value)
         if (deviceList.status === 'fulfilled') setDevices(deviceList.value?.devices ?? [])
-        if (sessionList.status === 'fulfilled') setSessions(sessionList.value ?? [])
+        if (sessionList.status === 'fulfilled') {
+        setSessions(sessionList.value ?? [])
+        setSessionsAnswered(true)
+      }
         if (machineList.status === 'fulfilled') {
           setMachines(machineList.value ?? [])
           setMachinesAnswered(true)
@@ -1311,6 +1319,7 @@ export function ConsoleProvider({ children }) {
       automations,
       projects,
       machinesAnswered,
+      sessionsAnswered,
       mcpServersAnswered,
       automationsAnswered,
       projectsAnswered,
@@ -1398,6 +1407,7 @@ export function ConsoleProvider({ children }) {
       automations,
       projects,
       machinesAnswered,
+      sessionsAnswered,
       mcpServersAnswered,
       automationsAnswered,
       projectsAnswered,
