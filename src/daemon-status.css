@@ -57,10 +57,12 @@
 /* The one action on the screen, in the console's primary language: amber
    with a white label, and the press pulse every primary action shares - a
    small scale dip and an amber bloom, on the house curve. Nothing here
-   invents a colour; amber marks the interaction and the greys do the rest. */
+   invents a colour; amber marks the interaction and the greys do the rest.
+   Its height is the console's text-button height, the same 30px a panel's
+   buttons stand at: the primary differs by colour, not by size. */
 .ds-cta {
   align-self: flex-start;
-  height: 38px;
+  height: 30px;
   padding: 0 16px;
   border: 0;
   border-radius: var(--radius);
