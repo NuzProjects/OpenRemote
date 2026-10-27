@@ -42,11 +42,6 @@ export default function MobileView({ onOpenChat }) {
         </div>
       </header>
 
-      <p className="pn-lead">
-        Install OpenRemote on a phone and sign in with the same moreweb account. Synced chats appear
-        there, and from a phone a new chat can run on one of your machines.
-      </p>
-
       <PairingSection />
 
       {!inCloud ? (
@@ -78,9 +73,6 @@ export default function MobileView({ onOpenChat }) {
               </button>
             ))}
           </div>
-          {phones.length === 0 && (
-            <p className="pn-empty">No phones yet. The first one to sign in shows up here.</p>
-          )}
         </>
       )}
 

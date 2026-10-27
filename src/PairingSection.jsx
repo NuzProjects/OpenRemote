@@ -178,15 +178,7 @@ export default function PairingSection() {
   return (
     <div className="qr-pair">
       <h2 className="pn-section">Pair a phone</h2>
-      <p className="pn-lead">
-        Show a code here and scan it with the phone's camera. The phone opens a read-only view of
-        this computer's chats, and nothing leaves your local network.
-      </p>
-      <p className="qr-note">
-        The phone and this computer talk straight to each other over the local network, without a
-        server in between, and that connection is not encrypted: a device that can watch this
-        network's traffic can see the pairing go by. Pair on a network you trust.
-      </p>
+      <p className="pn-lead">Scan this with your phone's camera. No account needed.</p>
 
       {!live && (
         <div className="qr-actions">
@@ -206,11 +198,9 @@ export default function PairingSection() {
               Waiting for a phone
             </p>
             <p className="qr-clock">{remainingLabel(live.expires_at, now)}</p>
-            <p className="qr-hint">Or open this on the phone:</p>
             <p className="qr-address">{live.url}</p>
             <p className="qr-note">
-              If the phone cannot reach this computer, allow OpenRemote through Windows Firewall.
-              Both devices must be on the same network.
+              Not encrypted, and your firewall may need to allow OpenRemote. Same network only.
             </p>
             <button className="pn-btn" onClick={stop} disabled={busy}>
               Stop showing
@@ -239,10 +229,7 @@ export default function PairingSection() {
         </ul>
       )}
       {phones !== null && phones.length === 0 && (
-        <p className="pn-empty">
-          No phones paired with this computer. Nothing is listening on your network: the pairing
-          port opens only while a code is on screen or a phone is paired.
-        </p>
+        <p className="pn-empty">No phones paired.</p>
       )}
     </div>
   )
