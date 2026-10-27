@@ -538,75 +538,115 @@ record(
     : 'no .chat-row in the sidebar',
 )
 
-// (b) The pane menu in a split: makes the split from the menu, reads the rows
-// the menu offers there, and closes it with Escape. Proves a split can be made
-// from the same menu a person uses and that its rows and Escape behave; not
-// that a split row's effect is what its words say, and not that a Layouts
-// control exists in a pane header (the Layouts page is the palette's).
-const clickMenuRow = async (source, timeout = 4000) => {
-  if (!(await waitFor("!!document.querySelector('.ctx-menu')", { timeout }))) return false
-  // Let the menu settle where it opened: it clamps itself inside the window in
-  // the same frame, and the hand sequence that works (and does split the pane)
-  // waits a beat before measuring the row.
-  await sleep(250)
-  const at = await evaluate(`(() => {
-    const row = [...document.querySelectorAll('.ctx-menu .nc-item')].find((i) => new RegExp('${source}', 'i').test(i.textContent.trim()));
-    if (!row) return null;
-    const b = row.getBoundingClientRect();
-    return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
-  })()`)
-  if (!at) return false
-  await click(at.x, at.y)
-  return true
-}
-const openPaneMenu = async () => {
-  // A blank margin first: a card, a link or a text field under the cursor
-  // hands the right-click to something else, and the pane menu is what this
-  // check needs. The marked-up pane itself is the fallback.
-  const points = await evaluate(`(() => {
-    const pane = document.querySelector('[data-leaf-id]');
-    if (!pane) return [];
-    const b = pane.getBoundingClientRect();
-    return [
-      { x: b.x + 12, y: b.y + b.height / 2 },
-      { x: b.x + b.width / 2, y: b.y + b.height / 2 },
-      { x: b.x + b.width - 12, y: b.y + 40 },
-    ];
-  })()`)
-  for (const p of points ?? []) {
-    await click(p.x, p.y, 'right')
-    if (await waitFor("!!document.querySelector('.ctx-menu')", { timeout: 1500 })) return true
+// (b) The pane header in a split: makes the split with the header's own Split
+// right button, reads the rows the header's more-options menu offers there, and
+// closes it with Escape, then closes the extra pane with the header's close
+// button. Proves the header controls a person presses are there and act; not
+// that a split row's effect is what its words say.
+//
+// Every step starts from a state this check set up itself (New chat, one pane)
+// and names the precondition it did not find, so a leftover split or a popup
+// from an earlier check cannot make it pass or fail for the wrong reason. It
+// addresses the header by its accessible names, not coordinates: the header
+// gained a Layouts word button and a chat title beside the split control, which
+// is what made the old coordinate-driven version stop finding the menu.
+if (!(await clickSidebar(`(x.textContent || '').trim() === 'New chat'`))) {
+  record('in a split, the pane header menus work', false, 'precondition: the sidebar has no New chat tile')
+} else if (!(await waitFor("location.hash === '#new'", { timeout: 5000 }))) {
+  record('in a split, the pane header menus work', false, `precondition: New chat did not open (window is on ${await evaluate('location.hash')})`)
+} else {
+  const panes = () => evaluate(`document.querySelectorAll('[data-leaf-id]').length`)
+  const one = (await waitFor(`document.querySelectorAll('[data-leaf-id]').length === 1`, { timeout: 3000 })) && (await panes()) === 1
+  if (!one) {
+    record('in a split, the pane header menus work', false, `precondition: the window is not a single pane (${await panes()})`)
+  } else {
+    // The header's own Split right appears only once the window is already
+    // split (SplitArea renders the header when the pane count is above one),
+    // so the first split is the pane menu's job: the cursor menu is the one
+    // control a person has for it in a single pane. Its row is pressed through
+    // the element, never through coordinates.
+    // A right-click over a text field opens the text menu, not the pane menu,
+    // so each candidate point is checked for the pane menu's own rows before it
+    // counts; anything else is dismissed and the next point tried.
+    const openPaneMenu = async () => {
+      const points = await evaluate(`(() => {
+        const pane = document.querySelector('[data-leaf-id]');
+        if (!pane) return [];
+        const b = pane.getBoundingClientRect();
+        return [
+          { x: b.x + 12, y: b.y + b.height / 2 },
+          { x: b.x + b.width / 2, y: b.y + b.height * 0.3 },
+          { x: b.x + b.width / 2, y: b.y + b.height / 2 },
+        ];
+      })()`)
+      for (const p of points ?? []) {
+        await click(p.x, p.y, 'right')
+        const paneMenuOpen = await waitFor(
+          `!!document.querySelector('.ctx-menu') && [...document.querySelectorAll('.ctx-menu .nc-item')].some((i) => /split right/i.test(i.textContent.trim()))`,
+          { timeout: 1500 },
+        )
+        if (paneMenuOpen) return true
+        await key({ key: 'Escape', code: 'Escape', vk: 27 })
+        await sleep(150)
+      }
+      return false
+    }
+    const clickMenuRow = async (source) => {
+      // Settle first: the menu clamps itself inside the window in the frame it
+      // opens in, and a stale measurement is what broke the old version.
+      await sleep(250)
+      return evaluate(`(() => {
+        const row = [...document.querySelectorAll('.ctx-menu .nc-item')].find((i) => new RegExp('${source}', 'i').test(i.textContent.trim()));
+        if (!row) return false;
+        row.click();
+        return true;
+      })()`)
+    }
+    const splitMade =
+      (await openPaneMenu()) &&
+      (await clickMenuRow('split right')) &&
+      (await waitFor(`document.querySelectorAll('[data-leaf-id]').length === 2`, { timeout: 5000 }))
+    let paneMenu = null
+    if (splitMade) {
+      // The header of the second pane, addressed by role and name.
+      const opened = await evaluate(`(() => {
+        const panes = [...document.querySelectorAll('[data-leaf-id]')];
+        const second = panes[panes.length - 1];
+        const b = [...second.querySelectorAll('.split-actions button')].find(
+          (x) => (x.getAttribute('aria-label') || '').trim() === 'More split options',
+        );
+        if (!b) return false;
+        b.click();
+        return true;
+      })()`)
+      if (opened && (await waitFor("!!document.querySelector('.ctx-menu')", { timeout: 3000 }))) {
+        const labels = await evaluate(`[...document.querySelectorAll('.ctx-menu .nc-item')].map((i) => i.textContent.trim())`)
+        await key({ key: 'Escape', code: 'Escape', vk: 27 })
+        const closed = await waitFor("!document.querySelector('.ctx-menu')")
+        paneMenu = { labels, closed }
+      }
+      // Close the extra pane with the header's own close button.
+      await evaluate(`(() => {
+        const panes = [...document.querySelectorAll('[data-leaf-id]')];
+        const second = panes[panes.length - 1];
+        const b = [...second.querySelectorAll('.split-actions button')].find(
+          (x) => (x.getAttribute('aria-label') || '').trim() === 'Close this pane',
+        );
+        b?.click();
+      })()`)
+      await waitFor(`document.querySelectorAll('[data-leaf-id]').length === 1`, { timeout: 5000 })
+    }
+    record(
+      'in a split, the pane header menus work',
+      splitMade && Boolean(paneMenu?.closed) && (paneMenu?.labels.length ?? 0) >= 4,
+      splitMade
+        ? paneMenu
+          ? `rows "${paneMenu.labels.slice(0, 6).join(' / ')}", Escape closed it: ${paneMenu.closed}, back to ${await panes()} pane(s)`
+          : 'the header more-options menu never opened in the split'
+        : 'the split never happened (the pane menu or its Split right row did not act)',
+    )
   }
-  return false
 }
-let splitMade = false
-if (await openPaneMenu()) {
-  splitMade = await clickMenuRow('split right')
-  splitMade = splitMade && (await waitFor("document.querySelectorAll('[data-leaf-id]').length === 2", { timeout: 5000 }))
-}
-let paneMenu = null
-if (splitMade) {
-  if (await openPaneMenu()) {
-    const labels = await evaluate(`[...document.querySelectorAll('.ctx-menu .nc-item')].map((i) => i.textContent.trim())`)
-    await key({ key: 'Escape', code: 'Escape', vk: 27 })
-    const closed = await waitFor("!document.querySelector('.ctx-menu')")
-    paneMenu = { labels, closed }
-  }
-  // Put the window back to one pane, the way a person would.
-  if (await openPaneMenu()) {
-    await clickMenuRow('close pane')
-    await waitFor("document.querySelectorAll('[data-leaf-id]').length === 1", { timeout: 5000 })
-  }
-}
-record(
-  'in a split, the pane menu lists its rows and Escape closes it',
-  Boolean(splitMade) && Boolean(paneMenu?.closed) && (paneMenu?.labels.length ?? 0) >= 4,
-  splitMade
-    ? paneMenu
-      ? `rows "${paneMenu.labels.slice(0, 6).join(' / ')}", Escape closed it: ${paneMenu.closed}`
-      : 'the pane menu never opened in the split'
-    : 'the split never happened (the pane menu did not act)',
-)
 
 // (c) The palette's Rules group: typing "rul" offers it only while Automations
 // is mounted. Proves the group is mounted with the view rather than always on;
@@ -619,6 +659,10 @@ const goView = async (label, hash) => {
   return reached
 }
 const rulesIn = async (label, hash) => {
+  // Any menu or popup left by an earlier check is dismissed first: a check that
+  // fails on the previous check's state is worse than no check.
+  await key({ key: 'Escape', code: 'Escape', vk: 27 })
+  await sleep(120)
   if (!(await goView(label, hash))) return null
   // The view's own words say whether it holds any rules; a profile with none
   // cannot show the group on any view, so the gating is not exercised there.
