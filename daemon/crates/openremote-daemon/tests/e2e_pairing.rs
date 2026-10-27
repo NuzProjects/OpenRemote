@@ -518,11 +518,12 @@ async fn revoking_a_phone_ends_its_access_and_nothing_idles_on_the_lan() {
     .await;
     assert_eq!(drained.status, 200, "{}", drained.body);
     let closed = tokio::time::timeout(Duration::from_secs(3), async {
-        loop {
-            match try_http(lan, "GET", "/", None, None).await {
-                Some(_) => tokio::time::sleep(Duration::from_millis(50)).await,
-                None => break,
-            }
+        // Ask until nothing answers: a closed socket is a refused
+        // connection, so the loop ends when the probe fails rather than when
+        // a status changes. Spelled `is_some` rather than `while let Some(_)`
+        // because clippy reads the pattern form as a redundant match.
+        while try_http(lan, "GET", "/", None, None).await.is_some() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
     .await;
@@ -674,11 +675,10 @@ async fn nothing_listens_until_a_code_is_live() {
     // socket closes by itself: no paired phone is holding it up, so nothing
     // of this feature is left answering the network, and no cancel was sent.
     let closed = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            match try_http(addr, "GET", "/", None, None).await {
-                Some(_) => tokio::time::sleep(Duration::from_millis(50)).await,
-                None => break,
-            }
+        // Same wait as above, on the address the payload named: the socket
+        // goes down by itself when the code runs out and no phone is paired.
+        while try_http(addr, "GET", "/", None, None).await.is_some() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
     .await;
