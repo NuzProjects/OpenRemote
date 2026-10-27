@@ -636,6 +636,34 @@ button.side-tile:active {
   text-overflow: ellipsis;
 }
 
+/* A row's words: the title, and under it the question while one is held.
+   The wrapper carries the row's width so the title and the line truncate
+   together, and the title keeps its own sizing inside it. */
+.chat-titles {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.chat-titles > .chat-title {
+  flex: none;
+}
+
+/* What a waiting harness is asking, one line under the title and quieter
+   than it. Text, never a control: the chat is where a decision is answered.
+   The marker in the text is what says the question continues; the ellipsis
+   is only the fallback for a pane too narrow to show what was cut to. */
+.chat-question {
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-3);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 /* Where a Cloud chat runs, when that isn't this computer. */
 .chat-device {
   flex: none;
@@ -789,6 +817,46 @@ button:focus-visible {
   color: var(--text-3);
   font-size: 12px;
   line-height: 1.5;
+}
+
+/* The archive's way back: one line on the sidebar's own grid, one control,
+gone in eight seconds. The wash matches a hovered row so it reads as a line
+of the list rather than as a banner that arrived from somewhere else. */
+.chat-undo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 10px 6px;
+  padding: 6px 8px;
+  border-radius: var(--radius);
+  background: var(--bg-hover);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.chat-undo-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-undo-act {
+  margin-left: auto;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-1);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.chat-undo-act:hover,
+.chat-undo-act:focus-visible {
+  background: var(--bg-active);
 }
 
 /* ---- phone width: the sidebar overlays instead of pushing ---- */

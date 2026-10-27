@@ -32,6 +32,7 @@ import { isMobile } from './platform.js'
 import { chatDragPayload } from './split.js'
 import { armRow, clearRow, rowIsArmed } from './row-confirm.js'
 import { listHasUnread, loadSeen, recordSeen, seedSeen, storeSeen, unreadIds } from './unread.js'
+import { lineFor, missingLines, pruneLines, questionKey, questionLine, rememberLine, wantedKeys } from './question-line.js'
 import { HarnessMark } from './brand-marks.jsx'
 import ContextMenu from './ContextMenu.jsx'
 import DeleteChatModal from './DeleteChatModal.jsx'
@@ -39,8 +40,12 @@ import { usePrivacyMode } from './privacy.js'
 import { useHint, useShortcut } from './keyboard.jsx'
 import './sidebar.css'
 
+// How long the archived line stays. Long enough to catch a mispress on a
+// hover control, short enough that the sidebar keeps no history of its own.
+const UNDO_MS = 8000
+
 export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit, onAddProject, onNewChatIn, onReveal }) {
-  const { connection, sessions, chats, devices, thisDevice, projects, projectsAnswered, sessionsAnswered, removeProject, archived, setChatArchived, deleteChat } = useConsole()
+  const { connection, sessions, chats, devices, thisDevice, projects, projectsAnswered, sessionsAnswered, removeProject, archived, setChatArchived, deleteChat, api } = useConsole()
   const privacy = usePrivacyMode()
   const [query, setQuery] = useState('')
   const [collapsed, setCollapsed] = useState({})
@@ -52,6 +57,21 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   const [armed, setArmed] = useState(null)
   const [menu, setMenu] = useState(null)
   const [deleting, setDeleting] = useState(null)
+  // The archive's way back. Archive is a hover button at the row's edge, so a
+  // mispress otherwise costs a hunt through Settings > Archived chats that a
+  // first-time user does not know exists. One line, for a moment after the
+  // act, replaced by a second archive rather than stacked - the same
+  // one-at-a-time rule the armed rows follow. Not the notice stack: that
+  // lives in the shell, and this is the list the control lives in.
+  const [undo, setUndo] = useState(null)
+
+  // The line outlives nothing: eight seconds, or the next archive, or the
+  // sidebar going away. A row that lingered would teach people to ignore it.
+  useEffect(() => {
+    if (!undo) return
+    const timer = setTimeout(() => setUndo(null), UNDO_MS)
+    return () => clearTimeout(timer)
+  }, [undo])
   // What this console has looked at, per chat: the stamp each chat showed
   // the last time it was read. Read once at mount from this computer's own
   // key, never on the boot path, so a damaged record cannot take the first
@@ -106,6 +126,52 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   // a chat whose harness is starving should not be hidden by a query typed for
   // something else.
   const needs = useMemo(() => needsYou(rows), [rows])
+
+  // What each waiting chat is holding, one line each, read once per question.
+  // There is no clock here of its own: the sessions beat is the only thing
+  // that changes `needs`, an answer is cached under the stamp it was read at,
+  // and a chat that stops waiting is dropped, so a steady state reads
+  // nothing. The line is a summary only - see the row below for the rule.
+  const [questions, setQuestions] = useState({})
+  const questionsRef = useRef(questions)
+  questionsRef.current = questions
+  const waitingKey = needs.chats.map((c) => questionKey(c.id, c.updatedAt)).join('|')
+  useEffect(() => {
+    if (!needs.chats.length) {
+      if (Object.keys(questionsRef.current).length) setQuestions({})
+      return undefined
+    }
+    const kept = pruneLines(questionsRef.current, wantedKeys(needs.chats))
+    if (Object.keys(kept).length !== Object.keys(questionsRef.current).length) {
+      questionsRef.current = kept
+      setQuestions(kept)
+    }
+    const missing = missingLines(kept, needs.chats)
+    if (!missing.length) return undefined
+    let cancelled = false
+    let cache = { ...kept }
+    ;(async () => {
+      for (const row of missing) {
+        let line = null
+        try {
+          line = questionLine(await api.decisions(row.id))
+        } catch {
+          // A chat whose decisions cannot be read shows no line rather than
+          // an error in the sidebar: the group already says it is waiting.
+          line = null
+        }
+        if (cancelled) return
+        // Kept even when null, so a failed or empty read is not retried on
+        // every beat; only a new question (a new stamp) asks again.
+        cache = rememberLine(cache, questionKey(row.id, row.updatedAt), line)
+        setQuestions({ ...cache })
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [waitingKey, api])
 
   // The two sections: registered projects with their chats, then the flat
   // Chats list - every chat that belongs to no project. A waiting chat is in
@@ -207,8 +273,20 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
   }, [watched, active, rows])
 
   const archive = (id) => {
+    const row = rows.find((r) => r.id === id)
     setChatArchived(id, true)
+    // Both ways in come through here (the hover button and the row's menu),
+    // so the way back is offered whichever one the press came from.
+    setUndo(row ? { id: row.id, title: row.title } : null)
     if (id === active) onSelect('new')
+  }
+
+  // The same call the Settings list makes. Restoring puts the chat back in
+  // the list it was archived from, with its own record untouched.
+  const undoArchive = () => {
+    if (!undo) return
+    setChatArchived(undo.id, false)
+    setUndo(null)
   }
 
   // Right-click on a chat: the same actions as the hover buttons, plus the
@@ -289,7 +367,16 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
             the status dot at the right edge so every status scans in
             one column */}
         {row.harness && <HarnessMark harness={row.harness} size={15} />}
-        <span className="chat-title pv">{row.title}</span>
+        <div className="chat-titles">
+          <span className="chat-title pv">{row.title}</span>
+          {/* What the harness is holding, one line, read only. The sidebar
+              never answers, approves or dismisses anything: a decision is
+              answered in the chat, where the harness's own words, its
+              options and (for an approval) what it wants to run are on
+              screen together. A summary here that could act would be an
+              approvals panel built out of a row, without any of that. */}
+          {row.question && <span className="chat-question pv">{row.question}</span>}
+        </div>
         {mode === 'cloud' && row.device && (
           <span className="chat-device pv">{row.device}</span>
         )}
@@ -402,6 +489,24 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
         </div>
       </div>
 
+      {/* Pinned between the actions and the scrolled list, not inside it: the
+          row that went is gone from whichever group held it, so there is no
+          stable place in the list to put its way back, and a line that
+          scrolls out of view is a line nobody reads. */}
+      {undo && (
+        <div className="chat-undo" role="status">
+          <span className="chat-undo-text pv">Archived “{undo.title}”</span>
+          <button
+            type="button"
+            className="chat-undo-act"
+            aria-label={`Undo archiving ${undo.title}`}
+            onClick={undoArchive}
+          >
+            Undo
+          </button>
+        </div>
+      )}
+
       <nav className="sb-list" aria-label="Projects and chats">
         {/* The one group that exists only while it has something in it: a
             chat whose harness is blocked on an answer is starving, and it
@@ -413,7 +518,7 @@ export default function Sidebar({ open, active, mode, onMode, onSelect, onSplit,
               Needs you
               <span className="sb-needs-count">{needs.count}</span>
             </div>
-            {needs.chats.map((row) => chatRow({ ...row, status: 'waiting' }))}
+            {needs.chats.map((row) => chatRow({ ...row, status: 'waiting', question: lineFor(questions, row.id, row.updatedAt) }))}
           </section>
         )}
 
