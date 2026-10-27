@@ -1249,21 +1249,24 @@ export default function SettingsView({ onReplay, onOpenChat, onClose, onManualCo
                   <div className="pn-name">{connection.state === 'connected' ? 'Connected' : 'Not connected'}</div>
                   <div className="pn-detail">{connection.state === 'connected' ? 'Bearer token accepted.' : connection.error ?? 'Start the app, or use Connect by address below.'}</div>
                 </div>
+                {/* A disabled button labelled with a dash read as a rendering
+                    fault rather than as "nothing to forget". The detail line
+                    above says why there is nothing to do, so the control is
+                    absent until there is something to forget. */}
                 {confirmDisconnect ? (
                   <div className="pn-actions">
                     <button type="button" className="pn-btn" onClick={disconnect}>Disconnect</button>
                     <button type="button" className="pn-btn" onClick={() => setConfirmDisconnect(false)}>Cancel</button>
                   </div>
-                ) : (
+                ) : connection.state === 'connected' ? (
                   <button
                     type="button"
                     className="pn-btn"
                     onClick={() => setConfirmDisconnect(true)}
-                    disabled={connection.state !== 'connected'}
                   >
-                    {connection.state === 'connected' ? 'Forget' : '-'}
+                    Forget
                   </button>
-                )}
+                ) : null}
               </div>
               {/* Only while nothing is connected: the form it opens says the
                   daemon did not answer, which is not true of a connection
