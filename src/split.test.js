@@ -10,15 +10,19 @@ import {
   dropZone,
   focusByIndex,
   focusLeaf,
+  leafById,
   leaves,
+  moveLeaf,
   movedSizes,
   newLayout,
   paneCount,
+  reconcilePanes,
   resizeSplit,
   restoreLayout,
   secondaryChatIds,
   setLeafView,
   splitLeaf,
+  tintZone,
 } from './split.js'
 
 const ids = (layout) => leaves(layout.root).map((l) => l.id)
@@ -252,4 +256,51 @@ test('only a chat drag is offered a pane', () => {
   assert.equal(acceptsChatDrop([]), false, 'nothing to carry')
   assert.equal(acceptsChatDrop(undefined), false, 'a drag event with no dataTransfer')
   assert.equal(acceptsChatDrop(null), false)
+})
+
+// ---- moving a chat between panes, and repairing panes that lost theirs ----
+
+test('a dragged chat moves out of its pane, and a drop on itself does nothing', () => {
+  const l = splitLeaf(newLayout(), 'p1', 'row', 'chat-a')
+  assert.equal(moveLeaf(l, 'p2', 'p2', 'row', false, 'chat-a'), l, 'a drop on its own pane is a no-op')
+  const moved = moveLeaf(l, 'p2', 'p1', 'row', false, 'chat-a')
+  assert.equal(paneCount(moved), 3)
+  assert.equal(leafById(moved, 'p2').view, 'new', 'the source pane lets go of the chat')
+  assert.equal(
+    leaves(moved.root).filter((pane) => pane.view === 'chat-a').length,
+    1,
+    'one pane, one stream, one draft',
+  )
+  // A sidebar drag has no source pane: it opens beside and moves nothing.
+  const beside = moveLeaf(l, null, 'p1', 'col', false, 'chat-b')
+  assert.equal(leafById(beside, 'p2').view, 'chat-a')
+})
+
+test('the tint matches the drop: a full-pane target where no split can happen', () => {
+  const box = { left: 0, top: 0, width: 400, height: 300, right: 400, bottom: 300 }
+  assert.equal(tintZone(true, box, 395, 150).zone, 'right', 'an edge tints its half while a split is possible')
+  assert.deepEqual(tintZone(false, box, 395, 150), { zone: 'center' }, 'at the cap the whole pane is the target')
+  assert.deepEqual(tintZone(false, box, 5, 5), { zone: 'center' }, 'on a phone too, whatever the corner')
+})
+
+test('a pane whose chat is gone becomes a New chat, in place', () => {
+  let l = splitLeaf(newLayout(), 'p1', 'row', 'chat-a')
+  l = splitLeaf(l, 'p2', 'col', 'chat-b')
+  const repaired = reconcilePanes(l, new Set(['chat-a']))
+  assert.equal(leafById(repaired, 'p2').view, 'new', 'the pane stops pointing at nothing')
+  assert.equal(leafById(repaired, 'p3').view, 'chat-b', 'the other pane keeps its chat')
+  assert.equal(paneCount(repaired), 3, 'the arrangement is kept')
+  assert.equal(leafById(repaired, 'p1').view, null, 'the primary keeps the app navigation')
+})
+
+test('a static view restored into a pane is repaired too', () => {
+  const l = splitLeaf(newLayout(), 'p1', 'row', 'settings')
+  assert.equal(leafById(reconcilePanes(l, new Set(['settings'])), 'p2').view, 'new')
+})
+
+test('nothing stale hands back the layout it was given', () => {
+  const l = splitLeaf(newLayout(), 'p1', 'row', 'chat-a')
+  assert.equal(reconcilePanes(l, new Set()), l)
+  assert.equal(reconcilePanes(l, new Set(['chat-z'])), l)
+  assert.equal(reconcilePanes(l, null), l)
 })

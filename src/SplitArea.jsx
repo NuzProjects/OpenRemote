@@ -11,11 +11,11 @@ import {
   closeLeaf,
   createDividerDrag,
   draggedChat,
-  dropZone,
   focusLeaf,
   paneCount,
   resizeSplit,
   splitLeaf,
+  tintZone,
 } from './split.js'
 import './split.css'
 
@@ -86,7 +86,7 @@ function SplitNode({ node, setLayout, renderNode }) {
 // holds. Dropping a chat on the middle keeps it here; dropping it on an
 // outer band splits this pane on that side, with the half it will take
 // highlighted while the chat hovers.
-function Pane({ node, layout, setLayout, renderPane, labelFor, showHeader, onDropInPane }) {
+function Pane({ node, layout, setLayout, renderPane, labelFor, showHeader, onDropInPane, canSplit }) {
   const [menu, setMenu] = useState(null)
   const [zone, setZone] = useState(null)
   const place = useRef(null)
@@ -95,6 +95,10 @@ function Pane({ node, layout, setLayout, renderPane, labelFor, showHeader, onDro
   const focused = layout.focus === node.id
   const primary = node.view === null
   const full = count >= MAX_PANES
+  // Whether a split can happen at all: false at the pane cap, and false on a
+  // phone, which has no panes. The buttons, the menu and the drop tint all
+  // read this one value, so nothing offers a split the shell will refuse.
+  const splittable = Boolean(canSplit) && !full
   const label = labelFor(node)
   const hintRight = useHint('split-right')
   const hintDown = useHint('split-down')
@@ -109,10 +113,10 @@ function Pane({ node, layout, setLayout, renderPane, labelFor, showHeader, onDro
 
   const menuItems = [
     ...(full ? [{ header: `${MAX_PANES} panes is the most` }] : []),
-    { label: 'Split right', icon: <ArrowRight size={14} />, hint: kb?.label('split-right'), disabled: full, onSelect: splitTo('row', false) },
-    { label: 'Split down', icon: <ArrowDown size={14} />, hint: kb?.label('split-down'), disabled: full, onSelect: splitTo('col', false) },
-    { label: 'Split left', icon: <ArrowLeft size={14} />, disabled: full, onSelect: splitTo('row', true) },
-    { label: 'Split up', icon: <ArrowUp size={14} />, disabled: full, onSelect: splitTo('col', true) },
+    { label: 'Split right', icon: <ArrowRight size={14} />, hint: kb?.label('split-right'), disabled: !splittable, onSelect: splitTo('row', false) },
+    { label: 'Split down', icon: <ArrowDown size={14} />, hint: kb?.label('split-down'), disabled: !splittable, onSelect: splitTo('col', false) },
+    { label: 'Split left', icon: <ArrowLeft size={14} />, disabled: !splittable, onSelect: splitTo('row', true) },
+    { label: 'Split up', icon: <ArrowUp size={14} />, disabled: !splittable, onSelect: splitTo('col', true) },
   ]
 
   const over = (e) => {
@@ -124,7 +128,9 @@ function Pane({ node, layout, setLayout, renderPane, labelFor, showHeader, onDro
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
     const box = e.currentTarget.getBoundingClientRect()
-    const next = dropZone(box, e.clientX, e.clientY)
+    // Where no split is possible the drop replaces this pane's view, so the
+    // tint covers the whole pane rather than a half it will not become.
+    const next = tintZone(splittable, box, e.clientX, e.clientY)
     place.current = next
     setZone(next.zone)
   }
@@ -190,7 +196,7 @@ function Pane({ node, layout, setLayout, renderPane, labelFor, showHeader, onDro
               className="split-btn"
               title={hintRight('Split right')}
               aria-label="Split right"
-              disabled={full}
+              disabled={!splittable}
               onClick={splitTo('row', false)}
             >
               <SplitGlyph size={14} />
@@ -240,7 +246,7 @@ function Pane({ node, layout, setLayout, renderPane, labelFor, showHeader, onDro
 // Cloud chats, new-chat composers and the primary view all share one frame.
 // One pane is the app's whole main area, headerless; two or more get the
 // headers, because that is where the split and close actions live.
-export default function SplitArea({ layout, setLayout, renderPane, labelFor, onDropInPane }) {
+export default function SplitArea({ layout, setLayout, renderPane, labelFor, onDropInPane, canSplit = true }) {
   const count = paneCount(layout)
 
   const renderNode = (node) => {
@@ -255,6 +261,7 @@ export default function SplitArea({ layout, setLayout, renderPane, labelFor, onD
           labelFor={labelFor}
           showHeader={count > 1}
           onDropInPane={onDropInPane}
+          canSplit={canSplit}
         />
       )
     }

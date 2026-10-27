@@ -42,8 +42,10 @@ import {
   focusLeaf,
   leafById,
   leaves,
+  moveLeaf,
   newLayout,
   paneCount,
+  reconcilePanes,
   restoreLayout,
   secondaryChatIds,
   setLeafView,
@@ -109,8 +111,16 @@ function loadViewState(sessions, gone = EMPTY_GONE) {
 }
 
 function loadLayout() {
+  // A phone has no panes: what a wide window stored is not a layout a phone
+  // can use, so the stored one is not restored there at all.
+  if (isMobile) return newLayout()
   try {
-    return restoreLayout(JSON.parse(sessionStorage.getItem(SPLIT_KEY) ?? 'null'))
+    // A pane can hold a chat or a New chat composer, never a static page, so
+    // one restored from an older build is repaired before it is drawn.
+    return reconcilePanes(
+      restoreLayout(JSON.parse(sessionStorage.getItem(SPLIT_KEY) ?? 'null')),
+      new Set(STATIC_VIEWS),
+    )
   } catch {
     return newLayout()
   }
@@ -270,6 +280,11 @@ function Shell() {
     // about it changed. Storing it only when it actually differs keeps the
     // shell from re-rendering on the clock, mid-stream.
     setNav((previous) => keepNav(previous, state))
+    // The same gone set repairs the panes: a pane whose chat was deleted in
+    // this window or another one becomes a New chat instead of pointing at
+    // nothing for the rest of the session. reconcilePanes keeps the object
+    // when there is nothing to repair, so an ordinary beat does not re-render.
+    setLayout((current) => reconcilePanes(current, gone))
     const view = state.history[state.hIndex]
     const session = (sessions ?? []).find((s) => s.id === view)
     if (session) ensureChat(session)
@@ -397,16 +412,21 @@ function Shell() {
     if (next !== layout) setLayout(next)
   }
 
-  // A chat dropped on a pane: the middle opens it in that pane, an outer
-  // band splits the pane on that side and puts the chat there. At the pane
-  // cap there is nowhere to split, so an edge drop opens in the pane it
-  // landed on instead of doing nothing.
+  // Whether a drop on a pane edge may open a new pane at all, read by the
+  // drop and by the pane that draws the tint. The cap and the phone rule live
+  // here once: splitting is refused at four panes, and a phone has no panes.
+  const panesCanSplit = !isMobile && paneCount(layout) < MAX_PANES
+
+  // A chat dropped on a pane: the middle opens it in that pane, an outer band
+  // moves it into a new pane on that side. Where no split can happen the drop
+  // opens in the pane it landed on, and a chat dropped back on the pane it
+  // already lives in is not a move.
   const dropInPane = (leafId, id, place) => {
     const leaf = leafById(layout, leafId)
-    if (!leaf) return
+    if (!leaf || leaf.view === id) return
     const session = (sessions ?? []).find((s) => s.id === id)
     if (session) ensureChat(session)
-    if (place.zone === 'center' || paneCount(layout) >= MAX_PANES) {
+    if (place.zone === 'center' || !panesCanSplit) {
       if (leaf.view === null) {
         openSession(id)
       } else {
@@ -414,7 +434,11 @@ function Shell() {
       }
       return
     }
-    setLayout((l) => splitLeaf(l, leafId, place.dir, id, place.before))
+    // A move, not a copy: the pane the chat came from becomes a New chat, so
+    // the same chat never streams in two panes with two drafts. The primary is
+    // left alone (its view is navigation), and a sidebar drag has no source.
+    const source = leaves(layout.root).find((pane) => pane.view === id)
+    setLayout((l) => moveLeaf(l, source?.id ?? null, leafId, place.dir, place.before, id))
   }
 
   // Right-click in the main area: split from the pane under the cursor,
@@ -894,6 +918,7 @@ function Shell() {
                 labelFor={paneLabel}
                 renderPane={renderPane}
                 onDropInPane={dropInPane}
+                canSplit={panesCanSplit}
               />
               {/* The browser docked right: beside the chat, never instead
                   of it. The floating bar (on the homepage) and the sidebar

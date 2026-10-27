@@ -105,6 +105,32 @@ export function setLeafView(layout, leafId, view) {
   return root === layout.root ? layout : { ...layout, root }
 }
 
+/// Move a chat from the pane that shows it into another pane on `dir` and
+/// `before`. `sourceId` is null when the chat came from the sidebar and no
+/// pane holds it, which is an open-beside and not a move. The source pane
+/// becomes a New chat, so the chat never streams in two panes with two
+/// drafts. A drop on the pane the chat already lives in is not a move.
+export function moveLeaf(layout, sourceId, targetId, dir, before, view) {
+  if (sourceId === targetId) return layout
+  const split = splitLeaf(layout, targetId, dir, view, before)
+  return sourceId ? setLeafView(split, sourceId, 'new') : split
+}
+
+/// Repair the panes whose view no longer means anything: a chat this console
+/// knows is gone (deleted here or on another device), or a view a pane can
+/// never hold (a static page restored from an older build). The pane becomes
+/// a New chat composer in place, so the arrangement is kept and no pane points
+/// at nothing. The primary is left alone: its view is the app's navigation,
+/// and setLeafView refuses an empty leaf, which is the same line.
+export function reconcilePanes(layout, stale) {
+  if (!stale || stale.size === 0) return layout
+  let next = layout
+  for (const leaf of leaves(layout.root)) {
+    if (leaf.view !== null && stale.has(leaf.view)) next = setLeafView(next, leaf.id, 'new')
+  }
+  return next
+}
+
 export function focusLeaf(layout, leafId) {
   return layout.focus === leafId || !leafById(layout, leafId) ? layout : { ...layout, focus: leafId }
 }
@@ -133,6 +159,16 @@ export const DROP_BAND = 0.28
 export function acceptsChatDrop(types) {
   if (!types) return false
   return Array.from(types).includes('text/plain')
+}
+
+/**
+ * The zone the pane should tint while a chat hovers. Where no split can
+ * happen (the pane cap, or a phone, which has no panes) the drop opens in the
+ * pane it landed on, so the tint says "here", not "this half": the screen
+ * must not promise an action the release will not perform.
+ */
+export function tintZone(canSplit, box, x, y) {
+  return canSplit ? dropZone(box, x, y) : { zone: 'center' }
 }
 
 export function dropZone(box, x, y) {
