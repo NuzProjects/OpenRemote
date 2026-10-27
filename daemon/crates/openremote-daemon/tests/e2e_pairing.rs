@@ -7,8 +7,9 @@
 //! tests do, so the flow is the shipped flow.
 //!
 //! The LAN narrowing is proved at the socket and route level: the control
-//! routes exist only on the loopback router, and the LAN listener answers
-//! exactly three routes and nothing else.
+//! routes exist only on the loopback router, and the LAN listener serves the
+//! page the QR code opens, the code exchange, the home projection and a
+//! favicon, and nothing else.
 
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex as StdMutex};
@@ -858,11 +859,20 @@ async fn the_production_bind_puts_a_real_network_address_in_the_payload() {
         Ok(mint) => mint,
         // A machine with no route off loopback cannot pair a phone, and the
         // desktop says exactly that. Nothing to assert about an address, and
-        // a green run here is not coverage of the shipped bind.
+        // a green run here is not coverage of the shipped bind, so an offline
+        // run fails unless it says out loud that it meant to be offline: this
+        // is the only test that binds the address a phone would dial, and a
+        // silent skip would leave the shipping path unproved on a build
+        // machine that happens to have no network.
         Err(openremote_daemon::pairing::MintError::NoNetwork) => {
+            assert!(
+                std::env::var_os("OPENREMOTE_PAIRING_ALLOW_OFFLINE").is_some(),
+                "this machine has no LAN address, so the shipped bind was not exercised; \
+                 set OPENREMOTE_PAIRING_ALLOW_OFFLINE=1 to accept that on purpose"
+            );
             eprintln!(
                 "SKIPPED the_production_bind_puts_a_real_network_address_in_the_payload: \
-                 this machine has no LAN address, so the shipped bind has not been exercised"
+                 this machine has no LAN address, and OPENREMOTE_PAIRING_ALLOW_OFFLINE is set"
             );
             return;
         }
@@ -912,4 +922,167 @@ async fn the_production_bind_puts_a_real_network_address_in_the_payload() {
         .is_none(),
         "the listener must not answer on loopback as well"
     );
+}
+
+/// A loopback address nothing is holding, from the range the suites keep for
+/// "a port I can name". Binding first is the only way to know it is free, and
+/// the range sits below the block Windows hands out, so no other test's port
+/// zero can take it.
+async fn free_loopback_addr() -> SocketAddr {
+    for port in 41011..41021u16 {
+        let addr: SocketAddr = format!("127.0.0.1:{port}").parse().expect("loopback");
+        if let Ok(listener) = tokio::net::TcpListener::bind(addr).await {
+            drop(listener);
+            return addr;
+        }
+    }
+    panic!("no free loopback port in 41011..41021");
+}
+
+/// A phone on the list, made the way the panel makes one: show a code, then
+/// let the phone exchange it. Answers the phone's id and the address it
+/// reached, which is the address it will dial again.
+async fn pair_one_phone(daemon: &Daemon) -> (String, SocketAddr) {
+    let (code, _url, lan) = mint(daemon).await;
+    let reply = http(
+        lan,
+        "POST",
+        "/pair",
+        None,
+        Some(&format!("{{\"code\":\"{code}\",\"name\":\"Pixel\"}}")),
+    )
+    .await;
+    assert_eq!(reply.status, 200, "pair: {}", reply.body);
+    let id = reply.json()["phone"]["id"]
+        .as_str()
+        .expect("phone id")
+        .to_string();
+    (id, lan)
+}
+
+/// A pairing host over a data folder a daemon has already used, at whatever
+/// address it binds now: how this suite moves "this computer" to another
+/// network without touching the machine's own interfaces.
+fn reopen_at(data_dir: &std::path::Path, addr: SocketAddr) -> Arc<PairingHost> {
+    let data_dir = data_dir.to_path_buf();
+    let store = Arc::new(StdMutex::new(Store::open(data_dir.clone()).expect("store")));
+    let supervisor = Supervisor::new(store.clone(), HarnessRegistry::none());
+    let app = App::assemble(
+        AppOptions {
+            data_dir,
+            token: OWNER_TOKEN.into(),
+            cloud: dead_cloud(),
+        },
+        store,
+        supervisor,
+    );
+    PairingHost::open_on(app, addr, CODE_TTL_MS)
+}
+
+#[tokio::test]
+async fn a_moved_address_tells_the_panel_the_phones_must_pair_again() {
+    // Pair at home, open the laptop on another network: the phone's token is
+    // stored against the old origin, so the phone shows "site can't be
+    // reached" while this end still lists it as paired and blames the
+    // network or the firewall. The file remembers the address, so the panel
+    // can say what actually happened.
+    let (daemon, lan) = {
+        let daemon = start(CODE_TTL_MS).await;
+        let (id, lan) = pair_one_phone(&daemon).await;
+        assert!(daemon.host.phones().iter().any(|p| p.id == id));
+        (daemon, lan)
+    };
+    let data_dir = daemon.data_dir.path().to_path_buf();
+    let file = std::fs::read_to_string(data_dir.join("paired-phones.json")).expect("phones file");
+    assert!(
+        file.contains(&lan.to_string()),
+        "the file records the address the phone paired at: {file}"
+    );
+    // The daemon stays alive on its old address: its temp folder goes with
+    // it, and the point here is a second daemon reading the folder the first
+    // one wrote, which is what a restart on another network is.
+
+    // The same folder, a different address: the phone is still on the list
+    // (nothing destroys a record behind the person's back) and the panel says
+    // why it cannot reach us.
+    let moved = reopen_at(&data_dir, free_loopback_addr().await);
+    moved.restore().await;
+    assert_eq!(moved.phones().len(), 1, "the record is kept");
+    let notice = moved.notice().expect("a notice about the moved address");
+    assert!(
+        notice.contains("network address changed"),
+        "the notice names the cause: {notice}"
+    );
+    assert!(
+        notice.contains("pair it again"),
+        "the notice says what to do: {notice}"
+    );
+
+    // Control: the daemon still bound where the phone paired says nothing at
+    // all, so the sentence above is about the move and not about reading the
+    // file back.
+    assert_eq!(
+        daemon.host.notice(),
+        None,
+        "the daemon that did not move is quiet"
+    );
+}
+
+#[tokio::test]
+async fn a_revoke_racing_a_mint_never_leaves_a_code_on_a_closed_socket() {
+    // The window: mint binds the socket, then installs the code, and a revoke
+    // arriving between the two used to close the socket and still let the
+    // mint answer with a QR for it. The lock closes the window, so the
+    // assertion is an invariant and not a timing: a code the panel is showing
+    // names a socket that is there.
+    let daemon = start(CODE_TTL_MS).await;
+    for round in 0..20 {
+        let (id, _lan) = pair_one_phone(&daemon).await;
+        let revoke_path = format!("/pairing/phones/{id}/revoke");
+        let (minted, revoked) = tokio::join!(
+            try_http(
+                daemon.control,
+                "POST",
+                "/pairing/code",
+                Some(OWNER_TOKEN),
+                Some("{}"),
+            ),
+            try_http(
+                daemon.control,
+                "POST",
+                &revoke_path,
+                Some(OWNER_TOKEN),
+                Some("{}"),
+            )
+        );
+        let minted = minted.expect("the control listener answered the mint");
+        let revoked = revoked.expect("the control listener answered the revoke");
+        assert_eq!(minted.status, 200, "round {round}: mint {}", minted.body);
+        assert_eq!(
+            revoked.status, 200,
+            "round {round}: revoke {}",
+            revoked.body
+        );
+        let url = minted.json()["url"].as_str().expect("url").to_string();
+        let named: SocketAddr = url
+            .trim_start_matches("http://")
+            .split('/')
+            .next()
+            .expect("host:port")
+            .parse()
+            .expect("an address a phone can dial");
+        assert!(
+            try_http(named, "GET", "/", None, None).await.is_some(),
+            "round {round}: the code names {named}, and nothing is listening there"
+        );
+        // Start the next round from a known state: no code, no phones.
+        http(
+            daemon.control,
+            "POST",
+            "/pairing/cancel",
+            Some(OWNER_TOKEN),
+            Some("{}"),
+        )
+        .await;
+    }
 }
