@@ -27,6 +27,7 @@ import { pushBack, useBack } from './use-back.js'
 import SplitArea from './SplitArea.jsx'
 import ViewBoundary from './ViewBoundary.jsx'
 import ContextMenu from './ContextMenu.jsx'
+import { textFieldOf, textMenuItems } from './text-menu.js'
 import CommandPalette from './CommandPalette.jsx'
 import ShortcutSheet from './ShortcutSheet.jsx'
 import ChangesModal from './ChangesModal.jsx'
@@ -521,9 +522,26 @@ function Shell() {
   }
 
   // Right-click in the main area: split from the pane under the cursor,
-  // and act on the chat it shows. Text, links and fields keep the
-  // browser's own menu (copy, paste, spelling).
+  // and act on the chat it shows. Text fields are handled by the one listener
+  // below, before this sees them.
   const [paneMenu, setPaneMenu] = useState(null)
+  // Text fields: the engine's own context menu is off in the console, so a
+  // right click in an input, a textarea or a contenteditable had nothing at
+  // all. One capture listener at the document serves every field in every
+  // view and popup, and it only acts on fields: the pane menu and the
+  // sidebar's row menu are left exactly as they were.
+  const [textMenu, setTextMenu] = useState(null)
+  useEffect(() => {
+    const onMenu = (e) => {
+      const el = textFieldOf(e.target)
+      if (!el) return
+      e.preventDefault()
+      e.stopPropagation()
+      setTextMenu({ x: e.clientX, y: e.clientY, el })
+    }
+    document.addEventListener('contextmenu', onMenu, true)
+    return () => document.removeEventListener('contextmenu', onMenu, true)
+  }, [])
   const onMainContextMenu = (e) => {
     if (isMobile) return
     const t = e.target
@@ -1043,6 +1061,16 @@ function Shell() {
               y={paneMenu.y}
               items={paneMenuItems(paneMenu.leafId)}
               onClose={() => setPaneMenu(null)}
+            />
+          )}
+          {/* The text-field menu: same engine, same keyboard handling, same
+              click-away, and it closes when the field goes. */}
+          {textMenu && (
+            <ContextMenu
+              x={textMenu.x}
+              y={textMenu.y}
+              items={textMenuItems(textMenu.el)}
+              onClose={() => setTextMenu(null)}
             />
           )}
           {palette && (
