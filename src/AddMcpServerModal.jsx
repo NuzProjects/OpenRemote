@@ -2,18 +2,19 @@
 // command is what that machine would start; a key, if it needs one,
 // stays there.
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { X } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
 import './devices.css'
 import { useBack } from './use-back.js'
-import { useEscLayer } from './esc-layer.js'
+import { useDialog } from './dialog-focus.js'
 
 const STATUS = { online: 'Online', offline: 'Offline', waiting: 'Has not checked in' }
 
 export default function AddMcpServerModal({ onClose }) {
   useBack(true, onClose)
-  useEscLayer(true, onClose)
+  const panelRef = useRef(null)
+  useDialog(panelRef, onClose)
   const { machines, mcpServers, addMcpServer } = useConsole()
   const online = (machines ?? []).find((m) => m.machine.status === 'online')
   const [name, setName] = useState('')
@@ -69,7 +70,7 @@ export default function AddMcpServerModal({ onClose }) {
         if (e.target === e.currentTarget) onClose()
       }}
     >
-      <div className="dv-modal dv-modal--form" role="dialog" aria-modal="true" aria-label="Add an MCP server">
+      <div className="dv-modal dv-modal--form" ref={panelRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Add an MCP server">
         <div className="dv-modal-head">
           <h2 className="dv-modal-title">Add an MCP server</h2>
           <button className="dv-modal-close" onClick={onClose} title="Close">

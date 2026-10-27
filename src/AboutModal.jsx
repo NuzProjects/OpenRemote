@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { CaretLeft, CaretRight, X } from '@phosphor-icons/react'
 // The one copy of the version the UI renders - package.json is the
 // source; tauri.conf.json and src-tauri/Cargo.toml carry it for the
@@ -8,7 +8,7 @@ import './about.css'
 import { isMobile } from './platform.js'
 import { SplashMark } from './Splash.jsx'
 import { useBack } from './use-back.js'
-import { useEscLayer } from './esc-layer.js'
+import { useDialog } from './dialog-focus.js'
 
 export default function AboutModal({ onClose, daemonVersion, api }) {
   const [view, setView] = useState('about')
@@ -16,9 +16,12 @@ export default function AboutModal({ onClose, daemonVersion, api }) {
     if (view === 'licenses') setView('about')
     else onClose()
   })
+  const panelRef = useRef(null)
   // Esc closes this window, never the Settings window it was opened over:
-  // that one holds a layer of its own underneath this.
-  useEscLayer(true, onClose)
+  // that one holds a layer of its own underneath this. The panel ref is empty
+  // on the phone, where this renders as a full screen; the Esc layer still
+  // holds, and the screen itself owns its focus.
+  useDialog(panelRef, onClose)
   const [notices, setNotices] = useState(null)
   const [noticesError, setNoticesError] = useState(null)
   // The daemon serves the notices itself (GET /notices), so the text is
@@ -66,6 +69,8 @@ export default function AboutModal({ onClose, daemonVersion, api }) {
     >
       <div
         className={view === 'licenses' ? 'ab-modal ab-modal--wide' : 'ab-modal'}
+        ref={panelRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label={view === 'licenses' ? 'Third-party licenses' : 'About OpenRemote'}

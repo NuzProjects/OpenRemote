@@ -5,14 +5,14 @@
 // device takes it out of the Cloud; it deletes the synced chats it kept,
 // never its Local ones.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Trash, X } from '@phosphor-icons/react'
 import SignInModal from './SignInModal.jsx'
 import { useConsole } from './state/console.jsx'
 import { harnessName } from './harness-names.js'
 import { SIGNIN_HARNESSES } from './harness-manager.js'
 import { useBack } from './use-back.js'
-import { useEscLayer } from './esc-layer.js'
+import { useDialog } from './dialog-focus.js'
 import { isPhone, kindLabel, platformLabel, selfLabel } from './cloud.js'
 
 const STATUS_LABEL = {
@@ -34,7 +34,8 @@ function seen(device) {
 
 export default function MachineModal({ device, onOpenChat, onClose }) {
   useBack(true, onClose)
-  useEscLayer(true, onClose)
+  const panelRef = useRef(null)
+  useDialog(panelRef, onClose)
   const { sessions, thisDevice, apiFor, setDeviceKind, removeDevice, machines } = useConsole()
   const [view, setView] = useState(null)
   const [busyHarness, setBusyHarness] = useState(null)
@@ -117,7 +118,7 @@ export default function MachineModal({ device, onOpenChat, onClose }) {
         if (e.target === e.currentTarget) onClose()
       }}
     >
-      <div className="dv-modal dv-devmodal" role="dialog" aria-modal="true" aria-label={device.name}>
+      <div className="dv-modal dv-devmodal" ref={panelRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={device.name}>
         <div className="dv-modal-head">
           <h2 className="dv-modal-title pv">{device.name}</h2>
           <button className="dv-modal-close" onClick={onClose} title="Close">

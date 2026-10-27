@@ -7,13 +7,14 @@ import { ArrowUp, Folder, House, X } from '@phosphor-icons/react'
 import './devices.css'
 import './folders.css'
 import { useBack } from './use-back.js'
-import { useEscLayer } from './esc-layer.js'
+import { useDialog } from './dialog-focus.js'
 import { usePrivacyMode } from './privacy.js'
 
 export default function FolderPickerModal({ api, where, start, onChoose, onClose }) {
   const privacy = usePrivacyMode()
   useBack(true, onClose)
-  useEscLayer(true, onClose)
+  const panelRef = useRef(null)
+  useDialog(panelRef, onClose)
   const [listing, setListing] = useState(null)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -64,7 +65,7 @@ export default function FolderPickerModal({ api, where, start, onChoose, onClose
         if (e.target === e.currentTarget) onClose()
       }}
     >
-      <div className="dv-modal fb-modal" role="dialog" aria-modal="true" aria-label="Choose a folder">
+      <div className="dv-modal fb-modal" ref={panelRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Choose a folder">
         <div className="dv-modal-head">
           <h2 className="dv-modal-title">Choose a folder</h2>
           <button className="dv-modal-close" onClick={onClose} title="Close">

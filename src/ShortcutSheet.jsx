@@ -1,15 +1,17 @@
 // The cheat sheet (Ctrl+/): every action that has a key, by group, with
 // the key as it is bound on this device right now.
 
+import { useRef } from 'react'
 import { X } from '@phosphor-icons/react'
 import { useKeyboard, isMac } from './keyboard.jsx'
-import { useEscLayer } from './esc-layer.js'
+import { useDialog } from './dialog-focus.js'
 import { ACTIONS, GROUPS, comboLabel } from './shortcuts.js'
 import './keyboard.css'
 
 export default function ShortcutSheet({ onClose }) {
   const kb = useKeyboard()
-  useEscLayer(true, onClose)
+  const panelRef = useRef(null)
+  useDialog(panelRef, onClose)
 
   const groups = GROUPS.map((g) => ({
     ...g,
@@ -23,7 +25,7 @@ export default function ShortcutSheet({ onClose }) {
         if (e.target === e.currentTarget) onClose()
       }}
     >
-      <div className="kb-sheet" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+      <div className="kb-sheet" ref={panelRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
         <div className="kb-sheet-head">
           <h2>Keyboard shortcuts</h2>
           <button type="button" className="dv-modal-close" onClick={onClose} title="Close">

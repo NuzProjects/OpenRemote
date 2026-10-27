@@ -30,12 +30,17 @@ const MODALS = [
 
 const source = (file) => readFileSync(new URL(`./${file}`, import.meta.url), 'utf8')
 
-// The shapes a real call takes: one that is always open holds `true`, one a
-// picker can sit over holds `!picker`, one that may not have its entry yet
-// holds `Boolean(entry)`. Matching the call as written, not the name alone,
-// is what keeps a hook called with a condition that can be false - or with
-// `false` outright - from passing as wired.
-const WIRED = ['useEscLayer(true,', 'useEscLayer(!', 'useEscLayer(Boolean(']
+// The shapes a real call takes: the shared dialog hook (dialog-focus.js) holds
+// the layer for the family now, and it takes the same conditions the raw hook
+// did - always open, a picker over it, or waiting on an entry. A modal that
+// still calls the raw hook directly is accepted too: the layer is what this
+// file pins, and the adoption itself is pinned in dialog-focus-wiring.test.js.
+const WIRED = [
+  'useDialog(',
+  'useEscLayer(true,',
+  'useEscLayer(!',
+  'useEscLayer(Boolean(',
+]
 
 test('every modal that closes on Esc holds a layer', () => {
   const missing = MODALS.filter((file) => !WIRED.some((shape) => source(file).includes(shape)))

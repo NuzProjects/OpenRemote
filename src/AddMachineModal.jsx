@@ -7,11 +7,12 @@ import { useEffect, useRef, useState } from 'react'
 import { Check, Copy, X } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
 import { useBack } from './use-back.js'
-import { useEscLayer } from './esc-layer.js'
+import { useDialog } from './dialog-focus.js'
 
 export default function AddMachineModal({ onClose }) {
   useBack(true, onClose)
-  useEscLayer(true, onClose)
+  const panelRef = useRef(null)
+  useDialog(panelRef, onClose)
   const { createEnrollment, devices, refreshCloud } = useConsole()
   const [enrollment, setEnrollment] = useState(null)
   const [error, setError] = useState(null)
@@ -70,7 +71,7 @@ export default function AddMachineModal({ onClose }) {
         if (e.target === e.currentTarget) onClose()
       }}
     >
-      <div className="dv-modal" role="dialog" aria-modal="true" aria-label="Add a machine">
+      <div className="dv-modal" ref={panelRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Add a machine">
         <div className="dv-modal-head">
           <h2 className="dv-modal-title">Add a machine</h2>
           <button className="dv-modal-close" onClick={onClose} title="Close">

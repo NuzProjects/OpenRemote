@@ -4,7 +4,7 @@
 // through their owner's own installer. Opened from the harness picker's
 // footer row.
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { X } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
 import { HarnessMark } from './brand-marks.jsx'
@@ -12,11 +12,12 @@ import { harnessRows } from './harness-manager.js'
 import { usePrivacyMode } from './privacy.js'
 import './devices.css'
 import { useBack } from './use-back.js'
-import { useEscLayer } from './esc-layer.js'
+import { useDialog } from './dialog-focus.js'
 
 export default function HarnessManagerModal({ onClose, onSignIn }) {
   const privacy = usePrivacyMode()
   useBack(true, onClose)
+  const panelRef = useRef(null)
   const { capabilities, machines, installHarness } = useConsole()
   const [busy, setBusy] = useState(null)
   const [error, setError] = useState(null)
@@ -31,11 +32,10 @@ export default function HarnessManagerModal({ onClose, onSignIn }) {
   const machineId = thisMachine?.machine?.id ?? null
 
   // Esc closes the topmost thing here: the go-ahead first, then the
-  // manager.
-  useEscLayer(true, () => {
-    if (confirming) setConfirming(null)
-    else onClose()
-  })
+  // manager. The go-ahead is a dialog of its own, so it holds its own layer
+  // and this one is simply not top while it is open - the layer stack does the
+  // ordering that used to be a condition in this handler.
+  useDialog(panelRef, onClose)
 
   const install = async (harnessId, options) => {
     if (busy || !machineId) return
@@ -60,7 +60,7 @@ export default function HarnessManagerModal({ onClose, onSignIn }) {
         if (e.target === e.currentTarget) onClose()
       }}
     >
-      <div className="dv-modal dv-devmodal" role="dialog" aria-modal="true" aria-label="Harnesses">
+      <div className="dv-modal dv-devmodal" ref={panelRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Harnesses">
         <div className="dv-modal-head">
           <h2 className="dv-modal-title">Harnesses</h2>
           <button className="dv-modal-close" onClick={onClose} title="Close">
@@ -135,8 +135,12 @@ export default function HarnessManagerModal({ onClose, onSignIn }) {
 
 // The go-ahead for pi's runtime. Matter-of-fact on purpose: setting up
 // Node.js is a normal part of installing pi (its own installer offers
-// the same step in a terminal), not a problem to warn about.
+// the same step in a terminal), not a problem to warn about. It is a dialog
+// in its own right - focus in, the app and the panel under it inert, its own
+// Esc layer - so backing out of it never takes the manager with it.
 function RuntimeConfirm({ name, onCancel, onConfirm }) {
+  const panelRef = useRef(null)
+  useDialog(panelRef, onCancel)
   return (
     <div
       className="dv-modal-backdrop dv-hm-stack"
@@ -144,7 +148,14 @@ function RuntimeConfirm({ name, onCancel, onConfirm }) {
         if (e.target === e.currentTarget) onCancel()
       }}
     >
-      <div className="dv-modal dv-hm-confirm" role="dialog" aria-modal="true" aria-label={`Install ${name}`}>
+      <div
+        className="dv-modal dv-hm-confirm"
+        ref={panelRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Install ${name}`}
+      >
         <div className="dv-modal-head">
           <h2 className="dv-modal-title">One more piece for {name}</h2>
           <button className="dv-modal-close" onClick={onCancel} title="Close">

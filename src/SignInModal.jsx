@@ -3,6 +3,7 @@ import { X } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
 import './signin.css'
 import { useBack } from './use-back.js'
+import { useDialog } from './dialog-focus.js'
 
 // The harness's own sign-in, relayed. The daemon runs the CLI's own
 // login command on the machine; the CLI's words stream in here (the
@@ -12,6 +13,7 @@ import { useBack } from './use-back.js'
 export default function SignInModal({ harnessId, onDone, deviceId = null }) {
   useBack(true, onDone)
   const { signIn, feedSignIn, stopSignIn } = useConsole()
+  const panelRef = useRef(null)
   const [view, setView] = useState(null)
   const [error, setError] = useState(null)
   const [answer, setAnswer] = useState('')
@@ -67,6 +69,11 @@ export default function SignInModal({ harnessId, onDone, deviceId = null }) {
     onDone()
   }
 
+  // The sign-in sheet had no Esc at all before the dialog plumbing: it held
+  // no layer and answered no key, so the only ways out were its own buttons.
+  // Esc now closes it through the same guarded close the X uses.
+  useDialog(panelRef, close)
+
   return (
     <div
       className="si-backdrop"
@@ -74,7 +81,7 @@ export default function SignInModal({ harnessId, onDone, deviceId = null }) {
         if (e.target === e.currentTarget && (settled || error)) close()
       }}
     >
-      <div className="si-modal" role="dialog" aria-modal="true" aria-label={`Sign in to ${harnessId}`}>
+      <div className="si-modal" ref={panelRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={`Sign in to ${harnessId}`}>
         <div className="si-head">
           <h2 className="si-title">Sign in</h2>
           <button
