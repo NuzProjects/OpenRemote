@@ -32,6 +32,30 @@ const NOT_ENROLLED: u8 = 78;
 /// "not enrolled".
 const EX_CONFIG: u8 = 78;
 
+/// The one usage line, so a refused argument and an unknown command say the
+/// same thing. Exit 2 is a usage error, the same code `mcp-chat` uses.
+fn usage_error(why: &str) -> ExitCode {
+    eprintln!("openremote-daemon: {why}");
+    eprintln!(
+        "usage: openremote-daemon [agent | enroll <code> | status | unenroll | mcp-chat <args> | --version]"
+    );
+    ExitCode::from(2)
+}
+
+/// The refusal for a command that takes no arguments, or nothing when the
+/// arguments are exactly the command. Ignoring is how
+/// `agent --data-dir /srv/openremote` would run against the default folder and
+/// make a second identity: the flag a unit file passes is the one thing a
+/// person cannot check afterwards.
+fn extra_argument(args: &[String], command: &str) -> Option<String> {
+    args.get(1)
+        .map(|extra| format!("{command} takes no arguments (got '{extra}')"))
+}
+
+fn no_arguments(args: &[String], command: &str) -> Option<ExitCode> {
+    extra_argument(args, command).map(|why| usage_error(&why))
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -40,29 +64,36 @@ fn main() -> ExitCode {
         .expect("tokio runtime");
     match args.first().map(String::as_str) {
         None => runtime.block_on(serve(false)),
-        Some("agent") => runtime.block_on(serve(true)),
-        Some("enroll") => match args.get(1) {
-            Some(code) => runtime.block_on(enroll(code)),
-            None => {
-                eprintln!("usage: openremote-daemon enroll <code>");
-                ExitCode::from(2)
+        Some("agent") => match no_arguments(&args, "agent") {
+            Some(refused) => refused,
+            None => runtime.block_on(serve(true)),
+        },
+        Some("enroll") => match (args.get(1), args.get(2)) {
+            (Some(code), None) => runtime.block_on(enroll(code)),
+            (None, _) => usage_error("enroll needs the code from the machine list"),
+            (Some(_), Some(extra)) => {
+                usage_error(&format!("enroll takes one code (got an extra '{extra}')"))
             }
         },
         // A chat's read-a-chat MCP server (OpenRemote Controls), started by
         // the chat's harness over stdio.
         Some("mcp-chat") => runtime.block_on(openremote_daemon::mcp_chat::run(&args[1..])),
-        Some("status") => status(),
-        Some("unenroll") => runtime.block_on(unenroll()),
-        Some("--version" | "-V") => {
-            println!("openremote-daemon {}", env!("CARGO_PKG_VERSION"));
-            ExitCode::SUCCESS
-        }
-        Some(other) => {
-            eprintln!(
-                "openremote-daemon: unknown command '{other}' (agent, enroll, status, unenroll, mcp-chat, --version)"
-            );
-            ExitCode::from(2)
-        }
+        Some("status") => match no_arguments(&args, "status") {
+            Some(refused) => refused,
+            None => status(),
+        },
+        Some("unenroll") => match no_arguments(&args, "unenroll") {
+            Some(refused) => refused,
+            None => runtime.block_on(unenroll()),
+        },
+        Some(version @ ("--version" | "-V")) => match no_arguments(&args, version) {
+            Some(refused) => refused,
+            None => {
+                println!("openremote-daemon {}", env!("CARGO_PKG_VERSION"));
+                ExitCode::SUCCESS
+            }
+        },
+        Some(other) => usage_error(&format!("unknown command '{other}'")),
     }
 }
 
@@ -231,7 +262,41 @@ fn status() -> ExitCode {
     let view = cloud.view();
     let (line, code) = status_line(cloud.enrolled(), view["account"]["email"].as_str());
     println!("{line}");
+    // A second line for the fact a person on a server cannot otherwise see.
+    // Enrolment is not reachability: a proxy that lets the registry through
+    // but blocks the relay enrols fine and is never reachable, and the laptop
+    // is the only place that would notice. The exit code stays about enrolment
+    // - that is the question a service script asks - and the sentence carries
+    // the rest.
+    if let Some(reach) = reach_line(view["state"].as_str(), view["error"].as_str()) {
+        println!("{reach}");
+    }
     ExitCode::from(code)
+}
+
+/// What the daemon's own phase says about being reachable, in one sentence, or
+/// nothing when there is no state to read. The words are the console's own
+/// ("can't reach OpenRemote Cloud" comes from the mesh), so a person reading
+/// both ends sees the same story.
+fn reach_line(state: Option<&str>, error: Option<&str>) -> Option<String> {
+    let why = error
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+        .map(|e| format!(" ({e})"))
+        .unwrap_or_default();
+    match state {
+        Some("online") => Some("Reachable from your other devices.".to_string()),
+        Some("connecting") => Some("Connecting to OpenRemote Cloud.".to_string()),
+        Some("offline") => Some(format!(
+            "Not reachable from your other devices right now{why}."
+        )),
+        // The credential is present (so the line above says enrolled) but the
+        // registry no longer accepts it: signing in again is the only way back.
+        Some("relink") => Some(format!(
+            "OpenRemote Cloud no longer accepts this computer's credential - sign in again{why}."
+        )),
+        _ => None,
+    }
 }
 
 /// What `status` says and the code it exits with. An enrolled machine is in
@@ -314,6 +379,10 @@ fn unenroll_answer(
 mod tests {
     use super::*;
 
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
     #[test]
     fn the_unretryable_exit_is_one_code_with_two_names() {
         // AGENTS.md tells a reader "exits 78 when not enrolled", and a service
@@ -364,5 +433,59 @@ mod tests {
         let (line, code) = unenroll_answer(true, Some("no credential"), Some("offline"));
         assert_eq!(code, 1);
         assert!(line.contains("no credential"));
+    }
+
+    #[test]
+    fn status_says_whether_the_machine_is_reachable() {
+        // Enrolment is not reachability, which is the thing a server admin
+        // cannot see otherwise: a proxy that blocks the relay still enrols.
+        assert_eq!(
+            reach_line(Some("online"), None).unwrap(),
+            "Reachable from your other devices."
+        );
+        assert_eq!(
+            reach_line(Some("connecting"), None).unwrap(),
+            "Connecting to OpenRemote Cloud."
+        );
+        let offline = reach_line(Some("offline"), None).unwrap();
+        assert!(offline.starts_with("Not reachable"), "{offline}");
+        let with_reason =
+            reach_line(Some("offline"), Some("can't reach OpenRemote Cloud")).unwrap();
+        assert!(
+            with_reason.contains("can't reach OpenRemote Cloud"),
+            "{with_reason}"
+        );
+        let relink = reach_line(
+            Some("relink"),
+            Some("this device's credential was rejected"),
+        )
+        .unwrap();
+        assert!(relink.contains("sign in again"), "{relink}");
+        assert!(relink.contains("rejected"), "{relink}");
+        // No state to read (an older view, a stubbed cloud): say nothing rather
+        // than claim a reachability nobody measured.
+        assert_eq!(reach_line(None, None), None);
+        assert_eq!(reach_line(Some("signed_out"), None), None);
+        // An empty reason is no reason, not "()".
+        assert!(
+            !reach_line(Some("offline"), Some("  "))
+                .unwrap()
+                .contains("(")
+        );
+    }
+
+    #[test]
+    fn a_command_that_takes_no_arguments_refuses_one() {
+        // The flag a unit file passes must not run silently against another
+        // folder: `agent --data-dir /srv/openremote` used to be ignored.
+        assert!(extra_argument(&args(&["agent"]), "agent").is_none());
+        let why = extra_argument(&args(&["agent", "--data-dir", "/srv/x"]), "agent")
+            .expect("an extra argument is refused");
+        assert!(why.contains("agent takes no arguments"), "{why}");
+        assert!(why.contains("--data-dir"), "the flag is named back: {why}");
+        assert!(extra_argument(&args(&["status", "now"]), "status").is_some());
+        assert!(extra_argument(&args(&["--version", "x"]), "--version").is_some());
+        // And the refusal is the usage error: 2, with the one usage line.
+        assert!(no_arguments(&args(&["status", "now"]), "status").is_some());
     }
 }

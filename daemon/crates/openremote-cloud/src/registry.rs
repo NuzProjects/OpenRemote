@@ -36,20 +36,39 @@ pub struct Registry {
     base: String,
 }
 
+/// What to say when the registry answers with a code and no sentence of its
+/// own. `invalid_code` is the one a person meets first - a typo, a code that
+/// expired, or one another device already spent - and a wire word is not a
+/// sentence. Anything else keeps the generic refusal plus the status, so an
+/// unknown failure is still identified by the number.
+fn refusal_sentence(status: u16, code: &str) -> String {
+    match code {
+        "invalid_code" => "That code is not valid. Codes are single use and expire after five minutes; mint a new one from the machine list.".to_string(),
+        other => format!("OpenRemote Cloud refused the request ({other}, HTTP {status})"),
+    }
+}
+
 fn check(response: Response) -> Result<Value, RegistryError> {
     let body = response.json();
     match response.status {
         200..=299 => Ok(body),
         401 => Err(RegistryError::Unauthorized),
         410 => Err(RegistryError::Revoked),
-        status => Err(RegistryError::Refused {
-            status,
-            code: body["error"].as_str().unwrap_or("refused").to_string(),
-            message: body["message"]
-                .as_str()
-                .unwrap_or("OpenRemote Cloud refused the request")
-                .to_string(),
-        }),
+        status => {
+            let code = body["error"].as_str().unwrap_or("refused").to_string();
+            // The registry's own words when it sent some that say more than the
+            // code does: the test double repeats the code in both fields, and a
+            // real answer may carry only a token.
+            let message = match body["message"].as_str().map(str::trim) {
+                Some(words) if !words.is_empty() && words != code => words.to_string(),
+                _ => refusal_sentence(status, &code),
+            };
+            Err(RegistryError::Refused {
+                status,
+                code,
+                message,
+            })
+        }
     }
 }
 
@@ -193,5 +212,59 @@ impl Registry {
             )
             .await?;
         check(response)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn refused(status: u16, body: &str) -> RegistryError {
+        check(Response {
+            status,
+            headers: http::HeaderMap::new(),
+            body: body.as_bytes().to_vec(),
+        })
+        .unwrap_err()
+    }
+
+    #[test]
+    fn a_code_the_registry_only_names_is_said_in_words_a_person_can_act_on() {
+        // The first failure on a new server: the fake (and the real contract)
+        // answers 400 invalid_code with the code repeated as the message.
+        let err = refused(400, r#"{"error":"invalid_code","message":"invalid_code"}"#);
+        let why = err.to_string();
+        assert!(why.contains("not valid"), "{why}");
+        assert!(why.contains("five minutes"), "{why}");
+        assert!(why.contains("mint a new one"), "{why}");
+        assert!(
+            !why.contains("invalid_code"),
+            "the wire word is not the sentence: {why}"
+        );
+
+        // No message at all is the same sentence, not the old generic one.
+        let err = refused(400, r#"{"error":"invalid_code"}"#);
+        assert!(err.to_string().contains("not valid"), "{err}");
+    }
+
+    #[test]
+    fn the_registrys_own_words_are_kept_when_it_sends_some() {
+        let err = refused(
+            403,
+            r#"{"error":"seat_limit","message":"This account already has three machines."}"#,
+        );
+        assert_eq!(err.to_string(), "This account already has three machines.");
+    }
+
+    #[test]
+    fn an_unknown_refusal_keeps_the_generic_sentence_and_its_status() {
+        let err = refused(500, r#"{"error":"boom","message":"boom"}"#);
+        let why = err.to_string();
+        assert!(why.contains("refused the request"), "{why}");
+        assert!(why.contains("boom"), "{why}");
+        assert!(why.contains("HTTP 500"), "{why}");
+        // A body that is not JSON at all still names the status.
+        let err = refused(502, "<html>Bad Gateway</html>");
+        assert!(err.to_string().contains("HTTP 502"), "{err}");
     }
 }
