@@ -135,3 +135,18 @@ export function pairingError(err) {
   if (err instanceof TypeError) return 'The console could not reach its daemon.'
   return err?.message || 'Pairing failed.'
 }
+
+/**
+ * The pairing address with its code hidden: `http://192.168.1.9:47823/#••••••••`.
+ * The code rides in the fragment, so masking it is what makes a blurred code
+ * worth blurring - the address beside it would otherwise hand it back. The
+ * dots keep its length, so the line does not jump when the code is shown.
+ */
+export function maskedAddress(url) {
+  const text = String(url ?? '')
+  const hash = text.indexOf('#')
+  if (hash < 0) return text
+  const code = text.slice(hash + 1)
+  if (!code) return text
+  return `${text.slice(0, hash + 1)}${'•'.repeat(code.length)}`
+}

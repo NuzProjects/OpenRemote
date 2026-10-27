@@ -5,10 +5,16 @@
 // keeps the phone records. This component asks for a code, draws it, watches
 // for a phone to arrive, and lists the phones that already did - so it needs
 // no account, no Cloud, and no network beyond this computer and the phone.
+//
+// The code arrives blurred. A camera pointed at the screen is how this screen
+// is meant to be used, so a code drawn sharp the moment the view opens is a
+// code anyone else in the room can read too: one click on it shows the code, a
+// second click hides it, and the address beside it stays masked while it is
+// hidden.
 
 import { useEffect, useRef, useState } from 'react'
 import { DeviceMobile } from '@phosphor-icons/react'
-import { pairedLabel, pairingApi, pairingError, phoneName, remainingLabel } from './pairing.js'
+import { maskedAddress, pairedLabel, pairingApi, pairingError, phoneName, remainingLabel } from './pairing.js'
 import { qrRows } from './qr.js'
 import './pairing.css'
 
@@ -19,7 +25,7 @@ const POLL_MS = 3000
 // the corners without it.
 const QUIET = 4
 
-function QrCard({ url }) {
+function QrCard({ url, blurred }) {
   let rows = null
   let failed = false
   try {
@@ -39,7 +45,12 @@ function QrCard({ url }) {
     })
   })
   return (
-    <svg className="qr-code" viewBox={`0 0 ${side} ${side}`} role="img" aria-label="Pairing code">
+    <svg
+      className={blurred ? 'qr-code is-blurred' : 'qr-code'}
+      viewBox={`0 0 ${side} ${side}`}
+      role="img"
+      aria-label="Pairing code"
+    >
       <rect width={side} height={side} fill="#ffffff" />
       <path d={dark.join('')} fill="#0a0c0f" shapeRendering="crispEdges" />
     </svg>
@@ -52,6 +63,12 @@ export default function PairingSection() {
   // The live code, exactly as the daemon minted it; null when nothing is on
   // screen.
   const [live, setLive] = useState(null)
+  // Whether that code is drawn sharp. The code is live either way: this is a
+  // question about the screen, not about the pairing.
+  const [shown, setShown] = useState(false)
+  // The code that was on screen ran out. The tile says so rather than offer
+  // what looks like a first attempt.
+  const [expired, setExpired] = useState(false)
   // null until the first list arrives, so "no phones" is never a guess.
   const [phones, setPhones] = useState(null)
   const [joined, setJoined] = useState(null)
@@ -99,6 +116,7 @@ export default function PairingSection() {
           setJoined(fresh ? phoneName(fresh.name) : 'A phone')
           setPhones(list)
           setLive(null)
+          setShown(false)
         }
       } catch {
         // A poll that fails changes nothing: the code is still on screen,
@@ -115,13 +133,18 @@ export default function PairingSection() {
   // card goes away with it.
   useEffect(() => {
     if (!live) return
-    if (remainingLabel(live.expires_at, now) === 'Expired') setLive(null)
+    if (remainingLabel(live.expires_at, now) !== 'Expired') return
+    setLive(null)
+    setShown(false)
+    setExpired(true)
   }, [live, now])
 
   const start = async () => {
     setBusy(true)
     setError(null)
     setJoined(null)
+    setExpired(false)
+    setShown(false)
     try {
       const mint = await api.current.start()
       setNow(Date.now())
@@ -137,6 +160,14 @@ export default function PairingSection() {
     }
   }
 
+  // The view opens with a code already on screen and blurred: pairing a phone
+  // should not need a button press first, and a code nobody has read yet costs
+  // nothing. It closes itself when the countdown ends, and leaving this view
+  // lets it run out rather than leaving a socket open behind us.
+  useEffect(() => {
+    start()
+  }, [])
+
   const stop = async () => {
     setBusy(true)
     setError(null)
@@ -147,6 +178,8 @@ export default function PairingSection() {
       // Only a cancel the daemon confirmed takes the card down: if it failed,
       // the code is still live there, and hiding it would hide that.
       setLive(null)
+      setShown(false)
+      setExpired(false)
     } catch (err) {
       setError(pairingError(err))
     } finally {
@@ -175,30 +208,43 @@ export default function PairingSection() {
     }
   }
 
+  // What the tile says when there is no code on screen: one is being minted,
+  // or the last one ran out, or the daemon refused and the sentence underneath
+  // says why.
+  const emptyLabel = busy
+    ? 'Preparing a code'
+    : expired
+      ? 'The code expired. Click for a new one.'
+      : 'Click for a code'
+
   return (
     <div className="qr-pair">
       <h2 className="pn-section">Pair a phone</h2>
       <p className="pn-lead">Scan this with your phone's camera. No account needed.</p>
 
-      {!live && (
-        <div className="qr-actions">
-          <button className="pn-btn" onClick={start} disabled={busy}>
-            Show a code
-          </button>
-          {joined && <span className="qr-note">{joined} is paired.</span>}
-        </div>
-      )}
+      {joined && <p className="qr-note qr-joined">{joined} is paired.</p>}
 
-      {live && (
+      {live ? (
         <div className="qr-card">
-          <QrCard url={live.url} />
+          <div className="qr-tile-wrap">
+            <button
+              type="button"
+              className="qr-tile"
+              aria-pressed={shown}
+              aria-label={shown ? 'Hide the pairing code' : 'Show the pairing code'}
+              onClick={() => setShown((on) => !on)}
+            >
+              <QrCard url={live.url} blurred={!shown} />
+            </button>
+            <p className="qr-hint">{shown ? 'Click the code to hide it' : 'Click the code to show it'}</p>
+          </div>
           <div className="qr-side">
             <p className="qr-wait">
               <span className="dot dot--waiting" />
               Waiting for a phone
             </p>
             <p className="qr-clock">{remainingLabel(live.expires_at, now)}</p>
-            <p className="qr-address">{live.url}</p>
+            <p className="qr-address">{shown ? live.url : maskedAddress(live.url)}</p>
             <p className="qr-note">
               Not encrypted, and your firewall may need to allow OpenRemote. Same network only.
             </p>
@@ -207,6 +253,11 @@ export default function PairingSection() {
             </button>
           </div>
         </div>
+      ) : (
+        <button type="button" className="qr-tile qr-tile--empty" onClick={start} disabled={busy}>
+          <span className="qr-blank" aria-hidden="true" />
+          <span className="qr-hint">{emptyLabel}</span>
+        </button>
       )}
 
       {error && <p className="qr-error">{error}</p>}

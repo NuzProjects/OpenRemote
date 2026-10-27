@@ -7,11 +7,9 @@
   margin-top: 4px;
 }
 
-.qr-actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 14px;
+/* The one-line note that says which phone just arrived, under the lead. */
+.qr-joined {
+  margin: 12px 0 0;
 }
 
 .qr-card {
@@ -25,6 +23,79 @@
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: rgba(255, 255, 255, 0.02);
+}
+
+/* The code is a button, not a picture with a button beside it: the whole
+   square is the target, one click shows the code and a second hides it. It
+   is drawn blurred at first, because the way this screen is used is by
+   pointing a camera at it, and a code drawn sharp the moment the view opens
+   is a code anyone else in the room can read too. No transition: a blur
+   that fades is an animation the reduced-motion switches would have to
+   cover, and a code that is half sharp is a code that is half readable. */
+.qr-tile-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: fit-content;
+}
+
+.qr-tile {
+  display: block;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  cursor: default;
+  /* The blur bleeds past the code's own square; clipping it keeps the white
+     edge of the square crisp, so a blurred code still reads as a code. */
+  overflow: hidden;
+}
+
+/* The console's amber ring sits at 1px; a code needs it clear of the
+   square, which is white against a white edge. */
+.qr-tile:focus-visible {
+  outline-offset: 4px;
+}
+
+.qr-code.is-blurred {
+  filter: blur(10px);
+}
+
+.qr-hint {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 12px;
+  text-align: center;
+}
+
+.qr-tile:hover + .qr-hint,
+.qr-tile:focus-visible + .qr-hint {
+  color: var(--text-1);
+}
+
+/* No code on screen: the same square, empty, so the panel keeps its shape
+   whether a code is up or not. */
+.qr-tile--empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.qr-tile--empty .qr-hint {
+  max-width: 208px;
+  line-height: 1.5;
+}
+
+.qr-tile--empty:hover .qr-hint {
+  color: var(--text-1);
+}
+
+.qr-blank {
+  width: 208px;
+  height: 208px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
 }
 
 .qr-code {

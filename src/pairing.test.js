@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { pairedLabel, pairingError, phoneName, remainingLabel } from './pairing.js'
+import { maskedAddress, pairedLabel, pairingError, phoneName, remainingLabel } from './pairing.js'
 
 test('a code counts down to the second, then says it is gone', () => {
   const now = 1_000_000
@@ -81,4 +81,23 @@ test('a failure says what happened, in the words the surface shows', () => {
   // fetch throws a TypeError when there is nothing listening at all.
   assert.equal(pairingError(new TypeError('Failed to fetch')), 'The console could not reach its daemon.')
   assert.equal(pairingError(null), 'Pairing failed.')
+})
+
+
+test('a hidden code masks its own address', () => {
+  // The code rides in the address fragment. Masking the address is what makes
+  // a blurred code worth blurring: the line beside it would otherwise hand the
+  // code back to anyone looking at the screen.
+  assert.equal(maskedAddress('http://192.168.1.9:47823/#ABC234XY'), 'http://192.168.1.9:47823/#••••••••')
+  // One dot per character, so the line keeps its length and does not jump
+  // when the code is shown.
+  assert.equal(
+    Array.from(maskedAddress('http://10.0.0.2:47823/#ABCD')).length,
+    Array.from('http://10.0.0.2:47823/#ABCD').length,
+  )
+  // Nothing to hide is left exactly as it was.
+  assert.equal(maskedAddress('http://10.0.0.2:47823/'), 'http://10.0.0.2:47823/')
+  assert.equal(maskedAddress('http://10.0.0.2:47823/#'), 'http://10.0.0.2:47823/#')
+  assert.equal(maskedAddress(null), '')
+  assert.equal(maskedAddress(''), '')
 })

@@ -219,7 +219,7 @@ sits unscanned past its five minutes (a timer minted with the code closes it).
 | the pairing could not be saved (500) | "The computer could not save the pairing", then "Nothing was paired. Show a new code in OpenRemote on the computer and scan again." |
 | the browser refused to store the token | the pairing still works for this visit, and the page says a reload will need a new code. |
 | the page cannot reach the host at all | the browser's own "site can't be reached". The desktop copy says: keep both on the same network, and allow OpenRemote through the firewall. |
-| no daemon / pairing off | the desktop's Mobile view says so, with the button that turns it on, and with no phones paired it also says nothing is listening |
+| no daemon / pairing off | the desktop's Mobile view says so, in the daemon's own sentence, and with no phones paired it also says nothing is listening |
 | the daemon could not open the pairing port at start | the panel shows the daemon's own sentence (`notice`), so a paired phone that cannot reach this computer is explained instead of silent |
 
 The second row has a window worth stating, because an old code has two possible answers. An exchange
@@ -241,7 +241,7 @@ honest description is that the code is simply gone.
    the shell, and the Android app about a third address. `/pairing/*` is merged into the loopback
    router only (in `main.rs`), so its reachability is decided by the socket, not by a header check.
 3. **Paired phones persist; codes do not.** See the lifecycle section.
-4. **One live code at a time.** A second button press replaces the first code. This gives cancel
+4. **One live code at a time.** Clicking the tile for a new code replaces the first one. This gives cancel
    for free and stops a stale QR from staying valid.
 5. **The code rides in the URL fragment.** It never travels to the server in a request line,
    where a log or a proxy would capture it.
