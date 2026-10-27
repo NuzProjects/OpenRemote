@@ -533,7 +533,14 @@ function Shell() {
   // Machines, chats, and the rest carry their own empty state.
   const primaryContent = (
     view === 'settings' ? (
-    <SettingsView onReplay={replayOnboarding} onOpenChat={openSession} />
+    <SettingsView
+      onReplay={replayOnboarding}
+      onOpenChat={openSession}
+      // The Daemon section gets a row that opens the manual connect form: the
+      // connection errors say "reconnect from Settings", and Settings has to
+      // be able to do it.
+      onManualConnect={() => setManualConnect(true)}
+    />
   ) : view === 'account' ? (
     <AccountView onOpenMachines={openMachines} />
   ) : view === 'mobile' ? (
@@ -737,6 +744,10 @@ function Shell() {
               setManualConnect(false)
               finishOnboarding()
             }}
+            // The door has to close both ways: a user who opened the form to
+            // look at it can come back to the screen that was healing by
+            // itself, which is the only one that offers Try now.
+            onDismiss={() => setManualConnect(false)}
             startManual
           />
         </div>
