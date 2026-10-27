@@ -109,8 +109,8 @@ There is a second edge to this. Plain HTTP gives the phone no way to verify who 
 `http://<ip>:<port>`, and the page keeps its token in `localStorage` keyed to exactly that origin. A
 device that later answers on the same address and port is, to the browser, the same origin, and a
 page served from it can read the key. That key is still read-only and still revocable, and revoking
-from the desktop is one click, but it is the reason the sentences on both surfaces were rewritten
-for this round.
+from the desktop is one click, but it is the reason both surfaces say the connection is not
+encrypted.
 
 What that means in the product: the desktop says, where the code is shown, that the two devices talk
 straight to each other over the local network and that the connection is not encrypted, so anyone who
@@ -118,10 +118,10 @@ can watch this network's traffic can see the pairing go by; the phone page says 
 sentence. Both say "pair on a network you trust" and neither promises a TLS handshake it does not
 perform.
 
-The next step, recorded here rather than done tonight: pair over TLS with a certificate the daemon
+The next step, recorded here and not built yet: pair over TLS with a certificate the daemon
 generates at pairing time and the phone pins when it accepts the code, which turns "somebody could
 be in the middle" into "this page cannot be read by anybody who was not at the first scan". Doing
-that badly tonight (a self-signed certificate accepted blindly) would be worse than plain HTTP with
+that badly (a self-signed certificate accepted blindly) would be worse than plain HTTP with
 an honest sentence.
 
 ## Wire shapes
@@ -196,18 +196,18 @@ sits unscanned past its five minutes (a timer minted with the code closes it).
 
 | What happened | What the phone shows |
 | --- | --- |
-| code unknown, used, or attempts burnt | "That pairing code is not valid. Show a new one on the computer." |
-| code older than 5 minutes | "That pairing code expired. Show a new one on the computer." |
-| token rejected by `/api/home` | "This computer removed this phone. Scan a new code to pair again." |
-| the pairing could not be saved (500) | "The computer could not save the pairing. Nothing was paired. Show a new code and scan again." |
+| code unknown, used, or attempts burnt | "That pairing code is not valid", then "Show a new pairing code in OpenRemote on the computer, then scan it again." |
+| code older than 5 minutes | "That pairing code expired", then "Codes last five minutes. Show a new one in OpenRemote on the computer." |
+| token rejected by `/api/home` | "This computer removed this phone", then "Scan a new pairing code from OpenRemote on the computer to pair again." |
+| the pairing could not be saved (500) | "The computer could not save the pairing", then "Nothing was paired. Show a new code in OpenRemote on the computer and scan again." |
 | the browser refused to store the token | the pairing still works for this visit, and the page says a reload will need a new code. |
 | the page cannot reach the host at all | the browser's own "site can't be reached". The desktop copy says: keep both on the same network, and allow OpenRemote through the firewall. |
 | no daemon / pairing off | the desktop's Mobile view says so, with the button that turns it on, and with no phones paired it also says nothing is listening |
 | the daemon could not open the pairing port at start | the panel shows the daemon's own sentence (`notice`), so a paired phone that cannot reach this computer is explained instead of silent |
 
-## Rulings made where the brief was silent
+## Rulings this design had to make on its own
 
-1. **The scoped surface is a small handler set, not an HTTP proxy.** "Proxy" in the brief allows
+1. **The scoped surface is a small handler set, not an HTTP proxy.** "Proxy" allows
    either; a set of three explicit read-only handlers is the smallest thing that can exist, and it
    makes "the phone cannot reach the owner API" structural rather than a filter someone can get
    wrong later.
@@ -222,7 +222,8 @@ sits unscanned past its five minutes (a timer minted with the code closes it).
    where a log or a proxy would capture it.
 6. **The phone's name comes from the page's own user agent string.** The founder asked for no
    typing; "iPhone" or "Android phone" is honest enough to identify a row in a list, and renaming
-   is a follow-up, not tonight. The daemon bounds it to one line and 40 characters, which is the
+   is a follow-up, not part of this design. The daemon bounds it to one line and 40 characters, which
+   is the
    same bound the console applies before drawing it, so a phone cannot push a long name into the
    list.
 7. **The QR encoder is hand-written in the console.** Neither lockfile has a QR dependency, and
@@ -231,9 +232,14 @@ sits unscanned past its five minutes (a timer minted with the code closes it).
    about 40. Its tests read every symbol back the way a scanner does and check the format strings
    against the published table, because a transposed format block looks fine in a matrix and fails
    on a real phone.
-8. **`cargo fmt` already fails at this branch's base** in `openremote-core/src/{model,store}.rs`
-   (another session's in-flight work, blacklisted here). Those two files are untouched by this
-   work, and the report names them as the only diffs the formatter finds.
+8. **`cargo fmt --all --check` does not pass in this tree.** It reports eight files across four
+   crates: `openremote-core/src/model.rs`, `openremote-core/src/store.rs`,
+   `openremote-daemon/src/app.rs`, `openremote-daemon/src/http.rs`,
+   `openremote-daemon/src/registry.rs`, `openremote-grok/src/config.rs`,
+   `openremote-opencode/src/driver.rs`, `openremote-opencode/src/resolve.rs` (counted as one path per
+   `Diff in` line the command prints). None of them is pairing work. `cargo fmt --check` inside
+   `src-tauri` alone is green; `--all` also formats this crate's path dependencies under `../daemon`,
+   which is why the shell workspace reports the same eight.
 9. **The listener binds the machine's own LAN address, not `0.0.0.0`.** The address is resolved
    before the socket is opened, and the QR carries that address, so binding it exactly means the
    socket exists on the interface the QR points at and on no other: not loopback aliases, not a
@@ -270,17 +276,30 @@ was already live (the error arm calls cancel before it reports, so nothing stays
 error the user is looking at). The arm is reachable in production, which is why it exists: a mint after
 the address moved can rebind and find every candidate port taken (`NoPort`), and a machine whose
 network went away resolves nothing at all (`NoNetwork`). Proving it end to end would mean moving or
-dropping this machine's network under a running daemon, which no test here can do. The report says it
+dropping this machine's network under a running daemon, which no test here can do. This note says it
 is read, not proved.
 
-## Explicitly out of scope tonight
+## Explicitly out of scope
 
 - Driving harnesses from the phone: sending prompts, answering approvals, creating chats.
 - Any public exposure, any tunnel or relay, any Cloud involvement, mDNS discovery. TLS with a
-  certificate pinned at the first pairing is the next step (see the plain HTTP section), not a thing
-  done tonight.
+  certificate pinned at the first pairing is the next step (see the plain HTTP section), not part of
+  this design.
 - One phone managing several desktops, or one desktop pairing with several phones at once (the
   list holds many phones; only one code is live at a time).
 - Renaming a paired phone, per-phone permissions, or a phone session log.
 - Installer firewall rules for the LAN port. Until those exist, Windows will ask the user, and a
   deny is a silent "site can't be reached" on the phone.
+
+## Checking this note
+
+Every claim in the table above is a test, and the whole table is one
+command: `cd daemon && cargo test --locked --test e2e_pairing`. The suite
+holds eleven tests; the table's eleven rows name ten of them, and the
+eleventh is the cancel path. The copy quoted under failure modes is
+verbatim from `pairing_page.rs`, so a quote that does not appear there is a
+fault in this note, not in the page. The route table is `routes()` in
+`pairing.rs` (four `route` calls), the ports are `PORT_CANDIDATES` (six of
+them), and the formatter paragraph in ruling 8 is
+`cd daemon && cargo fmt --all --check`, which prints the eight paths one
+per `Diff in` line.
