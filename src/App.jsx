@@ -653,18 +653,24 @@ function Shell() {
     <CloudMode onBackToLocal={isMobile ? null : () => switchMode('local')} />
   ) : (
     <>
-      {view === 'new' && (
-        <NewChat
-          onOpen={openSession}
-          mode={mode}
-          addProjectOpen={addProjectOpen}
-          onAddProjectDone={() => setAddProjectOpen(false)}
-          presetProject={presetProject}
-          focused={primaryFocused}
-          onOpenPlugins={() => goView('plugins')}
-          topRight={<FloatingBar browserOn={browserOpen} onBrowser={toggleBrowser} />}
-        />
-      )}
+      {view === 'new' &&
+        (bootSeed && !sessionsAnswered ? (
+          // The boot hash names a chat the first session beat has not
+          // answered for yet. The composer here would take the first sentence
+          // of the day and drop it when the beat moves the view to the chat.
+          <div className="cv-none">Opening your chat...</div>
+        ) : (
+          <NewChat
+            onOpen={openSession}
+            mode={mode}
+            addProjectOpen={addProjectOpen}
+            onAddProjectDone={() => setAddProjectOpen(false)}
+            presetProject={presetProject}
+            focused={primaryFocused}
+            onOpenPlugins={() => goView('plugins')}
+            topRight={<FloatingBar browserOn={browserOpen} onBrowser={toggleBrowser} />}
+          />
+        ))}
       {view === 'machines' && <MachinesView onOpenChat={openSession} openDevice={openDevice} />}
       {!STATIC_VIEWS.includes(view) &&
         (chat ? (

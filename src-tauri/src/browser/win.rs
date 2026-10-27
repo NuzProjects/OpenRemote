@@ -105,6 +105,31 @@ fn chord(vk: u32) -> Option<String> {
     Some(chord)
 }
 
+/// Turn the engine's own context menu off for one webview.
+///
+/// A page's menu is worth having (copy, select all, back, reload), so tabs
+/// keep it; the console's window is different. Every control that acts on the
+/// console is the app's own, and the engine's menu offers actions the app
+/// never had: "Save page as" writes a file from a page, which is the thing
+/// the browser's download policy exists to prevent in the tabs, and "Reload"
+/// reloads a webview the tab store is tracking. It is also an unthemed,
+/// English, native menu in a window that draws its own chrome. A dev build
+/// loses the menu's Inspect entry; the console's DevTools port (main.rs) is
+/// the inspecting path there, not the menu.
+pub fn no_default_menu(webview: &Webview) {
+    let _ = webview.with_webview(|platform| {
+        // SAFETY: COM calls on the window's thread, where the controller
+        // lives; the settings object is created by the engine for it.
+        unsafe {
+            if let Ok(core) = platform.controller().CoreWebView2() {
+                if let Ok(settings) = core.Settings() {
+                    let _ = settings.SetAreDefaultContextMenusEnabled(false);
+                }
+            }
+        }
+    });
+}
+
 /// Hook a new tab: its browser keys go to the console.
 pub fn attach(app: &AppHandle, webview: &Webview) {
     let app = app.clone();

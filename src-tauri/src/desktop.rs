@@ -195,6 +195,12 @@ pub fn run() {
             // larger than some laptop screens, and the part that would fall
             // off is the titlebar's own close button.
             geometry::open(app.handle());
+            // The console's webview gets no engine context menu: every action
+            // on the console is a control the app draws (browser/mod.rs has
+            // the longer reason). Tab pages keep theirs on purpose.
+            if let Some(console) = app.get_webview("main") {
+                browser::no_engine_menu(&console);
+            }
             // A dev build gives the console's webview a debugging port
             // (main.rs). The window exists by now, so the variable has done
             // its job; dropping it keeps the port off the browser's own

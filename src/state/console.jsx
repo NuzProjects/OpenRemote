@@ -20,9 +20,22 @@ const hasTauri = typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__
 // failure.
 const SIGNIN_POLL_MISSES = 40
 
+// How long a `connecting` state is shown as the app before it becomes the
+// waiting screen. The daemon usually answers well inside this: a warm start
+// has its address in the first `daemon_info` answer (a few milliseconds), and
+// one that boots in half a second is connected before the timer fires. A
+// longer grace would cover a slow cold boot (the registry probe spawns every
+// harness before READY), but the waiting screen is patient copy rather than a
+// verdict, so it is cheaper to show it early than to leave the app wordless.
+const BOOT_GRACE_MS = 2500
+
 export function ConsoleProvider({ children }) {
   const [api, setApi] = useState(() => {
-    const saved = loadConnection()
+    // In the desktop shell the daemon is the shell's child: its address comes
+    // from `daemon_info`, and the address saved by the last run is a port
+    // nothing listens on any more. Dialling it first would report a healthy
+    // boot as a failure. Browser mode has only the saved address.
+    const saved = hasTauri ? {} : loadConnection()
     return new DaemonApi(saved.url, saved.token)
   })
   // Which daemon an answer belongs to. A fetch that was in flight when the
@@ -234,8 +247,22 @@ export function ConsoleProvider({ children }) {
       setConnection((c) => (c.state === 'connected' ? c : { state: 'waiting-daemon', error: null }))
     }
     ask()
+    // A daemon that is booting has no screen of its own: `connecting` renders
+    // the app with nothing said, and the shell's own verdict is ninety
+    // seconds away. The waiting screen is patient (no verdict, no blame) and
+    // leaves by itself when the daemon answers, so it is the honest thing to
+    // show while the shell has no address. It is only ever entered from
+    // `connecting`: a first run starts in `new` and shows the wizard.
+    const slow = setTimeout(
+      () =>
+        setConnection((c) =>
+          c.state === 'connecting' ? { state: 'waiting-daemon', error: null } : c,
+        ),
+      BOOT_GRACE_MS,
+    )
     return () => {
       cancelled = true
+      clearTimeout(slow)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])

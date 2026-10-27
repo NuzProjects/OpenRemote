@@ -205,6 +205,21 @@ pub(crate) fn console() -> EventTarget {
     }
 }
 
+/// Give the console's webview no engine context menu.
+///
+/// The console is the app's own chrome: every action on it is a control the
+/// console draws, and the engine's menu offers what the app never had. It is
+/// also the webview that must never be talked into a download from a menu
+/// item. Tabs are the other way round: their menu is the only menu a page
+/// has, so they keep it (see `open_tab`). Only Windows' engine has one to
+/// turn off; the other engines are left as they are.
+pub fn no_engine_menu(webview: &Webview) {
+    #[cfg(windows)]
+    win::no_default_menu(webview);
+    #[cfg(not(windows))]
+    let _ = webview;
+}
+
 fn tab(app: &AppHandle, id: &str) -> Result<Webview, String> {
     app.get_webview(id)
         .filter(|_| id.starts_with("tab-"))
@@ -305,6 +320,17 @@ pub fn open_tab(
             }
             answer
         });
+    // A tab keeps the engine's own context menu, and that is a decision
+    // with a cost, not an oversight: it is the only menu a page has (copy,
+    // select all, back and reload all work from it), and the app has no page
+    // menu of its own to replace it with. The engine's menu also offers
+    // "Save page as" and "Print", which write a file without passing through
+    // `on_download` above. Replacing it means handling ContextMenuRequested,
+    // drawing a menu in the console's own webview over a parked page, and
+    // wiring each item to the tab: a real piece of work, and until it exists
+    // the engine's menu is the better one to have. The console's webview has
+    // no such excuse and is turned off (`no_engine_menu`, from the desktop
+    // setup).
     #[cfg(windows)]
     let builder = builder.additional_browser_args(win::BROWSER_ARGS);
     browser.tabs.lock().expect("browser lock").insert(
