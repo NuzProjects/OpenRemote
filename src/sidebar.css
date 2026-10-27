@@ -13,6 +13,10 @@
   --dot-idle: #4a525c;
   --radius: 7px;
   --font-sans: 'Inter', -apple-system, 'Segoe UI', system-ui, sans-serif;
+  /* The sheets already read var(--font-mono, 'Geist Mono', ...) and fell back
+     to the stack below; naming it here makes the fallback unreachable and the
+     contract's mono family one token, the way the sans family already is. */
+  --font-mono: 'Geist Mono', ui-monospace, Consolas, monospace;
 }
 
 * {

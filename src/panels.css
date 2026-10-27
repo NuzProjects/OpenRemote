@@ -289,7 +289,10 @@
 .pn-command {
   display: block;
   color: var(--text-2);
-  font-family: ui-monospace, Consolas, monospace;
+  /* Technical content: the contract's mono family, and the token every other
+     sheet reads. This stack used to start at ui-monospace, which on Windows
+     means Consolas and not the family the rest of the console sets. */
+  font-family: var(--font-mono, 'Geist Mono', ui-monospace, Consolas, monospace);
   font-size: 12px;
 }
 
@@ -303,7 +306,7 @@
 }
 
 .dv-command {
-  font-family: ui-monospace, Consolas, monospace;
+  font-family: var(--font-mono, 'Geist Mono', ui-monospace, Consolas, monospace);
 }
 
 .dv-check {
