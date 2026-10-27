@@ -7,8 +7,11 @@ import {
   MAX_SAVED,
   MIN_PANES,
   ROLES,
+  UNOPENABLE_LINE,
   capacityLine,
   loadLayouts,
+  offerLayouts,
+  paneCountLine,
   restoreShape,
   saveLayouts,
   shapeOf,
@@ -364,4 +367,59 @@ test('saving keeps the newest twenty, writes the version, and deleting takes one
   assert.deepEqual(withoutLayout(list, `id-${MAX_SAVED + 3}`).map((e) => e.id)[0], `id-${MAX_SAVED + 2}`)
   assert.deepEqual(withoutLayout([], 'nope'), [])
   assert.equal(ROLES.includes('chat') && ROLES.includes('new') && ROLES.includes('plugins'), true, 'the role list is the app\'s views')
+})
+
+// ---- the pane header's menu ----
+
+test('a pane count is said in panes, singular and plural', () => {
+  assert.equal(paneCountLine(2), '2 panes')
+  assert.equal(paneCountLine(3), '3 panes')
+  assert.equal(paneCountLine(1), '1 pane')
+  // Damage reads as nothing rather than "undefined panes".
+  assert.equal(paneCountLine(undefined), '0 panes')
+  assert.equal(paneCountLine(null), '0 panes')
+})
+
+test('the menu offers every saved layout, in the stored order, with its count', () => {
+  const three = shapeOf(threeInARow(), { primaryView: 'chat-a', isChat })
+  assert.equal(three.ok, true)
+  const two = shape()
+  const saved = [
+    ...withLayout([], { name: 'Work', panes: three.panes, tree: three.tree }, { id: 'b', now: 2 }),
+    ...withLayout([], { name: 'Review', panes: two.panes, tree: two.tree }, { id: 'a', now: 1 }),
+  ]
+  const offers = offerLayouts(saved, { currentChat: 'chat-a' })
+  assert.deepEqual(offers.map((offer) => offer.id), ['b', 'a'], 'the stored order, newest first')
+  assert.deepEqual(offers.map((offer) => offer.name), ['Work', 'Review'])
+  assert.deepEqual(offers.map((offer) => offer.countLine), ['3 panes', '2 panes'])
+  for (const offer of offers) {
+    assert.equal(offer.ok, true)
+    assert.equal(offer.note, null)
+    // The plan is the restore rule's own answer, not a second one.
+    const entry = saved.find((e) => e.id === offer.id)
+    assert.deepEqual(offer.plan, restoreShape(entry, { currentChat: 'chat-a' }))
+  }
+  // The current chat is what a restored "chat" pane gets.
+  assert.ok(JSON.stringify(offers[0].plan.layout).includes('chat-a'))
+})
+
+test('a layout that cannot fit stays in the menu, disabled, with the reason', () => {
+  const three = shapeOf(threeInARow(), { primaryView: 'chat-a', isChat })
+  const wide = withLayout([], { name: 'Wide', panes: three.panes, tree: three.tree }, { id: 'w', now: 3 })
+  const phone = offerLayouts(wide, { capacity: 1 })
+  assert.equal(phone.length, 1, 'it is offered, not hidden')
+  assert.equal(phone[0].ok, false)
+  assert.equal(phone[0].plan, null)
+  assert.equal(phone[0].note, 'This window holds one pane, so a 3-pane layout cannot open here.')
+  // A shape whose role this build no longer has gets the one plain sentence.
+  const lost = [{ id: 'x', name: 'Old', panes: 2, version: LAYOUT_VERSION, tree: { type: 'leaf', role: 'terminal', primary: true } }]
+  const offers = offerLayouts(lost, {})
+  assert.equal(offers[0].ok, false)
+  assert.equal(offers[0].note, UNOPENABLE_LINE)
+})
+
+test('an empty list offers nothing, and damage in it is skipped', () => {
+  assert.deepEqual(offerLayouts([], {}), [])
+  assert.deepEqual(offerLayouts(null, {}), [])
+  assert.deepEqual(offerLayouts([null, undefined], {}), [])
 })

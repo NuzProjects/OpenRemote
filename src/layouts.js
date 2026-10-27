@@ -300,3 +300,37 @@ export function capacityLine(refusal) {
   const holds = refusal.capacity === 1 ? 'one pane' : `${refusal.capacity} panes`
   return `This window holds ${holds}, so a ${refusal.panes}-pane layout cannot open here.`
 }
+
+/** "3 panes": the label a menu row carries beside a layout's name. */
+export function paneCountLine(panes) {
+  const count = Number.isInteger(panes) ? panes : 0
+  return `${count} ${count === 1 ? 'pane' : 'panes'}`
+}
+
+/** The one sentence for a saved shape this build cannot open at all. */
+export const UNOPENABLE_LINE = 'That layout cannot open in this window.'
+
+/**
+ * The saved layouts as a menu offers them: every one, in the stored order
+ * (newest first), each with the plan it would become or the sentence saying
+ * why it cannot open here. Nothing is filtered out - a shape that cannot fit
+ * is shown disabled with its reason rather than quietly missing, because an
+ * entry that vanishes teaches a person nothing about why their window did not
+ * change.
+ */
+export function offerLayouts(saved, { currentChat = null, capacity = MAX_PANES } = {}) {
+  return (saved ?? [])
+    .filter(Boolean)
+    .map((entry) => {
+      const plan = restoreShape(entry, { currentChat, capacity })
+      return {
+        id: entry.id,
+        name: String(entry.name ?? ''),
+        panes: entry.panes,
+        countLine: paneCountLine(entry.panes),
+        ok: plan.ok === true,
+        plan: plan.ok ? plan : null,
+        note: plan.ok ? null : capacityLine(plan.refusal) || UNOPENABLE_LINE,
+      }
+    })
+}

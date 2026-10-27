@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, DotsThree, X } from '@phosphor-icons/react'
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, DotsThree, FloppyDisk, SquaresFour, X } from '@phosphor-icons/react'
 import ContextMenu from './ContextMenu.jsx'
 import SplitGlyph from './SplitGlyph.jsx'
 import { useHint, useKeyboard } from './keyboard.jsx'
+import { MIN_PANES, loadLayouts, offerLayouts } from './layouts.js'
 import {
   MAX_PANES,
   acceptsChatDrop,
@@ -87,8 +88,24 @@ function SplitNode({ node, setLayout, renderNode }) {
 // holds. Dropping a chat on the middle keeps it here; dropping it on an
 // outer band splits this pane on that side, with the half it will take
 // highlighted while the chat hovers.
-function Pane({ node, layout, setLayout, renderPane, labelFor, showHeader, onDropInPane, canSplit }) {
+function Pane({
+  node,
+  layout,
+  setLayout,
+  renderPane,
+  labelFor,
+  showHeader,
+  onDropInPane,
+  canSplit,
+  onSaveLayout,
+  onRestoreLayout,
+  currentChat,
+}) {
   const [menu, setMenu] = useState(null)
+  // The saved-layouts menu, in the same pattern as the split menu above it:
+  // a ContextMenu anchored under its own button, with the same keys.
+  const [layoutMenu, setLayoutMenu] = useState(null)
+  const layoutsRef = useRef(null)
   const [zone, setZone] = useState(null)
   const place = useRef(null)
   const menuRef = useRef(null)
@@ -110,6 +127,41 @@ function Pane({ node, layout, setLayout, renderPane, labelFor, showHeader, onDro
   const openMenu = () => {
     const box = menuRef.current?.getBoundingClientRect()
     if (box) setMenu({ x: box.right - 208, y: box.bottom + 4 })
+  }
+
+  // The saved layouts are read when the menu opens, not held in state: a shape
+  // saved from the palette (or another pane) is in storage by then, and a
+  // stale list would offer a layout that is no longer there.
+  const openLayoutMenu = () => {
+    const box = layoutsRef.current?.getBoundingClientRect()
+    if (!box) return
+    setLayoutMenu({ x: box.right - 208, y: box.bottom + 4 })
+  }
+
+  const layoutMenuItems = () => {
+    const offers = offerLayouts(loadLayouts(), { currentChat })
+    const items = []
+    if (offers.length === 0) items.push({ header: 'No saved layouts yet' })
+    for (const offer of offers) {
+      items.push({
+        label: offer.name,
+        icon: <SquaresFour size={14} />,
+        hint: offer.countLine,
+        // A shape this window cannot hold stays in the menu with its reason
+        // under it: an entry that vanishes teaches nothing.
+        disabled: !offer.ok,
+        onSelect: offer.ok ? () => onRestoreLayout(offer.plan) : undefined,
+      })
+      if (!offer.ok) items.push({ header: offer.note })
+    }
+    // Saving is the one thing the header offers when the window is already
+    // split: a one-pane window is not a shape, so there would be nothing to
+    // save (layouts.js's MIN_PANES).
+    if (count >= MIN_PANES && onSaveLayout) {
+      if (items.length) items.push({ divider: true })
+      items.push({ label: 'Save this layout…', icon: <FloppyDisk size={14} />, onSelect: () => onSaveLayout() })
+    }
+    return items
   }
 
   const menuItems = [
@@ -205,6 +257,23 @@ function Pane({ node, layout, setLayout, renderPane, labelFor, showHeader, onDro
             >
               <SplitGlyph size={14} />
             </button>
+            {/* The saved shapes, beside the split: one control, the same menu
+                pattern as the split options, and only when the shell has
+                handed the header a way to put a shape back. */}
+            {onRestoreLayout && (
+              <button
+                type="button"
+                ref={layoutsRef}
+                className="split-btn split-btn--text"
+                title="Saved layouts"
+                aria-label="Saved layouts"
+                aria-haspopup="menu"
+                aria-expanded={Boolean(layoutMenu)}
+                onClick={openLayoutMenu}
+              >
+                Layouts
+              </button>
+            )}
             <button
               type="button"
               ref={menuRef}
@@ -241,6 +310,14 @@ function Pane({ node, layout, setLayout, renderPane, labelFor, showHeader, onDro
         {zone && <div className={`split-drop split-drop--${zone}`} aria-hidden="true" />}
       </div>
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}
+      {layoutMenu && (
+        <ContextMenu
+          x={layoutMenu.x}
+          y={layoutMenu.y}
+          items={layoutMenuItems()}
+          onClose={() => setLayoutMenu(null)}
+        />
+      )}
     </section>
   )
 }
@@ -249,8 +326,24 @@ function Pane({ node, layout, setLayout, renderPane, labelFor, showHeader, onDro
 // dividers. What a pane shows is the caller's (`renderPane`), so Local and
 // Cloud chats, new-chat composers and the primary view all share one frame.
 // One pane is the app's whole main area, headerless; two or more get the
-// headers, because that is where the split and close actions live.
-export default function SplitArea({ layout, setLayout, renderPane, labelFor, onDropInPane, canSplit = true }) {
+// headers, because that is where the split and close actions live and where a
+// saved shape is put back.
+//
+// `onRestoreLayout` is the shell's own "apply this plan" (it owns the layout
+// and the primary pane's view), and `currentChat` is the chat a restored
+// "chat" pane should hold; without them the header offers no Layouts control
+// rather than a menu that cannot do anything.
+export default function SplitArea({
+  layout,
+  setLayout,
+  renderPane,
+  labelFor,
+  onDropInPane,
+  canSplit = true,
+  onSaveLayout = null,
+  onRestoreLayout = null,
+  currentChat = null,
+}) {
   const count = paneCount(layout)
 
   const renderNode = (node) => {
@@ -266,6 +359,9 @@ export default function SplitArea({ layout, setLayout, renderPane, labelFor, onD
           showHeader={count > 1}
           onDropInPane={onDropInPane}
           canSplit={canSplit}
+          onSaveLayout={onSaveLayout}
+          onRestoreLayout={onRestoreLayout}
+          currentChat={currentChat}
         />
       )
     }

@@ -1085,6 +1085,9 @@ function Shell() {
               paneCapacity={isMobile ? 1 : MAX_PANES}
               onSaveLayout={() => setSavingLayout(true)}
               onRestoreLayout={applySavedLayout}
+              // A saved "chat" pane comes back holding the chat on screen, which
+              // is the value the palette hands the same restore.
+              currentChat={isChatView(view) ? view : null}
               // Renaming from the palette: the focused pane's chat, and the
               // opener the sidebar already uses (the dialog is hosted below).
               onRenameChat={openRename}
