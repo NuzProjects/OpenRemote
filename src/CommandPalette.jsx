@@ -76,6 +76,7 @@ import { loadSeen, recordSeen, storeSeen } from './unread.js'
 import { markAllSeen, movedLine, sinceLastLook, whatHappened, whenLabel } from './since-last-look.js'
 import { SAVED_LAYOUTS_NONE, capacityLine, loadLayouts, restoreShape, saveLayouts, withoutLayout } from './layouts.js'
 import { armRow, clearRow, rowIsArmed } from './row-confirm.js'
+import { projectName } from './projects.js'
 import {
   RULES_SECTION,
   ruleAnswer,
@@ -110,8 +111,6 @@ const SECTION_CAP = 8
 
 // The pages with no keyboard source behind them, so the crumb has a name.
 const PAGE_TITLES = { since: 'Since your last look', 'caught-up': 'Since your last look', layouts: 'Layouts', 'rule-run': 'Rules' }
-
-const projectLabel = (p) => p.folders[0].split(/[\\/]/).filter(Boolean).pop()
 
 export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onOpenProject, onOpenMachine, onRace, raceFree, panes = 1, paneCapacity = 4, onSaveLayout, onRestoreLayout, onRenameChat = null, focusedChatId = null }) {
   // One line on purpose: the stop-everything wiring test reads this call to
@@ -309,7 +308,7 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
     const projectRows = (projects ?? []).map((p) => ({
       key: `project:${p.id}`,
       section: 'Projects',
-      name: projectLabel(p),
+      name: projectName(p),
       sub: p.folders[0],
       subVeiled: true,
       icon: <FolderOpen size={15} />,

@@ -608,7 +608,7 @@ from the film's own components:
 ## Checking this contract
 
 Most of this page can be checked without opening the app: `npm test` runs
-the console's rule tests (912 of them the last time this line was checked,
+the console's rule tests (938 of them the last time this line was checked,
 and the run prints the live count) and a handful
 of wiring tests read the source text for the parts only a browser could
 show, such as the modal family and the waiting screen's doors. The rules
@@ -618,7 +618,14 @@ waiting line and its cut, the unread marks, presets and their repair, named
 layouts and their refusals, what a pane's header says, running a rule from
 the palette and the seam that lends it the Automations view's own Run now,
 the one-removal-at-a-time lock, the rename rules, the error copy, the
-daemon notice row, the view boundary, race - so each is tested as rules
+daemon notice row, the view boundary, race, the pane tree's own grammar
+(`src/split.js`: what a split is, the floor no pane's size may fall below,
+and what happens when a chat is dropped on an edge), the shape every daemon
+field passes through (`src/shape.js`: a field that should have been a word
+or a list, and the safe answer when it was not), and the beat's cadence and
+death rule (`src/beat.js`, with `src/state/`: how often the console asks,
+and how long a daemon may stay silent before it is called dead) - so each
+is tested as rules
 rather than as a screenshot. Colour,
 type and motion are not testable that way, so a change to them is checked
 by eye at both motion settings (`prefers-reduced-motion` and the in-app

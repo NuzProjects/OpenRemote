@@ -52,3 +52,15 @@ test('an empty source asks for one, whatever the kind', () => {
     assert.equal(checkSource(kind, '   '), 'Say where the plugin is.')
   }
 })
+
+test('a base URL is trimmed, and an address with no host is refused', () => {
+  // The cases the endpoint form used to keep in its own test file before the
+  // rule moved here: whitespace around a good address is not a mistake, and a
+  // scheme with nothing after it is not an address.
+  assert.equal(checkBaseUrl(' https://gateway.example.com/openai/v1 '), null)
+  assert.match(checkBaseUrl('gateway.example.com'), /http:\/\/ or https:\/\//)
+  assert.equal(checkBaseUrl('   '), 'A base URL is required.')
+  assert.equal(checkBaseUrl(null), 'A base URL is required.')
+  assert.match(checkBaseUrl('http://'), /no host|not a URL/)
+  assert.match(checkBaseUrl('http:// /v1'), /no host|not a URL/)
+})

@@ -27,7 +27,7 @@ import {
 import { useConsole } from './state/console.jsx'
 import { chatStatus } from './state/reducer.js'
 import { attentionTitle, needsYou } from './needs-you.js'
-import { projectIndex, projectLine, sections, unreadProjects, waitingProjects } from './projects.js'
+import { projectIndex, projectLine, projectName, sections, unreadProjects, waitingProjects } from './projects.js'
 import { activeSessions } from './archive.js'
 import { deviceName, isPhone, sessionsForMode } from './cloud.js'
 import { isMobile } from './platform.js'
@@ -763,7 +763,10 @@ export default function Sidebar({
         )}
         {grouped.projects.map(({ project, items }) => {
           const isCollapsed = !!collapsed[project.id]
-          const name = project.folders[0].split(/[\\/]/).filter(Boolean).pop()
+          // One reader of a project's name: projects.js owns the rule (and
+          // answers "project" for a project whose folders are gone, where the
+          // inline split this replaced would have thrown).
+          const name = projectName(project)
           const isArmed = rowIsArmed(armed, project.id)
           // What the head says beside the name, or null when it has nothing to
           // add: the count answers a collapsed head, the waiting count is the

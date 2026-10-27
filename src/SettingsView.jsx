@@ -1008,7 +1008,7 @@ export default function SettingsView({ onReplay, onOpenChat, onClose = null, onM
                         title={privacy ? 'Remove the project - it asks once, and its chats stay' : `Remove the project - it asks once, and its chats stay. Folder: ${p.folders[0]}`}
                         onClick={() => setArmedProject((current) => armRow(current, p.id))}
                       >
-                        <span className="pv">{p.folders[0].split(/[\\/]/).filter(Boolean).pop()}</span> ✕
+                        <span className="pv">{projectName(p)}</span> ✕
                       </button>
                     ))
                   )}
