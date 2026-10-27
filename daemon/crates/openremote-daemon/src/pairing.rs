@@ -3,9 +3,8 @@
 //! Two surfaces live here and they never share a credential.
 //!
 //! - The **LAN listener** serves the phone page, the one-time code exchange,
-//!   and a small read-only projection of this computer for a paired phone.
-//!   It is bound only while a code is live or a phone is paired, and it has
-//!   three routes.
+//!   the projection a paired phone reads, and an empty favicon. It is bound
+//!   only while a code is live or a phone is paired.
 //! - The **control routes** under `/pairing/` are merged into the daemon's
 //!   own router in `main.rs`, on the loopback listener the console already
 //!   knows. They take the owner token like every other console call, and a

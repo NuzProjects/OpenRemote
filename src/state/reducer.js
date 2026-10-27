@@ -99,9 +99,8 @@ export function mergeSessionIntoChat(existing, session) {
   // beat that raced a rename loses to the rename. A beat carrying no title
   // at all (a session the daemon has not named yet) never blanks the name
   // the console derived from the first prompt.
-  // `>=` on purpose: an equal stamp goes to the beat, so a name folded from a
-  // rename made in the same second is replaced for one beat and restored by
-  // the next. `>` would keep the derived name until the session itself moved.
+  // `>=` on purpose: an equal stamp goes to the beat, which is the fresher
+  // snapshot of the two, and the next beat settles it if they disagree.
   const beatIsNewer = (fresh.updatedAt ?? 0) >= (existing.updatedAt ?? 0)
   return {
     ...fresh,
