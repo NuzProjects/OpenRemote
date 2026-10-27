@@ -32,6 +32,10 @@ export default function CloudNotices() {
   const [known, setKnown] = useState(null)
   const [lastKind, setLastKind] = useState(null)
   const [confirming, setConfirming] = useState(null)
+  // The device whose removal is in flight. The confirm's own button used to
+  // fire twice on a double click, and the second call failed with "no such
+  // device" and painted that error over a removal that had worked.
+  const [removing, setRemoving] = useState(null)
   const [error, setError] = useState(null)
   const ready = signedIn(cloud) && account && thisDevice && (devices ?? []).length > 0
   const me = (devices ?? []).find((d) => d.id === thisDevice)
@@ -102,19 +106,24 @@ export default function CloudNotices() {
               <button
                 type="button"
                 className="cn-btn primary"
+                disabled={removing === device.id}
                 onClick={async () => {
+                  if (removing === device.id) return
+                  setRemoving(device.id)
                   setError(null)
                   try {
                     await removeDevice(device.id)
                     acknowledge(device.id)
                   } catch (err) {
                     setError(err.message ?? String(err))
+                  } finally {
+                    setRemoving(null)
                   }
                 }}
               >
-                Remove
+                {removing === device.id ? 'Removing...' : 'Remove'}
               </button>
-              <button type="button" className="cn-btn" onClick={() => setConfirming(null)}>
+              <button type="button" className="cn-btn" onClick={() => setConfirming(null)} disabled={removing === device.id}>
                 Keep
               </button>
             </>

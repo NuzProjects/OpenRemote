@@ -39,6 +39,10 @@ export default function AutomationsView({ onOpenChat }) {
   const [editing, setEditing] = useState(null) // null | {} (new) | rule
   const [busyId, setBusyId] = useState(null)
   const [error, setError] = useState(null)
+  // The rule waiting on a "remove?" answer. A rule is user-written text with a
+  // schedule behind it, and there is no undo for one this conversation did not
+  // create, so the trash icon asks once in place before it acts.
+  const [removing, setRemoving] = useState(null)
   // The pill's conversation: {role: user|reply|card|done|note, text?, draft?}
   const [thread, setThread] = useState([])
 
@@ -217,7 +221,7 @@ export default function AutomationsView({ onOpenChat }) {
                   )}
                   <button
                     className="am-icon"
-                    title="Run now"
+                    title={rule.enabled ? 'Run now' : 'Enable the rule to run it'}
                     disabled={!rule.enabled || busyId != null}
                     onClick={() => runNow(rule)}
                   >
@@ -229,7 +233,9 @@ export default function AutomationsView({ onOpenChat }) {
                   <button
                     className="am-icon"
                     title="Remove"
-                    onClick={() => run(() => removeAutomation(rule.id), rule.id)}
+                    aria-label={`Remove ${rule.name}`}
+                    disabled={busyId != null}
+                    onClick={() => setRemoving(rule.id)}
                   >
                     <TrashSimple size={13} />
                   </button>
@@ -242,6 +248,24 @@ export default function AutomationsView({ onOpenChat }) {
                   />
                 </div>
               </div>
+              {removing === rule.id && (
+                <div className="am-confirm" role="group" aria-label={`Remove ${rule.name}?`}>
+                  <span className="am-confirm-text">Remove this rule?</span>
+                  <button
+                    type="button"
+                    className="am-act"
+                    onClick={() => {
+                      setRemoving(null)
+                      run(() => removeAutomation(rule.id), rule.id)
+                    }}
+                  >
+                    Remove
+                  </button>
+                  <button type="button" className="am-act" onClick={() => setRemoving(null)}>
+                    Keep
+                  </button>
+                </div>
+              )}
               {rule.enabled && missing && (
                 <p className="am-note">
                   {harnessName(rule.harness)} is not installed

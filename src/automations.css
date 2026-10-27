@@ -424,9 +424,36 @@ html[data-reduce-motion] .am-row-actions {
   cursor: pointer;
 }
 
-.am-icon:hover {
+/* A pointer on a disabled control promises a click that will not happen: the
+   Run icon sits disabled on every paused rule, and every row's actions are
+   dead while one of them is in flight. It has to look it. */
+.am-icon:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.am-icon:hover:not(:disabled) {
   background: var(--bg-hover);
   color: var(--text-1);
+}
+
+/* The in-place remove confirm: the same text row the chat header uses, so the
+   second click is a word and not a second guess at the same icon. */
+.am-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.am-confirm-text {
+  margin-right: auto;
+  color: var(--text-2);
+  font-size: 12.5px;
 }
 
 .am-starter {

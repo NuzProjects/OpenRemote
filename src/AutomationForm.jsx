@@ -3,7 +3,7 @@
 // task it starts with. The project is picked from the registered ones -
 // its folder is the chat's own working folder.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { CaretDown, X } from '@phosphor-icons/react'
 import PickerMenu from './PickerMenu.jsx'
 import { useConsole } from './state/console.jsx'
@@ -11,10 +11,11 @@ import { findModel, modelDisplayName, prettyModelName } from './model-display.js
 import { modelMaker } from './model-maker.js'
 import { ModelMark } from './model-marks.jsx'
 import { projectName } from './projects.js'
+import { formDiffers } from './automation.js'
 import './devices.css'
 import './automations.css'
 import { useBack } from './use-back.js'
-import { useEscLayer } from './esc-layer.js'
+import { useDialog } from './dialog-focus.js'
 import { pickable } from './harness-manager.js'
 import { EndpointManagerModal } from './EndpointManager.jsx'
 
@@ -34,6 +35,7 @@ function splitTime(value) {
 
 export default function AutomationForm({ rule, onClose }) {
   useBack(true, onClose)
+  const panelRef = useRef(null)
   const {
     capabilities,
     machines,
@@ -95,10 +97,38 @@ export default function AutomationForm({ rule, onClose }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [harness])
 
+  // The fields as they were when the form opened, taken once on the first
+  // render. `dirty` is then a comparison, not a flag each setter has to
+  // remember to raise: a field added later is covered by adding it here.
+  const opened = useRef(null)
+  if (opened.current === null) {
+    opened.current = { name, kind, time, harness, model, permission, machineId, workspace, task, enabled }
+  }
+  const dirty = formDiffers(
+    { name, kind, time, harness, model, permission, machineId, workspace, task, enabled },
+    opened.current,
+  )
+  const [closeHint, setCloseHint] = useState(false)
+
+  // Closing the form by the way out is still a cancel; closing it by the
+  // backdrop or by Esc is the accident this guard exists for. A half-written
+  // rule is not something a stray click should be able to delete, so the two
+  // silent ways out stand down while there is anything to lose, and say which
+  // button does discard on purpose.
+  const requestClose = () => {
+    if (dirty) {
+      setCloseHint(true)
+      return
+    }
+    onClose()
+  }
+
   // Esc closes the form, unless a picker is open over it - that layer answers
   // its own Esc - or a dialog is: "Manage endpoints" holds a layer of its own,
-  // so the half-written rule is never closed by the key that closed it.
-  useEscLayer(!picker, onClose)
+  // so the half-written rule is never closed by the key that closed it. Every
+  // dialog shares the plumbing in dialog-focus.js: focus in, Tab kept inside,
+  // the app inert behind, focus back on the opener.
+  useDialog(panelRef, requestClose, { esc: !picker })
 
   const currentHarness = available.find((h) => h.id === harness)
   const currentMachine = online.find((m) => m.machine.id === machineId)
@@ -157,10 +187,10 @@ export default function AutomationForm({ rule, onClose }) {
     <div
       className="dv-modal-backdrop"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose()
+        if (e.target === e.currentTarget) requestClose()
       }}
     >
-      <div className="dv-modal dv-modal--form af-modal" role="dialog" aria-modal="true" aria-label={editing ? 'Edit automation' : 'New automation'}>
+      <div className="dv-modal dv-modal--form af-modal" ref={panelRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={editing ? 'Edit automation' : 'New automation'}>
         <div className="dv-modal-head">
           <h2 className="dv-modal-title">{editing ? 'Edit automation' : 'New automation'}</h2>
           {editing && (
@@ -477,6 +507,11 @@ export default function AutomationForm({ rule, onClose }) {
         </div>
 
         {error && <p className="af-error">{error}</p>}
+        {closeHint && dirty && (
+          <p className="af-when-note">
+            This rule has unsaved changes. Cancel discards it.
+          </p>
+        )}
         {managingEndpoints && (
           <EndpointManagerModal
             harness={currentHarness.id}

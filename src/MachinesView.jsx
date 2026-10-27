@@ -33,12 +33,20 @@ export default function MachinesView({ onOpenChat, openDevice = null }) {
   const onlineCount = list.filter((d) => d.online).length
   const open = list.find((d) => d.id === openId) ?? null
 
+  // One flip at a time: the daemon's answer takes a moment, and a second
+  // click while the first is out reads the same stale kind and sends the same
+  // request twice, which is how a toggle ends up flipped back.
+  const [busy, setBusy] = useState(false)
   const toggleMine = async () => {
+    if (busy) return
+    setBusy(true)
     setError(null)
     try {
       await setDeviceKind(me.id, me.kind === 'machine' ? 'desktop' : 'machine')
     } catch (err) {
       setError(err.message ?? String(err))
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -63,7 +71,12 @@ export default function MachinesView({ onOpenChat, openDevice = null }) {
                 : 'Let your other devices start and continue chats here while OpenRemote is open.'}
             </div>
           </div>
-          <button type="button" className={`dv-act${me.kind === 'machine' ? '' : ' primary'}`} onClick={toggleMine}>
+          <button
+            type="button"
+            className={`dv-act${me.kind === 'machine' ? '' : ' primary'}`}
+            disabled={busy}
+            onClick={toggleMine}
+          >
             {me.kind === 'machine' ? 'Stop' : 'Make it a machine'}
           </button>
         </div>
