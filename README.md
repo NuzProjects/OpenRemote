@@ -48,7 +48,7 @@ bearer token lives in `~/.openremote/token`.
 Tests:
 
 ```sh
-npm test               # console tests: 268 of them (the count it prints)
+npm test               # console tests: 271 when this line was last checked
 node scripts/check-tab-acl.mjs   # what the desktop webview's capabilities grant
 cd daemon && cargo test --locked   # unit + e2e (drives the fixture agent)
 ```

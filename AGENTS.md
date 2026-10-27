@@ -208,7 +208,8 @@ an old process is still alive; find it before re-running).
 ## Checking this file
 
 Four commands check what this page claims, and a reader can run all of them
-from the repo root: `npm test` (says `tests 268`), `node
+from the repo root: `npm test` (prints a count; 271 the last time this line
+was checked, and the run is the truth rather than this number), `node
 scripts/check-tab-acl.mjs` (says `tab acl ok: 2 capability file(s)`), `cd
 daemon && cargo fmt --all --check` (lists the eight files named under
 Commands), and `cd daemon && cargo clippy --all-targets --locked -- -D

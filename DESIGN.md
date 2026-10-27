@@ -398,7 +398,8 @@ from the film's own components:
 ## Checking this contract
 
 Most of this page can be checked without opening the app: `npm test` runs
-the console's rule tests (268 of them, the count it prints) and a handful
+the console's rule tests (271 of them the last time this line was checked,
+and the run prints the live count) and a handful
 of wiring tests read the source text for the parts only a browser could
 show, such as the modal family and the waiting screen's doors. Colour,
 type and motion are not testable that way, so a change to them is checked
