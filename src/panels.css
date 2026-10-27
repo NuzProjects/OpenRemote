@@ -82,7 +82,9 @@
   height: 30px;
   padding: 0 12px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  /* The contract's radius, not the send button's 8px: a panel action is a
+     control, and the one place 8px belongs is the send square. */
+  border-radius: var(--radius);
   background: transparent;
   color: var(--text-2);
   font-size: 12.5px;
