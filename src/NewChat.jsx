@@ -31,6 +31,7 @@ import {
   suggestedPresetName,
 } from './presets.js'
 import { armRow, clearRow, rowIsArmed } from './row-confirm.js'
+import { useArmedRow } from './use-armed-row.js'
 import { projectName } from './projects.js'
 import { carrySetup, droppedLine, restoreFromCatalog } from './harness-carry.js'
 import { keepLine, keepSelection } from './composer-selection.js'
@@ -98,8 +99,12 @@ export default function NewChat({
   // 'new' is the Save chip before it becomes a preset.
   const [presetEditing, setPresetEditing] = useState(null)
   // The chip whose delete control is armed: one row at a time, and the
-  // same helper the plugins and MCP panes use.
+  // same helper the plugins and MCP panes use. The helper's browser half comes
+  // with it: Escape disarms (DESIGN.md's "Escape or a click elsewhere keeps"),
+  // and so does losing the control. Without the hook this row was armed until it
+  // was pressed again: no key and no click anywhere else took the arm away.
   const [armedPreset, setArmedPreset] = useState(null)
+  const presetArmWatch = useArmedRow(armedPreset, setArmedPreset)
   const [text, setText] = useState('')
   // The project the chat runs in: one of the registered projects, or
   // null - a chat that belongs to no project and runs in the home folder.
@@ -951,6 +956,12 @@ export default function NewChat({
                   className={`nc-preset-hover nc-preset-x${armed ? ' armed' : ''}`}
                   aria-label={armed ? 'Press again to delete this setup' : 'Delete this setup'}
                   title={armed ? 'Press again to delete this setup' : 'Delete this setup'}
+                  // The hook goes on only while this row is the armed one: arming
+                  // re-renders the same node, so a ref that is always attached
+                  // would never be called again and the Escape listener and the
+                  // focus would never arrive.
+                  ref={armed ? presetArmWatch.buttonRef : null}
+                  onBlur={armed ? presetArmWatch.onBlur : undefined}
                   onClick={() => (armed ? deletePreset(preset.id) : setArmedPreset((curr) => armRow(curr, preset.id)))}
                 >
                   {armed ? 'Delete?' : <X size={11} weight="bold" />}

@@ -125,3 +125,18 @@ test('Escape keeps: an armed row is disarmed by the key, in every pane that uses
     assert.match(file, /ref=\{armWatch\.buttonRef\}|buttonRef=\{armWatch\.buttonRef\}/, `${pane} puts the hook on its armed control`)
   }
 })
+
+test('a saved setup arms the same way, so Escape and a click away both keep it', () => {
+  // The fifth armed row in the console, and the one the sweep for the hook missed:
+  // NewChat's preset chips armed on the first press and then stayed armed until
+  // they were pressed again. There was no key and no blur, so neither half of
+  // "Escape or a click elsewhere keeps" worked.
+  const newChat = source('NewChat.jsx')
+  assert.match(newChat, /useArmedRow\(armedPreset, setArmedPreset\)/, 'the preset row uses the shared hook')
+  assert.match(
+    newChat,
+    /ref=\{armed \? presetArmWatch\.buttonRef : null\}/,
+    'the hook goes on while the row is armed, because the node is the same before and after',
+  )
+  assert.match(newChat, /onBlur=\{armed \? presetArmWatch\.onBlur : undefined\}/, 'and losing the control disarms it')
+})
