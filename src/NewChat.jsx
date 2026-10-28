@@ -900,9 +900,90 @@ export default function NewChat({
     setPicker(null)
   }
 
+  // The saved setups, as the page's own row: ghost text, no fill and no border,
+  // the hover wash the only affordance, so the row reads as text until it is
+  // reached for. Every control is a real button (or an input while naming), so the
+  // row is Tab-reachable. It lives at the top of the page rather than above the
+  // composer, where it crowded the pickers.
+  const presetsRow = (
+<div className="nc-presets" role="group" aria-label="Saved setups">
+        {presets.map((preset) => {
+          const armed = rowIsArmed(armedPreset, preset.id)
+          return (
+            <span className="nc-preset-wrap" key={preset.id}>
+              {presetEditing?.id === preset.id ? (
+                presetNameInput(presetEditing)
+              ) : (
+                <button
+                  type="button"
+                  className={`nc-preset${preset.default ? ' on' : ''}`}
+                  title={`${presetSummary(preset, presetLabels(preset))}. Double-click to rename.`}
+                  onClick={() => applyPreset(preset)}
+                  onDoubleClick={() => beginRename(preset)}
+                >
+                  {/* A preset carries the name the person gave it (and, in
+                      the summary form, the project it was saved in), so it
+                      blurs with their other content. */}
+                  {/* The mark says which harness the setup opens in, so a
+                      row of presets reads as setups rather than as names. */}
+                  <HarnessMark harness={preset.harness} size={12} />
+                  <span className="pv">{chipLabel(preset)}</span>
+                </button>
+              )}
+              <button
+                type="button"
+                className="nc-preset-hover nc-preset-star"
+                aria-pressed={preset.default === true}
+                aria-label={preset.default ? 'New chats open on this setup' : 'Open new chats with this setup'}
+                title={preset.default ? 'New chats open on this setup' : 'Open new chats with this setup'}
+                onClick={() => toggleDefaultPreset(preset.id)}
+              >
+                <Star size={11} weight={preset.default ? 'fill' : 'regular'} />
+              </button>
+              <button
+                type="button"
+                className={`nc-preset-hover nc-preset-x${armed ? ' armed' : ''}`}
+                aria-label={armed ? 'Press again to delete this setup' : 'Delete this setup'}
+                title={armed ? 'Press again to delete this setup' : 'Delete this setup'}
+                // The hook goes on only while this row is the armed one: arming
+                // re-renders the same node, so a ref that is always attached
+                // would never be called again and the Escape listener and the
+                // focus would never arrive.
+                ref={armed ? presetArmWatch.buttonRef : null}
+                onBlur={armed ? presetArmWatch.onBlur : undefined}
+                onClick={() => (armed ? deletePreset(preset.id) : setArmedPreset((curr) => armRow(curr, preset.id)))}
+              >
+                {armed ? 'Delete?' : <X size={11} weight="bold" />}
+              </button>
+            </span>
+          )
+        })}
+        {presetEditing?.id === 'new' ? (
+          presetNameInput(presetEditing)
+        ) : (
+          <button
+            type="button"
+            className="nc-preset nc-preset-save"
+            onClick={beginSave}
+            disabled={!currentHarness}
+            title="Save the setup above as a preset"
+          >
+            <Plus size={12} weight="bold" />
+            Save this setup
+          </button>
+        )}
+      </div>
+  )
+
   return (
     <div className="newchat">
-      {topRight}
+      {/* The top of the page, not the composer: the saved setups sit on the left
+          and the floating bar on the right, so the row above the greeting has room
+          instead of squeezing into the box with the pickers. */}
+      <div className="nc-page-head">
+        {presetsRow}
+        {topRight}
+      </div>
       <h1 className="nc-greeting">What are we working on?</h1>
       {clashing.map((c) => (
         <div className="nc-signin" key={c.name}>
@@ -930,77 +1011,6 @@ export default function NewChat({
         </p>
       )}
       <div className={`nc-box${needsSignIn || usingApiKey ? ' nc-box--auth' : ''}`} ref={boxRef}>
-        {/* Saved setups, above the composer. Ghost text, no fill and no
-            border: the hover wash is the only affordance, so the row reads
-            as text until it is reached for. Every control is a real button
-            (or an input while naming), so the row is Tab-reachable. */}
-        <div className="nc-presets" role="group" aria-label="Saved setups">
-          {presets.map((preset) => {
-            const armed = rowIsArmed(armedPreset, preset.id)
-            return (
-              <span className="nc-preset-wrap" key={preset.id}>
-                {presetEditing?.id === preset.id ? (
-                  presetNameInput(presetEditing)
-                ) : (
-                  <button
-                    type="button"
-                    className={`nc-preset${preset.default ? ' on' : ''}`}
-                    title={`${presetSummary(preset, presetLabels(preset))}. Double-click to rename.`}
-                    onClick={() => applyPreset(preset)}
-                    onDoubleClick={() => beginRename(preset)}
-                  >
-                    {/* A preset carries the name the person gave it (and, in
-                        the summary form, the project it was saved in), so it
-                        blurs with their other content. */}
-                    {/* The mark says which harness the setup opens in, so a
-                        row of presets reads as setups rather than as names. */}
-                    <HarnessMark harness={preset.harness} size={12} />
-                    <span className="pv">{chipLabel(preset)}</span>
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="nc-preset-hover nc-preset-star"
-                  aria-pressed={preset.default === true}
-                  aria-label={preset.default ? 'New chats open on this setup' : 'Open new chats with this setup'}
-                  title={preset.default ? 'New chats open on this setup' : 'Open new chats with this setup'}
-                  onClick={() => toggleDefaultPreset(preset.id)}
-                >
-                  <Star size={11} weight={preset.default ? 'fill' : 'regular'} />
-                </button>
-                <button
-                  type="button"
-                  className={`nc-preset-hover nc-preset-x${armed ? ' armed' : ''}`}
-                  aria-label={armed ? 'Press again to delete this setup' : 'Delete this setup'}
-                  title={armed ? 'Press again to delete this setup' : 'Delete this setup'}
-                  // The hook goes on only while this row is the armed one: arming
-                  // re-renders the same node, so a ref that is always attached
-                  // would never be called again and the Escape listener and the
-                  // focus would never arrive.
-                  ref={armed ? presetArmWatch.buttonRef : null}
-                  onBlur={armed ? presetArmWatch.onBlur : undefined}
-                  onClick={() => (armed ? deletePreset(preset.id) : setArmedPreset((curr) => armRow(curr, preset.id)))}
-                >
-                  {armed ? 'Delete?' : <X size={11} weight="bold" />}
-                </button>
-              </span>
-            )
-          })}
-          {presetEditing?.id === 'new' ? (
-            presetNameInput(presetEditing)
-          ) : (
-            <button
-              type="button"
-              className="nc-preset nc-preset-save"
-              onClick={beginSave}
-              disabled={!currentHarness}
-              title="Save the setup above as a preset"
-            >
-              <Plus size={12} weight="bold" />
-              Save this setup
-            </button>
-          )}
-        </div>
         {(presetNote || carryNote || selectionNote) && (
           <p className="nc-preset-note" role="status">
             {presetNote ?? carryNote ?? selectionNote}

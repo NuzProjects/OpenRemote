@@ -5,6 +5,10 @@
   flex: 1;
   display: grid;
   grid-template-rows: 1fr auto 1fr;
+  /* One explicit column, so a row that asks to stretch across the page actually
+     does: with an implicit auto column it stretched only as far as the widest
+     item, which left the saved setups floating in the middle of the top edge. */
+  grid-template-columns: minmax(0, 1fr);
   justify-items: center;
   padding: 0 40px;
   background: var(--bg-app);
@@ -55,6 +59,20 @@
    glow lands without its fade and does not breathe. */
 html[data-reduce-motion] .newchat::before {
   animation: none;
+}
+
+/* The page's own top row: the saved setups on the left, and the floating shortcut
+   bar keeping its corner on the right. It shares the grid's first row with the
+   greeting, which sits at the end of it, so the two never collide however tall
+   the chip row grows. */
+.nc-page-head {
+  grid-row: 1;
+  align-self: start;
+  justify-self: stretch;
+  display: flex;
+  align-items: flex-start;
+  padding-top: 14px;
+  min-height: 44px;
 }
 
 .nc-greeting {
@@ -361,7 +379,10 @@ html[data-reduce-motion] .newchat::before {
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  margin: 0 0 12px;
+  /* The page's top row, so no bottom margin: the head owns the spacing now, and
+     the right padding keeps the last chip clear of the floating bar. */
+  margin: 0;
+  padding-right: 72px;
   min-height: 30px;
 }
 

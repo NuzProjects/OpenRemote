@@ -15,11 +15,20 @@ const source = (file) => readFileSync(new URL(`./${file}`, import.meta.url), 'ut
 const newchat = source('NewChat.jsx')
 const css = source('newchat.css')
 
-test('the chips row sits above the composer, inside its box, as real buttons', () => {
+test('the chips row sits at the top of the page, as real buttons', () => {
+  // It moved out of the composer box: the row is its own value now, rendered in the
+  // page's first grid row beside the floating bar, because in the box it crowded
+  // the pickers under it.
+  const head = newchat.indexOf('className="nc-page-head"')
   const box = newchat.indexOf('className={`nc-box')
-  const row = newchat.indexOf('className="nc-presets"')
   const textarea = newchat.indexOf('placeholder="Describe the task"')
-  assert.ok(box > 0 && row > box && textarea > row, 'the row renders between the box and the textarea')
+  assert.ok(newchat.includes('const presetsRow = ('), 'the row is its own value')
+  assert.ok(head > 0 && box > head, 'the head renders before the box')
+  assert.ok(textarea > box, 'and the box still holds the textarea')
+  const headBlock = newchat.slice(head, box)
+  assert.match(headBlock, /\{presetsRow\}/, 'the head renders it')
+  assert.doesNotMatch(headBlock, /className="nc-presets"/, 'and the box does not')
+  assert.match(css, /\.nc-page-head \{[^}]*grid-row: 1/)
   assert.match(newchat, /role="group" aria-label="Saved setups"/)
   assert.match(newchat, /<button[\s\S]{0,120}className={`nc-preset/)
 })
