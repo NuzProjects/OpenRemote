@@ -49,7 +49,9 @@ test('the step runs after the connection and before the ready screen', () => {
 
 test('the ready screen speaks from the rules, and the old screens still work', () => {
   const view = source('Onboarding.jsx')
-  assert.match(view, /<p className="ob-sub">\{readyLine\(installed\)\}<\/p>/)
+  // The sentence comes from the rule, and the rule is told whether the daemon has
+  // answered: an unanswered poll used to read as "no agent is installed".
+  assert.match(view, /<p className="ob-sub">\{readyLine\(installed, \{ known: capabilities != null \}\)\}<\/p>/)
   assert.match(view, /harnessState\(h\)/)
   // An agent installed but not signed in does not wear the ready green.
   assert.match(view, /ob-harness--quiet/)

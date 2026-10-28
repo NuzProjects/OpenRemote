@@ -75,9 +75,20 @@ test('a harness row says its own state, in the console own words', () => {
 })
 
 test('the ready step has a sentence for each state it can be reached in', () => {
+  // A poll that has not answered yet: the machine may hold any number of agents,
+  // and saying "no agent is installed" on a first run was the one claim this
+  // screen cannot afford to get wrong.
+  assert.equal(
+    readyLine([], { known: false }),
+    'Checking what is installed on this computer.',
+  )
+  assert.equal(
+    readyLine([harness()], { known: false }),
+    'Checking what is installed on this computer.',
+  )
   // Skipped the offer, or could not install yet: still able to continue.
   assert.equal(
-    readyLine([]),
+    readyLine([], { known: true }),
     'No agent is installed yet. Add one from the harness picker whenever you are ready.',
   )
   // An agent that can start a chat.

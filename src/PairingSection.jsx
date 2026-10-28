@@ -16,6 +16,7 @@ import { useEffect, useRef, useState } from 'react'
 import { DeviceMobile } from '@phosphor-icons/react'
 import { maskedAddress, pairedLabel, pairingApi, pairingError, phoneName, remainingLabel } from './pairing.js'
 import { qrRows } from './qr.js'
+import { useArmedRow } from './use-armed-row.js'
 import './pairing.css'
 
 const TICK_MS = 1000
@@ -73,6 +74,12 @@ export default function PairingSection() {
   const [phones, setPhones] = useState(null)
   const [joined, setJoined] = useState(null)
   const [error, setError] = useState(null)
+  // Which paired phone is waiting on a second press. Removing one drops that
+  // phone's credential and its access to this computer, and it used to happen on a
+  // single click: the person paired the phone in order to find it, and a misclick
+  // cut it off with no undo. The console's usual two-step, safe answer first.
+  const [confirmRevoke, setConfirmRevoke] = useState(null)
+  const revokeWatch = useArmedRow(confirmRevoke, setConfirmRevoke)
   // The daemon's own complaint about the pairing port (it could not bind at
   // boot with a phone already paired), which no retry here caused.
   const [notice, setNotice] = useState(null)
@@ -272,9 +279,28 @@ export default function PairingSection() {
               </span>
               <span className="qr-phone-name pv">{phoneName(phone.name)}</span>
               <span className="qr-phone-when">{pairedLabel(phone, now)}</span>
-              <button className="pn-btn" onClick={() => revoke(phone.id)}>
-                Remove
-              </button>
+              {confirmRevoke === phone.id ? (
+                <>
+                  <button className="pn-btn" onClick={() => setConfirmRevoke(null)}>
+                    Keep it paired
+                  </button>
+                  <button
+                    className="pn-btn pn-btn--danger"
+                    ref={revokeWatch.buttonRef}
+                    onBlur={revokeWatch.onBlur}
+                    onClick={() => {
+                      setConfirmRevoke(null)
+                      revoke(phone.id)
+                    }}
+                  >
+                    Remove
+                  </button>
+                </>
+              ) : (
+                <button className="pn-btn" onClick={() => setConfirmRevoke(phone.id)}>
+                  Remove
+                </button>
+              )}
             </li>
           ))}
         </ul>

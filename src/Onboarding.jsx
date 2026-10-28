@@ -165,7 +165,7 @@ export default function Onboarding({ onDone, onDismiss = null, startManual = fal
         {step === 'ready' && (
           <>
             <h1 className="ob-title">You&apos;re all set</h1>
-            <p className="ob-sub">{readyLine(installed)}</p>
+            <p className="ob-sub">{readyLine(installed, { known: capabilities != null })}</p>
             <div className="ob-harnesses">
               {installed.map((h) => {
                 const state = harnessState(h)

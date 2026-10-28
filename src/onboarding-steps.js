@@ -50,12 +50,17 @@ export function harnessState(row) {
   return 'Ready'
 }
 
-/// The ready step's sentence, for the three states a first run can reach it
-/// in: an agent that can run a task, agents that need signing in, and no
-/// agent at all (the person skipped the install offer, or could not install
-/// one yet). None of the three is a dead end.
-export function readyLine(installed) {
+/// The ready step's sentence, for the four states a first run can reach it in:
+/// capabilities still on their way, an agent that can run a task, agents that
+/// need signing in, and no agent at all (the person skipped the install offer, or
+/// could not install one yet). None of the four is a dead end.
+///
+/// `known` is whether this console has heard from its daemon about what is
+/// installed. Without it an unanswered poll read as "no agent is installed" on a
+/// machine full of them, on the one screen a first run cannot afford to be wrong.
+export function readyLine(installed, { known = true } = {}) {
   const rows = installed ?? []
+  if (!known) return 'Checking what is installed on this computer.'
   if (rows.length === 0) {
     return 'No agent is installed yet. Add one from the harness picker whenever you are ready.'
   }

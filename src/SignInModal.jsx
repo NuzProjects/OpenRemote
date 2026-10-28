@@ -145,7 +145,13 @@ export default function SignInModal({ harnessId, onDone, deviceId = null }) {
                 className="si-stop"
                 onClick={() => {
                   setStopping(true)
-                  stopSignIn(harnessId, deviceId).catch(() => {})
+                  // A stop the daemon refuses used to leave this button reading
+                  // "Stopping" for the rest of the modal's life while the login
+                  // command was still running, and the next attempt then met a
+                  // sign-in already in progress with nothing explaining it.
+                  stopSignIn(harnessId, deviceId)
+                    .catch((err) => setError(errorCopy(err)))
+                    .finally(() => setStopping(false))
                 }}
                 disabled={stopping}
               >
