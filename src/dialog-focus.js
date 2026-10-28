@@ -73,6 +73,23 @@ export function focusOpener(saved, doc = typeof document === 'undefined' ? null 
 }
 
 /**
+ * The last resort when the opener is gone: the keyboard goes to the nearest stop in the
+ * region the dialog was drawn over, and to the app's first stop if even that is gone.
+ * Leaving it on the body is the one outcome this module exists to prevent, and it
+ * happened when a dialog was opened from the command palette, which closes the row
+ * that ran before the dialog does.
+ */
+export function focusSomewhere(panel, doc = typeof document === 'undefined' ? null : document) {
+  if (!doc) return false
+  const region =
+    panel?.closest?.('[data-leaf-id], .split-pane, .page, main, .app-main') ??
+    doc.querySelector('[data-leaf-id], .split-body, .page, main, .app-main')
+  const target = (region && focusables(region)[0]) ?? focusables(doc.body)[0] ?? null
+  target?.focus?.({ preventScroll: true })
+  return Boolean(target) && doc.activeElement === target
+}
+
+/**
  * Where Tab goes from `active` among `count` stops. `null` means the browser's
  * own move is fine - a stop in the middle, or a dialog with nothing to focus.
  * The two ends wrap, and that wrap is the whole of "focus stays inside".
@@ -147,7 +164,15 @@ export function useDialog(panelRef, onClose, { esc = true, open = true } = {}) {
       restore()
       // Where the person was before the dialog. The body is not a place to
       // leave a keyboard user, and a list that re-rendered has not moved them.
-      focusOpener(opener.current)
+      const landed = focusOpener(opener.current)
+      // Cleared so the next open captures its own: a dialog that stays mounted for the
+      // session (the review surface) would otherwise hand the keyboard back to the
+      // control that opened it the first time, not to the one just pressed.
+      opener.current = null
+      // And when that opener is gone (the command palette closes the row it ran), the
+      // keyboard goes somewhere defined instead of to the body: the nearest stop in the
+      // region the dialog was over, which is where a person looks next.
+      if (!landed) focusSomewhere(panel)
     }
   }, [open, panelRef])
 
