@@ -18,12 +18,29 @@ export function statusCounts(sessions) {
   return counts
 }
 
-/** "2 running · 1 stopped" - the nonzero statuses only, '' when there is none. */
+/**
+ * How many rows `statusCounts` left out because their status is one this console
+ * does not know. A newer daemon can add one, and a total that silently dropped it
+ * would describe a list of four chats as three. Exported so the sentence can say so
+ * instead of counting what it cannot name.
+ */
+export function unknownStatusCount(sessions) {
+  const counts = statusCounts(sessions)
+  const known = STATUSES.reduce((sum, s) => sum + counts[s], 0)
+  const rows = Array.isArray(sessions) ? sessions.length : 0
+  return Math.max(0, rows - known)
+}
+
+/**
+ * "2 running · 1 stopped" - the nonzero statuses only, '' when there is none, and a
+ * closing note when some rows carry a state this console cannot name.
+ */
 export function statusSentence(sessions) {
   const counts = statusCounts(sessions)
-  return STATUSES.filter((s) => counts[s] > 0)
-    .map((s) => `${counts[s]} ${displayWord(s)}`)
-    .join(' · ')
+  const parts = STATUSES.filter((s) => counts[s] > 0).map((s) => `${counts[s]} ${displayWord(s)}`)
+  const unknown = unknownStatusCount(sessions)
+  if (unknown > 0) parts.push(`${unknown} with a state this console does not know`)
+  return parts.join(' · ')
 }
 
 /** Chats per harness, most used first; ties by name. Harnessless rows never count. */

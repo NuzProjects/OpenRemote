@@ -16,6 +16,7 @@ import {
   statusSentence,
   syncSplit,
 } from './metrics.js'
+import { activeSessions } from './archive.js'
 import './devices.css'
 import './panels.css'
 import './metrics.css'
@@ -39,8 +40,11 @@ function DayBar({ band, max }) {
 }
 
 export default function MetricsView() {
-  const { sessions, sessionsAnswered, machines, devices, thisDevice } = useConsole()
-  const list = sessions ?? []
+  const { sessions, sessionsAnswered, machines, devices, thisDevice, archived } = useConsole()
+  // The same list every other surface counts: archived chats are not on the record
+  // a person is looking at, so a Metrics total that included them disagreed with the
+  // sidebar under it (22 on the record while the lists showed 19).
+  const list = activeSessions(sessions, archived ?? new Set())
   const sentence = statusSentence(list)
   const split = syncSplit(list, thisDevice)
   const harnesses = harnessCounts(list)
