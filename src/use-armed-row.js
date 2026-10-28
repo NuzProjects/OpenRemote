@@ -1,12 +1,16 @@
 // The browser half of an armed destructive row: the arm ends the moment the
 // row stops being the thing the user is looking at. Scrolling it out of view
 // disarms it (an IntersectionObserver on the armed button itself), and so does
-// losing focus (a tab, or a click somewhere else). The rule is armAfter in
-// row-confirm.js; this only supplies the two events, in one place so the three
-// panes cannot drift apart.
+// losing focus (a tab, or a click somewhere else). Escape disarms it too, which
+// is what DESIGN.md promises ("Escape or a click elsewhere keeps") and what four
+// panes were not doing: the armed control took the focus but answered no key, so
+// the only way out of an armed row was to click something else. The listener is
+// attached to the armed control here rather than in each pane, so the four cannot
+// drift apart. The rule is armAfter in row-confirm.js; this only supplies the
+// events.
 
 import { useCallback, useEffect, useRef } from 'react'
-import { armAfter } from './row-confirm.js'
+import { armAfter, clearRow } from './row-confirm.js'
 
 export function useArmedRow(armed, setArmed) {
   const watching = useRef(null)
@@ -15,6 +19,9 @@ export function useArmedRow(armed, setArmed) {
   // one that was under it when the observer was built.
   const armedRef = useRef(armed)
   armedRef.current = armed
+  // The Escape listener lives on the armed control, so the element it was
+  // attached to is kept to detach it from.
+  const keyed = useRef(null)
 
   // A callback ref on the armed button, so the observer follows the row that
   // is actually armed rather than the list. It is a useCallback because a
@@ -32,8 +39,23 @@ export function useArmedRow(armed, setArmed) {
     (el) => {
       watching.current?.disconnect?.()
       watching.current = null
+      if (keyed.current) {
+        keyed.current.el.removeEventListener('keydown', keyed.current.onKeyDown)
+        keyed.current = null
+      }
       if (!el) return
       el.focus?.({ preventScroll: true })
+      // Escape keeps: the arm goes, nothing is removed, and the same press cannot
+      // reach a dialog underneath it, because an armed row is a question the
+      // person is being asked.
+      const onKeyDown = (event) => {
+        if (event.key !== 'Escape') return
+        event.preventDefault()
+        event.stopPropagation()
+        setArmed(() => clearRow())
+      }
+      el.addEventListener('keydown', onKeyDown)
+      keyed.current = { el, onKeyDown }
       if (typeof IntersectionObserver === 'undefined') return
       const observer = new IntersectionObserver((entries) => {
         if (!entries.some((entry) => !entry.isIntersecting)) return
@@ -49,6 +71,10 @@ export function useArmedRow(armed, setArmed) {
     () => () => {
       watching.current?.disconnect?.()
       watching.current = null
+      if (keyed.current) {
+        keyed.current.el.removeEventListener('keydown', keyed.current.onKeyDown)
+        keyed.current = null
+      }
     },
     [],
   )

@@ -14,8 +14,11 @@
 //
 // It talks to the page the way a person does: real key and mouse events over
 // the protocol, not synthetic DOM events, because the console's shortcuts and
-// focus rules read trusted input. Nothing is installed; WebSocket and fetch
-// come from Node itself, the same as cdp-eval.mjs.
+// focus rules read trusted input. Nothing is installed as a dependency:
+// WebSocket, fetch, and the fs/os/path calls that write the temp plugin folder
+// come from Node itself, the same as cdp-eval.mjs. The two things a run writes
+// (a rule through the rule form, a plugin folder under the temp dir) are
+// removed again before it ends.
 //
 // The checks past the view walk press things, and each says what it proves
 // and what it does not:
@@ -32,20 +35,27 @@
 //   form's own pickers, and the rule is deleted at the end. When the profile
 //   has no project or no installed harness to make one with, the form refuses
 //   Save and the check skips, naming the piece that is missing.
-// - an armed plugin row: proves the first press arms, Escape disarms, and the
-//   plugin is still installed; not that a second press would remove it. It
-//   needs an installed plugin, which the dev profile never has: install one
-//   from a local folder first (Plugins, Install, pick the plugin's folder in
-//   the in-app picker) or run against the fixture the plugins e2e uses. With
-//   none it skips and says so.
+// - an armed plugin row: proves Remove arms on the first press, that Escape
+//   takes the arm back, and that the plugin is still listed afterwards; it then
+//   removes the plugin for real, which proves the second press acts. The dev
+//   profile never holds a plugin, so the check makes one: it writes a folder
+//   with a .claude-plugin/plugin.json under the temp dir, installs it through
+//   Plugins > Install a plugin > Folder by typing the path, and approves the
+//   review. A profile that already holds a plugin uses the first one and
+//   removes nothing. The temp folder is deleted on every path, and a run that
+//   could not finish still tries both cleanups and says what it left behind.
 //
 // WHAT IT DOES NOT COVER: no chat is created and no message is typed into one,
-// so the stream and the transcript are never read. The one write is the rule the
-// palette check seeds and deletes, whose name and task are typed into the rule
-// form; no settings are changed, no plugin is actually removed and no layout is
-// saved or applied. A green run says every
+// so the stream and the transcript are never read. The two writes are the rule
+// the palette check seeds and deletes, and the plugin this check installs and
+// removes; no settings are changed and no layout is saved or applied. A green
+// run says every
 // view opens, draws, keeps the boundary panel away and that the four
 // interactions above behave; it does not say the app works.
+
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const port = process.env.OPENREMOTE_CDP_PORT ?? '9333'
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -1010,44 +1020,231 @@ if (!seed.name) {
 }
 
 
-// (d) An armed plugin row: the first press on Remove arms it, Escape cancels
-// the arm, and the plugin is still in the list. Proves the arm is reversible
-// and removes nothing; not that a second press would remove the plugin.
-const armTarget = await evaluate(`(() => {
-  const buttons = [...document.querySelectorAll('.split-body button')];
-  const remove = buttons.find((b) => (b.textContent || '').trim() === 'Remove');
-  if (!remove) return null;
-  const b = remove.getBoundingClientRect();
-  return { x: b.x + b.width / 2, y: b.y + b.height / 2, before: buttons.filter((x) => (x.textContent || '').trim() === 'Remove').length };
-})()`)
-let pluginArm = null
-if (armTarget) {
-  await click(armTarget.x, armTarget.y)
-  const armsUp = await waitFor(`[...document.querySelectorAll('.split-body button')].some((b) => (b.textContent || '').trim() === 'Remove it')`, {
-    timeout: 3000,
-  })
-  await key({ key: 'Escape', code: 'Escape', vk: 27 })
-  await sleep(300)
-  pluginArm = await evaluate(`(() => {
-    const buttons = [...document.querySelectorAll('.split-body button')];
+// (d) An armed plugin row: the first press on Remove arms it, Escape takes the
+// arm back, and the plugin is still in the list; then the same two presses
+// remove it, so this check proves both halves and leaves the profile as it
+// found it. The dev profile never holds a plugin, so the check makes one from a
+// folder it writes itself and installs it through the dialog's typed Folder
+// path. A profile that already holds a plugin uses the first row and removes
+// nothing.
+const smokePluginName = 'smoke-plugin'
+
+// The installed plugin rows, with the button that removes each one. Built-in
+// harnesses carry an On/Off button and no Remove, so the row's own actions are
+// the filter rather than a section heading.
+const pluginRows = () =>
+  evaluate(`[...document.querySelectorAll('.pn-row--stack')].map((row) => {
+    const buttons = [...row.querySelectorAll('.pn-actions button')];
+    const label = (b) => (b.textContent || '').trim();
+    const remove = buttons.find((b) => label(b) === 'Remove');
+    const armed = buttons.find((b) => label(b) === 'Remove it');
+    const box = (remove ?? armed)?.getBoundingClientRect() ?? null;
     return {
-      armed: buttons.some((b) => (b.textContent || '').trim() === 'Remove it'),
-      count: buttons.filter((b) => (b.textContent || '').trim() === 'Remove').length,
+      name: (row.querySelector('.pn-name')?.textContent || '').trim(),
+      buttons: buttons.map(label),
+      removeBox: box ? { x: box.x + box.width / 2, y: box.y + box.height / 2 } : null,
+      remove: Boolean(remove),
+      armed: Boolean(armed),
     };
-  })()`)
-  pluginArm.armsUp = armsUp
-  pluginArm.before = armTarget.before
+  })`)
+
+// The temp folder the check installs from: one manifest, the only file the
+// daemon needs (a name of lowercase letters, digits and dashes), and nothing
+// else, so the review has no powers or parts to ask about.
+const writePluginFolder = async () => {
+  const root = await mkdtemp(join(tmpdir(), 'openremote-smoke-'))
+  const folder = join(root, smokePluginName)
+  await mkdir(join(folder, '.claude-plugin'), { recursive: true })
+  await writeFile(
+    join(folder, '.claude-plugin', 'plugin.json'),
+    `${JSON.stringify({ name: smokePluginName, version: '0.0.1', description: 'A plugin the smoke installs and removes.' }, null, 2)}\n`,
+  )
+  return { root, folder }
 }
-if (!armTarget) {
+
+// Drive the install the way a person does: the header's Install a plugin, the
+// Folder kind (the dialog opens on it), the path typed into its field, Read the
+// plugin, then Install on the review. A control that is missing is reported as
+// a step the smoke cannot drive; a refusal is reported with the app's sentence.
+const installFromFolder = async (folder) => {
+  if (!(await clickElement('.pg-head .dv-act'))) {
+    return { why: 'the Plugins header has no Install a plugin button' }
+  }
+  if (!(await waitFor(`!!document.querySelector('[aria-label="Install a plugin"]')`, { timeout: 5000 }))) {
+    return { why: 'the Install a plugin dialog did not open' }
+  }
+  // The dialog opens on Folder; pressing it is what a person does to be sure,
+  // and a dialog that lost that default would be caught here rather than by a
+  // path typed into the Git field.
+  const folderKind = await evaluate(`(() => {
+    const chip = [...document.querySelectorAll('.pn-pick button')].find((b) => (b.textContent || '').trim() === 'Folder');
+    if (!chip) return false;
+    chip.click();
+    return true;
+  })()`)
+  if (!folderKind) return { why: 'the install dialog offers no Folder kind' }
+  if (!(await insertInto('[aria-label="Install a plugin"] .dv-command', folder))) {
+    await clickElement('[aria-label="Install a plugin"] .dv-modal-close')
+    return { why: 'the folder path could not be typed into the install dialog' }
+  }
+  await clickElement('[aria-label="Install a plugin"] .dv-connect')
+  const reviewed = await waitFor(`!!document.querySelector('.pg-review-actions')`, { timeout: 15000 })
+  if (!reviewed) {
+    // An approval screen that asks the smoke to run a command is a branch this
+    // gate cannot answer, and it says so with the screen's own shape rather
+    // than a generic timeout.
+    const needsCommand = await evaluate(`Boolean(document.querySelector('[role="dialog"] .pg-command--block'))`)
+    const said = await evaluate(
+      `document.querySelector('[aria-label="Install a plugin"] .pn-error')?.textContent?.trim() ?? null`,
+    )
+    await clickElement('[aria-label="Install a plugin"] .dv-modal-close')
+    return {
+      why: needsCommand
+        ? 'the approval screen asked to run a command, which this smoke cannot answer'
+        : (said ?? 'the review never appeared after reading the folder'),
+      command: needsCommand,
+      refused: Boolean(said),
+    }
+  }
+  await clickElement('.pg-review-actions .dv-act')
+  const installed = await waitFor(
+    `[...document.querySelectorAll('.pn-name')].some((n) => (n.textContent || '').trim().startsWith(${JSON.stringify(smokePluginName)}))`,
+    { timeout: 15000 },
+  )
+  if (!installed) {
+    const said = await evaluate(
+      `document.querySelector('[role="dialog"] .pn-error')?.textContent?.trim() ?? null`,
+    )
+    const closed = await clickElement('.pg-review-actions .pn-btn')
+    if (!closed) await clickElement('[role="dialog"] .dv-modal-close')
+    return { why: said ?? 'the install did not put a row in the list', refused: Boolean(said) }
+  }
+  return { installed: true }
+}
+
+const pluginState = { name: null, created: false, tempRoot: null, why: null, refused: false }
+let pluginArm = null
+try {
+  await key({ key: 'Escape', code: 'Escape', vk: 27 })
+  await sleep(150)
+  if (!(await goView('Plugins', '#plugins'))) {
+    pluginState.why = 'the Plugins view did not open'
+  } else {
+    // The Installed tab is not the default: Discover is.
+    await evaluate(`(() => {
+      const tab = [...document.querySelectorAll('.pg-tab')].find((b) => (b.textContent || '').trim() === 'Installed');
+      if (tab) tab.click();
+      return Boolean(tab);
+    })()`)
+    await waitFor(`!!document.querySelector('.pg-installed-view')`, { timeout: 5000 })
+    await sleep(200)
+    const existing = (await pluginRows()).find((r) => r.remove)
+    if (existing) {
+      pluginState.name = existing.name
+    } else {
+      const written = await writePluginFolder()
+      pluginState.tempRoot = written.root
+      const install = await installFromFolder(written.folder)
+      if (install.installed) {
+        const after = (await pluginRows()).find((r) => r.name.startsWith(smokePluginName))
+        pluginState.created = true
+        pluginState.name = after?.name ?? smokePluginName
+      } else {
+        pluginState.why = install.why
+        pluginState.refused = Boolean(install.refused)
+      }
+    }
+  }
+  if (pluginState.name) {
+    const before = (await pluginRows()).filter((r) => r.remove).length
+    const subject = (await pluginRows()).find((r) => r.name === pluginState.name && r.removeBox)
+    if (!subject) {
+      pluginState.why = `the row for "${pluginState.name}" has no Remove button`
+    } else {
+      await click(subject.removeBox.x, subject.removeBox.y)
+      const armsUp = await waitFor(
+        `[...document.querySelectorAll('.pn-row--stack')].some((r) => [...r.querySelectorAll('.pn-actions button')].some((b) => (b.textContent || '').trim() === 'Remove it'))`,
+        { timeout: 3000 },
+      )
+      await key({ key: 'Escape', code: 'Escape', vk: 27 })
+      await sleep(250)
+      const armedAfterEscape = (await pluginRows()).find((r) => r.name === pluginState.name)?.armed ?? false
+      // The pane's documented rule is that an arm ends when the row stops being
+      // what the person is looking at, and it implements that on blur and on
+      // scrolling. If Escape did not take the arm back, this click is that same
+      // rule doing the cleanup, so the row is never left armed; the assertion
+      // above still fails and names the key rather than the state.
+      if (armedAfterEscape) {
+        await clickElement('.pg-installed-view .pn-section')
+        await sleep(250)
+      }
+      const settled = await pluginRows()
+      const rowNow = settled.find((r) => r.name === pluginState.name)
+      pluginArm = {
+        before,
+        after: settled.filter((r) => r.remove).length,
+        armsUp,
+        armedAfterEscape,
+        armedAfterBlur: rowNow?.armed ?? false,
+        stillListed: Boolean(rowNow),
+      }
+    }
+  }
+} catch (err) {
+  // A throw from the page still has to end in a check line and still has to
+  // run the cleanups below: the shape of the output is part of the gate.
+  pluginState.why = `the drive threw: ${err?.message ?? err}`
+} finally {
+  // Both cleanups run whatever happened above: the plugin this run installed
+  // and the folder it wrote. A cleanup that cannot finish is said in the
+  // failure detail instead of being left as a dirty profile.
+  let removed = !pluginState.created
+  let removalNote = ''
+  if (pluginState.created && pluginState.name) {
+    let row = null
+    try {
+      row = (await pluginRows()).find((r) => r.name === pluginState.name) ?? null
+    } catch {
+      row = null
+    }
+    if (row) {
+      if (!row.armed && row.removeBox) await click(row.removeBox.x, row.removeBox.y)
+      const armedUp = await waitFor(
+        `[...document.querySelectorAll('.pn-row--stack')].some((r) => [...r.querySelectorAll('.pn-actions button')].some((b) => (b.textContent || '').trim() === 'Remove it'))`,
+        { timeout: 3000 },
+      )
+      if (armedUp) await clickElement('.pn-row--stack .pn-btn--danger')
+      removed = await waitFor(
+        `![...document.querySelectorAll('.pn-name')].some((n) => (n.textContent || '').trim().startsWith(${JSON.stringify(pluginState.name)}))`,
+        { timeout: 10000 },
+      )
+    }
+    if (!removed) {
+      removalNote = `the plugin "${pluginState.name}" is still installed: remove it by hand in Plugins > Installed (its Remove, then Remove it) before the next run`
+    }
+  }
+  if (pluginState.tempRoot) {
+    await rm(pluginState.tempRoot, { recursive: true, force: true }).catch(() => {})
+  }
+  pluginState.removed = removed
+  pluginState.removalNote = removalNote
+}
+
+if (!pluginState.name) {
   skip(
     'the armed plugin row',
-    'no installed plugin in this dev profile; install one from a local folder first (Plugins, Install, pick its folder in the in-app picker) and this check runs',
+    pluginState.why
+      ? `${pluginState.why}; the check needs a plugin it can install from a folder it writes`
+      : 'no plugin could be installed in this profile',
   )
 } else {
   record(
     'arming a plugin row and pressing Escape cancels the arm and removes nothing',
-    Boolean(pluginArm?.armsUp) && !pluginArm.armed && pluginArm.count === pluginArm.before,
-    `armed on the first press: ${pluginArm?.armsUp}, still armed after Escape: ${pluginArm?.armed}, Remove buttons ${pluginArm?.before} -> ${pluginArm?.count}`,
+    Boolean(pluginArm?.armsUp) &&
+      pluginArm?.armedAfterEscape === false &&
+      pluginArm?.after === pluginArm?.before &&
+      pluginState.removed,
+    `subject "${pluginState.name}" (${pluginState.created ? 'installed from a temp folder by this run' : 'already in the profile, so nothing was created'}); armed on the first press: ${pluginArm?.armsUp}; still armed after Escape: ${pluginArm?.armedAfterEscape}; after the fallback blur: ${pluginArm?.armedAfterBlur}; still listed: ${pluginArm?.stillListed}; Remove buttons ${pluginArm?.before} -> ${pluginArm?.after}; removed again: ${pluginState.removed}${pluginState.removalNote ? `; ${pluginState.removalNote}` : ''}${pluginState.why ? `; ${pluginState.why}` : ''}`,
   )
 }
 

@@ -106,3 +106,22 @@ test('the sync mark promises the setting, not a delivery', () => {
   assert.match(side, /aria-label="Syncs to your devices"/)
   assert.doesNotMatch(side, /aria-label="Synced to your devices"/)
 })
+
+test('Escape keeps: an armed row is disarmed by the key, in every pane that uses the hook', () => {
+  // DESIGN.md promises it in one line ("the first press arms, the second press
+  // does it, and Escape or a click elsewhere keeps") and four panes were not
+  // doing it: the armed control took the focus and answered no key, so the only
+  // way out was to click something else. The listener lives in the shared hook,
+  // which is what makes it true for all four at once.
+  const hook = source('use-armed-row.js')
+  assert.match(hook, /addEventListener\('keydown', onKeyDown\)/, 'the armed control listens')
+  assert.match(hook, /if \(event\.key !== 'Escape'\) return/, 'only Escape is taken')
+  assert.match(hook, /event\.stopPropagation\(\)/, 'and it does not also reach a dialog underneath')
+  assert.match(hook, /setArmed\(\(\) => clearRow\(\)\)/, 'the arm goes, nothing is removed')
+  assert.match(hook, /removeEventListener\('keydown', keyed\.current\.onKeyDown\)/, 'and the listener is detached with the control')
+  for (const pane of ['PluginsView.jsx', 'AutomationsView.jsx', 'EndpointManager.jsx', 'McpServersSection.jsx']) {
+    const file = source(pane)
+    assert.match(file, /useArmedRow\(/, `${pane} uses the shared hook`)
+    assert.match(file, /ref=\{armWatch\.buttonRef\}|buttonRef=\{armWatch\.buttonRef\}/, `${pane} puts the hook on its armed control`)
+  }
+})
