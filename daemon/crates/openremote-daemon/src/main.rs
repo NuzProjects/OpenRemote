@@ -112,6 +112,19 @@ fn main() -> ExitCode {
                 ExitCode::SUCCESS
             }
         },
+        // Asking for help is not an error. It printed the usage line and exited 2
+        // ("unknown command '--help'"), so a person following the usual reflex, and any
+        // script that runs `--help` first to see whether a flag exists, read the one
+        // command that always works as a refusal.
+        Some(help @ ("--help" | "-h")) => match no_arguments(&args, help) {
+            Some(refused) => refused,
+            None => {
+                println!(
+                    "usage: openremote-daemon [agent | enroll <code> | status | unenroll | mcp-chat <args> | --version]"
+                );
+                ExitCode::SUCCESS
+            }
+        },
         Some(other) => usage_error(&format!("unknown command '{other}'")),
     }
 }
