@@ -5,6 +5,17 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+// The launcher ships for Windows x64 only, and two of these assertions read host
+// path rules rather than the launcher's own: `cacheDir` joins with the running
+// platform's separator, and `isEntry` normalises with it, so the same Windows
+// strings answer differently on Linux and macOS. CI runs this suite on all
+// three, where those two would fail while the code is right; skipping them off
+// Windows says that plainly instead of letting a platform claim look like a
+// regression.
+const windowsOnly = {
+  skip: process.platform !== "win32" ? "the launcher ships for Windows x64 only" : false,
+};
+
 import {
   assetNamesFor,
   cacheDir,
@@ -31,7 +42,7 @@ test("win32 x64 has a portable pair, other platforms do not", () => {
   assert.equal(assetNamesFor("win32", "arm64"), null);
 });
 
-test("the cache is per tag under LOCALAPPDATA", () => {
+test("the cache is per tag under LOCALAPPDATA", windowsOnly, () => {
   assert.equal(
     cacheDir({ LOCALAPPDATA: "C:\\Users\\x\\AppData\\Local" }, "v0.4.1"),
     "C:\\Users\\x\\AppData\\Local\\moreweb\\openremote\\v0.4.1",
@@ -315,7 +326,7 @@ async function warmCache(env, tag = "v0.4.1") {
   return dir;
 }
 
-test("the entry guard survives a symlinked or junctioned install", () => {
+test("the entry guard survives a symlinked or junctioned install", windowsOnly, () => {
   // pnpm and `npm link` both run the entry through a symlink or junction, and
   // that path is not the module's own real path.
   const linked = "C:\\Users\\x\\AppData\\Local\\pnpm\\global\\5\\node_modules\\@morewebs\\openremote\\bin\\openremote.mjs";
