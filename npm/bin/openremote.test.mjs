@@ -235,6 +235,64 @@ test("the registry package and the app carry one version", async () => {
   assert.equal(published.private, undefined, "a private package cannot be published");
 });
 
+test("--update moves to a newer release and drops the old one", async () => {
+  const env = await sandbox();
+  const root = join(env.LOCALAPPDATA, "moreweb", "openremote");
+  const old = join(root, "v0.4.1");
+  await mkdir(old, { recursive: true });
+  const hex = createHash("sha256").update("old-console").digest("hex");
+  await writeFile(join(old, "OpenRemote.exe"), "old-console");
+  await writeFile(join(old, "openremote-daemon.exe"), "old-console");
+  await writeState(root, {
+    tag: "v0.4.1",
+    sha256: { "OpenRemote.exe": hex, "openremote-daemon.exe": hex },
+  });
+
+  const { fetchImpl } = fakeRelease({ tag: "v0.4.2" });
+  const { spawnImpl, spawned } = fakeSpawn();
+  const code = await main(["--update"], {
+    env, platform: "win32", arch: "x64", fetchImpl, spawnImpl, log: () => {}, warn: () => {},
+  });
+
+  assert.equal(code, 0);
+  assert.equal(spawned[0].file, join(root, "v0.4.2", "OpenRemote.exe"));
+  assert.equal((await readState(root)).tag, "v0.4.2");
+  // One release on disk: the superseded copy goes, or the cache grows by 28MB
+  // per release with nothing that ever reads it again.
+  let oldStillThere = true;
+  try {
+    await stat(old);
+  } catch {
+    oldStillThere = false;
+  }
+  assert.equal(oldStillThere, false);
+});
+
+test("a warm cache with an older release does not reach for the newer one", async () => {
+  const env = await sandbox();
+  const root = join(env.LOCALAPPDATA, "moreweb", "openremote");
+  const dir = join(root, "v0.4.1");
+  await mkdir(dir, { recursive: true });
+  const hex = createHash("sha256").update("console-bytes").digest("hex");
+  await writeFile(join(dir, "OpenRemote.exe"), "console-bytes");
+  await writeFile(join(dir, "openremote-daemon.exe"), "console-bytes");
+  await writeState(root, {
+    tag: "v0.4.1",
+    sha256: { "OpenRemote.exe": hex, "openremote-daemon.exe": hex },
+  });
+
+  // The app has never looked for updates on its own, and the launcher keeps
+  // that promise: a plain run starts what is here.
+  const { spawnImpl, spawned } = fakeSpawn();
+  const code = await main([], {
+    env, platform: "win32", arch: "x64", spawnImpl,
+    fetchImpl: async () => { throw new Error("a plain run went to the network"); },
+    log: () => {}, warn: () => {},
+  });
+  assert.equal(code, 0);
+  assert.equal(spawned[0].file, join(dir, "OpenRemote.exe"));
+});
+
 test("a file matches only its own checksum", async () => {
   const dir = await mkdtemp(join(tmpdir(), "or-sha-"));
   const path = join(dir, "a.bin");
