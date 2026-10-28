@@ -109,6 +109,15 @@ export function mergeSessionIntoChat(existing, session) {
   const merged = {
     ...fresh,
     title: (beatIsNewer ? fresh.title : null) ?? existing.title,
+    // The title has always been gated on that stamp; these were not, so a snapshot taken
+    // before an event the stream had already folded could put the older answer back for
+    // one beat: a finished turn flickered to running, the error line vanished, a queued
+    // message came and went. A fact the fold carries ahead of the poll belongs to the
+    // moment it happened, and the beat wins only when it is the fresher snapshot.
+    status: beatIsNewer ? fresh.status : existing.status,
+    running: beatIsNewer ? fresh.running : existing.running,
+    lastError: beatIsNewer ? fresh.lastError : existing.lastError,
+    queue: beatIsNewer ? fresh.queue : existing.queue,
     updatedAt: Math.max(existing.updatedAt ?? 0, fresh.updatedAt ?? 0),
     timeline: existing.timeline,
     foldedSeq: existing.foldedSeq,
@@ -209,10 +218,7 @@ export function foldEvent(chat, event) {
   // A replayed event - one at or below the fold cursor - is a duplicate:
   // the timeline already accounts for it. Folding is idempotent, so no
   // caller (a reopened chat, a reconnect) can double the transcript.
-  if (event.seq != null) {
-    if (chat.foldedSeq != null && event.seq <= chat.foldedSeq) return chat
-    chat.foldedSeq = event.seq
-  }
+  if (event.seq != null && chat.foldedSeq != null && event.seq <= chat.foldedSeq) return chat
   switch (payload.type) {
     case 'session.created': {
       const session = payload.session
@@ -463,6 +469,11 @@ export function foldEvent(chat, event) {
     default:
       break
   }
+  // Folded, so only now does the timeline own the seq. Set before the switch, a payload
+  // that threw while folding consumed its own event: the record claimed a seq the
+  // timeline never received, and every replay - a reopen, a reconnect resuming from this
+  // cursor - skipped it, leaving a hole in the transcript that nothing ever mentioned.
+  if (event.seq != null) chat.foldedSeq = event.seq
   return chat
 }
 
