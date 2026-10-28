@@ -7,7 +7,8 @@
 // phone scans a code from this computer, on this network, with no account.
 
 import { useState } from 'react'
-import { DeviceMobile } from '@phosphor-icons/react'
+import { CaretRight, DeviceMobile } from '@phosphor-icons/react'
+import { isMobile } from './platform.js'
 import MachineModal from './MachineModal.jsx'
 import CloudStateRow from './CloudStateRow.jsx'
 import PairingSection from './PairingSection.jsx'
@@ -30,15 +31,18 @@ function detail(device) {
 // paired. No control here: the first step is on the phone itself, so a
 // button in this row would have nothing to do.
 function NoPhonesYet() {
+  // On a phone this screen IS the phone app: telling the person to install the app they
+  // are holding, and calling the computer "this computer", was written for a desktop.
+  const onPhone = isMobile
   return (
     <div className="pn-list pn-list--tight">
       <div className="pn-row">
         <div>
           <div className="pn-name">No phones in your Cloud yet.</div>
           <div className="pn-detail">
-            A phone signed in to your Cloud lists the chats you sync and can
-            drive your machines. Install OpenRemote on the phone and sign in
-            with the same account.
+            {onPhone
+              ? 'This phone lists the chats you sync and can drive your machines. Sign in above to see them.'
+              : 'A phone signed in to your Cloud lists the chats you sync and can drive your machines. Install OpenRemote on the phone and sign in with the same account.'}
           </div>
         </div>
       </div>
@@ -56,8 +60,9 @@ function CheckingPhones() {
         <div>
           <div className="pn-name">Checking your Cloud…</div>
           <div className="pn-detail">
-            Looking for phones signed in to your account. A phone paired to this
-            computer is listed above either way.
+            {isMobile
+              ? 'Looking for the phones signed in to your account. This phone is listed here once the answer arrives.'
+              : 'Looking for phones signed in to your account. A phone paired to this computer is listed above either way.'}
           </div>
         </div>
       </div>
@@ -118,6 +123,12 @@ export default function MobileView({ onOpenChat }) {
               <span className="dv-status">
                 <span className={`dv-dot dv-dot--${device.online ? 'online' : 'offline'}`} />
                 {device.online ? 'Online' : 'Offline'}
+              </span>
+              {/* The card is the only way into a device on this screen, and its only
+                  affordance was a hover border: on a touch screen there is no hover, so it
+                  read as a status tile and the way in was invisible. */}
+              <span className="dv-open" aria-hidden="true">
+                <CaretRight size={12} weight="bold" />
               </span>
             </button>
           ))}

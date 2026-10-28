@@ -55,6 +55,15 @@
   border-color: rgba(255, 255, 255, 0.14);
 }
 
+/* The chevron is the card's permanent signal that it opens something: the hover border
+   above is the only other one, and a touch screen has no hover. */
+.dv-open {
+  display: grid;
+  place-items: center;
+  color: var(--text-3);
+  padding-left: 2px;
+}
+
 .dv-icon {
   display: grid;
   place-items: center;
