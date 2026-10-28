@@ -224,6 +224,17 @@ test("another platform is told where the installer is, and nothing spawns", asyn
   assert.match(said.join("\n"), /no npm build of the app for darwin-arm64/);
 });
 
+test("the registry package and the app carry one version", async () => {
+  const app = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8"));
+  const published = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  // Two manifests name the same release. A publish from one of them at a
+  // version the other does not carry is how a channel starts lying about
+  // which build it installs.
+  assert.equal(published.version, app.version);
+  assert.equal(published.bin.openremote, "bin/openremote.mjs");
+  assert.equal(published.private, undefined, "a private package cannot be published");
+});
+
 test("a file matches only its own checksum", async () => {
   const dir = await mkdtemp(join(tmpdir(), "or-sha-"));
   const path = join(dir, "a.bin");

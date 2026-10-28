@@ -1,0 +1,37 @@
+{
+  "name": "@morewebs/openremote",
+  "version": "0.4.1",
+  "description": "The terminal door into OpenRemote: one window for the agent harnesses on this computer. Installs a launcher that fetches the prebuilt desktop app.",
+  "license": "AGPL-3.0-only",
+  "bin": {
+    "openremote": "bin/openremote.mjs"
+  },
+  "files": [
+    "bin/openremote.mjs",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18.17"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/morewebs/OpenRemote.git",
+    "directory": "npm"
+  },
+  "homepage": "https://github.com/morewebs/OpenRemote",
+  "bugs": {
+    "url": "https://github.com/morewebs/OpenRemote/issues"
+  },
+  "keywords": [
+    "openremote",
+    "desktop",
+    "console",
+    "harness",
+    "claude-code",
+    "codex",
+    "tauri"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}
