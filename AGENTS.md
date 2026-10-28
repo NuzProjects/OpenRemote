@@ -222,6 +222,14 @@ an old process is still alive; find it before re-running).
   tag.
 - Installers are unsigned by decision; the release notes say so
   (SmartScreen, More info > Run anyway).
+- `npm/` is a second front door: a small launcher published to the registry as
+  `@morewebs/openremote`. It holds no build, it reads `releases/latest` at run
+  time, fetches the portable Windows pair the Windows job stages beside the six
+  names above, verifies both against `SHA256SUMS-portable-windows-x64`, keeps them
+  under the user's local app data and starts the console. So a launcher version
+  does not pin a release, and publishing the launcher is a manual `npm publish`
+  from `npm/` that no workflow performs - a release without it is still a release,
+  on the installer channel.
 - License is AGPL-3.0. Harness names and marks belong to their
   owners; OpenRemote is not affiliated with them.
 
@@ -236,7 +244,7 @@ an old process is still alive; find it before re-running).
 ## Checking this file
 
 Four commands check what this page claims, and a reader can run all of them
-from the repo root: `npm test` (prints a count; 944 the last time this line
+from the repo root: `npm test` (prints a count; 976 the last time this line
 was checked, and the run is the truth rather than this number), `node
 scripts/check-tab-acl.mjs` (says `tab acl ok: 2 capability file(s), every
 non-phone one scoped to the main webview, every declared command (27)
