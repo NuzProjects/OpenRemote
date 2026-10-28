@@ -16,7 +16,6 @@ globalThis.localStorage = {
 }
 
 const {
-  BUSY_STATUSES,
   SEEN_CAP,
   activityAt,
   isBusy,
@@ -29,6 +28,7 @@ const {
   storeSeen,
   unreadIds,
 } = await import('./unread.js')
+const { STATUSES, displayWord, isBusy: statusIsBusy } = await import('./status-words.js')
 
 const row = (over = {}) => ({ id: 'chat-1', status: 'idle', updatedAt: 200, ...over })
 
@@ -44,9 +44,14 @@ test('a chat with no record is not marked: first sight is not news', () => {
 })
 
 test('a chat mid-turn is not marked: nothing has arrived to read yet', () => {
-  for (const status of BUSY_STATUSES) {
-    assert.equal(isBusy(row({ status })), true)
-    assert.equal(isUnread({ 'chat-1': 1 }, row({ status })), false)
+  // The busy rule is status-words.js, which answers the same for the sidebar's
+  // `running` and the daemon's `working`: this walks all six statuses in both
+  // vocabularies and proves the row follows it exactly.
+  for (const status of STATUSES) {
+    const busy = statusIsBusy(status)
+    assert.equal(isBusy(row({ status })), busy, status)
+    assert.equal(isBusy(row({ status: displayWord(status) })), busy, `${status} as its display word`)
+    if (busy) assert.equal(isUnread({ 'chat-1': 1 }, row({ status })), false, `${status} is mid-turn`)
   }
   // A waiting harness has produced the thing to read, and a failed turn is
   // news too: both mark when they moved.

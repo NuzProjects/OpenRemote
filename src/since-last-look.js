@@ -9,28 +9,30 @@
 // and never implies that the newest thing matters most.
 
 import { activityAt, isUnread, recordSeen } from './unread.js'
+import { canonical } from './status-words.js'
 
 // The one timestamp format the console writes - the same options the
 // automations list uses for "last ran", so a time on screen looks the same
 // wherever it is on screen.
 export const TIME_FORMAT = { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }
 
-// What last happened, in the sidebar's own status words. A busy chat cannot be
-// unread (unread.js says why), but the sentence exists for it so the mapping is
-// total rather than full of holes.
+// What last happened, in the sidebar's own status words, one line per daemon
+// status. The keys are status-words.js's canonical words, so the console's
+// "running" reaches the working line without a second entry here; a busy chat
+// cannot be unread (unread.js says why), but the sentence exists for it so the
+// mapping is total rather than full of holes.
 const STATUS_LINE = {
-  running: 'A turn is running',
-  working: 'A turn is running',
   starting: 'Starting',
+  working: 'A turn is running',
   waiting: 'Waiting on an answer',
   idle: 'The last turn finished',
   stopped: 'Stopped',
   failed: 'The last turn failed',
 }
 
-/** The line that says what happened last, from the chat's status. */
+/** The line that says what happened last, from the chat's status in either vocabulary. */
 export function whatHappened(status) {
-  return STATUS_LINE[status] ?? 'Moved'
+  return STATUS_LINE[canonical(status)] ?? 'Moved'
 }
 
 /** The activity stamp as the console writes a time, or '' when there is none. */

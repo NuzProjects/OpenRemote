@@ -15,16 +15,12 @@
 // lands then. The status dot already says the chat is running.
 
 import { loadStoredChatSeen, saveStoredChatSeen } from './settings.js'
+import { isBusy as busyStatus } from './status-words.js'
 
 // How many chats keep a record. A console that has seen thousands of chats
 // does not need all of them, and local storage is not a database: the
 // newest records are the only ones that can still answer "did this move?".
 export const SEEN_CAP = 200
-
-// Statuses where a harness is mid-turn. The sidebar's rows say `running`
-// (its own word for the live status); the daemon's poll says `working` or
-// `starting`. All three mean the same thing here.
-export const BUSY_STATUSES = ['working', 'starting', 'running']
 
 /** The chat's last activity, as the poll reports it. */
 export function activityAt(row) {
@@ -40,11 +36,12 @@ export function activityAt(row) {
  * record yet, so reading `status` first would call a poll-only `working` chat
  * idle on the first paint after a load (Sidebar.jsx sets all three). The
  * poll's own word is next, and `status` stays as the fallback for a row built
- * without either.
+ * without either. The words themselves are status-words.js, which answers the
+ * same for the sidebar's `running` and the daemon's `working`.
  */
 export function isBusy(row) {
   const status = row?.liveStatus ?? row?.polledStatus ?? row?.status
-  return BUSY_STATUSES.includes(status)
+  return busyStatus(status)
 }
 
 /**

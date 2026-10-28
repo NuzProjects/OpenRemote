@@ -5,21 +5,14 @@
 // tokens) exist only for chats this console has watched, so they stay
 // out until the daemon can aggregate them itself.
 
-const STATUSES = ['starting', 'working', 'waiting', 'idle', 'stopped', 'failed']
-
-const STATUS_WORD = {
-  starting: 'starting',
-  working: 'running',
-  waiting: 'waiting',
-  idle: 'idle',
-  stopped: 'stopped',
-  failed: 'failed',
-}
+import { STATUSES, displayWord } from './status-words.js'
 
 /** Every status's count, zero included, in the fixed order the sentence reads. */
 export function statusCounts(sessions) {
   const counts = Object.fromEntries(STATUSES.map((s) => [s, 0]))
   for (const session of sessions ?? []) {
+    // The poll's rows are the daemon's own words, which are the canonical
+    // keys; a row with a status this console does not know is not counted.
     if (counts[session.status] != null) counts[session.status] += 1
   }
   return counts
@@ -29,7 +22,7 @@ export function statusCounts(sessions) {
 export function statusSentence(sessions) {
   const counts = statusCounts(sessions)
   return STATUSES.filter((s) => counts[s] > 0)
-    .map((s) => `${counts[s]} ${STATUS_WORD[s]}`)
+    .map((s) => `${counts[s]} ${displayWord(s)}`)
     .join(' · ')
 }
 

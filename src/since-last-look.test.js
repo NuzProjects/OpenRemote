@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { markAllSeen, movedLine, sinceLastLook, whatHappened, whenLabel } from './since-last-look.js'
+import { STATUSES, displayWord } from './status-words.js'
 
 // The row shape the palette builds from the poll: the id, the title, the
 // harness, when it last moved, and the status in the sidebar's vocabulary.
@@ -55,6 +56,16 @@ test('each status says what happened last in the sidebar\'s words', () => {
   assert.equal(whatHappened('starting'), 'Starting')
   assert.equal(whatHappened('something-new'), 'Moved', 'an unknown state still says something true')
   assert.equal(whatHappened(undefined), 'Moved')
+})
+
+test('every status has its own line, in either vocabulary', () => {
+  // The map is keyed by the canonical words from status-words.js, so it must
+  // be total over the six and say the same thing when handed the display word.
+  // A hole here would fall through to "Moved", which would be true but wrong.
+  for (const status of STATUSES) {
+    assert.notEqual(whatHappened(status), 'Moved', `${status} has a line of its own`)
+    assert.equal(whatHappened(displayWord(status)), whatHappened(status), `${displayWord(status)} says the same`)
+  }
 })
 
 test('the time is written the console\'s way, and a chat with no stamp says nothing', () => {

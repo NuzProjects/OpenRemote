@@ -6,6 +6,12 @@
 // chat that is still starting has not taken its first turn yet, and the
 // plan's scope stops here.
 //
+// The words come from status-words.js, which folds the console's "running"
+// onto the daemon's working, so a session row built from a chat record counts
+// exactly like one straight from the poll. Comparing against the daemon's
+// spelling here was how the one chat still burning a meter stayed out of the
+// count.
+//
 // What this daemon can stop is what this daemon holds. A chat a synced
 // account lists from another computer is named and skipped rather than
 // failed: the stop action is one daemon's route, and inventing a mesh call
@@ -15,7 +21,8 @@
 // counting, the order, the cap and every sentence can be tested without a
 // DOM.
 
-export const RUNNING_STATUSES = ['working', 'waiting']
+import { isRunning as runningStatus, isWaiting } from './status-words.js'
+
 // A handful of names under the question; the rest is "and N more".
 export const NAMED_CAP = 4
 
@@ -26,9 +33,9 @@ function word(n) {
   return WORDS[n] ?? String(n)
 }
 
-/** Whether this session is doing work right now. */
+/** Whether this session is doing work right now: working or waiting, in either vocabulary. */
 export function isRunning(session) {
-  return RUNNING_STATUSES.includes(session?.status)
+  return runningStatus(session?.status) || isWaiting(session?.status)
 }
 
 /**

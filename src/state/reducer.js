@@ -5,18 +5,13 @@
 // rendered item (message, tool, decision) lands in the rail exactly when
 // the daemon said it happened.
 
-const STATUS = {
-  starting: 'starting',
-  working: 'running',
-  waiting: 'waiting',
-  idle: 'idle',
-  stopped: 'stopped',
-  failed: 'failed',
-}
+import { displayWord, isActive } from '../status-words.js'
 
-// The UI's dot vocabulary maps the daemon's session statuses.
+// The UI's dot vocabulary maps the daemon's session statuses. The words and
+// the mapping live in status-words.js now, so the dot, the metrics sentence
+// and the unread mark cannot disagree about what a status is called.
 export function chatStatus(status) {
-  return STATUS[status] ?? 'idle'
+  return displayWord(status)
 }
 
 export function workspaceName(path) {
@@ -52,7 +47,7 @@ export function chatFromSession(session) {
     // number (claude's thinking_tokens), summed across turns.
     thinkingTokens: 0,
     lastError: session.last_error ?? null,
-    running: ['starting', 'working', 'waiting'].includes(session.status),
+    running: isActive(session.status),
     // The harness has its own conversation for this chat (claude's
     // `--resume` id, codex's thread id, ...). Without one - a chat stopped
     // before its first message - there is nothing to resume, ever.
@@ -234,7 +229,7 @@ export function foldEvent(chat, event) {
       // resurfaces an old, unrelated failure's words.
       if (payload.reason != null) chat.lastError = payload.reason
       else if (payload.status !== 'failed') chat.lastError = null
-      chat.running = ['starting', 'working', 'waiting'].includes(payload.status)
+      chat.running = isActive(payload.status)
       // A stop or a failure ends the turn with no settled message ever
       // coming; a turn that is working or waiting on an answer is still
       // speaking, and its live block stays honest.
@@ -254,7 +249,7 @@ export function foldEvent(chat, event) {
       // facts row renders.
       const session = payload.session
       chat.status = chatStatus(session.status)
-      chat.running = ['starting', 'working', 'waiting'].includes(session.status)
+      chat.running = isActive(session.status)
       // The same error latch as session.status_changed: set when the
       // payload carries one, keep on a failure without one, clear when
       // the session is healthy and reports no error.

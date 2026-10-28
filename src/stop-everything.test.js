@@ -39,6 +39,18 @@ test('running is working or waiting, and nothing else', () => {
   assert.equal(isRunning(null), false)
 })
 
+test('a session handed in with the console word is running too', () => {
+  // The console prints "running" for the daemon's working, and a session row
+  // that came back through a chat record carries that word. It is the same
+  // chat: the stop command must count it rather than assume the daemon's
+  // spelling, or the one chat that is burning the meter is left out of the
+  // count, the question and the stop.
+  assert.equal(isRunning(session({ status: 'running' })), true, 'the display word')
+  const { running, stoppable } = stopTargets([session({ id: 'live', status: 'running' })])
+  assert.deepEqual(running.map((s) => s.id), ['live'])
+  assert.deepEqual(stoppable.map((s) => s.id), ['live'])
+})
+
 test('the oldest work is named first', () => {
   const list = [
     session({ id: 'b', created_at: 200 }),
