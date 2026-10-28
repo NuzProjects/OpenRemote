@@ -211,6 +211,28 @@ if (!shellUp) {
   process.exit(1)
 }
 
+// A window somebody left open is not a defect in this build, and it made the
+// palette check fail once with a sentence about focus that read like a
+// regression: a manual session had left the Settings popup up, so Ctrl+K opened
+// over it and the opener was never recorded. Clear any overlay first and say what
+// was cleared, so every check below starts from the same place.
+const overlayOpen = await evaluate(`(() => {
+  const open = ['.kb-palette', '.vp-window', '.dv-modal', '.pn-menu'].find((s) => document.querySelector(s));
+  return open ?? null;
+})()`)
+if (overlayOpen) {
+  for (let i = 0; i < 3 && (await evaluate(`!!document.querySelector(${JSON.stringify(overlayOpen)})`)); i += 1) {
+    await key({ key: 'Escape', code: 'Escape', vk: 27 })
+    await sleep(250)
+  }
+  const stillOpen = await evaluate(`!!document.querySelector(${JSON.stringify(overlayOpen)})`)
+  console.log(
+    stillOpen
+      ? `NOTE  ${overlayOpen} was open when this started and would not close; a check below may read it as a failure`
+      : `NOTE  ${overlayOpen} was open when this started: closed before the first check`,
+  )
+}
+
 // Start from a known place. The app remembers the last view and a previous run
 // may have left a popup over it, so a click measured against whatever was on
 // screen would be a check on a different window than the one it names.
