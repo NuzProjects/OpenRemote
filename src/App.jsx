@@ -16,7 +16,7 @@ import MetricsView from './MetricsView.jsx'
 import BrowserPane from './BrowserPane.jsx'
 import FloatingBar from './FloatingBar.jsx'
 import { ConsoleProvider, useConsole } from './state/console.jsx'
-import { needsSignIn } from './cloud.js'
+import { needsSignIn, sessionsForMode } from './cloud.js'
 import CloudNotices from './CloudNotices.jsx'
 import { hasTauri, isMobile } from './platform.js'
 import { connectionNotice } from './connection-notice.js'
@@ -243,8 +243,20 @@ function Shell() {
   // a pane; one left in the history from before opens New chat. The
   // browser used to be a whole-window view; one left in the history opens
   // New chat, and its tabs are still there when the side pane opens.
+  //
+  // A chat belongs to a mode: a private chat is this computer's, a synced one is
+  // the account's. Switching mode with panes open used to keep the other mode's
+  // chat in the primary pane, so a private chat went on streaming under a window
+  // that said Cloud. The mode's own list rule decides (cloud.js), and a chat it
+  // does not hold opens New chat.
+  const chatInMode = (id) =>
+    !STATIC_VIEWS.includes(id) &&
+    sessionsForMode(sessions, mode, thisDevice).some((s) => s.id === id)
   const view =
-    OTHER_MODE[mode].includes(stored) || POPUP_VIEWS.includes(stored) || stored === 'browser'
+    OTHER_MODE[mode].includes(stored) ||
+    POPUP_VIEWS.includes(stored) ||
+    stored === 'browser' ||
+    (stored != null && chats[stored] && !chatInMode(stored))
       ? 'new'
       : stored
   const chat = STATIC_VIEWS.includes(view) ? null : chats[view] ?? null
@@ -1205,8 +1217,13 @@ function Shell() {
             />
           )}
           {/* The review surface for the chat's reported edits. It opens
-              itself when the palette asks for it and needs no state here. */}
-          {chat && <ChangesModal chat={chat} />}
+              itself when the palette asks for it and needs no state here. It is
+              mounted with the chat the keyboard and the palette call current
+              (`focusedChatId`), not the primary pane's: with a split open the only
+              review mount used to carry pane one's record while focus sat on pane
+              two, and the palette's "Changes in this chat" then reviewed a
+              transcript the person was not looking at. */}
+          {(chats[focusedChatId] ?? chat) && <ChangesModal chat={chats[focusedChatId] ?? chat} />}
           {popup && (
             <ViewPopup
               label={{ settings: 'Settings', metrics: 'Metrics', mobile: 'Mobile' }[popup]}
