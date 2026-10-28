@@ -34,15 +34,24 @@ async function call(method, path) {
   }
   const text = await response.text()
   let json = null
+  let unreadable = false
   try {
     json = text ? JSON.parse(text) : null
   } catch {
-    json = null
+    unreadable = true
   }
   if (!response.ok) {
     // The daemon writes a sentence a person can read; keep it, and carry
     // the status so the surface can tell "no such phone" from "not now".
     const error = new Error(json?.error ?? `HTTP ${response.status}`)
+    error.status = response.status
+    throw error
+  }
+  // A success whose body could not be read is not an empty answer: a cut-off body used
+  // to arrive as `{}`, which the section drew as "No phones paired" while the daemon may
+  // have listed several. The same guard as api/daemon.js, for the same reason.
+  if (unreadable) {
+    const error = new Error('The daemon answered, but its answer could not be read')
     error.status = response.status
     throw error
   }
@@ -101,7 +110,10 @@ export function phoneName(raw) {
 
 /** How long the code has left, as a clock: 4:07, or Expired. */
 export function remainingLabel(expiresAt, now = Date.now()) {
-  const left = Math.max(0, Math.round((Number(expiresAt) - now) / 1000))
+  // Rounded up, so the label never claims less time than the code has: rounding to the
+  // nearest second called a code with 0.4 s left "Expired" while it still worked, and
+  // printed "1:00" for one with 59.6 s, a minute the person did not get.
+  const left = Math.max(0, Math.ceil((Number(expiresAt) - now) / 1000))
   if (!Number.isFinite(left) || left <= 0) return 'Expired'
   const minutes = Math.floor(left / 60)
   const seconds = String(left % 60).padStart(2, '0')
