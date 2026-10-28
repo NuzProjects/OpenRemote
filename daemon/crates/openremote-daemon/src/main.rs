@@ -56,6 +56,28 @@ fn no_arguments(args: &[String], command: &str) -> Option<ExitCode> {
     extra_argument(args, command).map(|why| usage_error(&why))
 }
 
+/// The code `enroll` was given, or the sentence saying why it has none. A flag
+/// where the code belongs is refused rather than sent: `enroll --data-dir
+/// /srv/openremote` would otherwise reach the registry as a code and come back
+/// "that code is not valid", which sends a person to mint another code for a
+/// flag. The same unit-file mistake the commands above refuse, answered the same
+/// way.
+fn enroll_code(args: &[String]) -> Result<&str, String> {
+    // Any flag in the arguments is refused before the arity is considered:
+    // `enroll --data-dir /srv/openremote` is one flag and one value, and the
+    // arity alone would call that value an extra code.
+    if let Some(flag) = args.iter().skip(1).find(|a| a.starts_with('-')) {
+        return Err(format!(
+            "enroll takes the code from the machine list, not a flag (got '{flag}')"
+        ));
+    }
+    match (args.get(1), args.get(2)) {
+        (None, _) => Err("enroll needs the code from the machine list".to_string()),
+        (Some(code), None) => Ok(code),
+        (Some(_), Some(extra)) => Err(format!("enroll takes one code (got an extra '{extra}')")),
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -68,19 +90,9 @@ fn main() -> ExitCode {
             Some(refused) => refused,
             None => runtime.block_on(serve(true)),
         },
-        Some("enroll") => match (args.get(1), args.get(2)) {
-            // A flag where the code belongs is the same unit-file mistake the
-            // commands above refuse: without this check it would be sent to the
-            // registry as a code and answered with "that code is not valid",
-            // sending a person to mint another one for a flag.
-            (Some(flag), None) if flag.starts_with('-') => usage_error(&format!(
-                "enroll takes the code from the machine list, not a flag (got '{flag}')"
-            )),
-            (Some(code), None) => runtime.block_on(enroll(code)),
-            (None, _) => usage_error("enroll needs the code from the machine list"),
-            (Some(_), Some(extra)) => {
-                usage_error(&format!("enroll takes one code (got an extra '{extra}')"))
-            }
+        Some("enroll") => match enroll_code(&args) {
+            Ok(code) => runtime.block_on(enroll(code)),
+            Err(why) => usage_error(&why),
         },
         // A chat's read-a-chat MCP server (OpenRemote Controls), started by
         // the chat's harness over stdio.
@@ -480,5 +492,25 @@ mod tests {
         assert!(extra_argument(&args(&["--version", "x"]), "--version").is_some());
         // And the refusal is the usage error: 2, with the one usage line.
         assert!(no_arguments(&args(&["status", "now"]), "status").is_some());
+    }
+
+    #[test]
+    fn enroll_refuses_a_flag_where_the_code_belongs() {
+        // The code is the only thing `enroll` takes. A flag sent to the registry
+        // as a code comes back "that code is not valid", which sends a person to
+        // mint another code for something that was never a code.
+        assert_eq!(enroll_code(&args(&["enroll", "abc123"])), Ok("abc123"));
+        let flag = enroll_code(&args(&["enroll", "--data-dir", "/srv/x"]))
+            .expect_err("a flag is not a code");
+        assert!(flag.contains("not a flag"), "{flag}");
+        assert!(
+            flag.contains("--data-dir"),
+            "the flag is named back: {flag}"
+        );
+        let none = enroll_code(&args(&["enroll"])).expect_err("no code, no enrolment");
+        assert!(none.contains("needs the code"), "{none}");
+        // Two codes is a typo, not a second account.
+        let two = enroll_code(&args(&["enroll", "abc", "def"])).expect_err("one code only");
+        assert!(two.contains("one code"), "{two}");
     }
 }
