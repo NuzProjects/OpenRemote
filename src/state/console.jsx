@@ -68,6 +68,10 @@ export function ConsoleProvider({ children }) {
   // answer lands, never the value captured when the loop started.
   const connectionRef = useRef(connection.state)
   connectionRef.current = connection.state
+  // Whether the boot chain has finished, so the beat can follow it rather than run
+  // beside it: both read the same lists and neither guards on recency, so the boot's
+  // slower answer could land after the beat's and put a deleted chat back.
+  const [bootSettled, setBootSettled] = useState(false)
   // What the shell last said about the daemon, including why it is not
   // running. Null until it answers once.
   const [daemon, setDaemon] = useState(null)
@@ -170,6 +174,17 @@ export function ConsoleProvider({ children }) {
     setCloud(null)
     setDevices([])
     setCapabilitiesByDevice({})
+    // The chat list belongs to the daemon as much as anything above it. Leaving
+    // these three to the leave path alone meant that pointing the console at another
+    // daemon kept the previous one's chats on screen until the first beat replaced
+    // them, and a chat clicked in that window opened a stream against a daemon that
+    // never had the session.
+    setSessions([])
+    setChats({})
+    setWatched([])
+    // A new daemon means a new boot: the beat must wait for it again rather than
+    // race it with the previous chain's flag still set.
+    setBootSettled(false)
     resetAnswered()
   }, [resetAnswered])
 
@@ -418,6 +433,9 @@ export function ConsoleProvider({ children }) {
             ? "The daemon didn't answer - check that it's running, or reconnect from Settings."
             : err?.message ?? String(err),
         })
+        // A boot that failed is exactly when the beat is needed: it is what turns a
+        // waiting screen back into a connected one without a restart.
+        setBootSettled(true)
         return
       }
       if (caps.status === 'fulfilled') setCapabilities(caps.value ?? null)
@@ -450,6 +468,8 @@ export function ConsoleProvider({ children }) {
       if (marketList.status === 'fulfilled') setMarketplaces(marketList.value ?? [])
       if (catalogList.status === 'fulfilled') setCatalog(catalogList.value)
       setConnection({ state: 'connected', error: null })
+      // The first paint is done; the beat owns every list from here.
+      setBootSettled(true)
     })()
     return () => {
       cancelled = true
@@ -464,8 +484,14 @@ export function ConsoleProvider({ children }) {
   // the calls and the state writes. A beat never starts before the previous
   // one settled, so a slow daemon is not asked again while its answer is
   // still out, and three silent beats still trip the banner.
+  //
+  // It waits for the boot chain to settle first. Both read the same lists, and
+  // `stillCurrent` is identity of the daemon rather than recency of the answer, so
+  // an answer the boot started first could land last and put back a chat the beat
+  // had just seen deleted. The boot's own reads are the first paint; the beat owns
+  // every list after it.
   useEffect(() => {
-    if (!api.ready) return undefined
+    if (!api.ready || !bootSettled) return undefined
     const beat = createBeatLoop({
       currentConnection: () => connectionRef.current,
       run: async () => {
@@ -540,7 +566,7 @@ export function ConsoleProvider({ children }) {
       beat.stop()
       if (beatLoopRef.current === beat) beatLoopRef.current = null
     }
-  }, [api, stillCurrent])
+  }, [api, stillCurrent, bootSettled])
 
   // Keep chat records in step with the polled session list: merge
   // identities (status/workspace) without disturbing folded transcripts.
