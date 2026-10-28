@@ -25,9 +25,17 @@ openremote --help
 Windows x64 only for now. On macOS and Linux the launcher says so and points
 at the `.dmg`, `.AppImage` and `.deb` on the release page.
 
-The app is unsigned by decision, so SmartScreen asks the first time the window
-opens: **More info**, then **Run anyway**. It carries the same identity as an
-installed copy, so both read the same chats, settings and paired phone.
+The app is unsigned. Windows may scan, and occasionally quarantine, the
+binaries on first write; if a launch fails, delete
+`%LOCALAPPDATA%\moreweb\openremote` and run `openremote` again.
+
+It carries the same identity as an installed copy (`space.moreweb.openremote`),
+so both read the same chats, settings and paired phone, and either one hands a
+launch to a window that is already open. Two consequences worth knowing:
+autostart, if you switch it on, points at the cached copy and `--update`
+replaces that copy, so check autostart after an update; and an older cached
+release can open data a newer install wrote, so `--update` rather than
+alternating between the two.
 
 AGPL-3.0-only. Harness names and marks belong to their owners; OpenRemote is
 not affiliated with them.

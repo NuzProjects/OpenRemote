@@ -21,6 +21,13 @@ https://github.com/morewebs/OpenRemote/releases/latest/download/openremote-daemo
 https://github.com/morewebs/OpenRemote/releases/latest/download/SHA256SUMS-portable-windows-x64
 ```
 
+Every published release carries both names for each bundle: the versioned
+one Tauri produces (`OpenRemote_0.3.2_x64-setup.exe`) and the version-free
+one above. A version bump never edits a download link anywhere.
+
+The version-free names start with the first tag after this landed - v0.3.2
+predates them, so its release page has only the versioned assets.
+
 ## The npm channel
 
 `npm install -g @morewebs/openremote` installs the launcher in `npm/`, a
@@ -44,8 +51,10 @@ publish job enforces: the npm channel is a second door to the app, so a
 release that could not produce them still publishes its installers and says
 so in the run.
 
-**A release with no portable pair is invisible to npm.** The launcher fails
-with the installer URL rather than downloading something half-right.
+**A release with no portable pair is invisible to npm.** Every download
+failure names the URL that answered badly and then the installer to use
+instead, and nothing is spawned: the launcher fails closed rather than
+starting something half-right.
 
 ### Publishing the launcher with a release
 
@@ -54,27 +63,24 @@ hand when the app's version moves:
 
 ```sh
 cd npm
-npm publish --access public      # asks for the account's 2FA code
+npm publish --access public
 ```
+
+It has to be a terminal you are sitting at, not CI: the account's two-factor
+requirement is satisfied by approving the request in a browser, and npm is
+retiring tokens that bypass it for direct publishing. A headless run gets
+`E403` no matter what code it offers.
 
 `npm/package.json` carries the app's `version` and must move with it: the
 repo's tests assert the two agree, so a version bump that forgets the npm
 manifest fails `npm test` rather than shipping a launcher that claims to be
-a release it is not. Nothing publishes the launcher from CI, because npm
-holds the 2FA requirement and the release token in GitHub does not.
+a release it is not.
 
 Installing from GitHub instead - `npm install -g morewebs/openremote` -
 is not supported: npm's global install of a git dependency of this repo
 produces a package directory with no launcher in it (verified on npm 10 and
 11 on Windows), while an install from a published tarball works. That is
 why the channel is the registry.
-
-Every published release carries both names for each bundle: the versioned
-one Tauri produces (`OpenRemote_0.3.2_x64-setup.exe`) and the version-free
-one above. A version bump never edits a download link anywhere.
-
-The version-free names start with the first tag after this landed - v0.3.2
-predates them, so its release page has only the versioned assets.
 
 ## An installed app does not update itself
 

@@ -9,12 +9,14 @@ import {
   assetNamesFor,
   cacheDir,
   checksumFor,
+  isEntry,
   main,
   parseArgs,
   parseSums,
   readState,
   tagFromLatestUrl,
   verifyFile,
+  writeDirChecksums,
   writeState,
 } from "./openremote.mjs";
 
@@ -110,7 +112,14 @@ function fakeSpawn() {
   const spawned = [];
   const spawnImpl = (file, args, options) => {
     spawned.push({ file, args, options });
-    return { unref() {} };
+    return {
+      unref() {},
+      // Real spawn emits "spawn" once the child is running, and "error" when
+      // it never starts. The launcher waits for one of them.
+      once(event, handler) {
+        if (event === "spawn") setTimeout(() => handler(), 0);
+      },
+    };
   };
   return { spawnImpl, spawned };
 }
@@ -291,6 +300,115 @@ test("a warm cache with an older release does not reach for the newer one", asyn
   });
   assert.equal(code, 0);
   assert.equal(spawned[0].file, join(dir, "OpenRemote.exe"));
+});
+
+async function warmCache(env, tag = "v0.4.1") {
+  const root = join(env.LOCALAPPDATA, "moreweb", "openremote");
+  const dir = join(root, tag);
+  await mkdir(dir, { recursive: true });
+  const hex = createHash("sha256").update("console-bytes").digest("hex");
+  await writeFile(join(dir, "OpenRemote.exe"), "console-bytes");
+  await writeFile(join(dir, "openremote-daemon.exe"), "console-bytes");
+  const sha256 = { "OpenRemote.exe": hex, "openremote-daemon.exe": hex };
+  await writeState(root, { tag, sha256 });
+  await writeDirChecksums(dir, sha256);
+  return dir;
+}
+
+test("the entry guard survives a symlinked or junctioned install", () => {
+  // pnpm and `npm link` both run the entry through a symlink or junction, and
+  // that path is not the module's own real path.
+  const linked = "C:\\Users\\x\\AppData\\Local\\pnpm\\global\\5\\node_modules\\@morewebs\\openremote\\bin\\openremote.mjs";
+  const real = "C:\\Users\\x\\AppData\\Local\\pnpm\\store\\v10\\files\\ab\\cd\\node_modules\\@morewebs\\openremote\\bin\\openremote.mjs";
+  assert.equal(isEntry(linked, real), true);
+  assert.equal(isEntry("C:\\x\\something-else.mjs", real), false);
+  assert.equal(isEntry("", real), false);
+});
+
+test("a spawn that fails says so instead of claiming it started", async () => {
+  const env = await sandbox();
+  await warmCache(env);
+  const said = [];
+  const warned = [];
+  const spawnImpl = () => ({
+    unref() {},
+    once(event, handler) {
+      // The asynchronous failure: no such file, or a quarantined exe.
+      if (event === "error") setTimeout(() => handler(new Error("spawn ENOENT")), 0);
+    },
+  });
+
+  const code = await main([], {
+    env, platform: "win32", arch: "x64", fetchImpl: async () => { throw new Error("no network"); },
+    spawnImpl, log: (line) => said.push(line), warn: (line) => warned.push(line),
+  });
+
+  assert.equal(code, 1);
+  assert.match(warned.join("\n"), /could not start/);
+  assert.equal(said.some((line) => /starting OpenRemote/.test(line)), false);
+});
+
+test("a lost record does not throw away a cache that still verifies", async () => {
+  const env = await sandbox();
+  const root = join(env.LOCALAPPDATA, "moreweb", "openremote");
+  const dir = join(root, "v0.4.1");
+  await mkdir(dir, { recursive: true });
+  const hex = createHash("sha256").update("console-bytes").digest("hex");
+  await writeFile(join(dir, "OpenRemote.exe"), "console-bytes");
+  await writeFile(join(dir, "openremote-daemon.exe"), "console-bytes");
+  await writeDirChecksums(dir, { "OpenRemote.exe": hex, "openremote-daemon.exe": hex });
+  // current.json deleted, both binaries intact: this is what an offline machine
+  // with a good cache looks like after a half-finished cleanup.
+  const { spawnImpl, spawned } = fakeSpawn();
+
+  const code = await main([], {
+    env, platform: "win32", arch: "x64", spawnImpl,
+    fetchImpl: async () => { throw new Error("offline"); },
+    log: () => {}, warn: () => {},
+  });
+
+  assert.equal(code, 0);
+  assert.equal(spawned[0].file, join(dir, "OpenRemote.exe"));
+  assert.equal((await readState(root)).tag, "v0.4.1");
+});
+
+test("a refused download leaves another run's partial file alone", async () => {
+  const env = await sandbox();
+  const root = join(env.LOCALAPPDATA, "moreweb", "openremote");
+  const dir = join(root, "v9.9.9");
+  await mkdir(dir, { recursive: true });
+  const foreign = join(dir, "OpenRemote.exe.4242.part");
+  await writeFile(foreign, "another process is mid-download");
+
+  const fetchImpl = async (url) => {
+    if (url.endsWith("/releases/latest")) {
+      return { ok: true, url: "https://github.com/morewebs/OpenRemote/releases/tag/v9.9.9" };
+    }
+    return { ok: false, status: 404, url };
+  };
+
+  await assert.rejects(main([], {
+    env, platform: "win32", arch: "x64", fetchImpl,
+    spawnImpl: () => ({ unref() {}, once() {} }), log: () => {}, warn: () => {},
+  }));
+  assert.equal(await readFile(foreign, "utf8"), "another process is mid-download");
+});
+
+test("--update with no network starts what is already here", async () => {
+  const env = await sandbox();
+  const dir = await warmCache(env);
+  const { spawnImpl, spawned } = fakeSpawn();
+  const warned = [];
+
+  const code = await main(["--update"], {
+    env, platform: "win32", arch: "x64", spawnImpl,
+    fetchImpl: async () => { throw new Error("offline"); },
+    log: () => {}, warn: (line) => warned.push(line),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(spawned[0].file, join(dir, "OpenRemote.exe"));
+  assert.match(warned.join("\n"), /newest release|offline/i);
 });
 
 test("a file matches only its own checksum", async () => {

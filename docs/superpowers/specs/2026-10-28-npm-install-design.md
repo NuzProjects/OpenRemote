@@ -2,6 +2,30 @@
 
 2026-10-28. Session note for the npm install channel.
 
+## Amendments as built
+
+Five things differ from this design, each for a reason found while building
+it. The code and `docs/release-channels.md` are the truth; this section
+records why they moved.
+
+1. **The channel is the npm registry, not GitHub shorthand.** npm's global
+   install of a git dependency of this repo leaves a package directory with
+   no launcher in it (npm 10 and 11 on Windows, reproduced five times, while
+   an ordinary repo installs correctly). A published tarball install works,
+   so `@morewebs/openremote` is published from `npm/` and that is the channel.
+2. **The launcher is its own package** (`npm/package.json`), not a `bin` on
+   the app's manifest. The repo root stays `private: true`.
+3. **The portable pair stays outside the six required release names.** A
+   missing pair warns in the run instead of failing it, because a release
+   must never be held back by the second door.
+4. **A checksum record lives in each release directory**
+   (`checksums.json`) as well as at the cache root, so losing `current.json`
+   does not discard a cache that still verifies.
+5. **The app's runtime dependencies stay in `devDependencies`.** They were
+   moved for the abandoned git-install path and stay because nothing reads
+   `node_modules` at run time; the published launcher is a 5kB tarball
+   either way.
+
 ## Intent
 
 A person who lives in a terminal should be able to install the desktop app

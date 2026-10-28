@@ -13,9 +13,10 @@
 
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { basename, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const REPO = "morewebs/OpenRemote";
 const RELEASES = `https://github.com/${REPO}/releases`;
@@ -28,12 +29,19 @@ const INSTALLER = `${RELEASES}/latest/download/OpenRemote-Setup-x64.exe`;
 const LOCAL_APP = "OpenRemote.exe";
 const LOCAL_DAEMON = "openremote-daemon.exe";
 
+// Two records, both written atomically. The one at the root says which release
+// to start; the one in the release's own directory says what it was installed
+// as. The second is what lets a cache survive losing the first.
+const STATE_FILE = "current.json";
+const DIR_RECORD = "checksums.json";
+
 const HELP = `openremote - the harness console for this computer
 
 usage: openremote [--update | --version | --where | --help] [-- <app args>]
 
   (no flag)   start the app, fetching this release once if it is not cached
-  --update    fetch the newest release, then start it
+  --update    fetch the newest release, then start it (starting what is
+              already here if it cannot be reached)
   --version   print the release that is cached or available
   --where     print the path of the console it would start
   --help      this text
@@ -83,19 +91,37 @@ export function checksumFor(sums, name) {
   return sums.get(name) ?? null;
 }
 
+const KNOWN_FLAGS = ["--version", "--where", "--update", "--help", "-h"];
+
 export function parseArgs(argv) {
   const args = argv ?? [];
   const separator = args.indexOf("--");
   const own = separator === -1 ? args : args.slice(0, separator);
-  const passthrough = separator === -1 ? [] : args.slice(separator + 1);
-  const flag = own.find((arg) => ["--version", "--where", "--update", "--help", "-h"].includes(arg));
+  const tail = separator === -1 ? [] : args.slice(separator + 1);
+  const flag = own.find((arg) => KNOWN_FLAGS.includes(arg));
   const mode =
     flag === "--version" ? "version"
       : flag === "--where" ? "where"
         : flag === "--update" ? "update"
           : flag === "--help" || flag === "-h" ? "help"
             : "run";
+  // Anything this launcher does not understand is the app's, not ours to
+  // swallow: a mistyped flag should reach the app, not vanish silently.
+  const passthrough = [...own.filter((arg) => !KNOWN_FLAGS.includes(arg)), ...tail];
   return { mode, passthrough };
+}
+
+// pnpm, `npm link` and a Windows junction all reach this file through a path
+// that is not its own real path, so the name is accepted as well as the real
+// path. Without this the launcher exits 0 having done nothing at all.
+export function isEntry(argv1, selfPath) {
+  if (!argv1) return false;
+  if (basename(argv1).toLowerCase() === basename(selfPath).toLowerCase()) return true;
+  try {
+    return realpathSync(argv1) === realpathSync(selfPath);
+  } catch {
+    return false;
+  }
 }
 
 export async function verifyFile(path, expectedHex) {
@@ -108,22 +134,41 @@ export async function verifyFile(path, expectedHex) {
   }
 }
 
-export async function readState(root) {
+async function readJson(path) {
   try {
-    const state = JSON.parse(await readFile(join(root, "current.json"), "utf8"));
-    if (typeof state.tag !== "string" || typeof state.sha256 !== "object" || !state.sha256) return null;
-    return { tag: state.tag, sha256: state.sha256 };
+    return JSON.parse(await readFile(path, "utf8"));
   } catch {
     return null;
   }
 }
 
+// Rename, not truncate: two runs must never leave a half-written record that
+// the next run reads as no record at all.
+async function writeJsonAtomic(path, value) {
+  const staging = `${path}.${process.pid}.tmp`;
+  await writeFile(staging, `${JSON.stringify(value, null, 2)}\n`);
+  await rename(staging, path);
+}
+
+export async function readState(root) {
+  const state = await readJson(join(root, STATE_FILE));
+  if (!state || typeof state.tag !== "string" || typeof state.sha256 !== "object" || !state.sha256) return null;
+  return { tag: state.tag, sha256: state.sha256 };
+}
+
 export async function writeState(root, state) {
   await mkdir(root, { recursive: true });
-  await writeFile(
-    join(root, "current.json"),
-    `${JSON.stringify({ tag: state.tag, sha256: state.sha256 }, null, 2)}\n`,
-  );
+  await writeJsonAtomic(join(root, STATE_FILE), { tag: state.tag, sha256: state.sha256 });
+}
+
+export async function writeDirChecksums(dir, sha256) {
+  await mkdir(dir, { recursive: true });
+  await writeJsonAtomic(join(dir, DIR_RECORD), { sha256 });
+}
+
+async function readDirChecksums(dir) {
+  const record = await readJson(join(dir, DIR_RECORD));
+  return record && typeof record.sha256 === "object" && record.sha256 ? record.sha256 : null;
 }
 
 async function exists(path) {
@@ -132,6 +177,14 @@ async function exists(path) {
     return true;
   } catch {
     return false;
+  }
+}
+
+async function modified(path) {
+  try {
+    return (await stat(path)).mtimeMs;
+  } catch {
+    return 0;
   }
 }
 
@@ -153,27 +206,28 @@ export async function install({ tag, dir, names, fetchImpl = fetch, log = () => 
   await mkdir(dir, { recursive: true });
   const sums = parseSums(await fetchText(`${RELEASES}/download/${tag}/${names.sums}`, fetchImpl));
   const sha256 = {};
-  const staged = [];
+  const mine = [];
   try {
     for (const [asset, local] of [[names.app, LOCAL_APP], [names.daemon, LOCAL_DAEMON]]) {
       const expected = checksumFor(sums, asset);
       if (!expected) throw new Error(`${names.sums} does not list ${asset}`);
-      const part = join(dir, `${local}.part`);
+      // A pid-unique staging name: two `openremote` runs at once must not
+      // delete or rename each other's half-written file.
+      const part = join(dir, `${local}.${process.pid}.part`);
+      mine.push(part);
       log(`openremote: fetching ${asset}`);
       await fetchTo(`${RELEASES}/download/${tag}/${asset}`, part, fetchImpl);
       if (!(await verifyFile(part, expected))) {
         throw new Error(`${asset} does not match its checksum, so it was not used (expected sha256 ${expected})`);
       }
-      const final = join(dir, local);
-      await rename(part, final);
-      staged.push(final);
+      await rename(part, join(dir, local));
       sha256[local] = expected;
     }
+    await writeDirChecksums(dir, sha256);
   } catch (error) {
-    // A refused download must not look installed to the next run.
-    await Promise.all(staged.map((path) => rm(path, { force: true })));
-    await rm(join(dir, `${LOCAL_APP}.part`), { force: true });
-    await rm(join(dir, `${LOCAL_DAEMON}.part`), { force: true });
+    // Only this run's own staging files. The final names belong to whichever
+    // run finished them, and deleting those is how one run breaks another.
+    await Promise.all(mine.map((path) => rm(path, { force: true })));
     throw error;
   }
   return { app: join(dir, LOCAL_APP), daemon: join(dir, LOCAL_DAEMON), sha256 };
@@ -207,7 +261,14 @@ async function resolveLatest(fetchImpl) {
 
 async function installRelease({ tag, env, names, fetchImpl, log }) {
   log(`openremote: OpenRemote ${tag} is not on this machine yet, fetching it once (about 28MB)`);
-  const installed = await install({ tag, dir: cacheDir(env, tag), names, fetchImpl, log });
+  let installed;
+  try {
+    installed = await install({ tag, dir: cacheDir(env, tag), names, fetchImpl, log });
+  } catch (error) {
+    // Every failure here ends in the same place for the user, so every failure
+    // says where that place is.
+    throw new Error(`${error.message}\n  Install from ${INSTALLER} instead, or try again.`);
+  }
   await writeState(cacheRoot(env), { tag, sha256: installed.sha256 });
   await prune(cacheRoot(env), tag);
   return installed;
@@ -223,15 +284,38 @@ async function soundCopy(dir, state) {
   return app && daemon;
 }
 
-async function ensureInstalled({ tag, env, names, fetchImpl, log, warn }) {
-  const root = cacheRoot(env);
-  const state = await readState(root);
-  const dir = cacheDir(env, tag);
+// The root record is the one thing in the cache not addressed by tag and
+// content, so losing it must not throw away a good install: any release
+// directory that still carries its own record and matches it is adopted back.
+async function adoptCache(root) {
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  let best = null;
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const dir = join(root, entry.name);
+    const sha256 = await readDirChecksums(dir);
+    if (!sha256) continue;
+    const candidate = { tag: entry.name, sha256 };
+    if (!(await soundCopy(dir, candidate))) continue;
+    const stamp = await modified(join(dir, DIR_RECORD));
+    if (!best || stamp > best.stamp) best = { ...candidate, stamp };
+  }
+  if (!best) return null;
+  const state = { tag: best.tag, sha256: best.sha256 };
+  await writeState(root, state);
+  return state;
+}
 
+async function ensureInstalled({ tag, state, env, names, fetchImpl, log, warn }) {
+  const dir = cacheDir(env, tag);
   if (state && state.tag === tag && (await soundCopy(dir, state))) {
     return { app: join(dir, LOCAL_APP), daemon: join(dir, LOCAL_DAEMON) };
   }
-
   // A cache that is present but damaged is replaced rather than spawned: a
   // truncated exe is a crash on a window the user cannot see the reason for.
   if (state && state.tag === tag) {
@@ -239,6 +323,31 @@ async function ensureInstalled({ tag, env, names, fetchImpl, log, warn }) {
     await rm(dir, { recursive: true, force: true });
   }
   return installRelease({ tag, env, names, fetchImpl, log });
+}
+
+// A spawn that fails asynchronously (no such file, or a file the system
+// quarantined) is still a failed launch. Reporting "starting" over it would be
+// a lie the user cannot see through.
+function waitForSpawn(child) {
+  return new Promise((resolve) => {
+    if (typeof child.once !== "function") {
+      child.unref();
+      resolve(null);
+      return;
+    }
+    let settled = false;
+    child.once("spawn", () => {
+      if (settled) return;
+      settled = true;
+      child.unref();
+      resolve(null);
+    });
+    child.once("error", (error) => {
+      if (settled) return;
+      settled = true;
+      resolve(error);
+    });
+  });
 }
 
 export async function main(argv, options = {}) {
@@ -265,7 +374,8 @@ export async function main(argv, options = {}) {
   }
 
   const root = cacheRoot(env);
-  const state = await readState(root);
+  let state = await readState(root);
+  if (!state) state = await adoptCache(root);
 
   // Reporting the release must not fetch it, so these two answer from the
   // cache alone when there is one.
@@ -281,32 +391,49 @@ export async function main(argv, options = {}) {
   }
 
   let tag = state?.tag ?? null;
-  if (mode === "update") {
-    const latest = await resolveLatest(fetchImpl);
-    if (latest !== tag) {
-      tag = latest;
-      await installRelease({ tag, env, names, fetchImpl, log });
-    }
-  }
-  if (!tag) tag = await resolveLatest(fetchImpl);
+  let installed = null;
 
-  const { app } = await ensureInstalled({ tag, env, names, fetchImpl, log, warn });
+  if (mode === "update") {
+    let latest = null;
+    try {
+      latest = await resolveLatest(fetchImpl);
+    } catch (error) {
+      // Offline with a good cache: starting what is here beats starting
+      // nothing, and the update simply did not happen.
+      warn(`openremote: could not reach the newest release (${error.message}); starting ${tag ?? "nothing, there is no cache"}`);
+    }
+    if (latest && latest !== tag) {
+      tag = latest;
+      installed = await installRelease({ tag, env, names, fetchImpl, log });
+    }
+  } else if (!tag) {
+    tag = await resolveLatest(fetchImpl);
+  }
+
+  if (!tag) throw new Error("no release is cached and none could be reached");
+
+  if (!installed) installed = await ensureInstalled({ tag, state, env, names, fetchImpl, log, warn });
 
   // Detached so the window outlives the terminal, which is what `code .` and
   // every other CLI launch feels like. The console starts its own daemon from
   // beside itself, so there is no sidecar to start here.
-  const child = spawnImpl(app, passthrough, {
+  const child = spawnImpl(installed.app, passthrough, {
     cwd: cacheDir(env, tag),
     detached: true,
     stdio: "ignore",
     windowsHide: false,
   });
-  child.unref();
+
+  const failure = await waitForSpawn(child);
+  if (failure) {
+    warn(`openremote: could not start ${installed.app}: ${failure.message}`);
+    return 1;
+  }
   log(`openremote: starting OpenRemote ${tag}`);
   return 0;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isEntry(process.argv[1], fileURLToPath(import.meta.url))) {
   main(process.argv.slice(2))
     .then((code) => process.exit(code))
     .catch((error) => {
