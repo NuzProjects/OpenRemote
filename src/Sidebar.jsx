@@ -598,7 +598,17 @@ export default function Sidebar({
       {
         label: 'Copy title',
         icon: <Copy size={14} />,
-        onSelect: () => navigator.clipboard?.writeText(row.title).catch(() => {}),
+        // The same answer its neighbour gives: a refused clipboard used to be
+        // swallowed here, so this row did nothing and said nothing while the row
+        // above it in the same menu explained exactly this case.
+        onSelect: () => {
+          const write = navigator.clipboard?.writeText?.(row.title)
+          if (!write) {
+            setCopyNote('Could not copy: this window has no clipboard.')
+            return
+          }
+          write.then(() => setCopyNote('Copied the title.')).catch((err) => setCopyNote(errorCopy(err)))
+        },
       },
     ]
   }

@@ -139,7 +139,11 @@ function Pane({
     // transcript stopped when the stream dropped says so here.
     reconnecting: chatId ? Boolean(reconnecting?.[chatId]) : false,
   })
-  const headTitle = primary ? head.title : `${head.title} - drag onto another pane's edge to move it`
+  // A pane that cannot be dragged must not say it can: a New chat pane has nothing
+  // to carry, so `draggable` below is false for it while the tooltip used to append
+  // the instruction anyway. One predicate, read twice.
+  const canDrag = !primary && node.view !== 'new'
+  const headTitle = primary || !canDrag ? head.title : `${head.title} - drag onto another pane's edge to move it`
   const hintRight = useHint('split-right')
   const hintDown = useHint('split-down')
   const kb = useKeyboard()
@@ -257,7 +261,7 @@ function Pane({
           <span
             className={`split-label${head.chat ? ' split-label--chat' : ''}`}
             title={headTitle}
-            draggable={!primary && node.view !== 'new'}
+            draggable={canDrag}
             onDragStart={(e) => {
               // The same pair the sidebar writes: the private type the panes
               // test, and the prefixed text/plain an older reader understands.
