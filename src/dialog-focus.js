@@ -144,9 +144,16 @@ export function useDialog(panelRef, onClose, { esc = true, open = true } = {}) {
   // that is gone by the time the dialog closes, so the restore would leave
   // the user on the body.
   const opener = useRef(null)
-  if (open && opener.current == null) {
+  // Captured on the moment it opens, not on the first mount and not on every render.
+  // A dialog that stays mounted (the review over a chat) must capture its own opener
+  // each time it opens; one that stays open must not capture again, because by then the
+  // active element is its own field. Clearing on close alone re-captured on the next
+  // render and handed the keyboard to the dialog's own control when it went.
+  const wasOpen = useRef(false)
+  if (open && !wasOpen.current) {
     opener.current = captureOpener(typeof document === 'undefined' ? null : document.activeElement)
   }
+  wasOpen.current = open
 
   useEffect(() => {
     if (!open) return undefined
@@ -165,14 +172,17 @@ export function useDialog(panelRef, onClose, { esc = true, open = true } = {}) {
       // Where the person was before the dialog. The body is not a place to
       // leave a keyboard user, and a list that re-rendered has not moved them.
       const landed = focusOpener(opener.current)
-      // Cleared so the next open captures its own: a dialog that stays mounted for the
-      // session (the review surface) would otherwise hand the keyboard back to the
-      // control that opened it the first time, not to the one just pressed.
-      opener.current = null
-      // And when that opener is gone (the command palette closes the row it ran), the
-      // keyboard goes somewhere defined instead of to the body: the nearest stop in the
-      // region the dialog was over, which is where a person looks next.
-      if (!landed) focusSomewhere(panel)
+      // Not cleared here: React runs an effect twice in development (mount, cleanup,
+      // mount), and clearing on the first cleanup left the second pass with nothing to
+      // restore. The next open captures afresh through `wasOpen` above.
+      // Only when nobody else took the keyboard, which is what the palette does with
+      // its own restore: this fills a gap, it does not overrule a nearer decision. Left
+      // on the body (or nowhere), the keyboard goes to the nearest stop in the region
+      // the dialog was over, which is where a person looks next.
+      const page = typeof document === 'undefined' ? null : document
+      const active = page?.activeElement ?? null
+      const nowhere = !landed && (!active || active === page.body)
+      if (nowhere) focusSomewhere(panel, page)
     }
   }, [open, panelRef])
 
