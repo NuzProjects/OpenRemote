@@ -22,6 +22,7 @@ const {
   isUnread,
   listHasUnread,
   loadSeen,
+  markSeen,
   normalizeSeen,
   recordSeen,
   seedSeen,
@@ -156,6 +157,49 @@ test('a list says it holds something unread, without a count', () => {
   assert.equal(listHasUnread([row({ id: 'b' })], null), false)
 })
 
+test('a chat can be marked by hand, and the mark goes both ways', () => {
+  const at = 2000
+  // Marked read: the record is the activity that was on screen, so the row is
+  // not drawn unread any more.
+  const read = markSeen({ 'chat-1': 1000 }, 'chat-1', at, 'read')
+  assert.deepEqual(read, { 'chat-1': at })
+  assert.equal(isUnread(read, row({ id: 'chat-1', updatedAt: at })), false)
+  // Marked unread: the record sits under the activity, so the row reads as
+  // moved even though nothing arrived.
+  const unread = markSeen(read, 'chat-1', at, 'unread')
+  assert.deepEqual(unread, { 'chat-1': at - 1 })
+  assert.equal(isUnread(unread, row({ id: 'chat-1', updatedAt: at })), true)
+  // And back again: the manual mark is not one-way.
+  const again = markSeen(unread, 'chat-1', at, 'read')
+  assert.deepEqual(again, { 'chat-1': at })
+  assert.equal(isUnread(again, row({ id: 'chat-1', updatedAt: at })), false)
+})
+
+test('a manual mark leaves every other chat alone, and survives unknown input', () => {
+  const seen = { 'chat-1': 1000, 'chat-2': 500, 'chat-3': 900 }
+  assert.deepEqual(markSeen(seen, 'chat-1', 2000, 'read'), { 'chat-1': 2000, 'chat-3': 900, 'chat-2': 500 })
+  // already under the activity: it reads unread, and a second mark is not a
+  // change, so the caller keeps the same map and skips its write.
+  assert.equal(markSeen(seen, 'chat-1', 2000, 'unread'), seen)
+  assert.deepEqual(markSeen({ 'chat-1': 2000 }, 'chat-1', 2000, 'unread'), { 'chat-1': 1999 })
+  // An unknown chat gets a record: the person asked for the mark, and a chat
+  // with no record would otherwise be silently not marked.
+  assert.deepEqual(markSeen(seen, 'chat-new', 2000, 'unread'), {
+    'chat-new': 1999,
+    'chat-1': 1000,
+    'chat-3': 900,
+    'chat-2': 500,
+  })
+  // A null map, a missing id, a stamp that is not one, and a direction that is
+  // neither: the map comes back as it was, never a throw.
+  assert.deepEqual(markSeen(null, 'chat-1', 2000, 'read'), { 'chat-1': 2000 })
+  assert.deepEqual(markSeen(null, 'chat-1', 2000, 'unread'), { 'chat-1': 1999 })
+  assert.deepEqual(markSeen(seen, '', 2000, 'read'), seen)
+  assert.deepEqual(markSeen(seen, 'chat-1', 0, 'unread'), seen)
+  assert.deepEqual(markSeen(seen, 'chat-1', Number.NaN, 'unread'), seen)
+  assert.deepEqual(markSeen(seen, 'chat-1', 2000, 'sideways'), seen)
+})
+
 // ---- the sidebar wiring ----
 
 const sidebar = readFileSync(new URL('./Sidebar.jsx', import.meta.url), 'utf8')
@@ -171,6 +215,25 @@ test('the sidebar reads and writes the records through the module', () => {
 test('looking at a chat marks it read only while the window is being looked at', () => {
   assert.match(sidebar, /if \(!watched \|\| !active\) return/)
   assert.match(sidebar, /const unread = useMemo\(\(\) => unreadIds\(seen, rows\), \[seen, rows\]\)/)
+})
+
+test('a chat own menu marks it read or unread, by the state it is drawn in', () => {
+  // The rule the menu calls is the module's, and the label is the state's: a
+  // chat with a quiet mark offers to clear it, a read one offers to bring it
+  // back. The item sits beside Open, because it is a look-level action.
+  assert.match(sidebar, /label: unread\.has\(row\.id\) \? 'Mark as read' : 'Mark as unread'/)
+  assert.match(
+    sidebar,
+    /remember\(markSeen\(seenRef\.current, row\.id, row\.updatedAt, unread\.has\(row\.id\) \? 'read' : 'unread'\)\)/,
+  )
+  assert.ok(
+    sidebar.indexOf("label: 'Open'") < sidebar.indexOf("label: unread.has(row.id) ? 'Mark as read'"),
+    'the mark sits after Open',
+  )
+  assert.ok(
+    sidebar.indexOf("label: unread.has(row.id) ? 'Mark as read'") < sidebar.indexOf("label: 'Rename'"),
+    'and before the other row actions',
+  )
 })
 
 test('the mark is on the row, and the list heads carry their own', () => {

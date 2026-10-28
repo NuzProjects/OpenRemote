@@ -8,6 +8,8 @@ import {
   CaretDown,
   ChartBar,
   ChatCircle,
+  CheckCircle,
+  Circle,
   ClipboardText,
   Cloud,
   Copy,
@@ -33,7 +35,7 @@ import { deviceName, isPhone, sessionsForMode } from './cloud.js'
 import { isMobile } from './platform.js'
 import { CHAT_DRAG_TYPE, chatDragPayload } from './split.js'
 import { armRow, clearRow, rowIsArmed } from './row-confirm.js'
-import { listHasUnread, loadSeen, recordSeen, seedSeen, storeSeen, unreadIds } from './unread.js'
+import { listHasUnread, loadSeen, markSeen, recordSeen, seedSeen, storeSeen, unreadIds } from './unread.js'
 import { lineFor, missingLines, pruneLines, questionKey, questionLine, rememberLine, wantedKeys } from './question-line.js'
 import { HarnessMark } from './brand-marks.jsx'
 import ContextMenu from './ContextMenu.jsx'
@@ -533,6 +535,18 @@ export default function Sidebar({
     const canSplit = onSplit && !isMobile
     return [
       { label: 'Open', icon: <ChatCircle size={14} />, onSelect: () => onSelect(row.id) },
+      // Marking by hand, in the direction the row is drawn in: a chat with a
+      // quiet mark offers to clear it, a read one offers to bring the mark
+      // back (the person saw it on another device, or wants a reminder to
+      // return). It sits beside Open because it is a look-level action on the
+      // row, above the edit and split rows; the write goes through the same
+      // remember path every other seen change uses.
+      {
+        label: unread.has(row.id) ? 'Mark as read' : 'Mark as unread',
+        icon: unread.has(row.id) ? <CheckCircle size={14} /> : <Circle size={14} />,
+        onSelect: () =>
+          remember(markSeen(seenRef.current, row.id, row.updatedAt, unread.has(row.id) ? 'read' : 'unread')),
+      },
       // Renaming is the first thing a new user needs and the last thing they
       // find: `/rename` exists, and the row's name is what the list's search
       // matches on. The dialog belongs to the shell (it is the same one the

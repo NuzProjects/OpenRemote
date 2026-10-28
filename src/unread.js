@@ -115,6 +115,37 @@ export function isUnread(seen, row) {
   return stamp > last
 }
 
+/**
+ * The seen map after a person marks one chat by hand: `direction` is 'read' or
+ * 'unread'.
+ *
+ * Reading is the same act as looking at the chat, so it goes through
+ * `recordSeen` and keeps its rule that a stamp never goes backwards (a stale
+ * window cannot un-read what a newer look already read). Marking unread is the
+ * one place where the record moves under the activity on purpose, and the
+ * smallest honest value is one millisecond before it: the map means "the last
+ * activity a window showed", and that value says this console has seen nothing
+ * of the latest change. A chat with no activity to sit behind (a missing stamp,
+ * a zero) is left alone, because there is nothing for the mark to say.
+ *
+ * One function with a direction rather than two named ones: the two answers
+ * share their inputs and their output, and the caller chooses by the state the
+ * row is already drawn in. Keeping them together also keeps "never goes
+ * backwards" next to the single deliberate exception to it, which is the pair a
+ * future reader has to hold at once.
+ */
+export function markSeen(seen, id, stamp, direction) {
+  if (direction === 'read') return recordSeen(seen, id, stamp)
+  const current = seen ?? {}
+  if (!id) return current
+  if (typeof stamp !== 'number' || !Number.isFinite(stamp) || stamp <= 1) return current
+  const last = current[id]
+  // Already under the activity: the row is unread, and a second mark is not a
+  // change (the caller keeps the same map and skips its write).
+  if (typeof last === 'number' && last < stamp) return current
+  return normalizeSeen({ ...current, [id]: stamp - 1 })
+}
+
 /** The ids that should carry the mark, as a Set for the render. */
 export function unreadIds(seen, rows) {
   const ids = new Set()
