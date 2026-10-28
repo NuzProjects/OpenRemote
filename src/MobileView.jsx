@@ -72,11 +72,15 @@ function CheckingPhones() {
 
 export default function MobileView({ onOpenChat }) {
   const privacy = usePrivacyMode()
-  const { devices, devicesAnswered, thisDevice, cloud } = useConsole()
+  const { devices, devicesAnswered, thisDevice, cloud, connection } = useConsole()
   const [openId, setOpenId] = useState(null)
   const inCloud = signedIn(cloud)
   const phones = (devices ?? []).filter(isPhone)
   const open = phones.find((d) => d.id === openId) ?? null
+  // A poll that failed leaves the list unanswered for as long as the failure lasts, so
+  // "Checking your Cloud…" was the only answer a phone ever got: a slow read and a broken
+  // one looked the same. The console's own connection words are shown instead.
+  const stalled = !devicesAnswered && connection?.state === 'error'
 
   return (
     <div className="devices">
@@ -100,7 +104,21 @@ export default function MobileView({ onOpenChat }) {
           <CloudStateRow one="phone" />
         </div>
       ) : !devicesAnswered ? (
-        <CheckingPhones />
+        stalled ? (
+          <div className="pn-list pn-list--tight">
+            <div className="pn-row">
+              <div>
+                <div className="pn-name">Your Cloud did not answer.</div>
+                <div className="pn-detail">
+                  {connection?.error ?? 'The console could not read the account.'} Your phones are
+                  not lost; this screen just cannot list them right now.
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <CheckingPhones />
+        )
       ) : phones.length === 0 ? (
         <NoPhonesYet />
       ) : (

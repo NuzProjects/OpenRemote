@@ -57,14 +57,22 @@ test('Machines does not count zero devices, or hide its own row, before an answe
 })
 
 test('Mobile asks the empty question only after an answer', () => {
-  assert.match(mobile, /const \{ devices, devicesAnswered, thisDevice, cloud \} = useConsole\(\)/)
+  assert.match(mobile, /const \{ devices, devicesAnswered, thisDevice, cloud, connection \} = useConsole\(\)/)
   assert.match(mobile, /devicesAnswered\s*\n\s*\? `\$\{phones\.length\}/)
   // The checking row comes before the empty row and is not the empty row.
   const checking = mobile.indexOf('<CheckingPhones />')
   const empty = mobile.indexOf('<NoPhonesYet />')
   assert.ok(checking > 0 && empty > checking, 'the reading state renders before the empty claim')
   assert.match(mobile, /function CheckingPhones\(\)/)
-  assert.match(mobile, /!devicesAnswered \?\s*\(\s*<CheckingPhones \/>/)
+  assert.match(mobile, /!devicesAnswered \?/)
+  assert.match(mobile, /<CheckingPhones \/>/)
+  // A read that failed is not a read still coming: the branch that would say "checking"
+  // for ever now asks the console's connection state first.
+  assert.match(mobile, /const stalled = !devicesAnswered && connection\?\.state === 'error'/)
+  assert.ok(
+    mobile.indexOf('stalled ?') > 0 && mobile.indexOf('stalled ?') < checking,
+    'the failure row is decided before the reading row',
+  )
   assert.doesNotMatch(mobile, /'No phones in your Cloud yet\.'\s*\n\s*\)\}/, 'the empty row is not the fallback')
 })
 
