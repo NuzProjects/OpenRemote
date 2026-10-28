@@ -239,8 +239,12 @@ export default function AutomationsView({ onOpenChat }) {
   }
 
   const undoCreate = async (ruleId) => {
-    await run(() => removeAutomation(ruleId), ruleId)
-    setThread((t) => [...t, { role: 'note', text: 'Rule removed.' }])
+    // The note is the answer to "did it go", so it is written only when the
+    // removal landed. `run` paints the daemon's own sentence on a failure and
+    // returns null, so claiming "Rule removed." there left two lines disagreeing
+    // about one press.
+    const removed = await run(() => removeAutomation(ruleId), ruleId)
+    if (removed !== null) setThread((t) => [...t, { role: 'note', text: 'Rule removed.' }])
   }
 
   const editFromDraft = (draft, cardId) => {
@@ -356,6 +360,14 @@ export default function AutomationsView({ onOpenChat }) {
         )}
         {shown.map((rule) => {
           const missing = !availableIds.has(rule.harness)
+          // This console's list of installed harnesses says nothing about another
+          // computer of the account, so "not installed" is only ever claimed for a
+          // rule that runs here: one that names no machine, or this machine's own
+          // row. Saying it about a rule on another machine argued against a run
+          // that would have worked, and named a machine it could not check.
+          const machineHere =
+            ruleMachineState(rule, machines).state === 'here' ||
+            (machines ?? []).some((m) => m.machine?.this_machine && m.machine.id === rule.machine)
           // The same rule the palette's Rules group uses, asked once here: a
           // run that cannot work is not offered by either surface, and the
           // button's title says which way the rule is stuck.
@@ -450,11 +462,8 @@ export default function AutomationsView({ onOpenChat }) {
                   />
                 </div>
               </div>
-              {rule.enabled && missing && (
-                <p className="am-note">
-                  {harnessName(rule.harness)} is not installed
-                  {oneMachine ? '.' : <> on <span className="pv">{machineName(rule.machine)}</span>.</>}
-                </p>
+              {rule.enabled && missing && machineHere && (
+                <p className="am-note">{harnessName(rule.harness)} is not installed.</p>
               )}
             </div>
           )
