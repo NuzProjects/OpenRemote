@@ -960,16 +960,25 @@ const removeSeededRule = async (name) => {
 }
 const seed = await seedRule()
 const rulesQuery = seed.name ? seed.name.trim().slice(0, 3).toLowerCase() || 'rul' : 'rul'
-const onAutomations = seed.name ? await rulesIn('Automations', '#automations', rulesQuery) : null
-const onPlugins = seed.name ? await rulesIn('Plugins', '#plugins', rulesQuery) : null
-// The same view searched by the rule's whole name, because a group that appears
-// for the full name and not for three letters points at the ranking rather than
-// at the gating, and the two need different fixes.
-const byFullName = seed.name ? await rulesIn('Automations', '#automations', seed.name) : null
-
-// The rule goes before any verdict, so every path leaves the profile as it was
-// found: a gate that skips must not also change what it was asked to observe.
-const cleaned = seed.created ? await removeSeededRule(seed.name) : { removed: true, note: '' }
+// The reads, and then the removal, in a `try`: every one of them drives the real
+// window and any of them can throw (a closed socket, an element that vanished
+// mid-flight). Without the `finally` a throw here would leave the rule this run
+// made in the profile it was only supposed to observe, and the next run would
+// start against a profile this one changed.
+let onAutomations = null
+let onPlugins = null
+let byFullName = null
+let cleaned = { removed: !seed.created, note: '' }
+try {
+  onAutomations = seed.name ? await rulesIn('Automations', '#automations', rulesQuery) : null
+  onPlugins = seed.name ? await rulesIn('Plugins', '#plugins', rulesQuery) : null
+  // The same view searched by the rule's whole name, because a group that appears
+  // for the full name and not for three letters points at the ranking rather than
+  // at the gating, and the two need different fixes.
+  byFullName = seed.name ? await rulesIn('Automations', '#automations', seed.name) : null
+} finally {
+  if (seed.created) cleaned = await removeSeededRule(seed.name)
+}
 
 if (!seed.name) {
   skip('the rule the form makes', seed.why ?? 'no rule to look for and none could be made')
