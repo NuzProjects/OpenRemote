@@ -7,6 +7,9 @@
 // New chat tile, no crash panel, the command palette opening with its search
 // field focused and its rows listed, Escape closing it and handing focus
 // back, and a modal opened from the UI keeping its first field and its focus.
+// Past the view walk it drives the six interactions below, ending with the two
+// search fields a person types into (the sidebar's chats and Settings'), which
+// read only and write nothing.
 //
 // Usage: node scripts/smoke.mjs
 // Needs the dev app running in another terminal: npm run tauri:dev
@@ -44,14 +47,30 @@
 //   review. A profile that already holds a plugin uses the first one and
 //   removes nothing. The temp folder is deleted on every path, and a run that
 //   could not finish still tries both cleanups and says what it left behind.
+// - the sidebar's search: proves a word taken from a title the list is showing
+//   narrows the list to the rows that carry it, and that Escape gives the whole
+//   list back with the field empty; not that a query finds a chat by anything
+//   but its title (the sidebar's filter is title-only), and not that a matching
+//   row opens. The Needs you group ignores the query on purpose, so those rows
+//   are read as an exception rather than a stray.
+// - the settings search: proves a word a person uses for a setting reaches a
+//   row whose label does not contain it (the model-endpoint block answers
+//   "gateway" from its terms, src/settings-search.js), and that Escape clears
+//   the field and brings the sections back; not that pressing a result lands on
+//   its row. The search reads the index the app ships, so a missing term fails
+//   this line rather than skipping it.
+//
+// The two searches come last because they are the only interaction checks that
+// change nothing: a run that leaves a field or a window open would falsify the
+// next check rather than this one.
 //
 // WHAT IT DOES NOT COVER: no chat is created and no message is typed into one,
 // so the stream and the transcript are never read. The two writes are the rule
 // the palette check seeds and deletes, and the plugin this check installs and
-// removes; no settings are changed and no layout is saved or applied. A green
-// run says every
-// view opens, draws, keeps the boundary panel away and that the four
-// interactions above behave; it does not say the app works.
+// removes; the two searches write nothing. No settings are changed and no
+// layout is saved or applied. A green run says every view opens, draws, keeps
+// the boundary panel away and that the six interactions above behave; it does
+// not say the app works.
 
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -505,8 +524,10 @@ for (const view of POPUPS) {
 
 // ---- the interactions ------------------------------------------------------
 //
-// Everything above reads; these four press. Each one asserts what changes on
-// screen, and the header says what it proves and what it leaves alone.
+// Everything above reads; these six press or type. The first four change
+// something and undo it, and the last two (the sidebar's search and Settings')
+// change nothing at all. Each one asserts what changes on screen, and the
+// header says what it proves and what it leaves alone.
 //
 // (a) A chat row's menu: right-click opens it, Escape closes it, and the focus
 // comes back to the row. Proves the menu's own open, close and focus rules on
@@ -1254,6 +1275,200 @@ if (!pluginState.name) {
       pluginArm?.after === pluginArm?.before &&
       pluginState.removed,
     `subject "${pluginState.name}" (${pluginState.created ? 'installed from a temp folder by this run' : 'already in the profile, so nothing was created'}); armed on the first press: ${pluginArm?.armsUp}; still armed after Escape: ${pluginArm?.armedAfterEscape}; after the fallback blur: ${pluginArm?.armedAfterBlur}; still listed: ${pluginArm?.stillListed}; Remove buttons ${pluginArm?.before} -> ${pluginArm?.after}; removed again: ${pluginState.removed}${pluginState.removalNote ? `; ${pluginState.removalNote}` : ''}${pluginState.why ? `; ${pluginState.why}` : ''}`,
+  )
+}
+
+// (e) The sidebar's search reads, and only reads: a word taken from a title the
+// list is already showing narrows the list to the rows that carry it, and Escape
+// gives the whole list back with the field empty. Proves the field is wired to
+// the list's filter and that Escape clears it; not that a query finds a chat by
+// anything other than its title, because the sidebar's filter is title-only
+// (src/Sidebar.jsx:158-163), and not that a matching row opens.
+//
+// The Needs you group ignores the query on purpose (a starving chat is not
+// hidden by a word typed for something else), so those rows are excluded from
+// the "every row still shown matches" assertion rather than excused afterwards.
+const sidebarSearch = { why: null, run: null }
+try {
+  await key({ key: 'Escape', code: 'Escape', vk: 27 })
+  await sleep(150)
+  const sidebarField = await evaluate(`(() => {
+    const el = document.querySelector('label.side-tile.search input');
+    if (!el) return null;
+    const b = el.getBoundingClientRect();
+    return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+  })()`)
+  // Every row the list is drawing, with the title a person reads and whether it
+  // sits in the group the search deliberately leaves alone.
+  const sidebarRows = () =>
+    evaluate(`[...document.querySelectorAll('.chat-row[data-chat-row]')].map((r) => ({
+      id: r.getAttribute('data-chat-row'),
+      title: ((r.querySelector('.chat-title')?.textContent) || '').trim(),
+      waiting: Boolean(r.closest('.sb-needs')),
+    }))`)
+  if (!sidebarField) {
+    sidebarSearch.why = 'the sidebar renders no search field (label.side-tile.search input, src/Sidebar.jsx:743)'
+  } else {
+    const before = await sidebarRows()
+    // The word comes from a title the list is showing, so the check reads the
+    // same on a profile with one chat and on one with fifty: the longest word
+    // of four letters or more is a word a person can type into the field.
+    const words = before
+      .filter((r) => !r.waiting)
+      .flatMap((r) => r.title.split(/[^A-Za-z0-9]+/))
+      .filter((w) => w.length >= 4)
+      .sort((a, b) => b.length - a.length)
+    const word = words[0] ?? null
+    const subject = word ? before.find((r) => !r.waiting && r.title.toLowerCase().includes(word.toLowerCase())) : null
+    if (!before.length) {
+      sidebarSearch.why = 'the profile shows no chats, so a search has nothing to narrow'
+    } else if (!word || !subject) {
+      sidebarSearch.why = `no shown chat outside Needs you has a word of four letters in its title (titles: ${before.map((r) => `"${r.title}"`).join(', ')})`
+    } else {
+      // Focus it the way a person does, then insert the word whole: per-character
+      // keys do not reach this shell's React fields (see insertInto).
+      await click(sidebarField.x, sidebarField.y)
+      const typed = await insertInto('label.side-tile.search input', word)
+      await sleep(250)
+      const after = await sidebarRows()
+      const low = word.toLowerCase()
+      const strays = after.filter((r) => !r.waiting && !r.title.toLowerCase().includes(low))
+      const stillShown = after.some((r) => r.id === subject.id)
+      // Escape in the field clears it (src/Sidebar.jsx:736-742), then a second
+      // Escape leaves the field so nothing is left focused by this check.
+      await key({ key: 'Escape', code: 'Escape', vk: 27 })
+      await sleep(250)
+      const back = await sidebarRows()
+      const value = await evaluate(`document.querySelector('label.side-tile.search input')?.value ?? null`)
+      const restored = back.length === before.length && back.every((r) => before.some((b) => b.id === r.id))
+      await key({ key: 'Escape', code: 'Escape', vk: 27 })
+      sidebarSearch.run = {
+        word,
+        typed,
+        before: before.length,
+        after: after.length,
+        strays,
+        stillShown,
+        titles: after.map((r) => r.title).slice(0, 5),
+        restored,
+        value,
+      }
+    }
+  }
+} catch (err) {
+  sidebarSearch.why = `the drive threw: ${err?.message ?? err}`
+}
+if (sidebarSearch.why || !sidebarSearch.run) {
+  skip('the sidebar search', sidebarSearch.why ?? 'the check ended without a result')
+} else {
+  const run = sidebarSearch.run
+  record(
+    'the sidebar search narrows to the rows that match and Escape gives the list back',
+    Boolean(run?.typed) && run.strays.length === 0 && run.stillShown && run.restored && run.value === '',
+    `typed "${run.word}": ${run.before} row(s) before, ${run.after} after (titles after "${run.titles.join(' / ')}"); rows the word does not match: ${run.strays.length}${run.strays.length ? ` ("${run.strays.map((r) => r.title).join('", "')}")` : ''}; the row it came from still shown: ${run.stillShown}; Escape gave back ${run.before} row(s): ${run.restored}, field reads "${run.value}"`,
+  )
+}
+
+// (f) Settings search reads too: a word a person would type for a setting
+// reaches a row whose label does not contain it, because the index carries the
+// words people use beside the labels (src/settings-search.js). "gateway" is one
+// of those words: no static label holds it and the model-endpoint block's terms
+// do. Then Escape clears the field and the sections come back. Proves the field,
+// the terms and the clearing; not that pressing a result lands on its row.
+const settingsSearch = { why: null, run: null }
+// The window is left as this check found it on every path, including the skips:
+// a check that fails on the next one's leftover popup is worse than no check.
+const closeSettingsWindow = async () => {
+  for (let i = 0; i < 3; i += 1) {
+    if (!(await evaluate("!!document.querySelector('.vp-window')"))) return true
+    await key({ key: 'Escape', code: 'Escape', vk: 27 })
+    await sleep(200)
+  }
+  return !(await evaluate("!!document.querySelector('.vp-window')"))
+}
+const drawn = (selector) =>
+  evaluate(`[...document.querySelectorAll(${JSON.stringify(selector)})].filter((el) => el.getClientRects().length > 0).length`)
+try {
+  await key({ key: 'Escape', code: 'Escape', vk: 27 })
+  await sleep(150)
+  const settingsOpener = await evaluate(`(() => {
+    const b = [...document.querySelectorAll('.sidebar button')].find(
+      (x) => ((x.getAttribute('aria-label') || '').trim() === 'Settings') || ((x.title || '').trim() === 'Settings'),
+    );
+    if (!b) return null;
+    const r = b.getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  })()`)
+  if (!settingsOpener) {
+    settingsSearch.why = 'the sidebar has no Settings control'
+  } else {
+    await click(settingsOpener.x, settingsOpener.y)
+    const opened = await waitFor("!!document.querySelector('.vp-window')", { timeout: 4000 })
+    if (!opened) {
+      settingsSearch.why = 'the Settings window did not open from the sidebar'
+    } else {
+      await sleep(300)
+      const fieldSelector = '.stg-search input[aria-label="Search settings"]'
+      const hasField = await evaluate(`Boolean(document.querySelector(${JSON.stringify(fieldSelector)}))`)
+      const sectionsBefore = await drawn('.stg-section')
+      const resultsBefore = await drawn('.stg-result')
+      if (!hasField) {
+        settingsSearch.why = 'the Settings window renders no search field (.stg-search input, src/SettingsView.jsx:623)'
+      } else if (sectionsBefore < 1) {
+        settingsSearch.why = `the Settings window showed no drawn section to restore (${sectionsBefore})`
+      } else {
+        const word = 'gateway'
+        const typed = await insertInto(fieldSelector, word)
+        const resultsAppeared = await waitFor(
+          `[...document.querySelectorAll('.stg-result')].some((el) => el.getClientRects().length > 0)`,
+          { timeout: 4000 },
+        )
+        const shown = await evaluate(`(() => {
+          const rows = [...document.querySelectorAll('.stg-result')].filter((el) => el.getClientRects().length > 0);
+          return {
+            rows: rows.length,
+            labels: rows.map((r) => ((r.querySelector('.stg-result-name')?.textContent) || '').trim()),
+            lead: ((document.querySelector('.stg-lead')?.textContent) || '').trim(),
+            empty: ((document.querySelector('.stg-empty-name')?.textContent) || '').trim(),
+          };
+        })()`)
+        const low = word.toLowerCase()
+        const synonym = (shown.labels ?? []).some((l) => !l.toLowerCase().includes(low))
+        await key({ key: 'Escape', code: 'Escape', vk: 27 })
+        await sleep(250)
+        const cleared = await evaluate(`document.querySelector(${JSON.stringify(fieldSelector)})?.value ?? null`)
+        const sectionsAfter = await drawn('.stg-section')
+        const resultsAfter = await drawn('.stg-result')
+        const popupClosed = await closeSettingsWindow()
+        settingsSearch.run = {
+          word,
+          typed,
+          resultsBefore,
+          resultsAppeared,
+          shown,
+          synonym,
+          sectionsBefore,
+          cleared,
+          sectionsAfter,
+          resultsAfter,
+          popupClosed,
+        }
+      }
+      if (!settingsSearch.run) await closeSettingsWindow()
+    }
+  }
+} catch (err) {
+  settingsSearch.why = `the drive threw: ${err?.message ?? err}`
+  await closeSettingsWindow().catch(() => false)
+}
+if (settingsSearch.why || !settingsSearch.run) {
+  skip('the settings search', settingsSearch.why ?? 'the check ended without a result')
+} else {
+  const run = settingsSearch.run
+  record(
+    'the settings search reaches a synonym and Escape brings the sections back',
+    Boolean(run?.typed) && run.resultsAppeared && run.synonym && run.cleared === '' && run.sectionsAfter === run.sectionsBefore && run.resultsAfter === 0 && run.popupClosed,
+    `typed "${run.word}": ${run.resultsBefore} drawn result(s) before, ${run.shown.rows} after (labels "${run.shown.labels.join(' / ')}"; the lead reads "${run.shown.lead}"${run.shown.empty ? `; the panel reads "${run.shown.empty}"` : ''}); a label without the word: ${run.synonym}; Escape cleared the field: "${run.cleared}", sections ${run.sectionsBefore} -> ${run.sectionsAfter}, results ${run.resultsAfter}; the window is closed again: ${run.popupClosed}`,
   )
 }
 
