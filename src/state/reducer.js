@@ -105,11 +105,30 @@ export function mergeSessionIntoChat(existing, session) {
   // the console derived from the first prompt.
   // `>=` on purpose: an equal stamp goes to the beat, which is the fresher
   // snapshot of the two, and the next beat settles it if they disagree.
-  const beatIsNewer = (fresh.updatedAt ?? 0) >= (existing.updatedAt ?? 0)
+  //
+  // `foldedAt` is the newest event the fold has taken (`Event.at`, the daemon's own
+  // millisecond stamp of when it happened), and it is what makes this comparison honest:
+  // an event carries no session stamp, so measuring the payload against the record's
+  // `updatedAt` alone measured it against the last beat, and a beat taken before the
+  // event still won by equality. Now the beat wins only when its snapshot is at least as
+  // new as every event the timeline already holds. A record with no fold behind it (a
+  // first paint, a test fixture) has no `foldedAt` and compares exactly as before.
+  const settled = Math.max(existing.updatedAt ?? 0, existing.foldedAt ?? 0)
+  const beatIsNewer = (fresh.updatedAt ?? 0) >= settled
   const merged = {
     ...fresh,
     title: (beatIsNewer ? fresh.title : null) ?? existing.title,
+    // The title was gated this way and these were not, so the same beat could put the
+    // older answer back into the state, its reason, its liveness and its queue: a finished
+    // turn flickered to running, the error line vanished for a beat.
+    status: beatIsNewer ? fresh.status : existing.status,
+    running: beatIsNewer ? fresh.running : existing.running,
+    lastError: beatIsNewer ? fresh.lastError : existing.lastError,
+    queue: beatIsNewer ? fresh.queue : existing.queue,
     updatedAt: Math.max(existing.updatedAt ?? 0, fresh.updatedAt ?? 0),
+    // Kept through the merge: it is the record's memory of the newest event folded, and
+    // the next beat is measured against it.
+    foldedAt: existing.foldedAt,
     timeline: existing.timeline,
     foldedSeq: existing.foldedSeq,
     pendingDecisionId: existing.pendingDecisionId,
@@ -465,6 +484,10 @@ export function foldEvent(chat, event) {
   // timeline never received, and every replay - a reopen, a reconnect resuming from this
   // cursor - skipped it, leaving a hole in the transcript that nothing ever mentioned.
   if (event.seq != null) chat.foldedSeq = event.seq
+  // When it happened, by the daemon's own clock, so the next poll beat can tell whether
+  // its snapshot predates this event. Same millisecond unit as the session's
+  // `updated_at`, which is what makes the comparison meaningful.
+  if (event.at != null) chat.foldedAt = Math.max(chat.foldedAt ?? 0, event.at)
   return chat
 }
 
