@@ -16,11 +16,15 @@ export function loadArchived() {
   }
 }
 
+/// Whether the set reached storage. A profile that refuses writes used to swallow the
+/// failure here, so Restore in Settings left the row exactly where it was with nothing
+/// said, while the Appearance toggles further up report the identical refusal.
 export function saveArchived(ids) {
   try {
     localStorage.setItem(ARCHIVE_KEY, JSON.stringify([...ids]))
+    return true
   } catch {
-    /* storage unavailable */
+    return false
   }
 }
 

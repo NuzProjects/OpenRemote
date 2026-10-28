@@ -1000,13 +1000,16 @@ export function ConsoleProvider({ children }) {
   )
 
   // Archiving is console-side: the chat leaves the sidebar, its transcript
-  // and its other devices are untouched.
+  // and its other devices are untouched. The answer is whether the set reached storage,
+  // so a surface can say a write was refused instead of leaving the row unchanged.
   const setChatArchived = useCallback((id, value) => {
+    let saved = true
     setArchived((current) => {
       const next = withArchived(current, id, value)
-      saveArchived(next)
+      saved = saveArchived(next)
       return next
     })
+    return saved
   }, [])
 
   // Deleting a synced chat removes it from every device.

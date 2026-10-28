@@ -108,6 +108,9 @@ export default function SettingsView({ onReplay, onOpenChat, onClose = null, onM
     deleteChat,
   } = useConsole()
   const [deleting, setDeleting] = useState(null)
+  // A profile that refuses storage leaves the archived flag where it was; the toggles
+  // above report that refusal, and until now this section did not.
+  const [archiveRefused, setArchiveRefused] = useState(false)
   const archivedRows = archivedSessions(sessions, archived)
   // What each endpoint table holds, handed up by EndpointManager so the search
   // can index an endpoint by the name its person gave it. The table owns the
@@ -799,8 +802,11 @@ export default function SettingsView({ onReplay, onOpenChat, onClose = null, onM
                     onClick={() => openResult(entry)}
                   >
                     <span className="stg-result-main">
-                      <span className="stg-result-name">{entry.label}</span>
-                      <span className="stg-result-detail">{entry.detail}</span>
+                      {/* Behind privacy mode, like every other place those strings appear:
+                          an archived chat's title or a folder path was blurred in the list
+                          one tab over and readable here the moment a search was typed. */}
+                      <span className="stg-result-name pv">{entry.label}</span>
+                      <span className="stg-result-detail pv">{entry.detail}</span>
                     </span>
                     <span className="stg-result-where">{sectionLabel(entry.section)}</span>
                   </button>
@@ -1086,7 +1092,9 @@ export default function SettingsView({ onReplay, onOpenChat, onClose = null, onM
             <div className="pn-row" data-stg="appearance-density">
               <div>
                 <div className="pn-name">Compact density</div>
-                <div className="pn-detail">Pulls the rows and gutters in.</div>
+                <div className="pn-detail">
+                  Pulls in the settings, list and sidebar rows. The transcript keeps its spacing.
+                </div>
               </div>
               <Toggle
                 checked={prefs.density === 'compact'}
@@ -1627,6 +1635,11 @@ export default function SettingsView({ onReplay, onOpenChat, onClose = null, onM
               deleted.
             </p>
           </header>
+          {archiveRefused && (
+            <p className="stg-note" role="status">
+              This computer refused to save that change, so the chat is still archived.
+            </p>
+          )}
           <div className="pn-list pn-list--tight">
             {archivedRows.length === 0 ? (
               <div className="pn-row">
@@ -1650,7 +1663,7 @@ export default function SettingsView({ onReplay, onOpenChat, onClose = null, onM
                     type="button"
                     className="pn-btn"
                     data-stg="archived-restore-action"
-                    onClick={() => setChatArchived(s.id, false)}
+                    onClick={() => setArchiveRefused(!setChatArchived(s.id, false))}
                   >
                     Restore
                   </button>
