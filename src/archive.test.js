@@ -16,8 +16,22 @@ const { loadArchived, saveArchived, withArchived, activeSessions, archivedSessio
 test('archived ids round-trip through storage', () => {
   store.clear()
   assert.equal(loadArchived().size, 0)
-  saveArchived(new Set(['a', 'b']))
+  assert.equal(saveArchived(new Set(['a', 'b'])), true, 'the write says it landed')
   assert.deepEqual([...loadArchived()].sort(), ['a', 'b'])
+})
+
+test('a refused write says it did not land, instead of failing silently', () => {
+  // A profile that refuses storage used to leave Restore in Settings with the row
+  // unchanged and nothing said, while the toggles in the same pane report the refusal.
+  const real = localStorage.setItem
+  localStorage.setItem = () => {
+    throw new Error('QuotaExceededError')
+  }
+  try {
+    assert.equal(saveArchived(new Set(['a'])), false)
+  } finally {
+    localStorage.setItem = real
+  }
 })
 
 test('a damaged value reads as none', () => {
