@@ -100,8 +100,7 @@
 .pill-send:not(:disabled) {
   background: var(--accent);
   color: #fff;
-  box-shadow: 0 0 18px rgba(220, 162, 75, 0.25);
-  transition:
+  box-shadow: 0 0 18px rgba(220, 162, 75, 0.25);  transition:
     transform 0.12s cubic-bezier(0.2, 0, 0, 1),
     box-shadow 0.12s cubic-bezier(0.2, 0, 0, 1);
 }
@@ -117,6 +116,15 @@
 
 .pill-send:disabled {
   opacity: 0.45;
+}
+
+/* A message over the daemon's body limit, named before it is sent: the pill is
+   one row in a column, so the sentence sits under it rather than expanding it. */
+.pill-bound {
+  margin: 6px 2px 0;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 /* The pill's border and its send press settle for either switch: the system
