@@ -1629,11 +1629,19 @@ export default function SettingsView({ onReplay, onOpenChat, onClose = null, onM
                     </div>
                   </div>
                   <button type="button" className="pn-btn" onClick={() => onOpenChat(s.id)}>Open</button>
-                  <button type="button" className="pn-btn" onClick={() => setChatArchived(s.id, false)}>Restore</button>
+                  <button
+                    type="button"
+                    className="pn-btn"
+                    data-stg="archived-restore-action"
+                    onClick={() => setChatArchived(s.id, false)}
+                  >
+                    Restore
+                  </button>
                   {s.executor && (
                     <button
                       type="button"
                       className="pn-btn pn-btn--danger"
+                      data-stg="archived-delete-action"
                       title="Delete this chat here; other devices delete their copy when they next sync."
                       onClick={() => setDeleting(s)}
                     >
