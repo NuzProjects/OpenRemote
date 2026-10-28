@@ -893,6 +893,22 @@ html[data-reduce-motion] .pg-spin {
   font-size: 12.5px;
 }
 
+/* The address itself, under the button that asks the shell to open it: a refusal
+   there is silent, so the words have to be readable and copyable on their own. */
+.pg-detail-modal-homepage {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.pg-homepage-url {
+  font-family: 'Geist Mono', monospace;
+  font-size: 11.5px;
+  color: var(--text-3);
+  word-break: break-all;
+}
+
 .pg-detail-modal .pg-why-not {
   margin: 0;
   color: var(--accent);

@@ -42,6 +42,16 @@ export default function PluginDiscover({ onInstall }) {
   const refreshOne = async (name) => {
     setFetching((curr) => (curr.includes(name) ? curr : [...curr, name]))
     setRefreshError((curr) => (curr?.name === name ? null : curr))
+    // A dismissal is about the failure the person was looking at, not about that
+    // marketplace for ever: a refresh they asked for has to be able to report its
+    // own failure, or the card stays hidden until the window is reloaded and
+    // Discover goes on saying no catalog has been fetched while one is failing.
+    setDismissedErrors((curr) => {
+      if (!curr.has(name)) return curr
+      const next = new Set(curr)
+      next.delete(name)
+      return next
+    })
     try {
       await refreshMarketplace(name)
     } catch (err) {

@@ -170,11 +170,18 @@ export function PluginDetailModal({ entry, onClose, onInstall }) {
               <button
                 type="button"
                 className="pn-btn pg-homepage-btn"
+                title={homepage}
                 onClick={() => openExternal(homepage).catch(() => {})}
               >
                 <ArrowSquareOut size={14} />
                 <span>Homepage</span>
               </button>
+              {/* The address is also here as text. The button asks the shell to
+                  open it, and a refusal is silent (no handler, a locked-down
+                  machine, an address the browser will not take), so the only copy
+                  of where this plugin lives would be one that cannot be reached.
+                  Reading it, or copying it by hand, still gets a person there. */}
+              <span className="pv pg-homepage-url">{homepage}</span>
             </div>
           )}
 
