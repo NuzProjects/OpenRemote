@@ -251,6 +251,17 @@ if (overlayOpen) {
   )
 }
 
+// The pane count is the other piece of a manual session's state that a check reads
+// as a defect: the split check needs a single pane to start from, and a two-pane
+// window left behind made it report "the window is not a single pane" as if this
+// build had done it. Say what was found, so that failure explains itself.
+const paneCountAtStart = await evaluate(`document.querySelectorAll('[data-leaf-id]').length`)
+if (paneCountAtStart > 1) {
+  console.log(
+    `NOTE  ${paneCountAtStart} panes were open when this started; the split check needs one and may report the extra as a failure`,
+  )
+}
+
 // Start from a known place. The app remembers the last view and a previous run
 // may have left a popup over it, so a click measured against whatever was on
 // screen would be a check on a different window than the one it names.
