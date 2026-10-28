@@ -75,8 +75,8 @@ export default function NewChat({
   const [addProjectError, setAddProjectError] = useState(null)
   const cloudMode = mode === 'cloud'
   // A phone runs no chats: its list is the machines alone.
-  const machines = cloudMode ? machinePickerItems(devices, thisDevice, { phone: isMobile }) : []
-  const targetItem = machines.find((m) => m.id === target) ?? null
+  const machineOptions = cloudMode ? machinePickerItems(devices, thisDevice, { phone: isMobile }) : []
+  const targetItem = machineOptions.find((m) => m.id === target) ?? null
   const targetOffline = Boolean(target && targetItem && !targetItem.online)
   const [defaults] = useState(() => loadDefaults())
   // The setups this person saved, and the one New chat opens on. Both are
@@ -123,9 +123,9 @@ export default function NewChat({
 
   // On a phone a chat always runs on a machine: the first online one until
   // the user picks another.
-  const firstMachine = machines.find((m) => m.online)?.id ?? machines[0]?.id ?? null
+  const firstMachine = machineOptions.find((m) => m.online)?.id ?? machineOptions[0]?.id ?? null
   useEffect(() => {
-    if (isMobile && cloudMode && !machines.some((m) => m.id === target) && firstMachine) {
+    if (isMobile && cloudMode && !machineOptions.some((m) => m.id === target) && firstMachine) {
       setTarget(firstMachine)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -187,7 +187,7 @@ export default function NewChat({
         // itself has answered, the list is unknown (null), not empty, and a
         // machine the person chose is kept rather than declared lost. Local
         // offers no machine choice at all.
-        machines: cloudMode ? (cloud == null ? null : machines) : [],
+        machines: cloudMode ? (cloud == null ? null : machineOptions) : [],
         // In Cloud the project list belongs to the target and is read after
         // the switch: unknown, so the pick is kept and the row resolves.
         projects: cloudMode ? null : projects,
@@ -1387,7 +1387,7 @@ export default function NewChat({
                 <PickerMenu
                   label="Run on"
                   searchPlaceholder="Search machines"
-                  items={machines.map((m) => ({ ...m, id: m.id ?? 'here', veiled: !m.here }))}
+                  items={machineOptions.map((m) => ({ ...m, id: m.id ?? 'here', veiled: !m.here }))}
                   groups={null}
                   selectedId={target ?? 'here'}
                   onChoose={(id) => chooseTarget(id === 'here' ? null : id)}
@@ -1417,7 +1417,7 @@ export default function NewChat({
         </div>
         {addProjectError && <p className="nc-error">{addProjectError}</p>}
         {targetOffline && <p className="nc-error"><span className="pv">{targetItem.name}</span> is offline.</p>}
-        {isMobile && cloudMode && machines.length === 0 && (
+        {isMobile && cloudMode && machineOptions.length === 0 && (
           <div className="nc-auth nc-auth--solo">
             <p className="nc-auth-note">
               Chats run on your machines - add one and start chats on it from here.

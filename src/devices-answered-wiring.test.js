@@ -73,7 +73,11 @@ test('removing a device says the chats stay on it, and how many are at stake', (
   // until they are deleted there. Nothing is "deleted on every device" here.
   assert.match(modal, /leaves your Cloud\. Its copies of synced chats stay on it until they are deleted there\./)
   assert.match(modal, /const chatCount = \(n\) => `\$\{n\} synced \$\{n === 1 \? 'chat' : 'chats'\}`/)
-  assert.match(modal, /chatCount\(chats\.length\)/)
+  // The rows a device runs carry the local's own name, `sessionRows`, and not a
+  // `chats`: a local named like one of the console's own lists is how the palette
+  // lost its Rules group on 2026-10-28, by shadowing the list a predicate read.
+  assert.match(modal, /chatCount\(sessionRows\.length\)/)
+  assert.doesNotMatch(modal, /const chats = /, 'no local named like a console list')
   assert.match(modal, /const syncedCopies = \(sessions \?\? \[\]\)\.filter\(\(s\) => s\.executor\)\.length/)
   // Leaving Cloud deletes the copies here, and the hint names how many.
   assert.match(modal, /deletes its \$\{chatCount\(syncedCopies\)\} here/)

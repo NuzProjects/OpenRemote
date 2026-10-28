@@ -51,7 +51,7 @@ export default function MachineModal({ device, onOpenChat, onClose }) {
   const isMe = device.id === thisDevice
   // A phone has no harnesses to show or install.
   const reachable = !isPhone(device) && (isMe || (device.online && device.kind === 'machine'))
-  const chats = (sessions ?? []).filter((s) => s.executor === device.id)
+  const sessionRows = (sessions ?? []).filter((s) => s.executor === device.id)
   // Every synced session this console holds a copy of: what leaving Cloud
   // deletes here, and what the counts below are about. A copy of a chat that
   // runs elsewhere is deleted along with the ones that run here.
@@ -148,11 +148,11 @@ export default function MachineModal({ device, onOpenChat, onClose }) {
 
         <div className="dv-label-row">
           <span>Chats it runs</span>
-          <span className="dv-label-val">{chats.length}</span>
+          <span className="dv-label-val">{sessionRows.length}</span>
         </div>
         <div className="dv-agents">
-          {chats.length === 0 && <p className="dv-empty">No synced chats run here.</p>}
-          {chats.map((s) => (
+          {sessionRows.length === 0 && <p className="dv-empty">No synced chats run here.</p>}
+          {sessionRows.map((s) => (
             <button
               key={s.id}
               className="dv-agent"
@@ -282,9 +282,9 @@ export default function MachineModal({ device, onOpenChat, onClose }) {
               ? `This phone leaves your Cloud and deletes its ${chatCount(syncedCopies)} here. Its Local chats stay.`
               : isMe
                 ? `This computer leaves your Cloud and deletes its ${chatCount(syncedCopies)} here. Its Local chats stay.`
-                : chats.length === 0
+                : sessionRows.length === 0
                   ? <><span className="pv">{device.name}</span> leaves your Cloud. Its copies of synced chats stay on it until they are deleted there. Its Local chats stay.</>
-                  : <><span className="pv">{device.name}</span> leaves your Cloud. Its {chatCount(chats.length)} stay on it until they are deleted there, and they stay listed here. Its Local chats stay.</>}
+                  : <><span className="pv">{device.name}</span> leaves your Cloud. Its {chatCount(sessionRows.length)} stay on it until they are deleted there, and they stay listed here. Its Local chats stay.</>}
           </p>
         )}
       </div>
