@@ -29,12 +29,19 @@ export default function PickerMenu({
   const [cursor, setCursor] = useState(0)
   const ref = useRef(null)
   const searchRef = useRef(null)
+  // The element that opened this menu, kept for two uses: its rect places a menu opened
+  // from the keyboard, and it takes the keyboard back when the menu closes. Both are
+  // knowable only during the first render, while the trigger still holds focus, which
+  // is why the ref is filled from the state initialiser rather than an effect.
+  const triggerRef = useRef(null)
   // The spot is decided once, during the first render, while the trigger that
   // opened the menu still holds focus: a keyboard activation reports no point,
   // and that is the only moment the trigger is knowable. See picker-anchor.js.
-  const [spot] = useState(() =>
-    resolvePickerSpot(anchor, document.activeElement?.getBoundingClientRect?.() ?? null),
-  )
+  const [spot] = useState(() => {
+    const active = typeof document === 'undefined' ? null : document.activeElement
+    triggerRef.current = active && active !== document.body ? active : null
+    return resolvePickerSpot(anchor, triggerRef.current?.getBoundingClientRect?.() ?? null)
+  })
 
   const filtered = (() => {
     const q = query.trim().toLowerCase()
@@ -48,12 +55,24 @@ export default function PickerMenu({
     // On a phone the keyboard would cover the list it's searching; the
     // search field is a tap away.
     if (!isMobile) searchRef.current?.focus()
+    // The trigger is what held focus when this menu opened (see the comment above):
+    // without this, closing the menu left focus on the document body, so a person who
+    // chose with Enter had lost their place in the page.
+    const returnTo = triggerRef.current
     const close = (e) => {
       if (ref.current && ref.current.contains(e.target)) return
+      // In the capture phase, because React delegates its handlers at the root: a
+      // dialog's backdrop close ran before a bubble-phase window listener in the same
+      // press, so clicking the backdrop to dismiss this menu also closed the dialog
+      // that hosted it. The menu takes the press and stops it here.
+      e.stopPropagation()
       onClose()
     }
-    window.addEventListener('mousedown', close)
-    return () => window.removeEventListener('mousedown', close)
+    window.addEventListener('mousedown', close, true)
+    return () => {
+      window.removeEventListener('mousedown', close, true)
+      if (returnTo?.isConnected) returnTo.focus?.({ preventScroll: true })
+    }
   }, [onClose])
 
   useEffect(() => {
@@ -63,24 +82,33 @@ export default function PickerMenu({
 
   // keep the menu inside the viewport
   useLayoutEffect(() => {
-    if (!ref.current) return
+    if (!ref.current) return undefined
     const el = ref.current
-    const vw = window.innerWidth
-    const vh = window.innerHeight
-    const rect = el.getBoundingClientRect()
-    let { left, top } = rect
-    let maxHeight = ''
-    if (rect.bottom > vh - 8) {
-      top = Math.max(8, vh - rect.height - 8)
-      if (top + rect.height > vh - 8) {
-        top = 8
-        maxHeight = `${vh - 16}px`
+    // A function, run again on a resize: the clamp used to run per render only, so a
+    // menu open while the window shrank hung past the edge with no scroll to reach the
+    // rest of it.
+    const place = () => {
+      if (!el.isConnected) return
+      const vw = window.innerWidth
+      const vh = window.innerHeight
+      const rect = el.getBoundingClientRect()
+      let { left, top } = rect
+      let maxHeight = ''
+      if (rect.bottom > vh - 8) {
+        top = Math.max(8, vh - rect.height - 8)
+        if (top + rect.height > vh - 8) {
+          top = 8
+          maxHeight = `${vh - 16}px`
+        }
       }
+      if (rect.right > vw - 8) left = Math.max(8, vw - rect.width - 8)
+      el.style.left = `${left}px`
+      el.style.top = `${top}px`
+      el.style.maxHeight = maxHeight
     }
-    if (rect.right > vw - 8) left = Math.max(8, vw - rect.width - 8)
-    el.style.left = `${left}px`
-    el.style.top = `${top}px`
-    el.style.maxHeight = maxHeight
+    place()
+    window.addEventListener('resize', place)
+    return () => window.removeEventListener('resize', place)
   })
 
   useEffect(() => {
