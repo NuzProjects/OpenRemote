@@ -110,6 +110,12 @@ that syncs here later is refused from then on. Nothing in the route table above 
 route undoes it: after a tombstone, `/sync/sessions/{id}/events` answers 410 and every summary skips
 the chat, so deletion here is a one-way door.
 
+A tombstone also carries the time it was made, and nothing compares that time with the row it lands
+on: a deletion kept here because the chat would not stop, or simply offered again on the retry
+beat, removes a chat that has been worked in since. A delete only wins if it is newer than the work
+it destroys, and today the code does not ask. The comparison belongs in `Store::tombstone` so every
+writer path gets it, with a local delete always stamping the present.
+
 One thing follows that a reader should not have to discover: `sync.events` naming an id this
 computer does not hold is not only an append. The store accepts a copy that opens with a
 `session.created` and names the sender as its runner, so a peer can make a synced chat appear in
