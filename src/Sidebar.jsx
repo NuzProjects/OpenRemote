@@ -29,7 +29,7 @@ import {
 import { useConsole } from './state/console.jsx'
 import { chatStatus } from './state/reducer.js'
 import { attentionTitle, needsYou } from './needs-you.js'
-import { projectIndex, projectLine, projectName, sections, unreadProjects, waitingProjects } from './projects.js'
+import { duplicatedNames, projectIndex, projectLine, projectName, sections, unreadProjects, waitingProjects } from './projects.js'
 import { activeSessions } from './archive.js'
 import { deviceName, isPhone, sessionsForMode } from './cloud.js'
 import { isMobile } from './platform.js'
@@ -277,6 +277,8 @@ export default function Sidebar({
   // x folders on every beat.
   const folders = useMemo(() => projectIndex(projects), [projects])
   const grouped = useMemo(() => sections(projects, rest, folders), [projects, rest, folders])
+  // The names two or more projects share, so each head can say which folder it is.
+  const sharedNames = useMemo(() => duplicatedNames(projects), [projects])
 
   // The ids that should carry the quiet mark. Ordering never consults it:
   // the sorts above keep the order they had, so nothing jumps under the
@@ -874,8 +876,12 @@ export default function Sidebar({
           const isCollapsed = folded(project.id)
           // One reader of a project's name: projects.js owns the rule (and
           // answers "project" for a project whose folders are gone, where the
-          // inline split this replaced would have thrown).
+          // inline split this replaced would have thrown). A head whose name another
+          // head also carries says which folder it is: two folders that end in the same
+          // basename were otherwise identical rows, Remove and New chat included.
           const name = projectName(project)
+          const duplicated = sharedNames.has(name)
+          const nameSuffix = duplicated ? project.folders?.[0] : null
           const isArmed = rowIsArmed(armed, project.id)
           // What the head says beside the name, or null when it has nothing to
           // add: the count answers a collapsed head, the waiting count is the
@@ -908,6 +914,11 @@ export default function Sidebar({
                   <CaretDown size={12} />
                 </span>
                 <span className="project-name pv">{name}</span>
+                {nameSuffix && (
+                  <span className="project-count-part project-folder pv" title={nameSuffix}>
+                    {nameSuffix}
+                  </span>
+                )}
                 {held && (
                   <span className="project-count">
                     {held.map((part) => (

@@ -12,6 +12,30 @@ export function projectName(project) {
 }
 
 /**
+ * A project with no folder behind it: the registration survived, the folder it named does
+ * not. The sidebar draws it as its own case rather than as a live project called
+ * "project", because there is nothing there to unregister and its chats have already
+ * fallen back to the flat list.
+ */
+export function folderless(project) {
+  return !(project?.folders ?? []).length
+}
+
+/**
+ * The names two or more projects share. A name is a folder's basename, so `/work/app` and
+ * `/home/app` both read "app": without the folder, a head, its Remove row and its New-chat
+ * label are indistinguishable.
+ */
+export function duplicatedNames(projects) {
+  const counts = new Map()
+  for (const project of projects ?? []) {
+    const name = projectName(project)
+    counts.set(name, (counts.get(name) ?? 0) + 1)
+  }
+  return new Set([...counts.entries()].filter(([, count]) => count > 1).map(([name]) => name))
+}
+
+/**
  * Group chats by project: a chat belongs to the project whose folders
  * contain its workspace. Chats with no workspace, or one no project
  * holds, belong to none - they render in the flat Chats section.
