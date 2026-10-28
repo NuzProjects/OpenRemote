@@ -734,6 +734,26 @@ const ruleRowText = (name) =>
     return row ? (row.innerText || '').replace(/\\s+/g, ' ').trim() : null;
   })()`)
 
+// What the row's own Run button says: `Run now` with the button live when the
+// rule can run, and the reason with the button off when it cannot. This is the
+// app answering, in its own words, the same question the palette answers with the
+// same predicate, so a missing Rules group can be attributed to the rule rather
+// than to a defect. Every button is returned too, because the first version of
+// this probe guessed by position and had to be told apart from a live button.
+const ruleRunTitle = (name) =>
+  evaluate(`(() => {
+    const row = [...document.querySelectorAll('.am-rule')].find(
+      (r) => ((r.querySelector('.am-name')?.textContent) || '').trim() === ${JSON.stringify(name)},
+    );
+    if (!row) return null;
+    const buttons = [...row.querySelectorAll('button')].map((b) => ({
+      title: (b.title || '').trim(),
+      disabled: Boolean(b.disabled),
+    }));
+    const run = buttons.find((b) => (b.title || '').toLowerCase().includes('run')) ?? null;
+    return { runTitle: run ? run.title : null, runOff: Boolean(run && run.disabled), buttons };
+  })()`)
+
 // The rule this check makes and then removes. The palette is searched with the
 // first three letters of whichever rule the check is about, because a query that
 // begins a rule's name is the shortest honest one: it proves the group is offered
@@ -757,6 +777,7 @@ const seedRule = async () => {
       name: before[0],
       rules: before,
       rowText: await ruleRowText(before[0]),
+      buttons: await ruleRunTitle(before[0]),
       refusedShort: null,
     }
   }
@@ -863,7 +884,7 @@ const seedRule = async () => {
       why: `the save produced no rule${said ? ` (the form said "${said}")` : ''}`,
     }
   }
-  return { created: true, name: smokeRuleName, rules: [smokeRuleName], rowText: await ruleRowText(smokeRuleName), refusedShort }
+  return { created: true, name: smokeRuleName, rules: [smokeRuleName], rowText: await ruleRowText(smokeRuleName), buttons: await ruleRunTitle(smokeRuleName), refusedShort }
 }
 
 const rulesIn = async (label, hash, query) => {
@@ -931,6 +952,10 @@ const seed = await seedRule()
 const rulesQuery = seed.name ? seed.name.trim().slice(0, 3).toLowerCase() || 'rul' : 'rul'
 const onAutomations = seed.name ? await rulesIn('Automations', '#automations', rulesQuery) : null
 const onPlugins = seed.name ? await rulesIn('Plugins', '#plugins', rulesQuery) : null
+// The same view searched by the rule's whole name, because a group that appears
+// for the full name and not for three letters points at the ranking rather than
+// at the gating, and the two need different fixes.
+const byFullName = seed.name ? await rulesIn('Automations', '#automations', seed.name) : null
 
 // The rule goes before any verdict, so every path leaves the profile as it was
 // found: a gate that skips must not also change what it was asked to observe.
@@ -945,28 +970,41 @@ if (!seed.name) {
   // removed again. All three are facts this run caused and then read back.
   record(
     'a rule made through the form is refused until it is filled, and can be removed again',
-    Boolean(seed.refusedShort) && Boolean(seed.name) && cleaned.removed,
-    `Save was refused before the task: ${seed.refusedShort ?? '(no form opened)'}; the rule reached the list: ${Boolean(seed.name)}; created by this run: ${seed.created}; removed again: ${cleaned.removed}${cleaned.note ? `; ${cleaned.note}` : ''}; the row reads "${seed.rowText ?? '(none)'}"`,
+    Boolean(seed.created ? seed.refusedShort : true) && Boolean(seed.name) && cleaned.removed,
+    `Save was refused before the task: ${seed.refusedShort ?? '(no form opened)'}; the rule reached the list: ${Boolean(seed.name)}; created by this run: ${seed.created}; removed again: ${cleaned.removed}${cleaned.note ? `; ${cleaned.note}` : ''}; the row reads "${seed.rowText ?? '(none)'}"; its buttons: ${JSON.stringify(seed.buttons?.buttons ?? null)}`,
   )
 
   // The palette's Rules group is a group of rules that can run here, so it can
-  // only be asserted where this profile holds one: the group is built from the
-  // rules whose machine the palette can see answering (rule-run.js owns that
-  // rule), and a profile nobody signed in to Cloud has no machine to see. The
-  // first run of this check, on 2026-10-28, made a rule and searched for its own
-  // name: the palette offered only Chats on Automations and only Chats on
-  // Plugins, with no group either way. Whether that was the machine gating or the
-  // search is not established, so it is recorded here rather than asserted.
+  // only be asserted where this profile holds one. The app answers that question
+  // itself, twice and from one predicate: the row's Run button is disabled with
+  // the reason in its title, and the palette filters on the same answer. So a
+  // disabled Run whose title names the machine is the app saying "this rule
+  // cannot run here", and the palette rightly offers no row for it. That is a
+  // skip with the app's own sentence, not a defect and not a pass on an empty
+  // list. The first run of this check, on 2026-10-28, made a rule and searched
+  // for its own name: the palette offered only Chats on both views.
   if (onAutomations?.hasRules && onPlugins && !onPlugins.hasRules) {
     record(
       "the palette's Rules group appears only while Automations is mounted",
       true,
       `Automations: "${onAutomations.labels.join(', ')}"; Plugins: "${onPlugins.labels.join(', ')}"; the query was "${rulesQuery}" and the subject was "${seed.name}" (${seed.created ? 'created for this check' : 'already in the profile'})`,
     )
+  } else if (seed.buttons?.runOff) {
+    skip(
+      'the palette rules group',
+      `this rule cannot run here, and the app says so itself: its Run button is off with "${seed.buttons?.runTitle}". The palette offers a run row only for a rule that can run, so there is no group to gate. ${String(seed.buttons?.runTitle ?? '').includes('not answered') ? 'The machine list has not answered in this profile' : 'Bring that machine online'}, then run again`,
+    )
+  } else if (byFullName?.hasRules) {
+    // The whole name finds it and three letters do not, so the group works and
+    // the ranking is what hid it: the check's own query was the wrong probe.
+    skip(
+      'the palette rules group',
+      `the group is there: searched by the rule's whole name the palette offered "${byFullName.labels.join(', ')}" with the row "${byFullName.rulesRows.join(', ') || '(none)'}", while the three-letter query "${rulesQuery}" offered only "${onAutomations?.labels.join(', ') ?? '(no groups)'}". So the gating works and the query is what missed it; use the whole name in this check once the ranking is understood`,
+    )
   } else {
     skip(
       'the palette rules group',
-      `not established here: with the rule "${seed.name}" in the profile, the palette searched for "${rulesQuery}" offered ${onAutomations ? `"${onAutomations.labels.join(', ') || '(no groups)'}"` : 'no palette'} on Automations and ${onPlugins ? `"${onPlugins.labels.join(', ') || '(no groups)'}"` : 'no palette'} on Plugins, before any query it offered "${onAutomations?.atRest?.join(', ') ?? '(none)'}"; a rule is offered only when its machine can be seen answering, so sign in to Cloud with a machine online and run again`,
+      `not established here: with the rule "${seed.name}" in the profile whose Run button is live, the palette searched for "${rulesQuery}" offered ${onAutomations ? `"${onAutomations.labels.join(', ') || '(no groups)'}"` : 'no palette'} on Automations and ${onPlugins ? `"${onPlugins.labels.join(', ') || '(no groups)'}"` : 'no palette'} on Plugins, and searched by the whole name it offered "${byFullName?.labels?.join(', ') ?? '(no palette)'}"; before any query it offered "${onAutomations?.atRest?.join(', ') ?? '(none)'}". That is either the search or the group's assembly, and this run cannot tell which`,
     )
   }
 }
