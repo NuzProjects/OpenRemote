@@ -812,14 +812,23 @@ const goView = async (label, hash) => {
 // every handler that reads a coordinate (a picker's anchor, a menu's spot)
 // gets a real one. A selector that finds nothing is a false answer, never a
 // silent pass.
+//
+// It scrolls the element into view first, because a coordinate below the fold is
+// not a click: the window this runs in is whatever size the dev shell opened at, and
+// the plugin check spent one run pressing at y=890 in a 640px-tall window, which hit
+// nothing and then read as an arm that never happened.
 const clickElement = async (selector) => {
   const box = await evaluate(`(() => {
     const el = document.querySelector(${JSON.stringify(selector)});
     if (!el) return null;
+    el.scrollIntoView({ block: 'center', inline: 'nearest' });
     const b = el.getBoundingClientRect();
-    return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+    const inside = b.top >= 0 && b.left >= 0 && b.bottom <= window.innerHeight && b.right <= window.innerWidth;
+    return { x: b.x + b.width / 2, y: b.y + b.height / 2, inside };
   })()`)
   if (!box) return false
+  if (!box.inside) return false
+  await sleep(120)
   await click(box.x, box.y)
   return true
 }
@@ -1178,11 +1187,16 @@ const pluginRows = () =>
     const label = (b) => (b.textContent || '').trim();
     const remove = buttons.find((b) => label(b) === 'Remove');
     const armed = buttons.find((b) => label(b) === 'Remove it');
-    const box = (remove ?? armed)?.getBoundingClientRect() ?? null;
+    const target = remove ?? armed;
+    // Scrolled into view before it is measured: a coordinate below the fold is not
+    // a press, and the dev shell's window is whatever size it opened at.
+    target?.scrollIntoView({ block: 'center', inline: 'nearest' });
+    const box = target?.getBoundingClientRect() ?? null;
+    const inside = Boolean(box) && box.top >= 0 && box.bottom <= window.innerHeight;
     return {
       name: (row.querySelector('.pn-name')?.textContent || '').trim(),
       buttons: buttons.map(label),
-      removeBox: box ? { x: box.x + box.width / 2, y: box.y + box.height / 2 } : null,
+      removeBox: box && inside ? { x: box.x + box.width / 2, y: box.y + box.height / 2 } : null,
       remove: Boolean(remove),
       armed: Boolean(armed),
     };
@@ -1301,11 +1315,20 @@ try {
     if (!subject) {
       pluginState.why = `the row for "${pluginState.name}" has no Remove button`
     } else {
-      await click(subject.removeBox.x, subject.removeBox.y)
-      const armsUp = await waitFor(
-        `[...document.querySelectorAll('.pn-row--stack')].some((r) => [...r.querySelectorAll('.pn-actions button')].some((b) => (b.textContent || '').trim() === 'Remove it'))`,
-        { timeout: 3000 },
-      )
+      // Press it, and if the row's arm did not appear, measure again and press once
+      // more before calling it: the list is live (a plugin install or a beat can
+      // move a row between the measure and the press), and a person looking at the
+      // button would simply press again. The check still requires the arm to show.
+      let armsUp = false
+      for (let press = 0; press < 2 && !armsUp; press += 1) {
+        const row = (await pluginRows()).find((r) => r.name === pluginState.name && r.removeBox)
+        if (!row) break
+        await click(row.removeBox.x, row.removeBox.y)
+        armsUp = await waitFor(
+          `[...document.querySelectorAll('.pn-row--stack')].some((r) => [...r.querySelectorAll('.pn-actions button')].some((b) => (b.textContent || '').trim() === 'Remove it'))`,
+          { timeout: 3000 },
+        )
+      }
       await key({ key: 'Escape', code: 'Escape', vk: 27 })
       await sleep(250)
       const armedAfterEscape = (await pluginRows()).find((r) => r.name === pluginState.name)?.armed ?? false
