@@ -37,7 +37,7 @@ import {
 import { useConsole } from './state/console.jsx'
 import { useDialog } from './dialog-focus.js'
 import { useKeyboard, isMac } from './keyboard.jsx'
-import { ACTIONS, comboFromEvent, comboLabel, rankMatches } from './shortcuts.js'
+import { ACTIONS, comboFromEvent, comboLabel, rankMatches, tieRule } from './shortcuts.js'
 import { reopenAvailable, reopenClosed, browserMounted, getState, setState, subscribe } from './browser-store.js'
 import { BROWSER_GROUP, browserTabs } from './palette-tabs.js'
 import { activeSessions } from './archive.js'
@@ -699,7 +699,9 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
       ]
     }
     const all = [...everything.actions, ...everything.chats, ...everything.projectRows, ...everything.machines, ...everything.ruleRows, ...tabRows]
-    const ranked = rankMatches(query, all, (r) => r.name)
+    // The score ranks; the tie rule only settles two rows that scored the
+    // same - a label the query begins, then a chat over an action.
+    const ranked = rankMatches(query, all, (r) => r.name, tieRule(query, (row) => row.section === 'Chats'))
     return SECTION_ORDER.map((label) => {
       const forSection = ranked.filter((r) => r.section === label)
       const items = forSection.slice(0, SECTION_CAP)

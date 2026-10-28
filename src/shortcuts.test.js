@@ -26,6 +26,7 @@ const {
   resetOne,
   fuzzyScore,
   rankMatches,
+  tieRule,
   defaultKey,
   staleOverrides,
   typesIn,
@@ -253,5 +254,49 @@ test('every action in the catalog is wired to the window', async () => {
   assert.ok(
     sources.some((text) => text.includes('useModelSwitches(')),
     'the model switches keep their generated wire',
+  )
+})
+// ---- the tie the score cannot settle ----
+
+test('the tie rule prefers a prefix, then the preferred kind, then the order', () => {
+  const rows = [
+    { name: 'Sync to Code', section: 'Actions' },
+    { name: 'Code review', section: 'Chats' },
+    { name: 'Review code', section: 'Chats' },
+    { name: 'Reopen code', section: 'Actions' },
+    { name: 'Code review', section: 'Chats' },
+  ]
+  const isChat = (row) => row.section === 'Chats'
+  const rule = tieRule('code', isChat)
+  // A label the query begins beats one that only contains it, whatever the kind.
+  assert.equal(rule(rows[1], rows[0]) < 0, true, 'Code review beats Sync to Code')
+  assert.equal(rule(rows[0], rows[1]) > 0, true, 'and the other way round')
+  // Neither begins: the chat beats the action.
+  assert.equal(rule(rows[2], rows[3]) < 0, true, 'Review code beats Reopen code')
+  // Two of the same kind that both begin the query: no opinion, so the order
+  // the rows came in stands.
+  assert.equal(rule(rows[1], rows[4]), 0)
+  // No query, no rule: the at-rest list is not a search.
+  assert.equal(tieRule('', isChat), null)
+  assert.equal(tieRule('   ', isChat), null)
+})
+
+test('a tie rule settles a tie and never lifts a row over a better score', () => {
+  const rows = [
+    { name: 'Open chat', section: 'Actions' },
+    { name: 'Open chat', section: 'Chats' },
+    { name: 'Open plugins', section: 'Actions' },
+    { name: 'Reopen chat', section: 'Chats' },
+  ]
+  // Without a rule the order is the one given, exactly as it was before.
+  assert.deepEqual(
+    rankMatches('open', rows, (r) => r.name).map((r) => `${r.section}:${r.name}`),
+    ['Actions:Open chat', 'Chats:Open chat', 'Actions:Open plugins', 'Chats:Reopen chat'],
+  )
+  // With it: the chat wins the equal pair, and the better-scoring action keeps
+  // its place above the chat that scored lower.
+  assert.deepEqual(
+    rankMatches('open', rows, (r) => r.name, tieRule('open', (row) => row.section === 'Chats')).map((r) => `${r.section}:${r.name}`),
+    ['Chats:Open chat', 'Actions:Open chat', 'Actions:Open plugins', 'Chats:Reopen chat'],
   )
 })

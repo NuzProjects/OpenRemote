@@ -111,3 +111,14 @@ test('a capped group says how many rows it did not show', () => {
   assert.ok(palette.includes('run: null,'))
   assert.ok(palette.includes('if (!row.run) return'), 'the fact row cannot be chosen')
 })
+test('a tie prefers a label the query begins, then a chat over an action', () => {
+  const palette = source('CommandPalette.jsx')
+  // The rule lives beside the ranker, where it has its own test; the palette
+  // supplies the one fact it knows - which rows are chats - and nothing else.
+  assert.match(palette, /import \{ ACTIONS, comboFromEvent, comboLabel, rankMatches, tieRule \} from '\.\/shortcuts\.js'/)
+  assert.match(palette, /rankMatches\(query, all, \(r\) => r\.name, tieRule\(query, \(row\) => row\.section === 'Chats'\)\)/)
+  // The score still ranks: the palette never re-sorts, and never touches the
+  // scorer itself.
+  assert.doesNotMatch(palette, /fuzzyScore/)
+  assert.doesNotMatch(palette, /\.sort\(/)
+})

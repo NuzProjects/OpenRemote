@@ -356,11 +356,34 @@ export function fuzzyScore(query, text) {
   return score
 }
 
-// Items that match, best first; ties keep their given order.
-export function rankMatches(query, items, textOf) {
+// Items that match, best first. Two items that score the same are settled by
+// `tie` when the caller has a rule for it (the palette prefers a label the
+// query begins, then a chat over an action); with no rule, and whenever the
+// rule says nothing, they keep the order they came in. The score is the only
+// thing that ranks: a rule can never lift an item over a better score.
+export function rankMatches(query, items, textOf, tie = null) {
   return items
     .map((item, i) => ({ item, i, score: fuzzyScore(query, textOf(item)) }))
     .filter((r) => r.score !== null)
-    .sort((a, b) => b.score - a.score || a.i - b.i)
+    .sort((a, b) => b.score - a.score || (tie ? tie(a.item, b.item) : 0) || a.i - b.i)
     .map((r) => r.item)
+}
+
+/**
+ * The rule `rankMatches` uses to settle a tie, for the palette: a label the
+ * query begins beats one that only contains it, and then the caller's
+ * preferred kind (the palette passes "is a chat") beats the rest. Everything
+ * else keeps the order the rows came in, which is what keeps every ranking
+ * that already differed exactly as it was: the rule is asked only when the
+ * scores match, and a null answer means "no opinion".
+ */
+export function tieRule(query, isPreferred = null) {
+  const prefix = String(query ?? '').trim().toLowerCase()
+  if (!prefix) return null
+  const starts = (row) => typeof row?.name === 'string' && row.name.toLowerCase().startsWith(prefix)
+  return (a, b) => {
+    if (starts(a) !== starts(b)) return starts(a) ? -1 : 1
+    if (Boolean(isPreferred?.(a)) !== Boolean(isPreferred?.(b))) return isPreferred(a) ? -1 : 1
+    return 0
+  }
 }
