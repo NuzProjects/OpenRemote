@@ -498,7 +498,23 @@ export function foldEvent(chat, event) {
 /// counters are the ones per-event folding produced. reducer.test.js folds one
 /// recorded stream both ways and compares the results.
 export function foldEvents(chat, events) {
-  for (const event of events ?? []) foldEvent(chat, event)
+  for (const event of events ?? []) {
+    // An event this fold cannot read is a gap, not a crash and not a redial loop. Before
+    // this guard a malformed payload threw out of the whole batch, and because the cursor
+    // only advances past a successful fold, every retry re-delivered the same event: the
+    // pane failed again on each attempt with nothing in the transcript saying why.
+    try {
+      foldEvent(chat, event)
+    } catch {
+      chat.timeline.push({
+        kind: 'message',
+        id: `gap-${chat.timeline.length}`,
+        role: 'note',
+        text: 'One update from the daemon could not be read, so this chat is missing whatever it said.',
+      })
+      if (event?.seq != null) chat.foldedSeq = event.seq
+    }
+  }
   return chat
 }
 
