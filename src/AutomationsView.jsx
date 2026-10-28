@@ -42,7 +42,7 @@ import './pill.css'
 import { pickable } from './harness-manager.js'
 import { ranLabel } from './ran-label.js'
 import { errorCopy } from './error-copy.js'
-import { RULE_GONE, registerRuleRun } from './rule-run.js'
+import { RULE_GONE, registerRuleRun, ruleCannotRun, ruleCannotRunTitle, ruleMachineState } from './rule-run.js'
 
 export default function AutomationsView({ onOpenChat }) {
   const {
@@ -101,7 +101,11 @@ export default function AutomationsView({ onOpenChat }) {
   const availableIds = new Set(
     (capabilities?.harnesses ?? []).filter(pickable).map((h) => h.id),
   )
-  const machineName = (id) => (machines ?? []).find((m) => m.machine.id === id)?.machine.name ?? id
+  // One reader of a machine's name for the surfaces that only want the words
+  // (the pill's card and its draft note): rule-run.js owns where a machine
+  // stands, and answers a sentence rather than a raw id when it has left the
+  // account.
+  const machineName = (id) => ruleMachineState({ machine: id }, machines).label
   // Whether any rule could fire at all, in the words automation.js owns. It
   // sits above the list and never gates it: a saved rule is not broken
   // because its machine is asleep, and every rule stays readable and
@@ -352,6 +356,11 @@ export default function AutomationsView({ onOpenChat }) {
         )}
         {shown.map((rule) => {
           const missing = !availableIds.has(rule.harness)
+          // The same rule the palette's Rules group uses, asked once here: a
+          // run that cannot work is not offered by either surface, and the
+          // button's title says which way the rule is stuck.
+          const blocked = ruleCannotRun(rule, machines, { answered: machinesAnswered })
+          const machine = ruleMachineState(rule, machines)
           return (
             <div key={rule.id} className={`am-rule${rule.enabled ? '' : ' off'}`}>
               <div className="am-rule-main">
@@ -359,7 +368,16 @@ export default function AutomationsView({ onOpenChat }) {
                   <div className="am-name pv">{rule.name}</div>
                   <div className="am-line">
                     {whenSentence(rule.trigger)} · {harnessName(rule.harness)}
-                    {oneMachine ? '' : <> on <span className="pv">{machineName(rule.machine)}</span></>} · {ranLabel(rule)}
+                    {oneMachine ? '' : (
+                      <>
+                        {' '}on{' '}
+                        {machine.state === 'online' || machine.state === 'offline' ? (
+                          <span className="pv">{machine.label}</span>
+                        ) : (
+                          machine.label
+                        )}
+                      </>
+                    )} · {ranLabel(rule)}
                   </div>
                   {rule.trigger.kind === 'webhook' && api?.url && (
                     <code className="am-hook pv">
@@ -379,8 +397,8 @@ export default function AutomationsView({ onOpenChat }) {
                   )}
                   <button
                     className="am-icon"
-                    title={rule.enabled ? 'Run now' : 'Enable the rule to run it'}
-                    disabled={!rule.enabled || busyId != null}
+                    title={ruleCannotRunTitle(blocked)}
+                    disabled={blocked !== null || busyId != null}
                     onClick={() => runNow(rule)}
                   >
                     <Play size={13} weight="fill" />

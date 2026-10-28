@@ -75,6 +75,54 @@ export function ruleMachineLabel(rule, machines) {
 }
 
 /**
+ * Where a rule's machine stands, in the words a row or a picker shows.
+ *
+ * - 'here': the rule names no machine, so it runs on this computer;
+ * - 'online': the machine is in the account and answering;
+ * - 'offline': the machine is in the account but not answering right now;
+ * - 'gone': the machine is not in the account any more.
+ *
+ * The label is what a person can read: this computer's own name for the place,
+ * the machine's name when the daemon still lists it, and a sentence instead of
+ * a raw id when it does not (an id is the one thing a person cannot use).
+ */
+export function ruleMachineState(rule, machines) {
+  if (!sentence(rule?.machine)) return { state: 'here', label: 'this computer' }
+  const row = (Array.isArray(machines) ? machines : []).find((m) => m?.machine?.id === rule.machine)
+  if (!row) return { state: 'gone', label: 'a machine that is no longer in your account' }
+  return {
+    state: row.machine.status === 'online' ? 'online' : 'offline',
+    label: sentence(row.machine.name) ?? 'a machine',
+  }
+}
+
+/**
+ * Why a rule's Run button is off, in the row's own words. Same codes as
+ * `ruleCannotRun`, so the row and the palette cannot say different things about
+ * the same rule: one answers whether a run would work, the other says why not.
+ */
+export function ruleCannotRunTitle(code) {
+  switch (code) {
+    case 'paused':
+      return 'Enable the rule to run it'
+    case 'no-machine':
+      return 'The machine this rule ran on is no longer in your account'
+    case 'machine-offline':
+      return 'Its machine has not come online yet'
+    case 'not-answered':
+      return 'The list of machines has not answered yet'
+    case 'nameless':
+      return 'This rule has no name'
+    case 'missing':
+      // A row whose rule is no longer in the list: it is about to stop being
+      // drawn, so the title only has to be true for the frame it exists in.
+      return 'This rule is not here any more'
+    default:
+      return 'Run now'
+  }
+}
+
+/**
  * The rows the palette's Rules group offers, in the order the Automations list
  * shows them (the order a person recognises from that view), with the two
  * facts that help pick one of ten: when it fires, and where it runs.

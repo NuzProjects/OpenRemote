@@ -48,7 +48,7 @@ test('choosing a rule shows the answer line and asks the view, not the daemon', 
 })
 
 test('the Automations view lends its own Run now and takes it back on unmount', () => {
-  assert.match(view, /import \{ RULE_GONE, registerRuleRun \} from '\.\/rule-run\.js'/)
+  assert.match(view, /import \{[^}]*RULE_GONE[^}]*registerRuleRun[^}]*\} from '\.\/rule-run\.js'/) 
   // Registered once per mount: the effect returns the seam's unregister.
   assert.match(view, /useEffect\(\(\) => registerRuleRun\(\(id\) => paletteRun\.current\(id\)\), \[\]\)/)
   // The handler is the view's runNow, the same path the row's button uses.
@@ -76,4 +76,33 @@ test('the module keeps the seam small and the copy in one place', () => {
   // The palette renders one line through one function, in every phase.
   assert.match(rules, /export function ruleAnswer\(/)
   assert.doesNotMatch(rules, /—/, 'no em dashes in the copy')
+})
+
+test('the rules row and the palette ask the same question about a rule', () => {
+  // One predicate for both surfaces: the palette hides a rule it cannot run,
+  // and the row disables Run with the same answer and says why in its title.
+  assert.match(view, /import \{[^}]*ruleCannotRun[^}]*ruleCannotRunTitle[^}]*\} from '\.\/rule-run\.js'/)
+  assert.match(view, /const blocked = ruleCannotRun\(rule, machines, \{ answered: machinesAnswered \}\)/)
+  assert.match(view, /disabled=\{blocked !== null \|\| busyId != null\}/)
+  assert.match(view, /title=\{ruleCannotRunTitle\(blocked\)\}/)
+  // The row's machine is named through the same module, so a machine that left
+  // the account reads as a sentence rather than as an id.
+  assert.match(view, /const machine = ruleMachineState\(rule, machines\)/)
+  assert.match(view, /const machineName = \(id\) => ruleMachineState\(\{ machine: id \}, machines\)\.label/)
+  assert.doesNotMatch(view, /\?\? id\b/, 'no raw id fallback is left in the view')
+})
+
+test('the rule editor keeps the saved machine and asks before moving it', () => {
+  const form = source('AutomationForm.jsx')
+  assert.match(form, /import \{ ruleMachineState \} from '\.\/rule-run\.js'/)
+  // The saved machine is kept even when it is not online: the old init took the
+  // first online machine instead, which moved a rule as a side effect of an edit.
+  assert.match(form, /const \[machineId, setMachineId\] = useState\(rule\?\.machine \?\? online\[0\]\?\.machine\.id \?\? null\)/)
+  // A machine that left the account stays in the picker, marked, and the save is
+  // refused until the person picks another one.
+  assert.match(form, /const machineOptions = \[/)
+  assert.match(form, /items=\{machineOptions\}/)
+  assert.match(form, /const machineGone = Boolean\(savedMachine\) && savedMachine\.state === 'gone' && machineId === rule\.machine/)
+  assert.match(form, /!machineGone &&/)
+  assert.match(form, /Pick where it should run\s*\n?\s*before saving\.|Pick where it should run before saving\./)
 })

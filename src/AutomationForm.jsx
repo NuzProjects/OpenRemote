@@ -13,6 +13,7 @@ import { ModelMark } from './model-marks.jsx'
 import { projectName } from './projects.js'
 import { formDiffers } from './form-dirty.js'
 import { carrySetup, droppedLine, restoreFromCatalog } from './harness-carry.js'
+import { ruleMachineState } from './rule-run.js'
 import { jobSourceLine } from './chat-to-job.js'
 import './devices.css'
 import './automations.css'
@@ -57,6 +58,11 @@ export default function AutomationForm({ rule, onClose }) {
   const fromChat = rule?.fromChat === true
   const available = (capabilities?.harnesses ?? []).filter(pickable)
   const online = (machines ?? []).filter((m) => m.machine.status === 'online')
+  // Where the rule's own machine stands: no machine (this computer), in the
+  // account and online, in the account but asleep, or gone from it. An edit
+  // keeps the saved machine: moving a rule to another computer is a choice the
+  // person makes in the picker, never something a save does by itself.
+  const savedMachine = rule?.machine ? ruleMachineState(rule, machines) : null
 
   const [name, setName] = useState(rule?.name ?? '')
   const [kind, setKind] = useState(rule?.trigger?.kind ?? 'schedule')
@@ -66,13 +72,14 @@ export default function AutomationForm({ rule, onClose }) {
   // The rule's permission word - the harness's own vocabulary, carried to
   // the chat the rule fires. Unset means the harness's default holds.
   const [permission, setPermission] = useState(rule?.permission_mode ?? null)
-  // A draft or saved rule may name a machine that isn't online - the
-  // form preselects one that can actually run the rule.
-  const [machineId, setMachineId] = useState(
-    online.some((m) => m.machine.id === rule?.machine)
-      ? rule.machine
-      : online[0]?.machine.id ?? null,
-  )
+  // A saved rule keeps the machine it names, online or not: preselecting the
+  // first online one here used to move the rule as a side effect of any edit.
+  // A new rule or a draft still starts on the first machine that can run it.
+  const [machineId, setMachineId] = useState(rule?.machine ?? online[0]?.machine.id ?? null)
+  // The saved machine has left the account and nothing has replaced it: saving
+  // would write a dead id, so the form asks for a machine first (picking one is
+  // the person's own move, which is why the default is not replaced for them).
+  const machineGone = Boolean(savedMachine) && savedMachine.state === 'gone' && machineId === rule.machine
   // The rule's project: picked from the registered ones. A saved rule
   // carries its folder; the picker matches it back to its project and
   // preselects that. A chat with no folder starts here empty - the first
@@ -185,6 +192,31 @@ export default function AutomationForm({ rule, onClose }) {
 
   const currentHarness = available.find((h) => h.id === harness)
   const currentMachine = online.find((m) => m.machine.id === machineId)
+  // What the picker shows for the current choice: the online machine's own
+  // name, or the saved machine's words when it is asleep or gone (never an id),
+  // or nothing when there is no machine at all.
+  const machineName =
+    currentMachine?.machine.name ??
+    (machineId && machineId === rule?.machine ? savedMachine?.label : null) ??
+    null
+  // The machine this rule already targets, kept in the picker even when it is
+  // not online: it is where the rule runs, and seeing it marked is how a person
+  // knows a save is not moving the rule.
+  const machineOptions = [
+    ...online.map((m) => ({ id: m.machine.id, name: m.machine.name, veiled: true })),
+    ...(savedMachine && savedMachine.state !== 'online' && rule?.machine
+      ? [
+          {
+            id: rule.machine,
+            name:
+              savedMachine.state === 'gone'
+                ? savedMachine.label
+                : `${savedMachine.label} · not online`,
+            veiled: savedMachine.state !== 'gone',
+          },
+        ]
+      : []),
+  ]
   // The two halves of the rule's time, as its pickers show them: a saved
   // minute the list does not carry reads as 00, which is what picking from
   // that list would have written.
@@ -198,7 +230,14 @@ export default function AutomationForm({ rule, onClose }) {
   const matchedProject =
     (projects ?? []).find((p) => p.folders.includes(workspace)) ?? null
   const noProjects = (projects ?? []).length === 0
-  const ready = name.trim() && task.trim() && workspace.trim() && harness && machineId && (kind !== 'schedule' || time.trim())
+  const ready =
+    name.trim() &&
+    task.trim() &&
+    workspace.trim() &&
+    harness &&
+    machineId &&
+    !machineGone &&
+    (kind !== 'schedule' || time.trim())
 
   const openPicker = (kind_) => (e) => setPicker({ kind: kind_, x: e.clientX, y: e.clientY })
 
@@ -515,7 +554,10 @@ export default function AutomationForm({ rule, onClose }) {
                 )}
               </div>
             )}
-            {!oneMachine && (
+            {/* The picker is hidden when there is nothing to choose between,
+                except when the rule's own machine has left the account: then it
+                is the only way to answer the refusal, so it has to be there. */}
+            {(!oneMachine || machineGone) && (
               <div className="af-then-cell">
                 <button
                   className="af-pick"
@@ -524,13 +566,13 @@ export default function AutomationForm({ rule, onClose }) {
                   aria-haspopup="listbox"
                   aria-expanded={picker?.kind === 'machine'}
                 >
-                  {currentMachine ? <span className="pv">{currentMachine.machine.name}</span> : 'No machine online'}
+                  {machineName ? <span className="pv">{machineName}</span> : 'No machine online'}
                 </button>
                 {picker?.kind === 'machine' && (
                   <PickerMenu
                     label="Machine"
                     searchPlaceholder="Search machines"
-                    items={online.map((m) => ({ id: m.machine.id, name: m.machine.name, veiled: true }))}
+                    items={machineOptions}
                     groups={null}
                     selectedId={machineId ?? ''}
                     onChoose={(id) => {
@@ -547,6 +589,15 @@ export default function AutomationForm({ rule, onClose }) {
           {(carryNote || modelsUnavailable) && (
             <p className="af-when-note" role="status">
               {carryNote ?? 'The model list did not load: the harness may still be starting.'}
+            </p>
+          )}
+          {machineGone && (
+            // The rule's machine left the account: the save keeps it by default,
+            // so it is refused until the person picks where the rule should run.
+            // Moving a rule is never something a save does on its own.
+            <p className="af-when-note" role="status">
+              The machine this rule ran on is no longer in your account. Pick where it should run
+              before saving.
             </p>
           )}
           <div className="af-workspace">

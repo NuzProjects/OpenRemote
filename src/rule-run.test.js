@@ -9,7 +9,9 @@ import {
   registerRuleRun,
   ruleAnswer,
   ruleCannotRun,
+  ruleCannotRunTitle,
   ruleMachineLabel,
+  ruleMachineState,
   ruleRunAvailable,
   ruleRunRows,
   runRule,
@@ -152,4 +154,30 @@ test('the newest view leaving puts the one behind it back, not an empty seam', a
   first()
   assert.equal(ruleRunAvailable(), false, 'the last one leaving closes the seam')
   assert.deepEqual(await runRule('rule-1'), { ok: false, error: RULE_GONE })
+})
+
+test('a rule says where its machine stands, never by id', () => {
+  // A saved machine that left the account names a sentence, not an id: an id is
+  // the one thing a person cannot use.
+  assert.deepEqual(ruleMachineState(rule('a'), machines), { state: 'here', label: 'this computer' })
+  assert.equal(ruleMachineState(rule('a', { machine: 'box' }), machines).state, 'online')
+  assert.equal(ruleMachineState(rule('a', { machine: 'box' }), machines).label, 'build-box')
+  assert.equal(ruleMachineState(rule('a', { machine: 'mini' }), machines).state, 'offline')
+  const gone = ruleMachineState(rule('a', { machine: 'gone' }), machines)
+  assert.equal(gone.state, 'gone')
+  assert.equal(gone.label, 'a machine that is no longer in your account')
+  assert.equal(gone.label.includes('gone'), false, 'the id is not what a person reads')
+})
+
+test('the Run button says why it is off, in the row own words', () => {
+  assert.equal(ruleCannotRunTitle(null), 'Run now')
+  assert.equal(ruleCannotRunTitle('paused'), 'Enable the rule to run it')
+  assert.equal(ruleCannotRunTitle('machine-offline'), 'Its machine has not come online yet')
+  assert.match(ruleCannotRunTitle('no-machine'), /no longer in your account/)
+  assert.match(ruleCannotRunTitle('not-answered'), /has not answered/)
+  // The title comes from the same code the palette refuses on, so the two
+  // surfaces cannot disagree: every code the predicate returns has words.
+  for (const code of ['paused', 'no-machine', 'machine-offline', 'not-answered', 'nameless', 'missing']) {
+    assert.notEqual(ruleCannotRunTitle(code), 'Run now', code)
+  }
 })
