@@ -240,6 +240,13 @@ an old process is still alive; find it before re-running).
 - Flaky-looking daemon e2e failures under heavy parallel load: rerun
   the suite once before diagnosing; the fixture-agent e2e is timing
   sensitive on a busy machine.
+- `failed to run custom build command for openremote-ui-desktop` with a
+  `PermissionDenied` (`Os { code: 5 }`) panic inside `tauri-build` is not a
+  broken build: it is the dev copy of the sidecar still held open by a running
+  daemon (`target/debug/openremote-daemon.exe`), which the build script rewrites
+  whenever the app version changes - so a version bump taken while the dev app is
+  up is when it shows. Quit the dev app, or set `CARGO_TARGET_DIR` elsewhere, and
+  `cargo test` and clippy pass.
 
 ## Checking this file
 
