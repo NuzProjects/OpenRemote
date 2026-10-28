@@ -143,6 +143,12 @@ export default function HarnessManagerModal({ onClose, onSignIn }) {
                   Sign in
                 </button>
               )}
+              {/* The same row without a handler, which is how onboarding opens this modal:
+                  a signed-out claude, codex or grok showed the state and nothing at all to
+                  do about it. The sentence names where the button is. */}
+              {row.action === 'signin' && !onSignIn && (
+                <span className="dv-hm-detail dv-hm-note">Sign in from New chat.</span>
+              )}
             </div>
           ))}
         </div>
