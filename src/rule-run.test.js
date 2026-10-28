@@ -11,6 +11,7 @@ import {
   ruleBlockedRowLine,
   ruleCannotRun,
   ruleCannotRunTitle,
+  ruleControl,
   ruleMachineLabel,
   ruleMachineState,
   ruleRunAvailable,
@@ -220,4 +221,33 @@ test('a row and its tooltip read one table, so they cannot disagree', () => {
     assert.equal(ruleCannotRunTitle(code), title, code)
     assert.ok(ruleBlockedRowLine(code), code)
   }
+})
+test('a rule offers Stop only while the chat it started is in flight', () => {
+  const chats = {
+    live: { id: 'live', status: 'running', title: 'Fix the parser' },
+    work: { id: 'work', status: 'working', title: 'A daemon word' },
+    wait: { id: 'wait', status: 'waiting', title: 'Waiting on an answer' },
+    idle: { id: 'idle', status: 'idle', title: 'Idle chat' },
+    stop: { id: 'stop', status: 'stopped', title: 'Stopped chat' },
+    start: { id: 'start', status: 'starting', title: 'Starting chat' },
+  }
+  // No last chat: the rule has not started one from this console.
+  assert.equal(ruleControl(rule('a'), { chats }), 'run')
+  // The chat it names is gone from the list: nothing to stop.
+  assert.equal(ruleControl(rule('a', { last_chat: 'gone' }), { chats }), 'run')
+  // Not in flight: idle and stopped both offer Run.
+  assert.equal(ruleControl(rule('a', { last_chat: 'idle' }), { chats }), 'run')
+  assert.equal(ruleControl(rule('a', { last_chat: 'stop' }), { chats }), 'run')
+  // working, in either vocabulary, is the state a stop can end.
+  assert.equal(ruleControl(rule('a', { last_chat: 'live' }), { chats }), 'stop')
+  assert.equal(ruleControl(rule('a', { last_chat: 'work' }), { chats }), 'stop')
+  // waiting too: the stop lane counts it, because a process and a meter are
+  // both live while the harness holds a question.
+  assert.equal(ruleControl(rule('a', { last_chat: 'wait' }), { chats }), 'stop')
+  // starting has not taken its first turn, which is where the stop lane's
+  // scope ends.
+  assert.equal(ruleControl(rule('a', { last_chat: 'start' }), { chats }), 'run')
+  // The poll answers when the live record has not arrived, and the other way.
+  assert.equal(ruleControl(rule('a', { last_chat: 's1' }), { sessions: [{ id: 's1', status: 'working' }] }), 'stop')
+  assert.equal(ruleControl(rule('a', { last_chat: 's1' }), { chats: {}, sessions: [] }), 'run')
 })

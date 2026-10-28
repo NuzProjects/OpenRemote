@@ -12,6 +12,7 @@
 // answers with, and the cases where a rule cannot run at all.
 
 import { whenSentence } from './automation.js'
+import { isRunning as canStopChat } from './stop-everything.js'
 
 // A field that must be a real word to be used: shape.js's `text` keeps a
 // whitespace-only string, which is a name nobody can read in a row.
@@ -72,6 +73,34 @@ export function ruleMachineLabel(rule, machines) {
   if (!sentence(rule?.machine)) return 'this computer'
   const row = (Array.isArray(machines) ? machines : []).find((m) => m?.machine?.id === rule.machine)
   return sentence(row?.machine?.name) ?? 'a machine'
+}
+
+/**
+ * Which control a rule's row offers: 'stop' while the chat the rule last
+ * started is in flight, 'run' otherwise.
+ *
+ * The decision reads the chat's id and never its title. A row that stopped a
+ * chat by name would stop whatever chat the person happened to have open under
+ * that name, which is the one way a stop can act on something other than what
+ * the row says. The title is only ever the tooltip's words.
+ *
+ * 'run' covers the three states with nothing to stop: no last chat (the rule
+ * has not started one here), a chat that is gone from this console's lists, and
+ * a chat that is not in flight. 'stop' is the stop lane's own state: working or
+ * waiting, in either vocabulary, the two where a harness process and a meter
+ * are both live (stop-everything.js's isRunning). `starting` is not that one -
+ * the turn has not begun, so the stop lane leaves it out too.
+ */
+export function ruleControl(rule, { chats = null, sessions = null } = {}) {
+  const id = sentence(rule?.last_chat)
+  if (!id) return 'run'
+  const live = chats && typeof chats === 'object' ? chats[id] ?? null : null
+  const polled = Array.isArray(sessions) ? sessions.find((s) => s?.id === id) ?? null : null
+  const record = live ?? polled
+  if (!record) return 'run'
+  // The stop lane's rule takes the record (it reads `.status` itself), so the
+  // two surfaces answer the same question the same way.
+  return canStopChat(record) ? 'stop' : 'run'
 }
 
 /**

@@ -92,6 +92,24 @@ test('the rules row and the palette ask the same question about a rule', () => {
   assert.doesNotMatch(view, /\?\? id\b/, 'no raw id fallback is left in the view')
 })
 
+test('the rule row stops the chat it started, and stops it by id', () => {
+  // The control follows the rule, not a guess in the markup: one call answers
+  // run or stop from the state of `rule.last_chat`, and the row renders that.
+  assert.match(view, /const control = ruleControl\(rule, \{ chats, sessions \}\)/)
+  assert.match(view, /control === 'stop'/)
+  // The tooltip names the chat a person knows, and the press sends its id: a
+  // row that stopped a chat by name would stop whatever had that name.
+  assert.match(view, /const stopName = chatTitle\(\{/)
+  assert.match(view, /title=\{`Stop "\$\{stopName\}"`\}/)
+  // The press reads the id off the rule and sends that: the title above is the
+  // tooltip's words only.
+  assert.match(view, /const id = rule\?\.last_chat/)
+  assert.match(view, /run\(\(\) => stopChat\(id\), rule\.id\)/)
+  assert.doesNotMatch(view, /stopChat\(\s*(?:chatTitle|stopName|rule\.name)/, 'the stop sends the id, never a title')
+  // While it is stopping, the control is off like the row's other actions.
+  assert.match(view, /disabled=\{busyId != null\}/)
+})
+
 test('the rule editor keeps the saved machine and asks before moving it', () => {
   const form = source('AutomationForm.jsx')
   assert.match(form, /import \{ ruleMachineState \} from '\.\/rule-run\.js'/)

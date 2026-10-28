@@ -11,6 +11,7 @@ import {
   MagnifyingGlass,
   PencilSimple,
   Play,
+  Stop,
   TrashSimple,
   X,
 } from '@phosphor-icons/react'
@@ -42,7 +43,8 @@ import './pill.css'
 import { pickable } from './harness-manager.js'
 import { ranLabel } from './ran-label.js'
 import { errorCopy } from './error-copy.js'
-import { RULE_GONE, registerRuleRun, ruleBlockedRowLine, ruleCannotRun, ruleCannotRunTitle, ruleMachineState } from './rule-run.js'
+import { chatTitle } from './shape.js'
+import { RULE_GONE, registerRuleRun, ruleBlockedRowLine, ruleCannotRun, ruleCannotRunTitle, ruleControl, ruleMachineState } from './rule-run.js'
 
 export default function AutomationsView({ onOpenChat }) {
   const {
@@ -58,6 +60,9 @@ export default function AutomationsView({ onOpenChat }) {
     removeAutomation,
     enableAutomation,
     runAutomation,
+    stopChat,
+    chats,
+    sessions,
   } = useConsole()
   const kb = useKeyboard()
   const [editing, setEditing] = useState(null) // null | {} (new) | rule
@@ -158,6 +163,16 @@ export default function AutomationsView({ onOpenChat }) {
     const session = await run(() => runAutomation(rule.id), rule.id)
     if (session) onOpenChat?.(session.id)
     return session ?? null
+  }
+
+  // Stopping the chat a rule last started, from the row where the rule lives:
+  // the same single-chat stop the palette's Stop everything uses (`stopChat`,
+  // the daemon's one stop route). The id is what is sent, never the title, so a
+  // press cannot land on whatever chat happens to carry that name.
+  const stopRuleChat = async (rule) => {
+    const id = rule?.last_chat
+    if (!id) return
+    await run(() => stopChat(id), rule.id)
   }
 
   // The palette's way in: it offers rules only while this view is mounted,
@@ -372,6 +387,17 @@ export default function AutomationsView({ onOpenChat }) {
           // run that cannot work is not offered by either surface, and the
           // button's title says which way the rule is stuck.
           const blocked = ruleCannotRun(rule, machines, { answered: machinesAnswered })
+          // The row's one action answers the rule's own state: Stop while the
+          // chat it last started is in flight, Run now otherwise. rule-run.js
+          // owns that answer, and the stop lane's own rule behind it.
+          const control = ruleControl(rule, { chats, sessions })
+          // The tooltip names the chat a person knows; the press sends its id,
+          // so it cannot stop a different chat that carries the same title.
+          const stopName = chatTitle({
+            title:
+              chats?.[rule.last_chat]?.title ??
+              (sessions ?? []).find((s) => s.id === rule.last_chat)?.title,
+          })
           // A tooltip is not a visible sentence: a rule whose only machine is
           // asleep looked exactly like a healthy one, with a Run button that
           // did nothing when pressed. The reason leads the row's own line, as a
@@ -414,14 +440,27 @@ export default function AutomationsView({ onOpenChat }) {
                       <ArrowUpRight size={13} />
                     </button>
                   )}
-                  <button
-                    className="am-icon"
-                    title={ruleCannotRunTitle(blocked)}
-                    disabled={blocked !== null || busyId != null}
-                    onClick={() => runNow(rule)}
-                  >
-                    <Play size={13} weight="fill" />
-                  </button>
+                  {control === 'stop' ? (
+                    // One control, whose meaning follows the rule: the chat this
+                    // rule started is live, so the useful press is the stop.
+                    <button
+                      className="am-icon"
+                      title={`Stop "${stopName}"`}
+                      disabled={busyId != null}
+                      onClick={() => stopRuleChat(rule)}
+                    >
+                      <Stop size={13} weight="fill" />
+                    </button>
+                  ) : (
+                    <button
+                      className="am-icon"
+                      title={ruleCannotRunTitle(blocked)}
+                      disabled={blocked !== null || busyId != null}
+                      onClick={() => runNow(rule)}
+                    >
+                      <Play size={13} weight="fill" />
+                    </button>
+                  )}
                   <button className="am-icon" title="Edit" onClick={() => { setArmed(clearRow()); setEditing(rule) }}>
                     <PencilSimple size={13} />
                   </button>
