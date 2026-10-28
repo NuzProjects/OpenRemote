@@ -71,8 +71,14 @@ test('a registered project with no chats keeps its row and says so', () => {
   const empty = source.indexOf('items.length === 0')
   assert.ok(empty >= 0, 'an empty project has its own state')
   assert.ok(
-    source.slice(empty, empty + 220).includes('No chats yet.'),
+    source.slice(empty, empty + 400).includes('No chats yet.'),
     'and says it in one line rather than reading as an absence',
+  )
+  // A project whose folder is gone is its own sentence rather than reading as empty:
+  // its chats have fallen to the flat list, so "No chats yet" would be the wrong news.
+  assert.ok(
+    source.slice(empty, empty + 400).includes('No folder behind this project'),
+    'and a folder-less project says what happened to it',
   )
 })
 

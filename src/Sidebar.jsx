@@ -29,7 +29,7 @@ import {
 import { useConsole } from './state/console.jsx'
 import { chatStatus } from './state/reducer.js'
 import { attentionTitle, needsYou } from './needs-you.js'
-import { duplicatedNames, projectIndex, projectLine, projectName, sections, unreadProjects, waitingProjects } from './projects.js'
+import { duplicatedNames, folderless, projectIndex, projectLine, projectName, sections, unreadProjects, waitingProjects } from './projects.js'
 import { activeSessions } from './archive.js'
 import { deviceName, isPhone, sessionsForMode } from './cloud.js'
 import { isMobile } from './platform.js'
@@ -880,6 +880,11 @@ export default function Sidebar({
           // head also carries says which folder it is: two folders that end in the same
           // basename were otherwise identical rows, Remove and New chat included.
           const name = projectName(project)
+          // A project whose folder is gone is not a live project called "project": its
+          // chats have already fallen to the flat list, and there is nothing on disk to
+          // point at, so the head says what it is.
+          const folderIsGone = folderless(project)
+          const shownName = folderIsGone ? 'A project with no folder' : name
           const duplicated = sharedNames.has(name)
           const nameSuffix = duplicated ? project.folders?.[0] : null
           const isArmed = rowIsArmed(armed, project.id)
@@ -913,7 +918,7 @@ export default function Sidebar({
                 <span className={`project-caret${isCollapsed ? ' closed' : ''}`}>
                   <CaretDown size={12} />
                 </span>
-                <span className="project-name pv">{name}</span>
+                <span className="project-name pv">{shownName}</span>
                 {nameSuffix && (
                   <span className="project-count-part project-folder pv" title={nameSuffix}>
                     {nameSuffix}
@@ -946,7 +951,7 @@ export default function Sidebar({
                     className="sb-unregister"
                     autoFocus
                     title="Unregister this project. Its chats move to Chats and the folder on disk is never touched."
-                    aria-label={`Unregister ${name}`}
+                    aria-label={`Unregister ${shownName}`}
                     aria-describedby="sb-unregister-note"
                     onKeyDown={(e) => {
                       if (e.key === 'Escape') {
@@ -972,8 +977,8 @@ export default function Sidebar({
                   <button
                     type="button"
                     className="sb-project-new"
-                    title={`New chat in ${name}`}
-                    aria-label={`New chat in ${name}`}
+                    title={`New chat in ${shownName}`}
+                    aria-label={`New chat in ${shownName}`}
                     onClick={() => onNewChatIn?.(project.id)}
                   >
                     <Plus size={12} weight="bold" />
@@ -985,7 +990,7 @@ export default function Sidebar({
                     type="button"
                     className="sb-project-remove"
                     title="Remove the project - it asks once, and its chats stay"
-                    aria-label={`Remove ${name}`}
+                    aria-label={`Remove ${shownName}`}
                     onClick={() => setArmed((current) => armRow(current, project.id))}
                   >
                     <TrashSimple size={11} />
@@ -994,7 +999,11 @@ export default function Sidebar({
               )}
               {!isCollapsed && items.length === 0 && (
                 <p className="sb-empty sb-project-empty">
-                  {sessionsAnswered ? 'No chats yet.' : 'Loading your chats…'}
+                  {folderIsGone
+                    ? 'No folder behind this project any more. Unregister it to clear the row.'
+                    : sessionsAnswered
+                      ? 'No chats yet.'
+                      : 'Loading your chats…'}
                 </p>
               )}
               {!isCollapsed && items.map(chatRow)}
