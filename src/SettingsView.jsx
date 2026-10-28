@@ -24,7 +24,7 @@ import DeleteChatModal from './DeleteChatModal.jsx'
 import SignInModal from './SignInModal.jsx'
 import PickerMenu from './PickerMenu.jsx'
 import Toggle from './Toggle.jsx'
-import { SECTIONS, SETTING_GROUPS, SETTINGS_ENTRIES, dynamicEntries, searchSettings, visibleSections } from './settings-search.js'
+import { SECTIONS, SETTING_GROUPS, SETTINGS_ENTRIES, dynamicEntries, resultToOpen, searchSettings, visibleSections } from './settings-search.js'
 import { projectName } from './projects.js'
 import { chatTitle } from './shape.js'
 import { armRow, clearRow } from './row-confirm.js'
@@ -662,20 +662,31 @@ export default function SettingsView({ onReplay, onOpenChat, onClose = null, onM
             }}
             onKeyDown={(e) => {
               if (e.key === 'Escape') {
+                // Clear first, leave the field second. The window's own Escape
+                // layer closes Settings; stopping the event here is what keeps
+                // a clear from also closing the pane behind it.
                 e.preventDefault()
                 e.stopPropagation()
                 if (query) setQuery('')
                 else e.currentTarget.blur()
                 return
               }
+              // Down hands the keyboard to the rows (they are buttons, and a
+              // focused row answers its own Enter); every other arrow, Home and
+              // End stay the field's, for the caret.
               if (e.key === 'ArrowDown' && shown.length) {
                 e.preventDefault()
                 panelRef.current?.querySelector('.stg-result')?.focus()
                 return
               }
-              if (e.key === 'Enter' && shown.length) {
+              if (e.key === 'Enter') {
+                // The same opener the rows call, through the one rule that
+                // decides which row Enter means - so a click and a keystroke
+                // cannot land in different places.
+                const entry = resultToOpen(shown)
+                if (!entry) return
                 e.preventDefault()
-                openResult(shown[0])
+                openResult(entry)
               }
             }}
             placeholder="Search settings"

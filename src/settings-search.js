@@ -295,3 +295,27 @@ export function searchSettings(query, entries = SETTINGS_ENTRIES) {
 export function visibleSections(mobile) {
   return mobile ? SECTIONS.filter((s) => s.phone) : SECTIONS
 }
+
+// ---- the keyboard's share of the search ----
+
+/**
+ * The row Enter in the search field opens, or null when there is nothing to
+ * open: Enter on an empty list must do nothing rather than act on the last
+ * answer that was on screen.
+ *
+ * `highlighted` is the key of a row a roving highlight has landed on. The list
+ * keeps no highlight of its own today (Down moves focus into the rows, and a
+ * focused row is a button that answers its own Enter), so it is null and the
+ * first result answers. A key that is not in `shown` is stale - the query
+ * changed under it - and falls back to the first row rather than opening a row
+ * the person can no longer see.
+ */
+export function resultToOpen(shown, highlighted = null) {
+  const rows = Array.isArray(shown) ? shown : []
+  if (!rows.length) return null
+  if (highlighted != null) {
+    const hit = rows.find((entry) => entry?.key === highlighted)
+    if (hit) return hit
+  }
+  return rows[0] ?? null
+}

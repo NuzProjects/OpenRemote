@@ -1,4 +1,4 @@
-import assert from 'node:assert/strict'
+﻿import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   SECTIONS,
@@ -6,6 +6,7 @@ import {
   SETTINGS_ENTRIES,
   dynamicEntries,
   hostOf,
+  resultToOpen,
   searchSettings,
   visibleSections,
 } from './settings-search.js'
@@ -198,4 +199,25 @@ test('a host is read out of a base URL without trusting its shape', () => {
   assert.equal(hostOf('  '), '')
   assert.equal(hostOf('not a url at all'), 'not a url at all'.split('/')[0])
   assert.equal(hostOf(null), '')
+})
+
+test('Enter opens the first row, and nothing at all when there is no row', () => {
+  // The search field's Enter goes through this rule, not its own copy of
+  // "the first one": the rows and the keystroke must not be able to disagree.
+  const rows = [
+    { key: 'startup-reopen', label: 'Reopen', section: 'startup' },
+    { key: 'appearance-motion', label: 'Motion', section: 'appearance' },
+  ]
+  assert.equal(resultToOpen(rows), rows[0])
+  assert.equal(resultToOpen(rows, null), rows[0], 'no highlight is the first row')
+  assert.equal(resultToOpen([rows[0]]), rows[0], 'one row is that row')
+  // A highlight, when a list grows one, wins - and a highlight naming a row
+  // that is no longer shown (the query changed) falls back to the first.
+  assert.equal(resultToOpen(rows, 'appearance-motion'), rows[1])
+  assert.equal(resultToOpen(rows, 'gone-row'), rows[0])
+  // Nothing to open: Enter must do nothing, not act on the last answer.
+  assert.equal(resultToOpen([]), null)
+  assert.equal(resultToOpen(undefined), null)
+  assert.equal(resultToOpen(null), null)
+  assert.equal(resultToOpen('not a list'), null)
 })
