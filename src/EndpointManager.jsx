@@ -15,7 +15,7 @@ import { harnessName } from './harness-names.js'
 import { armRow, clearRow, rowIsArmed } from './row-confirm.js'
 import { useArmedRow } from './use-armed-row.js'
 import { formDiffers } from './form-dirty.js'
-import { checkBaseUrl } from './form-checks.js'
+import { checkBaseUrl, redactedUrl } from './form-checks.js'
 import './devices.css'
 import './panels.css'
 import { errorCopy } from './error-copy.js'
@@ -310,7 +310,7 @@ export default function EndpointManager({ harness, deviceId = null, onChanged = 
                     {entry.enabled ? '' : ' · off'}
                   </div>
                   <div className="pn-detail">
-                    <span className="pv">{entry.base_url}</span> · {authLabel(entry.auth_kind)}
+                    <span className="pv">{redactedUrl(entry.base_url)}</span> · {authLabel(entry.auth_kind)}
                     {entry.auth_kind !== 'none' && (entry.has_key ? ' · key saved' : ' · no key')}
                     {entry.default_model && ` · ${entry.default_model}`}
                   </div>

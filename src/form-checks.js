@@ -7,6 +7,19 @@
 // the daemon would have taken.
 
 /**
+ * A base URL as a list row may print it. A person can paste
+ * `https://user:secret@gateway/v1` into the address field, which validates fine (the
+ * check below judges the host, not the userinfo), and the endpoint row then rendered it
+ * in the clear beside a key field that is carefully never echoed. This keeps the shape of
+ * the address and drops the credential to `@`, so a screenshot or a screen share shows
+ * where the endpoint is without showing what opens it.
+ */
+export function redactedUrl(value) {
+  const url = String(value ?? '')
+  return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@\s]+@/i, '$1…@')
+}
+
+/**
  * What is wrong with a base URL, or null when nothing is. The daemon needs a
  * scheme to know a transport, and a bare `localhost:4000` reads as a protocol
  * name to everything downstream - so it is refused here, before the request.
