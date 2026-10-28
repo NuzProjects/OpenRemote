@@ -5,10 +5,6 @@
   flex: 1;
   display: grid;
   grid-template-rows: 1fr auto 1fr;
-  /* One explicit column, so a row that asks to stretch across the page actually
-     does: with an implicit auto column it stretched only as far as the widest
-     item, which left the saved setups floating in the middle of the top edge. */
-  grid-template-columns: minmax(0, 1fr);
   justify-items: center;
   padding: 0 40px;
   background: var(--bg-app);
@@ -62,17 +58,25 @@ html[data-reduce-motion] .newchat::before {
 }
 
 /* The page's own top row: the saved setups on the left, and the floating shortcut
-   bar keeping its corner on the right. It shares the grid's first row with the
-   greeting, which sits at the end of it, so the two never collide however tall
-   the chip row grows. */
+   bar keeping its corner on the right. Taken out of the grid on purpose: the
+   greeting and the box already sit in its rows, and a third item in the first row
+   pushed the greeting into a second column, so it ended up beside the box instead
+   of above it. The empty parts of this row let clicks through; the chips take
+   theirs. */
 .nc-page-head {
-  grid-row: 1;
-  align-self: start;
-  justify-self: stretch;
+  position: absolute;
+  top: 14px;
+  left: 40px;
+  right: 40px;
   display: flex;
   align-items: flex-start;
-  padding-top: 14px;
-  min-height: 44px;
+  padding-right: 96px;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.nc-page-head > * {
+  pointer-events: auto;
 }
 
 .nc-greeting {
