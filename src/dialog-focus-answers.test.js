@@ -26,7 +26,13 @@ test('the same surface opened twice captures its opener again', () => {
   // own field. It captures on the open transition.
   const keys = source('dialog-focus.js')
   assert.match(keys, /const wasOpen = useRef\(false\)/, 'the transition is remembered')
-  assert.match(keys, /if \(open && !wasOpen\.current\) \{\n\s*opener\.current = captureOpener/, 'captured when it opens')
+  // `\r?\n`: this repo is checked out with CRLF on Windows, so a pin that assumes a bare
+  // LF passes here and fails on the one CI job that matters most. It did, for a day.
+  assert.match(
+    keys,
+    /if \(open && !wasOpen\.current\) \{\r?\n\s*opener\.current = captureOpener/,
+    'captured when it opens',
+  )
   // And the value survives the cleanup: React runs an effect twice in development, and
   // clearing on the first cleanup left the second pass nothing to restore.
   const cleanup = keys.slice(keys.indexOf('const restore = inertOthers(panel)'))
