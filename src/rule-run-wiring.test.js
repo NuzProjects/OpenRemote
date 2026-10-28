@@ -124,3 +124,26 @@ test('the palette still asks the same predicate the row does', () => {
   assert.match(palette, /ruleRunRows\(/)
   assert.match(rules, /if \(ruleCannotRun\(rule, machines, \{ answered \}\)\) continue/)
 })
+
+test('the palette hands the rule predicate the console machines, not its own rows', () => {
+  // The bug this pins, found by running the app on 2026-10-28: the palette built
+  // its Machines group rows into a local `machines`, which shadowed the console's
+  // machine list for every line below it. `ruleCannotRun` looks for
+  // `{ machine: { id } }` rows, was handed palette rows instead, answered
+  // "no-machine" for every rule, and so the Rules group never appeared and "Plan
+  // this chat as a rule" was refused with "machine" in every profile. Nothing
+  // failed: both surfaces still called the same predicate.
+  assert.doesNotMatch(
+    palette,
+    /const machines = \(devices \?\? \[\]\)/,
+    'the Machines group rows must not be named machines: it shadows the console list',
+  )
+  assert.match(palette, /const machineRows = \(devices \?\? \[\]\)/, 'they are machineRows')
+  assert.match(
+    palette,
+    /ruleRunRows\(automations, machines, \{ answered: machinesAnswered \}\)/,
+    'the Rules group reads the console list',
+  )
+  assert.match(palette, /machines: machines \?\? \[\],/, 'and so does the rule a chat would become')
+  assert.match(palette, /machines: machineRows,/, 'while the Machines group gets its own rows')
+})

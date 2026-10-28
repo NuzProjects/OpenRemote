@@ -315,7 +315,13 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
       veiled: true,
       run: { project: p.id },
     }))
-    const machines = (devices ?? [])
+    // The Machines group's rows, built from the account's devices. Named apart
+    // from the console's own `machines` on purpose: that list is what the rule
+    // predicate reads (rule-run.js looks for `{ machine: { id } }` rows), and a
+    // local `machines` shadowing it made every rule look like it named a machine
+    // the account no longer has, so the Rules group could never appear and
+    // "Plan this chat as a rule" was refused with "machine" in every profile.
+    const machineRows = (devices ?? [])
       .filter((d) => !isPhone(d))
       .map((d) => ({
         key: `machine:${d.id}`,
@@ -519,7 +525,7 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
       actions: [...stopRow, ...harnessRow, ...raceRow, ...sinceRow, ...layoutRow, ...layoutsRow, ...renameRow, ...presetRow, ...reopenRow, ...review, ...markdown, ...jobRow, ...pages, ...actions],
       chats: chatRows,
       projectRows,
-      machines,
+      machines: machineRows,
       harnessRows,
       ruleRows,
     }
