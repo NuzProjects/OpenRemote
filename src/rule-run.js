@@ -97,20 +97,36 @@ export function ruleMachineState(rule, machines) {
 }
 
 /**
- * Why a rule's Run button is off, in the row's own words. Same codes as
- * `ruleCannotRun`, so the row and the palette cannot say different things about
- * the same rule: one answers whether a run would work, the other says why not.
+ * The machine-caused reasons a run would not work, in the two lengths the
+ * surfaces read: `title` for the Run button's tooltip and `row` for the
+ * rule's own line. One table, so a row and its tooltip cannot disagree about
+ * the same rule (the palette asks `ruleCannotRun` for both).
+ */
+const MACHINE_REASONS = {
+  'no-machine': {
+    title: 'The machine this rule ran on is no longer in your account',
+    row: 'its machine is gone',
+  },
+  'machine-offline': {
+    title: 'Its machine has not come online yet',
+    row: 'its machine is offline',
+  },
+  'not-answered': {
+    title: 'The list of machines has not answered yet',
+    row: 'still reading its machine',
+  },
+}
+
+/**
+ * Why a rule's Run button is off, in the tooltip's words. Same codes as
+ * `ruleCannotRun`, so the row, the palette and the tooltip cannot say different
+ * things about the same rule: one answers whether a run would work, the others
+ * say why not.
  */
 export function ruleCannotRunTitle(code) {
   switch (code) {
     case 'paused':
       return 'Enable the rule to run it'
-    case 'no-machine':
-      return 'The machine this rule ran on is no longer in your account'
-    case 'machine-offline':
-      return 'Its machine has not come online yet'
-    case 'not-answered':
-      return 'The list of machines has not answered yet'
     case 'nameless':
       return 'This rule has no name'
     case 'missing':
@@ -118,8 +134,17 @@ export function ruleCannotRunTitle(code) {
       // drawn, so the title only has to be true for the frame it exists in.
       return 'This rule is not here any more'
     default:
-      return 'Run now'
+      return MACHINE_REASONS[code]?.title ?? 'Run now'
   }
+}
+
+/**
+ * The short sentence a rule's row shows for a machine-caused block, or null
+ * when the row needs nothing: paused has the row's own `off` class, and
+ * missing and nameless are not about a machine, so neither gets a line.
+ */
+export function ruleBlockedRowLine(code) {
+  return MACHINE_REASONS[code]?.row ?? null
 }
 
 /**

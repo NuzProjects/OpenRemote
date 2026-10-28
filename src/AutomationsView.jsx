@@ -42,7 +42,7 @@ import './pill.css'
 import { pickable } from './harness-manager.js'
 import { ranLabel } from './ran-label.js'
 import { errorCopy } from './error-copy.js'
-import { RULE_GONE, registerRuleRun, ruleCannotRun, ruleCannotRunTitle, ruleMachineState } from './rule-run.js'
+import { RULE_GONE, registerRuleRun, ruleBlockedRowLine, ruleCannotRun, ruleCannotRunTitle, ruleMachineState } from './rule-run.js'
 
 export default function AutomationsView({ onOpenChat }) {
   const {
@@ -360,6 +360,12 @@ export default function AutomationsView({ onOpenChat }) {
           // run that cannot work is not offered by either surface, and the
           // button's title says which way the rule is stuck.
           const blocked = ruleCannotRun(rule, machines, { answered: machinesAnswered })
+          // A tooltip is not a visible sentence: a rule whose only machine is
+          // asleep looked exactly like a healthy one, with a Run button that
+          // did nothing when pressed. The reason leads the row's own line, as a
+          // fragment, so it stays one line beside the when, the harness and the
+          // last run, and the tooltip below still carries the long version.
+          const blockedReason = ruleBlockedRowLine(blocked)
           const machine = ruleMachineState(rule, machines)
           return (
             <div key={rule.id} className={`am-rule${rule.enabled ? '' : ' off'}`}>
@@ -367,6 +373,7 @@ export default function AutomationsView({ onOpenChat }) {
                 <div className="am-rule-body">
                   <div className="am-name pv">{rule.name}</div>
                   <div className="am-line">
+                    {blockedReason ? blockedReason + ' · ' : ''}
                     {whenSentence(rule.trigger)} · {harnessName(rule.harness)}
                     {oneMachine ? '' : (
                       <>

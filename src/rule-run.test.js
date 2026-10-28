@@ -8,6 +8,7 @@ import {
   RULES_SECTION,
   registerRuleRun,
   ruleAnswer,
+  ruleBlockedRowLine,
   ruleCannotRun,
   ruleCannotRunTitle,
   ruleMachineLabel,
@@ -179,5 +180,44 @@ test('the Run button says why it is off, in the row own words', () => {
   // surfaces cannot disagree: every code the predicate returns has words.
   for (const code of ['paused', 'no-machine', 'machine-offline', 'not-answered', 'nameless', 'missing']) {
     assert.notEqual(ruleCannotRunTitle(code), 'Run now', code)
+  }
+})
+
+test('the rule row says why a rule cannot run, in a short line of its own words', () => {
+  // A tooltip is not a visible sentence: a row whose machine is asleep used to
+  // look exactly like a healthy one. The row now carries the fact, as a
+  // fragment so it fits beside the when, the harness and the last run.
+  assert.equal(ruleBlockedRowLine('machine-offline'), 'its machine is offline')
+  assert.equal(ruleBlockedRowLine('no-machine'), 'its machine is gone')
+  assert.equal(ruleBlockedRowLine('not-answered'), 'still reading its machine')
+  // Paused has the row's own off class; missing and nameless are not about a
+  // machine and never reach a drawn row; a rule that runs says nothing extra.
+  for (const code of ['paused', 'missing', 'nameless', null, undefined, '']) {
+    assert.equal(ruleBlockedRowLine(code), null, String(code))
+  }
+  const rule = {
+    id: 'r1',
+    name: 'Nightly sweep',
+    enabled: true,
+    harness: 'claude',
+    machine: 'm1',
+    trigger: { kind: 'clock' },
+  }
+  const machines = [{ machine: { id: 'm1', name: 'studio', status: 'online' } }]
+  assert.equal(ruleCannotRun(rule, machines), null)
+  assert.equal(ruleBlockedRowLine(ruleCannotRun(rule, machines)), null)
+})
+
+test('a row and its tooltip read one table, so they cannot disagree', () => {
+  // The machine-caused codes keep the tooltip sentences they had; the row
+  // sentence is the same fact in fewer words, and both come from one place.
+  const pairs = [
+    ['machine-offline', 'Its machine has not come online yet'],
+    ['no-machine', 'The machine this rule ran on is no longer in your account'],
+    ['not-answered', 'The list of machines has not answered yet'],
+  ]
+  for (const [code, title] of pairs) {
+    assert.equal(ruleCannotRunTitle(code), title, code)
+    assert.ok(ruleBlockedRowLine(code), code)
   }
 })

@@ -106,3 +106,21 @@ test('the rule editor keeps the saved machine and asks before moving it', () => 
   assert.match(form, /!machineGone &&/)
   assert.match(form, /Pick where it should run\s*\n?\s*before saving\.|Pick where it should run before saving\./)
 })
+
+test('the rule row shows the machine reason in words, on the line after the name', () => {
+  assert.match(rules, /export function ruleBlockedRowLine\(/)
+  assert.match(view, /const blockedReason = ruleBlockedRowLine\(blocked\)/)
+  // One line: the reason leads the when, the harness and the last run rather
+  // than becoming a second row of prose under the name.
+  assert.match(view, /<div className="am-line">\s*\n\s*\{blockedReason \? blockedReason \+ ' [^']*' : ''\}/)
+  // The visible sentence is an addition, not a change to what Run does.
+  assert.match(view, /title=\{ruleCannotRunTitle\(blocked\)\}/)
+  assert.match(view, /disabled=\{blocked !== null \|\| busyId != null\}/)
+})
+
+test('the palette still asks the same predicate the row does', () => {
+  // Both surfaces read ruleRunRows, and that reads ruleCannotRun: a reason in
+  // the row cannot drift from what the palette refuses to offer.
+  assert.match(palette, /ruleRunRows\(/)
+  assert.match(rules, /if \(ruleCannotRun\(rule, machines, \{ answered \}\)\) continue/)
+})
