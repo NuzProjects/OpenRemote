@@ -1054,7 +1054,13 @@ export default function SettingsView({ onReplay, onOpenChat, onClose = null, onM
                         title={privacy ? 'Remove the project - it asks once, and its chats stay' : `Remove the project - it asks once, and its chats stay. Folder: ${p.folders[0]}`}
                         onClick={() => setArmedProject((current) => armRow(current, p.id))}
                       >
-                        <span className="pv">{projectName(p)}</span> ✕
+                        <span className="pv">{projectName(p)}</span>
+                        {/* The cross sits in its own span so it can be spaced: run
+                            straight after the name it read as part of it
+                            ("Obsidian×"), while it means something separate. */}
+                        <span className="pn-chip-x" aria-hidden="true">
+                          ✕
+                        </span>
                       </button>
                     ))
                   )}

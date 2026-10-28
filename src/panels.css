@@ -103,6 +103,16 @@
   border-color: rgba(76, 180, 135, 0.35);
 }
 
+/* A remove cross inside a panel button (the settings project chips): spaced away
+   from the name it follows, and dimmed so the name stays the label while the cross
+   reads as the control it is. */
+.pn-chip-x {
+  margin-left: 6px;
+  opacity: 0.65;
+  font-size: 11px;
+  line-height: 1;
+}
+
 /* The destructive button, in the one red the contract names (the diff's
    #F87171, held in the --red token): red text and border so it reads as
    dangerous before it is pressed, a wash on hover, and nothing else - no
