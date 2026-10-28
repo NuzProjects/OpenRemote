@@ -32,6 +32,15 @@ export const isMac =
 // arrows move inside it, and no app shortcut fires underneath.
 const OVERLAY = '[role="dialog"], .nc-menu, .ctx-menu'
 
+/// Whether an overlay is really on screen. The selector alone is not enough: a menu
+/// left in the DOM but hidden (display: none, a hidden attribute) still matches, and
+/// then every shortcut in the app would be dead with nothing to say why. A rendered
+/// node has client rects; a hidden one has none.
+function overlayOpen() {
+  const node = document.querySelector(OVERLAY)
+  return Boolean(node && node.getClientRects().length > 0)
+}
+
 const KeyboardContext = createContext(null)
 
 export function KeyboardProvider({ children }) {
@@ -85,7 +94,7 @@ export function KeyboardProvider({ children }) {
       if (!combo) return
       const id = actionForCombo(bindingsRef.current, combo)
       if (!id) return
-      if (document.querySelector(OVERLAY)) return
+      if (overlayOpen()) return
       const typing = typesIn(document.activeElement)
       if (typing && !firesWhileTyping(combo)) return
       // An action that leaves the chat does not fire while the caret is in a
@@ -97,6 +106,12 @@ export function KeyboardProvider({ children }) {
         if (/(^|\+)(Mod|Ctrl)\+/.test(combo)) e.preventDefault()
         return
       }
+      // Esc is the one action that fires while typing, because holding a turn is
+      // the chat's own gesture and the composer is inside the chat. From any other
+      // field Esc is the field's key (clear it, then leave it), and those handlers
+      // do not stop the event, so without this an Escape pressed to clear the
+      // sidebar's search also aborted the turn the sidebar was showing.
+      if (typing && id === 'interrupt' && !document.activeElement?.closest?.('.chatview')) return
       // A Ctrl/Cmd key the app owns never falls through to the webview's
       // own accelerators (Ctrl+P would print) even when nothing can act on
       // it here; Esc and Alt keys do fall through, keeping their meaning.

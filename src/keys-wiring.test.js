@@ -36,6 +36,30 @@ test('a navigating shortcut stands down while a field has focus', () => {
   assert.match(dispatch, /preventDefault\(\)/, 'a swallowed Mod combo does not reach the browser')
 })
 
+test('an Escape in a field outside the chat does not interrupt the turn', () => {
+  // Esc is the one action that fires while typing (the chat's own composer is where
+  // holding a turn happens), and the field handlers that clear a search do not stop
+  // the event. Without this guard, Escape pressed to clear the sidebar's search also
+  // aborted the turn the sidebar was showing.
+  const keys = source('keyboard.jsx')
+  const start = keys.indexOf('const onKey')
+  const dispatch = keys.slice(start, keys.indexOf("window.addEventListener('keydown', onKey)"))
+  const guard = dispatch.indexOf("id === 'interrupt'")
+  assert.ok(guard > 0, 'the dispatcher knows the one action Esc is bound to')
+  assert.match(dispatch, /closest\?\.\('\.chatview'\)/, 'and where it may fire from')
+  const run = dispatch.indexOf('run(id)')
+  assert.ok(run > guard, 'the guard runs before the handler does')
+})
+
+test('an overlay owns the keyboard only while it is really on screen', () => {
+  // A menu left in the DOM but hidden still matched the old selector, and then every
+  // shortcut in the app was dead with nothing saying why.
+  const keys = source('keyboard.jsx')
+  assert.match(keys, /function overlayOpen\(\)[\s\S]{0,220}getClientRects\(\)\.length > 0/)
+  assert.match(keys, /if \(overlayOpen\(\)\) return/, 'the dispatcher asks the question, not the selector')
+  assert.doesNotMatch(keys, /if \(document\.querySelector\(OVERLAY\)\) return/)
+})
+
 test('the sheet explains the leave-the-chat rule where bindings are explained', () => {
   const sheet = source('ShortcutSheet.jsx')
   const at = sheet.indexOf('Actions that leave the chat')
