@@ -68,10 +68,13 @@ test('deleting is a hover control that asks once, through row-confirm', () => {
   assert.match(newchat, /\{armed \? 'Delete\?' : <X size=\{11\}/)
 })
 
-test('a preset that cannot be honoured still applies what it can, and says why', () => {
+test('a preset that cannot be honoured applies what it can, and says nothing about it', () => {
+  // The founder's call: a saved setup whose model or project is gone settles to what is
+  // available here without narrating the comparison. What it can still carry, it carries.
   assert.match(newchat, /settlePreset\(preset, \{/)
-  assert.match(newchat, /setPresetNote\(notes\.join\(' '\) \|\| null\)/)
-  assert.match(newchat, /<p className="nc-preset-note" role="status">/)
+  assert.match(newchat, /if \(slots\.projectId\) setProjectId\(slots\.projectId\)/)
+  assert.doesNotMatch(newchat, /setPresetNote/, 'no note is set any more')
+  assert.match(newchat, /\{\(carryNote \|\| selectionNote\) && \(/, 'the chat-level notes stay')
 })
 
 test('a preset is a chip with an edge at rest, and the mark that says its harness', () => {

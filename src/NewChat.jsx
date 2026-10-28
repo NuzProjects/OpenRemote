@@ -94,8 +94,10 @@ export default function NewChat({
   // The preset waiting for a harness switch to finish: its slots can only
   // be settled once the new harness has answered with its model list.
   const pendingPreset = useRef(openingPreset ?? null)
-  // One calm sentence about what a preset could not bring with it.
-  const [presetNote, setPresetNote] = useState(null)
+  // A saved setup that no longer matches this machine settles to what is available here
+  // without narrating the difference: the founder's call, and the right one. The two
+  // notes below stay, because they are about the chat in front of you rather than about
+  // a comparison with something else.
   // The chip being renamed in place: { id: 'new' | preset id, draft }.
   // 'new' is the Save chip before it becomes a preset.
   const [presetEditing, setPresetEditing] = useState(null)
@@ -367,10 +369,11 @@ export default function NewChat({
             })
             setModel(slots.model)
             setEffort(slots.effort)
-            setPermission(slots.permission)
+            if (slots.permission) setPermission(slots.permission)
             setFast(slots.fast && currentHarness.fast_supported === true)
             if (slots.projectId) setProjectId(slots.projectId)
-            setPresetNote(notes.join(' ') || null)
+            // The settle notes are not shown: a saved setup that no longer matches this
+            // machine settles to what is available without narrating the difference.
           } else {
             // Its harness is not the one running now: the project still
             // travels, and the note says why the rest did not.
@@ -383,7 +386,6 @@ export default function NewChat({
               labels: presetLabels(waiting),
             })
             if (slots.projectId) setProjectId(slots.projectId)
-            setPresetNote(notes.join(' ') || null)
           }
         }
       }
@@ -535,14 +537,12 @@ export default function NewChat({
         labels: presetLabels(preset),
       })
       if (slots.projectId) setProjectId(slots.projectId)
-      setPresetNote(notes.join(' ') || null)
       return
     }
     if (currentHarness && preset.harness !== currentHarness.id) {
       // A harness switch resets every slot below this line, so the preset
       // waits for the new harness's model list and settles in that effect.
       pendingPreset.current = preset
-      setPresetNote(null)
       setHarness(preset.harness)
       return
     }
@@ -559,7 +559,6 @@ export default function NewChat({
     setPermission(slots.permission)
     setFast(slots.fast && currentHarness?.fast_supported === true)
     if (slots.projectId) setProjectId(slots.projectId)
-    setPresetNote(notes.join(' ') || null)
   }
   // Naming a preset is one step, in place: the Save chip becomes an input
   // prefilled with what the setup is, and Enter keeps it. The ref holds the
@@ -1019,9 +1018,9 @@ export default function NewChat({
         </p>
       )}
       <div className={`nc-box${needsSignIn || usingApiKey ? ' nc-box--auth' : ''}`} ref={boxRef}>
-        {(presetNote || carryNote || selectionNote) && (
+        {(carryNote || selectionNote) && (
           <p className="nc-preset-note" role="status">
-            {presetNote ?? carryNote ?? selectionNote}
+            {carryNote ?? selectionNote}
           </p>
         )}
         {menus.element}
