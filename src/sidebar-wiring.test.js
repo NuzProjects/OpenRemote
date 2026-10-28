@@ -209,3 +209,26 @@ test('a row whose stream is between attempts says reconnecting in its tooltip', 
   assert.match(source, /reconnecting \} = useConsole\(\)/)
   assert.match(source, /title=\{reconnecting\?\.\[row\.id\] \? `\$\{row\.title\} - \$\{RECONNECTING\}` : undefined\}/)
 })
+test('the waiting lines are asked for in one pass, and one failure does not sink the rest', () => {
+  // Three waiting chats used to be three awaits in a row: the first line
+  // appeared, then the next, and the stamp that started the pass re-entered
+  // between rows. One Promise.all settles them together.
+  const effect = source.slice(source.indexOf('const missing = missingLines(kept, needs.chats)'), source.indexOf('// The two sections: registered projects'))
+  assert.ok(effect.length > 0, 'the question-lines effect is in the file')
+  assert.match(effect, /const asked = await Promise\.all\(/)
+  assert.match(effect, /missing\.map\(async \(row\) => \{/)
+  // Each ask owns its failure: a rejected decision read becomes this chat's
+  // empty line, so the batch never rejects and the others still land.
+  assert.match(effect, /catch \{[\s\S]{0,220}return \{ row, line: null \}/)
+  // One settle for the whole pass, after every ask is in.
+  assert.equal((effect.match(/setQuestions\(/g) ?? []).length, 1, 'one state write per pass')
+  assert.match(effect, /for \(const \{ row, line \} of asked\)/)
+  // The rules that decide which chats ask, and how an answer is cached, are
+  // the ones that were there: missingLines over the same kept cache, keyed by
+  // the stamp, kept even when null so a failure is not retried every beat.
+  assert.match(effect, /const missing = missingLines\(kept, needs\.chats\)/)
+  assert.match(effect, /cache = rememberLine\(cache, questionKey\(row\.id, row\.updatedAt\), line\)/)
+  assert.doesNotMatch(effect, /for \(const row of missing\)/, 'no serial walk')
+  // And the pass still stands down when the dependency changes under it.
+  assert.match(effect, /if \(cancelled\) return/)
+})

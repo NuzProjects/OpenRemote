@@ -227,23 +227,31 @@ export default function Sidebar({
     const missing = missingLines(kept, needs.chats)
     if (!missing.length) return undefined
     let cancelled = false
-    let cache = { ...kept }
     ;(async () => {
-      for (const row of missing) {
-        let line = null
-        try {
-          line = questionLine(await api.decisions(row.id))
-        } catch {
-          // A chat whose decisions cannot be read shows no line rather than
-          // an error in the sidebar: the group already says it is waiting.
-          line = null
-        }
-        if (cancelled) return
+      // Every new question in one pass: the asks go out together and the lines
+      // settle together, so three waiting chats cost one wait rather than
+      // three, and the stamp that started the pass arrives complete instead of
+      // re-entering between rows. Each ask owns its failure, so one chat whose
+      // decisions cannot be read leaves its line empty and the others land.
+      const asked = await Promise.all(
+        missing.map(async (row) => {
+          try {
+            return { row, line: questionLine(await api.decisions(row.id)) }
+          } catch {
+            // A chat whose decisions cannot be read shows no line rather than
+            // an error in the sidebar: the group already says it is waiting.
+            return { row, line: null }
+          }
+        }),
+      )
+      if (cancelled) return
+      let cache = { ...kept }
+      for (const { row, line } of asked) {
         // Kept even when null, so a failed or empty read is not retried on
         // every beat; only a new question (a new stamp) asks again.
         cache = rememberLine(cache, questionKey(row.id, row.updatedAt), line)
-        setQuestions({ ...cache })
       }
+      setQuestions({ ...cache })
     })()
     return () => {
       cancelled = true
