@@ -109,15 +109,6 @@ export function mergeSessionIntoChat(existing, session) {
   const merged = {
     ...fresh,
     title: (beatIsNewer ? fresh.title : null) ?? existing.title,
-    // The title has always been gated on that stamp; these were not, so a snapshot taken
-    // before an event the stream had already folded could put the older answer back for
-    // one beat: a finished turn flickered to running, the error line vanished, a queued
-    // message came and went. A fact the fold carries ahead of the poll belongs to the
-    // moment it happened, and the beat wins only when it is the fresher snapshot.
-    status: beatIsNewer ? fresh.status : existing.status,
-    running: beatIsNewer ? fresh.running : existing.running,
-    lastError: beatIsNewer ? fresh.lastError : existing.lastError,
-    queue: beatIsNewer ? fresh.queue : existing.queue,
     updatedAt: Math.max(existing.updatedAt ?? 0, fresh.updatedAt ?? 0),
     timeline: existing.timeline,
     foldedSeq: existing.foldedSeq,
