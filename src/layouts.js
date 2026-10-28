@@ -11,7 +11,7 @@
 // shape is validated (an older build may have saved a role this build no longer
 // has), what restoring produces, and every refusal.
 
-import { MAX_PANES, leaves, paneCount } from './split.js'
+import { MAX_PANES, PANE_MIN_PX, leaves, paneCount } from './split.js'
 
 // The stored list's own key, like the archive's: a console preference that
 // never travels to another device.
@@ -350,7 +350,11 @@ export function offerLayouts(saved, { currentChat = null, capacity = MAX_PANES }
 /// title is a sliver and the buttons crowd. A saved shape stores fractions, and
 /// a fraction has no pixel floor of its own: that is how a four-pane layout
 /// saved in a wide window came back unusable in a half-width one.
-export const PANE_MIN_PX = 240
+///
+/// The number itself is `split.js`'s, because a dragged divider is clamped to
+/// the same floor and two literals drift; re-exported here so every caller that
+/// knows the floor through a saved layout keeps importing it from this file.
+export { PANE_MIN_PX } from './split.js'
 
 const near = (a, b) => Math.abs(a - b) < 0.001
 

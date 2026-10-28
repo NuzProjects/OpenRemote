@@ -309,3 +309,63 @@ test('nothing stale hands back the layout it was given', () => {
   assert.equal(reconcilePanes(l, new Set(['chat-z'])), l)
   assert.equal(reconcilePanes(l, null), l)
 })
+
+// ---- the drag floor is the restored layout's own: pixels, not a fraction ----
+
+const twoPane = () => splitLeaf(newLayout(), 'p1', 'row')
+
+test('a drag in a 600px split cannot leave a neighbour below the pane floor', () => {
+  // 15 percent of 600 is 90px, a pane header nobody can read. The neighbour
+  // stops at 240px, which is 0.4 of the split.
+  const painted = movedSizes([0.5, 0.5], 0, 0.9, 600)
+  assert.ok(Math.abs(painted[1] * 600 - 240) < 1e-9, `neighbour ${painted[1] * 600}px`)
+  assert.ok(Math.abs(painted[0] + painted[1] - 1) < 1e-9, 'the split stays whole')
+  // The other direction lands on the same pixel number.
+  const back = movedSizes([0.5, 0.5], 0, -0.9, 600)
+  assert.ok(Math.abs(back[0] * 600 - 240) < 1e-9, `left ${back[0] * 600}px`)
+})
+
+test('the same drag in a 2000px split stops at the old fraction', () => {
+  // 240/2000 is 0.12, below MIN_SIZE, so a wide window behaves exactly as
+  // before: the fraction is still the stricter rule there.
+  const painted = movedSizes([0.5, 0.5], 0, -0.9, 2000)
+  assert.ok(Math.abs(painted[0] - 0.15) < 1e-9, `${painted[0]}`)
+})
+
+test('a split too narrow for two floors pins the divider instead of a sliver', () => {
+  // 400px cannot hold two 240px panes: half is the honest answer, and neither
+  // side is zero or negative.
+  const pinned = movedSizes([0.5, 0.5], 0, 0.9, 400)
+  assert.ok(Math.abs(pinned[0] - 0.5) < 1e-9, `${pinned[0]}`)
+  assert.ok(Math.abs(pinned[1] - 0.5) < 1e-9, `${pinned[1]}`)
+  const other = movedSizes([0.5, 0.5], 0, -0.9, 400)
+  assert.ok(other[0] >= 0 && other[1] >= 0, `${other}`)
+  // A pair narrower than two floors is split evenly, not pushed under zero.
+  const narrow = movedSizes([0.3, 0.1], 0, 0.9, 600)
+  assert.ok(Math.abs(narrow[0] - 0.2) < 1e-9, `${narrow[0]}`)
+  assert.ok(Math.abs(narrow[1] - 0.2) < 1e-9, `${narrow[1]}`)
+})
+
+test('the paint and the commit agree on the released number', () => {
+  // Both paths apply one floor, so the last painted frame is the layout the
+  // release commits and the divider does not jump.
+  const l = twoPane()
+  const drag = createDividerDrag({ sizes: [0.5, 0.5], index: 0, total: 600, start: 300 })
+  const painted = drag.move(300 + 200)
+  const committed = resizeSplit(l, l.root.id, 0, drag.release(), 600)
+  assert.ok(Math.abs(painted.sizes[0] - committed.root.sizes[0]) < 1e-9, `${painted.sizes} vs ${committed.root.sizes}`)
+  assert.ok(Math.abs(painted.sizes[1] - committed.root.sizes[1]) < 1e-9, `${painted.sizes} vs ${committed.root.sizes}`)
+})
+
+test('no geometry keeps the fraction exactly, on both paths', () => {
+  // movedSizes and resizeSplit are called from paths with no pixel size; those
+  // keep today's rule instead of guessing one.
+  const painted = movedSizes([0.5, 0.5], 0, -0.9)
+  assert.ok(Math.abs(painted[0] - 0.15) < 1e-9, `${painted[0]}`)
+  const l = twoPane()
+  const committed = resizeSplit(l, l.root.id, 0, -0.9)
+  assert.ok(Math.abs(committed.root.sizes[0] - 0.15) < 1e-9, `${committed.root.sizes[0]}`)
+  // A junk total counts as no total.
+  assert.ok(Math.abs(movedSizes([0.5, 0.5], 0, -0.9, Number.NaN)[0] - 0.15) < 1e-9)
+  assert.ok(Math.abs(movedSizes([0.5, 0.5], 0, -0.9, 0)[0] - 0.15) < 1e-9)
+})

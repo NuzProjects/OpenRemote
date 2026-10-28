@@ -9,6 +9,25 @@
 
 export const MAX_PANES = 4
 const MIN_SIZE = 0.15
+/// The width a pane may not fall below, in pixels: one floor for both paths that
+/// can shrink a pane - a restored layout is fitted to it (`fitLayout`) and a
+/// dragged divider is clamped through the split's own pixel size to the same
+/// number. A fraction alone is 90px in a 600px window, which is a pane whose
+/// header cannot be read, and two literals are how the two paths drift apart
+/// again. It lives here because `layouts.js` already imports this file, so the
+/// other direction would be a cycle.
+export const PANE_MIN_PX = 240
+
+/// The smallest share one side of a divider may hold. `total` is the split's
+/// size in pixels when the caller has geometry; without it (the paths that
+/// only carry fractions) the rule is what it always was. The pixel floor wins
+/// where it is stricter, and is capped at half: a split too narrow for two
+/// floors pins the divider in the middle, which is honest, while a negative or
+/// zero pane is not.
+function floorFraction(total) {
+  if (typeof total !== 'number' || !Number.isFinite(total) || total <= 0) return MIN_SIZE
+  return Math.min(0.5, Math.max(MIN_SIZE, PANE_MIN_PX / total))
+}
 
 export function newLayout() {
   return { root: { type: 'leaf', id: 'p1', view: null }, focus: 'p1', seq: 1 }
@@ -202,15 +221,24 @@ export function balanceSplit(layout, splitId) {
 
 /**
  * The sizes after moving the divider after `index` by `delta` (a fraction of
- * the split's whole size). Neither neighbour shrinks below MIN_SIZE. Kept
- * apart from the layout walk so a drag can paint from exactly the numbers it
- * will later commit.
+ * the split's whole size). Neither neighbour shrinks below the floor: the
+ * stricter of the old fraction (MIN_SIZE) and this pane width's share of
+ * PANE_MIN_PX, when `total` is the split's pixel size. `total` is optional
+ * because `movedSizes` is also called from paths that have no geometry, and
+ * those keep the fraction exactly. Never negative, never zero: a pair already
+ * narrower than two floors is split evenly rather than pushed past its own
+ * size. Kept apart from the layout walk so a drag can paint from exactly the
+ * numbers it will later commit.
  */
-export function movedSizes(sizes, index, delta) {
+export function movedSizes(sizes, index, delta, total) {
   const a = sizes?.[index]
   const b = sizes?.[index + 1]
   if (a === undefined || b === undefined) return sizes
-  const moved = Math.max(MIN_SIZE - a, Math.min(b - MIN_SIZE, delta))
+  // Two floors cannot be met inside a pair narrower than both together, so the
+  // floor is capped by half the pair: the divider then sits at the pair's own
+  // midpoint instead of one side going under zero.
+  const floor = Math.min(floorFraction(total), (a + b) / 2)
+  const moved = Math.max(floor - a, Math.min(b - floor, delta))
   const next = [...sizes]
   next[index] = a + moved
   next[index + 1] = b - moved
@@ -219,12 +247,14 @@ export function movedSizes(sizes, index, delta) {
 
 /**
  * Move the divider after child `index` of a split by `delta` (a fraction of
- * the split's whole size). Neither neighbour shrinks below MIN_SIZE.
+ * the split's whole size). Neither neighbour shrinks below the same floor
+ * `movedSizes` uses - pass the split's pixel size as `total` so the commit
+ * lands on the number the last painted frame showed.
  */
-export function resizeSplit(layout, splitId, index, delta) {
+export function resizeSplit(layout, splitId, index, delta, total) {
   const root = mapNode(layout.root, (node) => {
     if (node.type !== 'split' || node.id !== splitId) return node
-    const sizes = movedSizes(node.sizes, index, delta)
+    const sizes = movedSizes(node.sizes, index, delta, total)
     return sizes === node.sizes ? node : { ...node, sizes }
   })
   return root === layout.root ? layout : { ...layout, root }
@@ -239,6 +269,10 @@ export function resizeSplit(layout, splitId, index, delta) {
  * The controller exists so the rule is testable without a DOM: a drag paints
  * on every move and hands React one state change, at the end. Committing on
  * every move re-rendered every pane, transcripts included, at pointer rate.
+ *
+ * `total` is the split's size in pixels: the same number converts the pointer
+ * to a fraction here and gives `movedSizes` its pixel floor, so the last frame
+ * painted and the committed layout come from one rule.
  */
 export function createDividerDrag({ sizes, index, total, start }) {
   const base = sizes ?? []
@@ -252,7 +286,7 @@ export function createDividerDrag({ sizes, index, total, start }) {
   return {
     move(at) {
       delta = (at - start) / total
-      return { sizes: movedSizes(base, index, delta), delta }
+      return { sizes: movedSizes(base, index, delta, total), delta }
     },
     release() {
       return delta

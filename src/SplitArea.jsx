@@ -58,9 +58,12 @@ function SplitNode({ node, setLayout, renderNode }) {
       target.removeEventListener('pointercancel', done)
       // The one layout commit of the drag. A gesture that never moved (the
       // first half of a double-click on the strip) commits nothing, so it
-      // cannot churn the shell either.
+      // cannot churn the shell either. `total` rides along so the commit is
+      // clamped by the same pixel floor the last painted frame used: without
+      // it, release would land on the old fractional floor and the divider
+      // would jump back.
       const delta = drag.release()
-      if (delta !== 0) setLayout((l) => resizeSplit(l, node.id, index, delta))
+      if (delta !== 0) setLayout((l) => resizeSplit(l, node.id, index, delta, total))
     }
     target.addEventListener('pointermove', move)
     target.addEventListener('pointerup', done)
