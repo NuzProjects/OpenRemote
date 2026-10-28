@@ -16,7 +16,37 @@ https://github.com/morewebs/OpenRemote/releases/latest/download/OpenRemote-unive
 https://github.com/morewebs/OpenRemote/releases/latest/download/OpenRemote-universal.apk
 https://github.com/morewebs/OpenRemote/releases/latest/download/openremote-daemon-linux-x86_64
 https://github.com/morewebs/OpenRemote/releases/latest/download/SHA256SUMS
+https://github.com/morewebs/OpenRemote/releases/latest/download/OpenRemote-windows-x64.exe
+https://github.com/morewebs/OpenRemote/releases/latest/download/openremote-daemon-windows-x64.exe
+https://github.com/morewebs/OpenRemote/releases/latest/download/SHA256SUMS-portable-windows-x64
 ```
+
+## The npm channel
+
+`npm install -g morewebs/openremote` installs npm's GitHub shorthand for
+this repo, not a package published to the registry: npm clones the repo and
+links the `bin` that `package.json` declares, which is
+`npm/bin/openremote.mjs`.
+
+That launcher carries no binary. On its first run it follows
+`releases/latest` to the current tag, downloads the three portable assets
+above, and verifies both `.exe` files against
+`SHA256SUMS-portable-windows-x64` before anything is spawned. It then keeps
+them as `OpenRemote.exe` and `openremote-daemon.exe` under
+`%LOCALAPPDATA%\moreweb\openremote\<tag>\` - the second name is the contract
+the Tauri shell resolves beside itself - and records the checksums it
+verified in `current.json` there. A later run checks against that record, so
+it makes no request at all, and a copy that no longer matches is fetched
+again rather than started.
+
+The three assets are the same binaries the installer carries, staged from
+the same build. They are deliberately outside the six required names the
+publish job enforces: the npm channel is a second door to the app, so a
+release that could not produce them still publishes its installers and says
+so in the run.
+
+**A release with no portable pair is invisible to npm.** The launcher fails
+with the installer URL rather than downloading something half-right.
 
 Every published release carries both names for each bundle: the versioned
 one Tauri produces (`OpenRemote_0.3.2_x64-setup.exe`) and the version-free

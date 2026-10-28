@@ -11,6 +11,23 @@ Grab the latest installer from
 MSI or the NSIS setup exe). The installers are unsigned - SmartScreen
 will ask; choose More info > Run anyway.
 
+Or, from a terminal with Node 18.17 or newer:
+
+```sh
+npm install -g morewebs/openremote
+openremote
+```
+
+That installs a launcher, not the app. The first `openremote` downloads the
+portable build from the current release (about 28MB, into
+`%LOCALAPPDATA%\moreweb\openremote\<release>\`), checks it against the
+release's own checksums, and starts it; later runs use that copy and need no
+network, and `openremote --update` moves to a newer release. It is the same
+binary the installer carries, under the same identity, so whichever way you
+install it you get the same chats, settings and paired phone. Windows x64
+only for now - `openremote --help` says so, and names the installer for
+macOS and Linux.
+
 ## Layout
 
 - `src/` + `src-tauri/` - the console (Vite + React 19), frameless Tauri 2 shell
