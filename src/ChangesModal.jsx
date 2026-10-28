@@ -184,6 +184,17 @@ export default function ChangesModal({ chat }) {
               {folded.totals.removedLines > 0 && (
                 <span className="chg-minus"> -{folded.totals.removedLines}</span>
               )}
+              {/* The counts above are what landed. A report that did not land is said
+                  here rather than folded into the headline, which a reviewer reads as
+                  lines that reached the disk. */}
+              {folded.unlandedEdits > 0 && (
+                <span className="chg-unlanded">
+                  {' '}
+                  plus {countWords(folded.unlandedEdits)}
+                  {folded.unlandedLines > 0 ? `, ${folded.unlandedLines} lines,` : ''} in a report
+                  that failed
+                </span>
+              )}
             </p>
             <div className="chg-list">
               {folded.files.map((entry) => {
@@ -247,9 +258,9 @@ export default function ChangesModal({ chat }) {
 
         {folded.empty === 'no-edit' && (
           <p className="chg-empty">
-            No file changes in this chat. A harness that edits from a shell command or a script
-            reports no file list at all, so this is what it reported rather than everything a turn
-            did.
+            {folded.unread > 0
+              ? `No file changes this console could read. ${folded.unread === 1 ? 'One report named a file' : `${folded.unread} reports named files`} in a shape it does not recognise, so this says what this window could show, not that the chat changed nothing.`
+              : 'No file changes in this chat. A harness that edits from a shell command or a script reports no file list at all, so this is what it reported rather than everything a turn did.'}
           </p>
         )}
         {folded.empty === 'no-transcript' && (

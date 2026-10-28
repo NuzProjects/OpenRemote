@@ -135,10 +135,18 @@ export function hasFileChanges(items) {
 export function fileChanges(items) {
   const list = Array.isArray(items) ? items : []
   const byKey = new Map()
+  // Items that named a file but whose shape this module cannot read: an edit whose
+  // input carries a path and one truncated string, a harness that reports a bare path.
+  // Dropping them silently made a chat whose only edits arrived that way say it
+  // changed no files, which is the opposite of what the harness reported.
+  let unread = 0
   for (const item of list) {
     if (!item || item.kind !== 'tool' || !item.input) continue
     const op = editOp(item.input)
-    if (!op) continue
+    if (!op) {
+      if (item.input.file_path) unread += 1
+      continue
+    }
     const key = pathKey(item.input.file_path)
     const status = reportStatus(item)
     let file = byKey.get(key)
@@ -162,7 +170,10 @@ export function fileChanges(items) {
     file.hunks += drawn.hunks
     file.addedLines += drawn.addedLines
     file.removedLines += drawn.removedLines
-    file.parts.push(drawn)
+    // The part carries its report's status so the totals can tell a landed write from
+    // one whose report failed: the row already says which it is, and the headline
+    // above the rows has to agree with them.
+    file.parts.push({ ...drawn, status })
     // The file's state is its last report's: an edit that landed and one
     // that errored leave different files behind.
     file.status = status
@@ -191,13 +202,26 @@ export function fileChanges(items) {
     }))
     .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
   const totals = { files: files.length, edits: 0, hunks: 0, addedLines: 0, removedLines: 0, added: 0, edited: 0, deleted: 0 }
+  // The totals are what the chat did, so they count only the reports that landed: a
+  // forty-line write whose report failed used to be added to the headline, which a
+  // reviewer reads as lines that reached the disk. The failed report is counted aside
+  // so the surface can say so in one line.
+  let unlandedLines = 0
+  let unlandedEdits = 0
   for (const file of files) {
+    for (const drawn of file.parts) {
+      if (drawn.status === 'ok') {
+        totals.hunks += drawn.hunks
+        totals.addedLines += drawn.addedLines
+        totals.removedLines += drawn.removedLines
+      } else {
+        unlandedEdits += 1
+        unlandedLines += drawn.addedLines + drawn.removedLines
+      }
+    }
     totals.edits += file.edits
-    totals.hunks += file.hunks
-    totals.addedLines += file.addedLines
-    totals.removedLines += file.removedLines
     totals[file.op] += 1
   }
   const empty = files.length > 0 ? null : list.length === 0 ? 'no-transcript' : 'no-edit'
-  return { files, totals, empty }
+  return { files, totals, empty, unread, unlandedEdits, unlandedLines }
 }
