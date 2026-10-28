@@ -24,6 +24,7 @@ export default function PickerMenu({
   renderSubline, // a muted second line inside the item (efforts, paths)
   wide, // room for sublines without cramped trailing text
   footer, // a pinned action row under the list; renders in the empty state too
+  note, // one line under the search field, for a list the caller knows is stale
 }) {
   const [query, setQuery] = useState('')
   const [cursor, setCursor] = useState(0)
@@ -190,6 +191,7 @@ export default function PickerMenu({
           spellCheck={false}
         />
       </label>
+      {note && <p className="nc-note">{note}</p>}
       <div className="nc-items">
         {grouped.map((group) => (
           <div key={group.label ?? 'all'} className="nc-group">

@@ -177,6 +177,11 @@ export default function NewChat({
   // project belongs to the machine that owns its folder, so the list
   // follows the target.
   const [targetProjects, setTargetProjects] = useState([])
+  // Whether the list under the picker is the daemon's answer or the last one this window
+  // had: a failed fetch used to empty it, so a machine whose relay was still coming up
+  // looked like a machine with no projects, and a chat started in the home folder
+  // although the machine had one.
+  const [projectsFailed, setProjectsFailed] = useState(false)
   useEffect(() => {
     let cancelled = false
     // Not while the daemon is down: the fetch would only fail and blank
@@ -185,10 +190,13 @@ export default function NewChat({
     apiFor(target)
       .projects()
       .then((list) => {
-        if (!cancelled) setTargetProjects(list ?? [])
+        if (cancelled) return
+        setTargetProjects(list ?? [])
+        setProjectsFailed(false)
       })
       .catch(() => {
-        if (!cancelled) setTargetProjects([])
+        // The last good list stays on screen; the picker says it may be stale.
+        if (!cancelled) setProjectsFailed(true)
       })
     return () => {
       cancelled = true
@@ -1373,8 +1381,7 @@ export default function NewChat({
               title={chosenProject ? (privacy ? 'The project this chat runs in' : workspace) : 'A chat can run in a project, or in no folder at all'}
             >
               <FolderOpen size={13} weight="light" />
-              {chosenProject ? <span className="pv">{projectName(chosenProject)}</span> : 'No project'}
-            </button>
+              {chosenProject ? <span className="pv">{projectName(chosenProject)}</span> : 'No project'}            </button>
             {picker?.kind === 'project' && (
               <PickerMenu
                 label="Project"
@@ -1386,6 +1393,14 @@ export default function NewChat({
                 ]}
                 groups={null}
                 selectedId={chosenProject?.id ?? '__none__'}
+                // The list under this picker is the last one the daemon sent: a failed
+                // fetch keeps it rather than showing none, so a machine mid-reconnect no
+                // longer reads as a machine with no projects.
+                note={
+                  projectsFailed
+                    ? 'The project list did not load. This is the last one this window saw.'
+                    : null
+                }
                 onChoose={(id) => {
                   setProjectId(id === '__none__' ? null : id)
                   setPicker(null)
