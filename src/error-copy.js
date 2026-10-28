@@ -45,7 +45,12 @@ export function errorCopy(err) {
   const said = typeof err?.message === 'string' ? err.message.trim() : ''
   // The console wrote this one itself, so it is repeated rather than quoted.
   // TIMEOUT carries its own period now, so the sentence is not doubled.
-  if (said.startsWith(TIMEOUT)) return `${TIMEOUT} Try again.`
+  // Two voices say it: the daemon client's own timeout ('The daemon did not answer in
+  // time', marked `code: 'timeout'` beside `status: 0`) and the console's shorter
+  // sentence. Both are this app's words, so neither may be quoted as the daemon's: a
+  // timeout that carried no status used to fall through to the neutral line, and one
+  // that carries `status: 0` would otherwise be read as a refusal.
+  if (err?.code === 'timeout' || said.startsWith(TIMEOUT)) return `${TIMEOUT} Try again.`
   // The stream's own close line: a status with no words around it. Only the
   // statuses a reconnect can fix are called a drop that is healing itself; a 404 (a
   // daemon that no longer serves that route) or a 403 would promise a recovery that
@@ -56,6 +61,9 @@ export function errorCopy(err) {
     if (code >= 500) return 'The live stream to the daemon dropped. The console is reconnecting on its own.'
     return `The daemon refused the live stream (HTTP ${code}). Try again, or reconnect from Settings.`
   }
+  // Status 0 is the client's own mark for "nothing came back": not a refusal, and
+  // not a status it could quote. Every other status is an answer the daemon gave.
+  if (status === 0) return `${UNREACHABLE} Check that it is running, then try again.`
   if (status != null) {
     // `call()` puts the daemon's own sentence in the message and keeps the
     // status beside it. A message that is only the status means the daemon
