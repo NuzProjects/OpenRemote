@@ -16,6 +16,9 @@ https://github.com/morewebs/OpenRemote/releases/latest/download/OpenRemote-unive
 https://github.com/morewebs/OpenRemote/releases/latest/download/OpenRemote-universal.apk
 https://github.com/morewebs/OpenRemote/releases/latest/download/openremote-daemon-linux-x86_64
 https://github.com/morewebs/OpenRemote/releases/latest/download/SHA256SUMS
+https://github.com/morewebs/OpenRemote/releases/latest/download/OpenRemote-windows-x64.exe
+https://github.com/morewebs/OpenRemote/releases/latest/download/openremote-daemon-windows-x64.exe
+https://github.com/morewebs/OpenRemote/releases/latest/download/SHA256SUMS-portable-windows-x64
 ```
 
 Every published release carries both names for each bundle: the versioned
@@ -24,6 +27,60 @@ one above. A version bump never edits a download link anywhere.
 
 The version-free names start with the first tag after this landed - v0.3.2
 predates them, so its release page has only the versioned assets.
+
+## The npm channel
+
+`npm install -g @morewebs/openremote` installs the launcher in `npm/`, a
+package of three files (its manifest, this description, and
+`npm/bin/openremote.mjs`) published separately from the app.
+
+The launcher carries no binary. On its first run it follows
+`releases/latest` to the current tag, downloads the three portable assets
+above, and verifies both `.exe` files against
+`SHA256SUMS-portable-windows-x64` before anything is spawned. It then keeps
+them as `OpenRemote.exe` and `openremote-daemon.exe` under
+`%LOCALAPPDATA%\moreweb\openremote\<tag>\` - the second name is the contract
+the Tauri shell resolves beside itself - and records the checksums it
+verified in `current.json` there. A later run checks against that record, so
+it makes no request at all, and a copy that no longer matches is fetched
+again rather than started.
+
+The three assets are the same binaries the installer carries, staged from
+the same build. They are deliberately outside the six required names the
+publish job enforces: the npm channel is a second door to the app, so a
+release that could not produce them still publishes its installers and says
+so in the run.
+
+**A release with no portable pair is invisible to npm.** Every download
+failure names the URL that answered badly and then the installer to use
+instead, and nothing is spawned: the launcher fails closed rather than
+starting something half-right.
+
+### Publishing the launcher with a release
+
+The launcher names a release, it is not part of one, so it is published by
+hand when the app's version moves:
+
+```sh
+cd npm
+npm publish --access public
+```
+
+It has to be a terminal you are sitting at, not CI: the account's two-factor
+requirement is satisfied by approving the request in a browser, and npm is
+retiring tokens that bypass it for direct publishing. A headless run gets
+`E403` no matter what code it offers.
+
+`npm/package.json` carries the app's `version` and must move with it: the
+repo's tests assert the two agree, so a version bump that forgets the npm
+manifest fails `npm test` rather than shipping a launcher that claims to be
+a release it is not.
+
+Installing from GitHub instead - `npm install -g morewebs/openremote` -
+is not supported: npm's global install of a git dependency of this repo
+produces a package directory with no launcher in it (verified on npm 10 and
+11 on Windows), while an install from a published tarball works. That is
+why the channel is the registry.
 
 ## An installed app does not update itself
 

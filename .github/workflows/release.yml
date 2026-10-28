@@ -49,6 +49,13 @@ name: Release
 # six, so a platform that silently changed its artifact name fails the run
 # instead of shipping a page with a dead download link.
 #
+# The Windows job also stages the portable pair the npm channel downloads
+# (OpenRemote-windows-x64.exe, openremote-daemon-windows-x64.exe, and the
+# SHA256SUMS-portable-windows-x64 they are verified against). Those three
+# stay outside the six on purpose: the npm channel is a second front door
+# to the app, so a release that lacks them still publishes, and the publish
+# job names the gap instead of failing it.
+#
 # Supply chain: every action below is pinned to a full commit SHA with the
 # release that SHA stands for in a trailing comment, and the Rust toolchain
 # to a fixed version rather than `stable`. A tag build holds
@@ -305,6 +312,31 @@ jobs:
           set -euo pipefail
           cp src-tauri/target/release/bundle/nsis/*.exe OpenRemote-Setup-x64.exe
           cp src-tauri/target/release/bundle/msi/*.msi OpenRemote-Setup-x64.msi
+      # The portable pair that `npm install -g morewebs/OpenRemote` downloads:
+      # the same two binaries the installer carries, staged under version-free
+      # names so the launcher never has to know a version.
+      #
+      # A missing pair warns and carries on. The npm channel is a second front
+      # door to the app, and it must never be the reason a tag's installers
+      # fail to ship; when it does warn, this release simply has no npm entry,
+      # and the publish job warns again rather than leaving a dead link.
+      - name: stage the portable pair
+        if: steps.build.outputs.skip != '1'
+        run: |
+          set -uo pipefail
+          app=src-tauri/target/release/openremote-ui-desktop.exe
+          daemon=src-tauri/target/release/openremote-daemon.exe
+          if [ -f "$app" ] && [ -f "$daemon" ] \
+            && cp "$app" OpenRemote-windows-x64.exe \
+            && cp "$daemon" openremote-daemon-windows-x64.exe \
+            && sha256sum OpenRemote-windows-x64.exe openremote-daemon-windows-x64.exe \
+                 > SHA256SUMS-portable-windows-x64; then
+            cat SHA256SUMS-portable-windows-x64
+          else
+            # No -e above on purpose: a disk-full runner or a renamed build
+            # output must cost this release its npm entry, not its installers.
+            echo "::warning::the portable pair could not be staged, so this release has no npm entry"
+          fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: steps.build.outputs.skip != '1'
         with:
@@ -314,6 +346,9 @@ jobs:
             src-tauri/target/release/bundle/nsis/*.exe
             OpenRemote-Setup-x64.msi
             OpenRemote-Setup-x64.exe
+            OpenRemote-windows-x64.exe
+            openremote-daemon-windows-x64.exe
+            SHA256SUMS-portable-windows-x64
 
   linux:
     needs: release
@@ -720,7 +755,8 @@ jobs:
           done < <(find assets -maxdepth 1 -type f \
             \( -name '*.msi' -o -name '*.exe' -o -name '*.AppImage' -o -name '*.deb' \
                -o -name '*.dmg' -o -name '*.apk' -o -name 'openremote-daemon-linux-x86_64' \
-               -o -name 'THIRD-PARTY_NOTICES.md' -o -name 'SHA256SUMS' \) | sort)
+               -o -name 'THIRD-PARTY_NOTICES.md' -o -name 'SHA256SUMS' \
+               -o -name 'SHA256SUMS-portable-windows-x64' \) | sort)
           have=()
           for file in "${assets[@]}"; do
             have+=("$(basename "$file")")
@@ -769,6 +805,21 @@ jobs:
             echo "publish: nothing was published; this run and ${TAG} together lack ${missing[*]}" >&2
             exit 1
           fi
+
+          # The npm channel's pair is deliberately outside NAMES: it is a
+          # second door to the app, and a gap there must not hold back the
+          # installers. It is named here so a release that ships without it
+          # says so in the run, which is the only place anyone would look.
+          for name in OpenRemote-windows-x64.exe openremote-daemon-windows-x64.exe \
+                      SHA256SUMS-portable-windows-x64; do
+            if printf '%s\n' "${have[@]}" | grep -qxF "$name"; then
+              continue
+            fi
+            if [ -n "$existing" ] && grep -qxF "$name" <<< "$existing"; then
+              continue
+            fi
+            echo "::warning::${TAG} has no ${name}, so the npm channel will not offer this release"
+          done
 
           # A nightly replaces the rolling release only now, with every
           # platform built. Its tag moves to this run's commit.
