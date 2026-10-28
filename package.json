@@ -4,15 +4,6 @@
   "version": "0.4.1",
   "license": "AGPL-3.0-only",
   "type": "module",
-  "bin": {
-    "openremote": "npm/bin/openremote.mjs"
-  },
-  "files": [
-    "npm/bin/openremote.mjs"
-  ],
-  "engines": {
-    "node": ">=18.17"
-  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",

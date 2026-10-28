@@ -23,12 +23,11 @@ https://github.com/morewebs/OpenRemote/releases/latest/download/SHA256SUMS-porta
 
 ## The npm channel
 
-`npm install -g morewebs/openremote` installs npm's GitHub shorthand for
-this repo, not a package published to the registry: npm clones the repo and
-links the `bin` that `package.json` declares, which is
-`npm/bin/openremote.mjs`.
+`npm install -g @morewebs/openremote` installs the launcher in `npm/`, a
+package of three files (its manifest, this description, and
+`npm/bin/openremote.mjs`) published separately from the app.
 
-That launcher carries no binary. On its first run it follows
+The launcher carries no binary. On its first run it follows
 `releases/latest` to the current tag, downloads the three portable assets
 above, and verifies both `.exe` files against
 `SHA256SUMS-portable-windows-x64` before anything is spawned. It then keeps
@@ -47,6 +46,28 @@ so in the run.
 
 **A release with no portable pair is invisible to npm.** The launcher fails
 with the installer URL rather than downloading something half-right.
+
+### Publishing the launcher with a release
+
+The launcher names a release, it is not part of one, so it is published by
+hand when the app's version moves:
+
+```sh
+cd npm
+npm publish --access public      # asks for the account's 2FA code
+```
+
+`npm/package.json` carries the app's `version` and must move with it: the
+repo's tests assert the two agree, so a version bump that forgets the npm
+manifest fails `npm test` rather than shipping a launcher that claims to be
+a release it is not. Nothing publishes the launcher from CI, because npm
+holds the 2FA requirement and the release token in GitHub does not.
+
+Installing from GitHub instead - `npm install -g morewebs/openremote` -
+is not supported: npm's global install of a git dependency of this repo
+produces a package directory with no launcher in it (verified on npm 10 and
+11 on Windows), while an install from a published tarball works. That is
+why the channel is the registry.
 
 Every published release carries both names for each bundle: the versioned
 one Tauri produces (`OpenRemote_0.3.2_x64-setup.exe`) and the version-free

@@ -14,7 +14,7 @@ will ask; choose More info > Run anyway.
 Or, from a terminal with Node 18.17 or newer:
 
 ```sh
-npm install -g morewebs/openremote
+npm install -g @morewebs/openremote
 openremote
 ```
 
@@ -26,7 +26,8 @@ network, and `openremote --update` moves to a newer release. It is the same
 binary the installer carries, under the same identity, so whichever way you
 install it you get the same chats, settings and paired phone. Windows x64
 only for now - `openremote --help` says so, and names the installer for
-macOS and Linux.
+macOS and Linux. The package itself is [npm/](npm); `docs/release-channels.md`
+says how a release publishes it.
 
 ## Layout
 
