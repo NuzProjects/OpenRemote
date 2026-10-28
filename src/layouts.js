@@ -342,3 +342,114 @@ export function offerLayouts(saved, { currentChat = null, capacity = MAX_PANES }
       }
     })
 }
+
+// ---- what a restore costs, and how small a pane may become ----
+
+/// The narrowest a pane may be when a saved layout is applied. The pane header
+/// holds a title, the split action and the overflow; below about this width the
+/// title is a sliver and the buttons crowd. A saved shape stores fractions, and
+/// a fraction has no pixel floor of its own: that is how a four-pane layout
+/// saved in a wide window came back unusable in a half-width one.
+export const PANE_MIN_PX = 240
+
+const near = (a, b) => Math.abs(a - b) < 0.001
+
+/// Whether two windows are the same shape: same tree, same directions, same
+/// sizes to three decimals, same view in every leaf. Ids are not compared: a
+/// restore builds new ones every time.
+export function sameShape(a, b) {
+  const walk = (x, y) => {
+    if (!x || !y) return false
+    if (x.type !== y.type) return false
+    if (x.type === 'leaf') return x.view === y.view
+    if (x.dir !== y.dir) return false
+    if (!Array.isArray(x.sizes) || !Array.isArray(y.sizes)) return false
+    if (x.sizes.length !== y.sizes.length || x.sizes.length !== x.children.length) return false
+    if (!x.sizes.every((size, i) => near(size, y.sizes[i]))) return false
+    return x.children.every((child, i) => walk(child, y.children[i]))
+  }
+  return walk(a, b)
+}
+
+/**
+ * The confirm a restore needs, or null when it must not ask.
+ *
+ * The rule the row carries is "restoring replaces what is open", so the answer
+ * is a question whenever something is open that the shape would take away: more
+ * than the primary pane is showing, and the incoming shape is not already the
+ * window. A restore onto a single pane asks nothing (nothing is lost), and a
+ * restore of the shape already on screen asks nothing either (the window would
+ * not change).
+ */
+export function restoreConfirm(plan, current) {
+  if (!plan?.ok || !plan.layout?.root) return null
+  const openNow = current?.root ? paneCount(current) : 1
+  if (openNow <= 1) return null
+  if (current.root && sameShape(plan.layout.root, current.root)) return null
+  const incoming = paneCount(plan.layout)
+  const dropped = Math.max(0, openNow - incoming)
+  const closes = dropped === 1 ? '1 pane closes' : `${dropped} panes close`
+  return {
+    open: openNow,
+    incoming,
+    dropped,
+    title: 'Restore this layout?',
+    note:
+      dropped > 0
+        ? `This replaces the ${openNow} panes open now with a ${incoming}-pane shape, so ${closes}. The chats themselves stay in the sidebar.`
+        : `This replaces the ${openNow} panes open now with a ${incoming}-pane shape. The chats themselves stay in the sidebar.`,
+    confirm: 'Restore',
+    cancel: 'Keep what is open',
+  }
+}
+
+/// Fractions with every one at least `min`, the rest scaled down to fit. Water
+/// filling: whatever the low fractions gain is taken from the high ones in
+/// proportion to their share, repeated until nothing is under the floor.
+const clampFractions = (sizes, min) => {
+  let out = sizes.map((size) => (Number.isFinite(size) ? size : 0))
+  for (let pass = 0; pass < 8; pass += 1) {
+    const low = out.reduce((sum, f) => sum + Math.max(0, min - f), 0)
+    if (low < 0.000001) break
+    const high = out.reduce((sum, f) => (f > min ? sum + f : sum), 0)
+    if (high <= 0) {
+      out = out.map(() => 1 / out.length)
+      break
+    }
+    out = out.map((f) => (f > min ? f - (f / high) * low : min))
+  }
+  const total = out.reduce((sum, f) => sum + f, 0) || 1
+  return out.map((f) => f / total)
+}
+
+/**
+ * A layout with its fractions clamped so that no pane falls below `minPx` in a
+ * window `width` wide. Recursive: each split's children are clamped against
+ * that split's own width, so a nested split is measured after its parents have
+ * taken their floors.
+ *
+ * When a split is too narrow to give every child the floor (width below
+ * children times minPx), the floor cannot be met at all. The children are then
+ * split evenly: an even set of slivers reads better than one readable pane and
+ * one strip, and refusing to restore would leave the person with a window they
+ * explicitly asked to replace. That is the trade, and it is the same one the
+ * tab strip makes below its own floor.
+ */
+export function fitLayout(layout, { width = 0, minPx = PANE_MIN_PX } = {}) {
+  const fit = (node, w) => {
+    if (!node || node.type !== 'split') return node
+    const children = Array.isArray(node.children) ? node.children : []
+    const n = children.length
+    if (!n) return node
+    const sizes =
+      Array.isArray(node.sizes) && node.sizes.length === n ? node.sizes : Array.from({ length: n }, () => 1 / n)
+    const fitted = w >= n * minPx ? clampFractions(sizes, minPx / w) : Array.from({ length: n }, () => 1 / n)
+    return {
+      ...node,
+      sizes: fitted,
+      children: children.map((child, i) => fit(child, fitted[i] * w)),
+    }
+  }
+  if (!layout?.root || !(width > 0)) return layout
+  return { ...layout, root: fit(layout.root, width) }
+}

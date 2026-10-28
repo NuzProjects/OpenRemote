@@ -34,6 +34,8 @@ import ShortcutSheet from './ShortcutSheet.jsx'
 import ChangesModal from './ChangesModal.jsx'
 import RaceModal from './RaceModal.jsx'
 import SaveLayoutModal from './SaveLayoutModal.jsx'
+import RestoreLayoutConfirm from './RestoreLayoutConfirm.jsx'
+import { fitLayout, restoreConfirm } from './layouts.js'
 import RenameChatModal from './RenameChatModal.jsx'
 import { overlayStale } from './rename-chat.js'
 import ViewPopup from './ViewPopup.jsx'
@@ -656,6 +658,8 @@ function Shell() {
   // Saving the window's shape: the palette's row opens the dialog, and the
   // dialog writes it through layouts.js into this console's own storage.
   const [savingLayout, setSavingLayout] = useState(false)
+  // A saved shape that would replace panes already open: asked once, then applied.
+  const [pendingRestore, setPendingRestore] = useState(null)
   // The view open over the app, if any: settings, metrics or mobile.
   const [popup, setPopup] = useState(null)
   useEffect(() => onPopup((name) => setPopup(name)), [])
@@ -673,16 +677,29 @@ function Shell() {
     openInFocus(id)
   }
 
-  // A saved shape arrived from the palette's Layouts page, already checked
-  // against this window's room and already resolved (a chat role is the chat
-  // current now). Setting the tree is the restore; the primary pane's view is
-  // navigation, so that is the one thing the shell still has to do.
-  const applySavedLayout = (plan) => {
-    setLayout(plan.layout)
+  // A saved shape arrived from the palette's Layouts page or the pane header,
+  // already checked against this window's room and already resolved (a chat role
+  // is the chat current now). A restore replaces whatever panes are open, so it
+  // asks once when something would be lost, then applies the shape with every
+  // pane held above the readable floor. Setting the tree is the restore; the
+  // primary pane's view is navigation, so that is the one thing the shell still
+  // has to do.
+  const restoreNow = (plan) => {
+    // Fractions carry no pixel floor of their own: a shape saved in a wide
+    // window restored into a narrow one came back as slivers. innerWidth is the
+    // whole window rather than the pane area, so the floor is slightly weaker
+    // than the panes deserve, and it is the only width the shell knows here.
+    setLayout(fitLayout(plan.layout, { width: typeof window === 'undefined' ? 0 : window.innerWidth }))
     if (!plan.primaryRole) return
     if (plan.primaryRole === 'new') navigate('new')
     else if (isChatView(plan.primaryRole)) openSession(plan.primaryRole)
     else goView(plan.primaryRole)
+  }
+  const applySavedLayout = (plan) => {
+    if (!plan?.ok) return
+    const ask = restoreConfirm(plan, layout)
+    if (ask) return setPendingRestore({ plan, ask })
+    restoreNow(plan)
   }
   // A new chat already in a project (the sidebar's + on a project, the
   // palette's project rows): the home screen with that project chosen and
@@ -1120,6 +1137,19 @@ function Shell() {
             />
           )}
           {sheet && <ShortcutSheet onClose={() => setSheet(false)} />}
+          {pendingRestore && (
+            <RestoreLayoutConfirm
+              title={pendingRestore.ask.title}
+              note={pendingRestore.ask.note}
+              confirm={pendingRestore.ask.confirm}
+              cancel={pendingRestore.ask.cancel}
+              onConfirm={() => {
+                restoreNow(pendingRestore.plan)
+                setPendingRestore(null)
+              }}
+              onClose={() => setPendingRestore(null)}
+            />
+          )}
           {/* Renaming, hosted above every surface that offers it: the sidebar
               passes its row here, and the palette's row will too. */}
           {renaming && (

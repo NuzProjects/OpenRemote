@@ -35,9 +35,11 @@ test('the shell gives the palette its room and applies the plan', () => {
   assert.ok(app.includes('panes={paneCount(layout)}'), 'the palette knows how many panes there are')
   assert.ok(app.includes('paneCapacity={isMobile ? 1 : MAX_PANES}'), 'and how many this window can hold')
   assert.ok(app.includes('<SaveLayoutModal'), 'the dialog is mounted by the shell')
-  assert.ok(app.includes('setLayout(plan.layout)'), 'restoring sets the tree')
-  assert.ok(
-    app.includes('isChatView(plan.primaryRole)') && app.includes("plan.primaryRole === 'new'"),
-    'and the primary pane navigates to what the shape said it was',
-  )
+  // A restore replaces whatever panes are open, so the shell asks first when
+  // something would be lost and fits the shape to the window it lands in.
+  assert.ok(app.includes('restoreConfirm(plan, layout)'), 'the shell asks before it replaces panes')
+  assert.ok(app.includes('<RestoreLayoutConfirm'), 'and the question is the modal family')
+  assert.ok(app.includes('fitLayout(plan.layout'), 'the shape is fitted to this window')
+  assert.ok(app.includes('isChatView(plan.primaryRole)') && app.includes("plan.primaryRole === 'new'"),
+    'and the primary pane navigates to what the shape said it was')
 })
