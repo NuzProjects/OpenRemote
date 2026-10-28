@@ -9,29 +9,28 @@ import { focusOpener, focusSomewhere } from './dialog-focus.js'
 
 const source = (name) => readFileSync(new URL(`./${name}`, import.meta.url), 'utf8')
 
-// A document small enough to need no renderer: three elements, one of them detachable.
+// A document small enough to need no renderer: a body, and the stops it can reach.
 function fakeDoc(nodes) {
-  const body = {
-    querySelectorAll: () => nodes,
-  }
+  const body = { querySelectorAll: () => nodes }
   return {
     activeElement: body,
     body,
-    querySelectorAll: (sel) => (sel === 'button' ? nodes : []),
+    querySelectorAll: () => [],
     querySelector: () => null,
   }
 }
 
-test('the same surface opened twice hands focus to the control just pressed', () => {
-  // The review surface is mounted for the whole session: with the opener never cleared,
-  // its second close returned the keyboard to the first control, not the second.
+test('the same surface opened twice captures its opener again', () => {
+  // The review surface stays mounted for the session. Capturing once per mount handed
+  // the keyboard back to the first control; capturing per render captured the dialog's
+  // own field. It captures on the open transition.
   const keys = source('dialog-focus.js')
-  const effect = keys.slice(keys.indexOf('const restore = inertOthers(panel)'))
-  assert.match(effect, /opener\.current = null/, 'the opener is cleared on close')
-  assert.ok(
-    effect.indexOf('opener.current = null') < effect.indexOf('}, [open, panelRef])'),
-    'inside the cleanup, before the effect returns',
-  )
+  assert.match(keys, /const wasOpen = useRef\(false\)/, 'the transition is remembered')
+  assert.match(keys, /if \(open && !wasOpen\.current\) \{\n\s*opener\.current = captureOpener/, 'captured when it opens')
+  // And the value survives the cleanup: React runs an effect twice in development, and
+  // clearing on the first cleanup left the second pass nothing to restore.
+  const cleanup = keys.slice(keys.indexOf('const restore = inertOthers(panel)'))
+  assert.doesNotMatch(cleanup.slice(0, 600), /opener\.current = null/)
 })
 
 test('an opener that is gone sends focus somewhere defined, never to the body', () => {
@@ -40,6 +39,12 @@ test('an opener that is gone sends focus somewhere defined, never to the body', 
   assert.equal(focusOpener(gone, doc), false, 'nothing to restore to')
 
   // The fallback picks the first stop it can reach, and says so when it cannot.
+  const withStops = {
+    activeElement: { body: true },
+    body: { querySelectorAll: () => [] },
+    querySelectorAll: () => [],
+    querySelector: () => null,
+  }
   const editable = {
     isConnected: true,
     getClientRects: () => [1],
@@ -48,12 +53,7 @@ test('an opener that is gone sends focus somewhere defined, never to the body', 
       withStops.activeElement = this
     },
   }
-  const withStops = {
-    activeElement: { body: true },
-    body: { querySelectorAll: () => [editable] },
-    querySelectorAll: () => [],
-    querySelector: () => ({ querySelectorAll: () => [editable] }),
-  }
+  withStops.body.querySelectorAll = () => [editable]
   assert.equal(focusSomewhere(null, withStops), true)
   assert.equal(withStops.activeElement, editable)
   // No stops at all is a false answer, not a guess.
