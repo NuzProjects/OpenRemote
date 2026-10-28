@@ -67,3 +67,13 @@ test('the quiet row style exists for the states that are not ready', () => {
   assert.match(css, /\.ob-harness--quiet \{/)
   assert.match(css, /\.ob-harness--quiet \.ob-harness-state \{/)
 })
+
+test('the welcome button is the same white as the last step, and the dots are centered', () => {
+  const view = source('Onboarding.jsx')
+  assert.match(view, /className="ob-cta ob-cta--primary" onClick=\{begin\}/)
+  assert.match(view, /className="ob-stage" key=\{step\}/)
+  const css = source('onboarding.css')
+  assert.match(css, /\.ob-progress \{[^}]*justify-content: center/)
+  assert.match(css, /@keyframes ob-step-in/)
+  assert.match(css, /html\[data-reduce-motion\] \.ob-stage/)
+})

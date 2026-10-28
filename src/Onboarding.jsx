@@ -82,6 +82,7 @@ export default function Onboarding({ onDone, onDismiss = null, startManual = fal
   return (
     <div className="ob">
       <div className="ob-panel">
+        <div className="ob-stage" key={step}>
         {step === 'welcome' && (
           <>
             <h1 className="ob-title">One window for all your coding agents</h1>
@@ -89,7 +90,7 @@ export default function Onboarding({ onDone, onDismiss = null, startManual = fal
               Run {ALL_HARNESSES} side by side. Start tasks, follow every session as it
               runs, approve what the agents do, and put routine work on a schedule.
             </p>
-            <button className="ob-cta" onClick={begin}>
+            <button className="ob-cta ob-cta--primary" onClick={begin}>
               Get started
             </button>
           </>
@@ -186,6 +187,7 @@ export default function Onboarding({ onDone, onDismiss = null, startManual = fal
             </button>
           </>
         )}
+        </div>
 
         <div className="ob-progress">
           {Array.from({ length: steps.length }, (_, i) => (

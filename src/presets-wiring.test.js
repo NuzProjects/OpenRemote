@@ -36,7 +36,7 @@ test('the chips row sits at the top of the page, as real buttons', () => {
 })
 
 test('the Save chip names the setup and is renamed in place, one step', () => {
-  assert.match(newchat, />\s*Save this setup\s*</)
+  assert.doesNotMatch(newchat, />\s*Save this setup\s*</)
   assert.match(newchat, /setPresetEditing\(\{ id: 'new', draft: suggestedForNow\(\) \}\)/)
   assert.match(newchat, /aria-label="Name this setup"/)
   // Enter keeps the name, Escape drops it, and the blur Enter causes cannot

@@ -36,6 +36,8 @@ import { projectName } from './projects.js'
 import { carrySetup, droppedLine, restoreFromCatalog } from './harness-carry.js'
 import { keepLine, keepSelection } from './composer-selection.js'
 import { clashes } from './plugins.js'
+import { spotAtBox } from './picker-anchor.js'
+import { greetingAt, greetingForNewChat, nextGreetingIndex } from './greetings.js'
 import { useComposerMenus } from './useComposerMenus.jsx'
 import { mentionedChats, ownCommands, takeCommands } from './composer-menus.js'
 import { claimInserter } from './composer-insert.js'
@@ -107,6 +109,14 @@ export default function NewChat({
   const [armedPreset, setArmedPreset] = useState(null)
   const presetArmWatch = useArmedRow(armedPreset, setArmedPreset)
   const [text, setText] = useState('')
+  // A new chat opens on the next sentence. While the box stays empty the
+  // line keeps moving, so a page left sitting does not freeze on one greeting.
+  const [greetingIndex, setGreetingIndex] = useState(() => greetingForNewChat())
+  useEffect(() => {
+    if (text.trim()) return
+    const idle = setTimeout(() => setGreetingIndex((i) => nextGreetingIndex(i)), 8000)
+    return () => clearTimeout(idle)
+  }, [text, greetingIndex])
   // The project the chat runs in: one of the registered projects, or
   // null - a chat that belongs to no project and runs in the home folder.
   const [projectId, setProjectId] = useState(null)
@@ -690,6 +700,14 @@ export default function NewChat({
   }
 
   const openPicker = (kind) => (e) => setPicker({ kind, x: e.clientX, y: e.clientY })
+  // The model list is the composer's, so it shares the box's left padding and
+  // opens under the box rather than wherever the pointer happened to be.
+  const openBoxPicker = (kind) => {
+    const spot = spotAtBox(boxRef.current?.getBoundingClientRect())
+    if (spot) setPicker({ kind, x: spot.left, y: spot.top })
+    else setPicker({ kind, x: 16, y: 16 })
+  }
+  const openModelPicker = () => openBoxPicker('model')
 
   // The keyboard acts on the focused pane's composer (keyboard.jsx); a
   // picker that isn't on screen (no catalog, no permission words) lets
@@ -740,6 +758,12 @@ export default function NewChat({
     }
   }, [])
   const openPickerAt = (kind) => {
+    if (kind === 'model' || kind === 'harness') {
+      const spot = spotAtBox(boxRef.current?.getBoundingClientRect())
+      if (!spot) return false
+      setPicker({ kind, x: spot.left, y: spot.top })
+      return true
+    }
     const el = boxRef.current?.querySelector(`[data-picker="${kind}"]`)
     if (!el) return false
     const r = el.getBoundingClientRect()
@@ -818,7 +842,7 @@ export default function NewChat({
       permissionWords.length
         ? {
             title: 'Set permission',
-            items: permissionWords.map((w) => ({ id: w, name: w })),
+            items: permissionWords.map((w) => ({ id: w.w ?? w, name: w.l ?? w.w ?? w })),
             selectedId: chosenPermission,
             choose: setPermission,
           }
@@ -906,6 +930,7 @@ export default function NewChat({
   // row is Tab-reachable. It lives at the top of the page rather than above the
   // composer, where it crowded the pickers.
   const presetsRow = (
+    presets.length === 0 && presetEditing?.id !== 'new' ? null : (
 <div className="nc-presets" role="group" aria-label="Saved setups">
         {presets.map((preset) => {
           const armed = rowIsArmed(armedPreset, preset.id)
@@ -958,21 +983,9 @@ export default function NewChat({
             </span>
           )
         })}
-        {presetEditing?.id === 'new' ? (
-          presetNameInput(presetEditing)
-        ) : (
-          <button
-            type="button"
-            className="nc-preset nc-preset-save"
-            onClick={beginSave}
-            disabled={!currentHarness}
-            title="Save the setup above as a preset"
-          >
-            <Plus size={12} weight="bold" />
-            Save this setup
-          </button>
-        )}
+        {presetEditing?.id === 'new' && presetNameInput(presetEditing)}
       </div>
+    )
   )
 
   return (
@@ -984,7 +997,7 @@ export default function NewChat({
         {presetsRow}
         {topRight}
       </div>
-      <h1 className="nc-greeting">What are we working on?</h1>
+      <h1 className="nc-greeting" key={greetingIndex}>{greetingAt(greetingIndex)}</h1>
       {clashing.map((c) => (
         <div className="nc-signin" key={c.name}>
           <div className="nc-signin-note">
@@ -1061,7 +1074,7 @@ export default function NewChat({
                 {modelItems.length > 0 ? (
                   <button
                     className="nc-meta"
-                    onClick={openPicker('model')}
+                    onClick={openModelPicker}
                     aria-haspopup="listbox"
                     aria-expanded={picker?.kind === 'model'}
                     data-picker="model"
@@ -1226,7 +1239,7 @@ export default function NewChat({
             <button
               className="nc-meta"
               data-unset={!currentHarness || undefined}
-              onClick={openPicker('harness')}
+              onClick={() => openBoxPicker('harness')}
               aria-haspopup="listbox"
               aria-expanded={picker?.kind === 'harness'}
               data-picker="harness"
@@ -1297,14 +1310,14 @@ export default function NewChat({
                 data-picker="permission"
                 title={hintPermission('What the harness may do without asking')}
               >
-                {chosenPermission ?? 'Permission'}
+                {permissionWords.find((w) => (w.w ?? w) === chosenPermission)?.l ?? chosenPermission ?? 'Permission'}
               </button>
             )}
             {picker?.kind === 'permission' && (
               <PickerMenu
                 label="Permission"
                 searchPlaceholder="Search permission words"
-                items={permissionWords.map((word) => ({ id: word, name: word }))}
+                items={permissionWords.map((word) => ({ id: word.w ?? word, name: word.l ?? word.w ?? word }))}
                 groups={null}
                 selectedId={chosenPermission ?? ''}
                 onChoose={(id) => {
@@ -1451,12 +1464,7 @@ export default function NewChat({
                 />
               )}
             </div>
-          ) : (
-            <span className="nc-meta nc-static">
-              <House size={13} weight="light" />
-              This computer
-            </span>
-          )}
+          ) : null}
         </div>
         {addProjectError && <p className="nc-error">{addProjectError}</p>}
         {targetOffline && <p className="nc-error"><span className="pv">{targetItem.name}</span> is offline.</p>}
