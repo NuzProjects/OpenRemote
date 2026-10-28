@@ -47,6 +47,15 @@
 //   review. A profile that already holds a plugin uses the first one and
 //   removes nothing. The temp folder is deleted on every path, and a run that
 //   could not finish still tries both cleanups and says what it left behind.
+// - the palette's New chat with this setup: proves Ctrl+K offers exactly one
+//   such row for the chat on screen, that its sub line is that chat's title,
+//   and that pressing it lands on New chat with the same harness chosen in the
+//   picker; not that the model, effort, approval word or project it seeds are
+//   right (src/chat-setup.test.js covers the rule), and not that a New chat
+//   started from it runs. It writes nothing: the only thing it changes is that
+//   the chat it opens is no longer marked unread. It skips when the profile
+//   has no chats, when the chat carries no readable harness in its pane, or
+//   when the row is not offered at all.
 // - the sidebar's search: proves a word taken from a title the list is showing
 //   narrows the list to the rows that carry it, and that Escape gives the whole
 //   list back with the field empty; not that a query finds a chat by anything
@@ -60,16 +69,18 @@
 //   its row. The search reads the index the app ships, so a missing term fails
 //   this line rather than skipping it.
 //
-// The two searches come last because they are the only interaction checks that
-// change nothing: a run that leaves a field or a window open would falsify the
-// next check rather than this one.
+// The two searches come last because they change nothing at all: a run that
+// leaves a field or a window open would falsify the next check rather than
+// this one.
 //
 // WHAT IT DOES NOT COVER: no chat is created and no message is typed into one,
 // so the stream and the transcript are never read. The two writes are the rule
 // the palette check seeds and deletes, and the plugin this check installs and
-// removes; the two searches write nothing. No settings are changed and no
+// removes; the palette's setup check and the two searches write nothing to the
+// profile, though the setup check does open a chat, which clears that chat's
+// local unread mark. No settings are changed and no
 // layout is saved or applied. A green run says every view opens, draws, keeps
-// the boundary panel away and that the six interactions above behave; it does
+// the boundary panel away and that the seven interactions above behave; it does
 // not say the app works.
 
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -1391,7 +1402,159 @@ if (sidebarSearch.why || !sidebarSearch.run) {
   )
 }
 
-// (f) Settings search reads too: a word a person would type for a setting
+// (f) "New chat with this setup": with a chat on screen, Ctrl+K offers one row
+// of that name whose sub line is the chat's title, and pressing it lands on New
+// chat with the chat's harness already chosen. Proves the row is offered and
+// that the seed reaches New chat's own picker; not that the model, effort,
+// approval word or project are right (src/chat-setup.test.js owns the rule). It
+// writes nothing.
+const newWithSetup = { why: null, run: null }
+
+// The checks after this one expect the window on New chat, not on whichever
+// chat this check opened. This runs on every path, including the skips.
+const backToNewChat = async () => {
+  for (let i = 0; i < 2; i += 1) {
+    if (await evaluate("location.hash === '#new' && !document.querySelector('.kb-palette')")) return true
+    await evaluate(`(() => {
+      const b = [...document.querySelectorAll('.sidebar button')].find((x) => (x.textContent || '').trim() === 'New chat');
+      b?.click();
+      return Boolean(b);
+    })()`)
+    await waitFor("location.hash === '#new'", { timeout: 5000 })
+    await key({ key: 'Escape', code: 'Escape', vk: 27 })
+    await sleep(200)
+  }
+  return evaluate("location.hash === '#new' && !document.querySelector('.kb-palette')")
+}
+
+try {
+  await key({ key: 'Escape', code: 'Escape', vk: 27 })
+  await sleep(150)
+  // The sidebar's own row: its data-chat-row is the chat id and its .chat-title
+  // is the title the sub line is supposed to repeat (src/Sidebar.jsx:639 and
+  // :662, the row markup in the chat list).
+  const firstChat = await evaluate(`(() => {
+    const row = document.querySelector('.chat-row[data-chat-row]');
+    if (!row) return null;
+    const b = row.getBoundingClientRect();
+    return {
+      id: row.getAttribute('data-chat-row'),
+      title: (row.querySelector('.chat-title')?.textContent || '').trim(),
+      x: b.x + b.width / 2,
+      y: b.y + b.height / 2,
+    };
+  })()`)
+  if (!firstChat) {
+    newWithSetup.why = 'the sidebar shows no chat rows, so there is no chat to copy a setup from'
+  } else {
+    await click(firstChat.x, firstChat.y)
+    const opened = await waitFor(`location.hash === ${JSON.stringify(`#${firstChat.id}`)}`, { timeout: 5000 })
+    // The chat has to be drawn before its facts row can be read: the hash moves
+    // before the record is loaded on a cold chat.
+    const chatDrawn = opened && (await waitFor("!!document.querySelector('.chatview .cv-facts')", { timeout: 5000 }))
+    // The chat's facts row is where its own harness is written; the first
+    // .cv-fact is that name (src/ChatView.jsx:828). With no readable harness
+    // there is no value to compare New chat's picker against, so the check
+    // says so and skips rather than guessing one.
+    const harness = chatDrawn
+      ? await evaluate(
+          `(document.querySelector('.chatview .cv-facts .cv-fact')?.textContent || '').trim()`,
+        )
+      : ''
+    if (!opened) {
+      newWithSetup.why = `the row "${firstChat.title}" did not open: the window is on ${(await evaluate('location.hash')) || '(none)'}`
+    } else if (!chatDrawn) {
+      newWithSetup.why = `the chat "${firstChat.title}" opened but its view never drew a facts row (.chatview .cv-facts)`
+    } else if (!harness) {
+      newWithSetup.why = `the chat "${firstChat.title}" shows no harness in its facts row (.cv-facts .cv-fact, src/ChatView.jsx:828)`
+    } else {
+      await key({ key: 'k', code: 'KeyK', vk: 75, modifiers: 2 })
+      const palette = await waitFor("!!document.querySelector('.kb-palette')", { timeout: 4000 })
+      if (!palette) {
+        newWithSetup.why = 'Ctrl+K did not open the palette on the chat'
+      } else {
+        // The row's own name minus its last word, typed whole: per-character
+        // keys do not land in this shell's React fields (see insertInto).
+        const typed = await insertInto('.kb-search input', 'new chat with')
+        await sleep(250)
+        // The rows the palette is drawing, in its own markup: .kb-item is the
+        // row, .kb-name its name and .kb-sub its sub line
+        // (src/CommandPalette.jsx:1310-1316), and the setup row's sub is the
+        // focused chat's title (src/CommandPalette.jsx:526).
+        const rows = await evaluate(`[...document.querySelectorAll('.kb-item')].map((i) => {
+          const b = i.getBoundingClientRect();
+          return {
+            name: (i.querySelector('.kb-name')?.textContent || '').trim(),
+            sub: (i.querySelector('.kb-sub')?.textContent || '').trim(),
+            box: { x: b.x + b.width / 2, y: b.y + b.height / 2 },
+          };
+        })`)
+        const setupRows = rows.filter((r) => r.name === 'New chat with this setup')
+        if (!typed) {
+          await key({ key: 'Escape', code: 'Escape', vk: 27 })
+          newWithSetup.why = 'the palette search field did not take the typed words (insertInto read a different value back)'
+        } else if (setupRows.length === 0) {
+          await key({ key: 'Escape', code: 'Escape', vk: 27 })
+          newWithSetup.why = `the palette offered no row named "New chat with this setup" for the chat "${firstChat.title}"; it offered ${rows.map((r) => `"${r.name}"`).join(', ') || 'nothing'}`
+        } else if (setupRows.length > 1) {
+          await key({ key: 'Escape', code: 'Escape', vk: 27 })
+          newWithSetup.run = { duplicates: setupRows.length, rows: rows.map((r) => r.name), harness, title: firstChat.title }
+        } else {
+          const offered = setupRows[0]
+          await click(offered.box.x, offered.box.y)
+          const closed = await waitFor("!document.querySelector('.kb-palette')", { timeout: 4000 })
+          const landed = await waitFor("location.hash === '#new'", { timeout: 5000 })
+          // New chat's harness picker carries data-picker="harness" and shows
+          // the chosen harness's own name (src/NewChat.jsx:1216-1227).
+          const pickerReady =
+            landed && (await waitFor(`!!document.querySelector('button[data-picker="harness"]')`, { timeout: 5000 }))
+          const picker = pickerReady
+            ? await evaluate(`(() => {
+                const b = document.querySelector('button[data-picker="harness"]');
+                return b
+                  ? { text: (b.textContent || '').trim(), unset: b.getAttribute('data-unset') === 'true' }
+                  : null;
+              })()`)
+            : null
+          newWithSetup.run = {
+            typed,
+            rows: rows.map((r) => r.name),
+            sub: offered.sub,
+            title: firstChat.title,
+            harness,
+            closed,
+            landed,
+            picker,
+          }
+        }
+      }
+    }
+  }
+} catch (err) {
+  newWithSetup.why = `the drive threw: ${err?.message ?? err}`
+} finally {
+  newWithSetup.back = await backToNewChat()
+}
+
+if (newWithSetup.run?.duplicates) {
+  record(
+    'the palette offers one "New chat with this setup" row for the chat on screen',
+    false,
+    `the palette offered ${newWithSetup.run.duplicates} rows of that name for the chat "${newWithSetup.run.title}"; rows were ${newWithSetup.run.rows.map((r) => `"${r}"`).join(', ')}`,
+  )
+} else if (newWithSetup.why || !newWithSetup.run) {
+  skip('the palette new chat with this setup', newWithSetup.why ?? 'the check ended without a result')
+} else {
+  const run = newWithSetup.run
+  record(
+    'the palette offers "New chat with this setup" for the chat on screen and it lands on New chat with the same harness',
+    run.typed && run.sub === run.title && run.closed && run.landed && Boolean(run.picker) &&
+      !run.picker.unset && run.picker.text === run.harness,
+    `chat "${run.title}" (harness "${run.harness}"); the row's sub line read "${run.sub}"; rows offered for the query: ${run.rows.map((r) => `"${r}"`).join(', ')}; the palette closed on the press: ${run.closed}; the window reached #new: ${run.landed}; New chat's harness picker read "${run.picker?.text ?? '(no picker)'}" (unset: ${run.picker?.unset ?? '(none)'}); back on New chat afterwards: ${newWithSetup.back}`,
+  )
+}
+
+// (g) Settings search reads too: a word a person would type for a setting
 // reaches a row whose label does not contain it, because the index carries the
 // words people use beside the labels (src/settings-search.js). "gateway" is one
 // of those words: no static label holds it and the model-endpoint block's terms
