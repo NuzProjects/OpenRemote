@@ -48,11 +48,18 @@ export function loadPrefs() {
   }
 }
 
+// Writes one preference over the stored set, and answers whether the write
+// landed. A storage that refuses (a locked-down profile, a full disk) leaves
+// the console showing the value it already has, so the answer is what tells a
+// caller the difference between "kept" and "the row re-read the old value":
+// switching a document attribute on a write nobody kept would leave the app
+// and its own settings row disagreeing.
 export function savePrefs(partial) {
   try {
     localStorage.setItem(PREFS_KEY, JSON.stringify({ ...loadPrefs(), ...partial }))
+    return true
   } catch {
-    /* storage unavailable */
+    return false
   }
 }
 

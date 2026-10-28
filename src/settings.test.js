@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
 // settings.js touches localStorage at import time? No - only inside its
@@ -270,4 +271,79 @@ test('a storage that refuses to answer leaves no records rather than throwing', 
   } finally {
     globalThis.localStorage = original
   }
+})
+
+test('a preference the storage refused says it did not land, and keeps the old value', () => {
+  localStorage.clear()
+  // A write that works answers true, so the caller may show it as kept.
+  assert.equal(savePrefs({ density: 'compact' }), true)
+  assert.equal(loadPrefs().density, 'compact')
+  // A storage that refuses the write: the answer is false, and what is stored
+  // is the value from before, which is what the rows will re-read.
+  const writable = globalThis.localStorage.setItem
+  globalThis.localStorage.setItem = () => {
+    throw new Error('denied')
+  }
+  try {
+    assert.equal(savePrefs({ density: 'comfortable' }), false)
+    assert.equal(savePrefs({ reduce_motion: true }), false)
+  } finally {
+    globalThis.localStorage.setItem = writable
+  }
+  assert.equal(loadPrefs().density, 'compact', 'the refused write changed nothing')
+  assert.equal(loadPrefs().reduce_motion, false)
+  // A storage that refuses both ways: no answer about what is stored, and no
+  // write either, so the caller is told nothing landed.
+  const readable = globalThis.localStorage.getItem
+  const writable2 = globalThis.localStorage.setItem
+  globalThis.localStorage.getItem = () => {
+    throw new Error('denied')
+  }
+  globalThis.localStorage.setItem = () => {
+    throw new Error('denied')
+  }
+  try {
+    assert.equal(savePrefs({ density: 'comfortable' }), false)
+  } finally {
+    globalThis.localStorage.getItem = readable
+    globalThis.localStorage.setItem = writable2
+  }
+  assert.equal(loadPrefs().density, 'compact')
+})
+
+// The view's side of the same contract: a write that did not land has to be
+// said, and a document attribute may not move ahead of the stored preference.
+// Read as source, the way the other views' wiring is pinned.
+const viewSource = readFileSync(new URL('./SettingsView.jsx', import.meta.url), 'utf8')
+
+test('the startup rows and the preference toggles say when a write did not land', () => {
+  // Both startup catches speak, instead of the comments that used to sit there.
+  const said = viewSource.match(/setStartupNote\(errorCopy\(err\)\)/g) ?? []
+  assert.equal(said.length, 2, 'Launch at login and the tray both report a refusal')
+  assert.doesNotMatch(viewSource, /\{\s*\/\* the fact stays what it was \*\/\s*\}/)
+  // A startup call that answers "still what it was" is surfaced too.
+  assert.match(viewSource, /if \(enabled !== wanted\) \{/)
+  assert.match(viewSource, /if \(next && typeof next\.keep_running === 'boolean' && next\.keep_running !== wanted\) \{/)
+  // The preference write's answer is returned, and a failed one sets the line.
+  assert.match(viewSource, /const landed = savePrefs\(partial\)/)
+  assert.match(
+    viewSource,
+    /setStartupNote\(landed \? null : 'The console could not save that setting, so it is unchanged\.'\)/,
+  )
+  assert.match(viewSource, /return landed/)
+  // The document follows a kept preference only, in all three places that set one.
+  for (const [attribute, call] of [
+    ['reduce motion', 'applyReduceMotion'],
+    ['privacy mode', 'applyPrivacyMode'],
+    ['density', 'applyDensity'],
+  ]) {
+    const at = viewSource.indexOf(`${call}(document, value)`)
+    assert.ok(at > 0, `${attribute} applies its attribute`)
+    const before = viewSource.slice(Math.max(0, at - 260), at)
+    assert.match(before, /if \(!setPref\(/, `${attribute} applies it only when the save landed`)
+  }
+  // One line, drawn where the press happened: the Appearance rows and the
+  // startup rows each show it from the same piece of state.
+  const lines = viewSource.match(/\{startupNote && \(\s*\n\s*<p className="pn-error" role="status">/g) ?? []
+  assert.equal(lines.length, 2, 'the note renders under Appearance and under Startup')
 })

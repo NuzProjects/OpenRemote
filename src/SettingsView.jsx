@@ -47,6 +47,7 @@ import {
   applyPrivacyMode,
 } from './settings.js'
 import { hasTauri } from './pick-folder.js'
+import { errorCopy } from './error-copy.js'
 import { usePrivacyMode } from './privacy.js'
 import { version } from '../package.json'
 import './devices.css'
@@ -235,25 +236,39 @@ export default function SettingsView({ onReplay, onOpenChat, onClose = null, onM
   const savedPermission = defaults.permissions?.[defaultHarness?.id] ?? null
   const chosenPermission = permissionWords.some((w) => w.w === savedPermission) ? savedPermission : null
 
+  // The one line for a setting whose write did not land: a startup row the
+  // shell refused, or a preference the storage refused. Both used to fail
+  // silently - the switch simply did not move - which reads as a broken app
+  // rather than as a machine that said no.
+  const [startupNote, setStartupNote] = useState(null)
+
   const setPref = (partial) => {
-    savePrefs(partial)
+    const landed = savePrefs(partial)
     setPrefs(loadPrefs())
     // A pref chosen from a picker closes it, the way `set` does for the New
     // tasks rows: leaving the menu open read as "the choice did not land".
     setPicker(null)
+    // The rows re-read the stored value, so a refused write leaves them showing
+    // the value from before. The note is what tells the press was heard and not
+    // kept; a write that landed clears it again.
+    setStartupNote(landed ? null : 'The console could not save that setting, so it is unchanged.')
+    return landed
   }
 
   const openPicker = (kind) => (e) => setPicker({ kind, x: e.clientX, y: e.clientY })
 
+  // The document attribute follows the stored preference, never ahead of it: a
+  // switch that reads on while the app is not is worse than one that stayed
+  // off, and a failed save has to leave both of them where they were.
   const toggleReduce = () => {
     const value = !prefs.reduce_motion
-    setPref({ reduce_motion: value })
+    if (!setPref({ reduce_motion: value })) return
     applyReduceMotion(document, value)
   }
 
   const togglePrivacy = () => {
     const value = !prefs.privacy_mode
-    setPref({ privacy_mode: value })
+    if (!setPref({ privacy_mode: value })) return
     applyPrivacyMode(document, value)
   }
 
@@ -305,14 +320,24 @@ export default function SettingsView({ onReplay, onOpenChat, onClose = null, onM
   }, [])
   const toggleAutoStart = async () => {
     if (autoStart == null) return
+    const wanted = !autoStart
+    setStartupNote(null)
     try {
       const { isEnabled, enable, disable } = await import('@tauri-apps/plugin-autostart')
       if (autoStart) await disable()
       else await enable()
-      setAutoStart(await isEnabled())
+      const enabled = await isEnabled()
+      setAutoStart(enabled)
       setAutoStartAt(Date.now())
-    } catch {
-      /* the fact stays what it was */
+      // Windows can refuse the Run-key write without throwing: the plugin's own
+      // read-back then still says what it said before. Say so, or the switch
+      // reads as inert and the person cannot tell a locked-down machine from a
+      // broken app.
+      if (enabled !== wanted) {
+        setStartupNote('Launch at login is unchanged: this computer did not let the startup entry change.')
+      }
+    } catch (err) {
+      setStartupNote(errorCopy(err))
     }
   }
 
@@ -340,11 +365,20 @@ export default function SettingsView({ onReplay, onOpenChat, onClose = null, onM
   }, [focusTick])
   const toggleTray = async () => {
     if (!tray) return
+    const wanted = !tray.keep_running
+    setStartupNote(null)
     try {
       const { invoke } = await import('@tauri-apps/api/core')
-      setTray(await invoke('set_tray_prefs', { keepRunning: !tray.keep_running }))
-    } catch {
-      /* the fact stays what it was */
+      const next = await invoke('set_tray_prefs', { keepRunning: wanted })
+      setTray(next)
+      // The shell answers with the setting it holds. One that comes back the
+      // other way round means the change did not take, and the row must not
+      // look as though it did.
+      if (next && typeof next.keep_running === 'boolean' && next.keep_running !== wanted) {
+        setStartupNote('Keep running in the tray is unchanged: the shell did not take the change.')
+      }
+    } catch (err) {
+      setStartupNote(errorCopy(err))
     }
   }
 
@@ -1041,7 +1075,9 @@ export default function SettingsView({ onReplay, onOpenChat, onClose = null, onM
                 checked={prefs.density === 'compact'}
                 onChange={() => {
                   const value = prefs.density === 'compact' ? 'comfortable' : 'compact'
-                  setPref({ density: value })
+                  // The same rule as the two toggles below: the document
+                  // follows a preference that was actually kept.
+                  if (!setPref({ density: value })) return
                   applyDensity(document, value)
                 }}
                 label="Compact density"
@@ -1065,6 +1101,14 @@ export default function SettingsView({ onReplay, onOpenChat, onClose = null, onM
               <Toggle checked={prefs.privacy_mode} onChange={togglePrivacy} label="Privacy mode" />
             </div>
           </div>
+          {/* The same line as the Startup rows', where a preference's own press
+              happens: the storage can refuse a write on this tab too, and a
+              sentence on another tab would be no sentence at all. */}
+          {startupNote && (
+            <p className="pn-error" role="status">
+              {startupNote}
+            </p>
+          )}
         </section>
 
         {!isMobile && (
@@ -1139,6 +1183,13 @@ export default function SettingsView({ onReplay, onOpenChat, onClose = null, onM
                     label="Keep running in the tray"
                   />
                 </div>
+              )}
+              {/* One line under the startup rows for either failure: a row the
+                  shell refused, or a preference the storage refused. */}
+              {startupNote && (
+                <p className="pn-error" role="status">
+                  {startupNote}
+                </p>
               )}
             </div>
           </section>
