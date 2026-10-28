@@ -27,6 +27,24 @@ const CALL_TIMEOUT_MS = 10000
 // says "not answering" long before this fires.
 const BOOT_TIMEOUT_MS = 120000
 
+// The installer waits: a harness install can run for minutes by design, and the
+// daemon holds its own limit (ten minutes). This client had no bound at all on it,
+// so a daemon that was alive but wedged left the install spinner going with no way
+// out but a cancel that not every caller passes. Same ceiling, one second of slack.
+const INSTALL_TIMEOUT_MS = 601000
+
+/// The failure of a request that never answered, as one object with the fields the
+/// rest of this file's errors carry: `status` 0 (nothing came back) and a `code` the
+/// copy can key on. Thrown as a bare Error before this, so a caller that branches on
+/// `err.status` to decide "retryable?" or "the daemon's refusal?" saw `undefined`
+/// for the one failure the console wrote itself.
+function timedOut() {
+  const error = new Error('The daemon did not answer in time')
+  error.status = 0
+  error.code = 'timeout'
+  return error
+}
+
 // Calls that leave this machine: a cloud sign-out, a device kind change or
 // removal (the registry, over the network), and an enrolment mint. They are
 // not the installer, but they are network-shaped and can outlive the ten
@@ -254,23 +272,24 @@ export class DaemonApi {
       // says nothing. A caller's own stop is a deliberate cancel, not a
       // failure: the raw error rides through and the stopper ignores it.
       if (linked.timedOut) {
-        throw new Error('The daemon did not answer in time')
+        throw timedOut()
       }
       if (signal?.aborted) {
         throw err
       }
       if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
-        throw new Error('The daemon did not answer in time')
+        throw timedOut()
       }
       throw err
     } finally {
       linked.detach()
     }
     let json = null
+    let unreadable = false
     try {
       json = text ? JSON.parse(text) : null
     } catch {
-      json = null
+      unreadable = true
     }
     if (!response.ok) {
       // A body the daemon refused arrives with nothing to read, so name the
@@ -288,7 +307,16 @@ export class DaemonApi {
     // One route answers a document rather than JSON (the third-party
     // notices): same timeout, same abort rules, same error shape, and the
     // caller gets the text it actually reads.
-    return as === 'text' ? text : json
+    if (as === 'text') return text
+    // A success whose body could not be read is not an empty answer: a proxy that
+    // truncates, or a daemon killed mid-body, used to hand the caller `null` where a
+    // list was promised, so the pane rendered as empty and said nothing.
+    if (unreadable) {
+      const error = new Error('The daemon answered, but its answer could not be read')
+      error.status = response.status
+      throw error
+    }
+    return json
   }
 
   health() {
@@ -539,7 +567,7 @@ export class DaemonApi {
         harness: harnessId,
         with_runtime: withRuntime,
       },
-      { timeoutMs: null },
+      { timeoutMs: INSTALL_TIMEOUT_MS },
     )
   }
 
@@ -562,7 +590,7 @@ export class DaemonApi {
   // own limit, and a client that gave up first would report a failure
   // while the install finished without anyone to show it.
   installStagedPlugin(stageId) {
-    return this.call('POST', `/plugins/stage/${seg(stageId)}/install`, { request_id: newRequestId() }, { timeoutMs: null })
+    return this.call('POST', `/plugins/stage/${seg(stageId)}/install`, { request_id: newRequestId() }, { timeoutMs: INSTALL_TIMEOUT_MS })
   }
 
   cancelStagedPlugin(stageId) {

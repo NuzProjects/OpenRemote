@@ -390,10 +390,15 @@ test('every request is bounded: 10s normally, 120s across a harness boot, none f
     AbortSignal.timeout = realTimeout
     globalThis.fetch = realFetch
   }
-  assert.deepEqual(budgets, [10000, 120000, 120000, 120000, 120000])
-  assert.ok(signals.slice(0, 5).every((signal) => signal instanceof AbortSignal))
-  // The installer's wait is the contract: no signal at all.
-  assert.equal(signals[5], undefined)
+  // The installer used to opt out of any client budget, and the two tests below
+  // pinned that as the contract. Opting out left a daemon that was alive but wedged
+  // holding the spinner forever; it has a budget now, the daemon's own ten minutes
+  // plus a second, so the promise the exemption was there for still holds (the
+  // client never gives up before the daemon answers) and the wait is bounded too.
+  assert.deepEqual(budgets, [10000, 120000, 120000, 120000, 120000, 601000])
+  assert.ok(signals.slice(0, 6).every((signal) => signal instanceof AbortSignal))
+  // And the installer's signal is a real one now, not the absence of a bound.
+  assert.ok(signals[5] instanceof AbortSignal)
 })
 
 // ---- a caller's own stop ----

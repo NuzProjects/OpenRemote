@@ -34,16 +34,20 @@ async function call(route) {
   return seen[0]
 }
 
-test('a plugin install carries no client timeout', async () => {
+test('a plugin install waits longer than the daemon, then gives up', async () => {
+  // It used to carry no client signal at all: "the install is the wait, not a call".
+  // That is right about not giving up first, and wrong about a daemon that is alive
+  // but wedged, where the wait had no end. The budget outlasts the daemon's own ten
+  // minutes, so the daemon always answers first and the spinner still ends.
   const request = await call((api) => api.installStagedPlugin('stage-1'))
   assert.equal(request.init.method, 'POST')
   assert.match(request.url, /\/plugins\/stage\/stage-1\/install$/)
-  assert.equal(request.init.signal, undefined, 'the install is the wait, not a call')
+  assert.ok(request.init.signal instanceof AbortSignal, 'bounded, longer than the daemon')
 })
 
-test('the harness installer stays unbounded too', async () => {
+test('the harness installer is bounded by the same long budget', async () => {
   const request = await call((api) => api.installHarness('machine-1', 'pi'))
-  assert.equal(request.init.signal, undefined)
+  assert.ok(request.init.signal instanceof AbortSignal)
 })
 
 test('staging keeps its own long budget', async () => {
