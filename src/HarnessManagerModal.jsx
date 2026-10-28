@@ -9,6 +9,7 @@ import { X } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
 import { HarnessMark } from './brand-marks.jsx'
 import { harnessRows } from './harness-manager.js'
+import { harnessName } from './harness-names.js'
 import { usePrivacyMode } from './privacy.js'
 import './devices.css'
 import { useBack } from './use-back.js'
@@ -36,7 +37,14 @@ export default function HarnessManagerModal({ onClose, onSignIn }) {
   // manager. The go-ahead is a dialog of its own, so it holds its own layer
   // and this one is simply not top while it is open - the layer stack does the
   // ordering that used to be a condition in this handler.
-  useDialog(panelRef, onClose)
+  //
+  // An install in flight keeps the modal open: its failure is quoted inside, so closing
+  // it mid-install threw the daemon's words away and left only "Not installed" behind.
+  const canClose = busy == null
+  const closeOrWait = () => {
+    if (canClose) onClose()
+  }
+  useDialog(panelRef, closeOrWait)
 
   const install = async (harnessId, options) => {
     if (busy || !machineId) return
@@ -58,13 +66,17 @@ export default function HarnessManagerModal({ onClose, onSignIn }) {
     <div
       className="dv-modal-backdrop"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose()
+        if (e.target === e.currentTarget) closeOrWait()
       }}
     >
       <div className="dv-modal dv-devmodal" ref={panelRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Harnesses">
         <div className="dv-modal-head">
           <h2 className="dv-modal-title">Harnesses</h2>
-          <button className="dv-modal-close" onClick={onClose} title="Close">
+          <button
+            className="dv-modal-close"
+            onClick={closeOrWait}
+            title={canClose ? 'Close' : 'An install is running, so this stays open until it answers'}
+          >
             <X size={14} weight="bold" />
           </button>
         </div>
@@ -72,6 +84,12 @@ export default function HarnessManagerModal({ onClose, onSignIn }) {
           The coding agents on this machine. Install any that are missing - each one
           comes from its maker&apos;s official installer.
         </p>
+        {busy != null && (
+          <p className="dv-modal-hint" role="status">
+            One install at a time: {harnessName(busy)} is installing. This stays open until the daemon
+            answers, so its words are not lost.
+          </p>
+        )}
         <div className="dv-hm-list">
           {rows.map((row) => (
             <div key={row.id} className="dv-hm-row">
@@ -106,6 +124,13 @@ export default function HarnessManagerModal({ onClose, onSignIn }) {
                   type="button"
                   className="dv-act"
                   disabled={busy != null}
+                  // A second install's button went dead beside a row still reading "Not
+                  // installed", with the reason nowhere on screen.
+                  title={
+                    busy != null && busy !== row.id
+                      ? 'One install at a time: another harness is installing'
+                      : undefined
+                  }
                   onClick={() =>
                     row.action === 'install-runtime' ? setConfirming(row.id) : install(row.id)
                   }
