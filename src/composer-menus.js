@@ -282,9 +282,34 @@ export function filesForQuery(held, query) {
 
 // The @ menu: files and folders, agents, MCP servers, other chats -
 // each group filtered by the query.
-export function mentionItems(query, { files = [], agents = [], servers = [], chats = [], harness = '', unavailable = null } = {}) {
+//
+// Files are narrowed here as well as by the ask: the ask's answer is a beat
+// behind the typing, and a daemon that answers with a wider list than was
+// asked for would otherwise put every file it knows under a word that matches
+// almost none of them. `inOrder` is the matcher the file ask already ranks by
+// (the daemon looks for the characters of the word, in order, anywhere in the
+// path), so a row that survives here is one the ask could have returned.
+//
+// `unavailable` is the line for a list the machine did not answer;
+// `filesUnavailable` is the same for the files, which are asked separately and
+// fail separately. Both are read, never picked.
+const MENTION_ROWS = 80
+
+export function mentionItems(
+  query,
+  {
+    files = [],
+    agents = [],
+    servers = [],
+    chats = [],
+    harness = '',
+    unavailable = null,
+    filesUnavailable = null,
+  } = {},
+) {
   const items = []
   for (const f of files) {
+    if (!inOrder(f.path, query)) continue
     items.push({
       key: `file:${f.path}`,
       kind: 'file',
@@ -334,12 +359,23 @@ export function mentionItems(query, { files = [], agents = [], servers = [], cha
       disabled: false,
     })
   }
-  // The trim is a budget for rows, and the note is the one row that says the
-  // list is short: keep a slot for it, or eighty filled rows push it off the
-  // end and a partial list reads as the whole answer.
-  const rows = items.slice(0, unavailable ? 79 : 80)
-  if (unavailable) rows.push(note(unavailable))
-  return rows
+  // The budget is for rows, and a line that says the list is short has to fit
+  // inside it: eighty filled rows pushing the line off the end makes a partial
+  // list read as the whole answer. The failure lines come last and are counted
+  // first, so a menu with two of them still ends with both.
+  const notes = []
+  if (filesUnavailable) notes.push(note(filesUnavailable))
+  if (unavailable) notes.push(note(unavailable))
+  const room = MENTION_ROWS - notes.length
+  let rows = items.slice(0, room)
+  let hidden = items.length - rows.length
+  if (hidden > 0) {
+    // One of the slots is the sentence, not a row.
+    rows = items.slice(0, room - 1)
+    hidden = items.length - rows.length
+    rows = [...rows, note(`${hidden} more - keep typing to narrow`)]
+  }
+  return [...rows, ...notes]
 }
 
 // The argument menu after an OpenRemote command: the choices it takes.

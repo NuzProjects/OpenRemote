@@ -202,11 +202,13 @@ test('a menu trimmed to its last row still ends with the line that says it did n
   // More rows than the menu takes: the chats group alone can be this long.
   const files = Array.from({ length: 90 }, (_, i) => ({ path: `src/f${i}.js`, kind: 'file' }))
   const trimmed = mentionItems('', { files, unavailable: line })
-  assert.equal(trimmed.length, 80, 'the budget for rows does not grow for the note')
-  assert.equal(trimmed.at(-1).detail, line, 'the note survives the trim')
+  assert.equal(trimmed.length, 80, 'the budget for rows does not grow for the lines')
+  assert.equal(trimmed.at(-1).detail, line, 'the failure line survives the trim')
   assert.equal(trimmed.at(-1).note, true)
-  assert.equal(trimmed.filter((i) => i.kind === 'file').length, 79, 'the note costs one row')
-  // An answer that arrived is trimmed to the full eighty, with nothing to say.
+  assert.equal(trimmed.filter((i) => i.kind === 'file').length, 78, 'both lines cost a row each')
+  assert.equal(trimmed.at(-2).detail, '12 more - keep typing to narrow')
+  // An answer that arrived is trimmed to the full eighty: seventy-nine rows
+  // and the line that says the rest are there.
   assert.equal(mentionItems('', { files }).length, 80)
 })
 
@@ -232,7 +234,7 @@ test('the @ menu only shows the files asked for the word being typed', () => {
 
 test('the @ menu groups files, agents, servers and chats', () => {
   const items = mentionItems('no', {
-    files: [{ path: 'notes.md', kind: 'file' }, { path: 'src', kind: 'dir' }],
+    files: [{ path: 'notes.md', kind: 'file' }, { path: 'no-docs', kind: 'dir' }],
     agents: [{ name: 'notes:scribe', source: 'plugin', available: true }],
     servers: [{ name: 'notes-db', source: 'plugin', plugin: 'notes@local' }],
     chats: [{ id: 'abc12345-x', title: 'Notes cleanup', harness: 'claude' }],
@@ -242,9 +244,86 @@ test('the @ menu groups files, agents, servers and chats', () => {
     items.map((i) => i.group),
     ['Files', 'Files', 'Agents', 'MCP servers', 'Chats'],
   )
-  assert.equal(items[1].label, 'src/')
+  assert.equal(items[1].label, 'no-docs/')
   assert.equal(items[2].insertion, '@agent-notes:scribe')
   assert.equal(items[3].insertion, '@notes-db:')
   assert.equal(items[3].space, false)
   assert.equal(argItems('op', [{ id: 'opus', name: 'Opus' }, { id: 'haiku' }]).map((i) => i.insertion)[0], 'opus')
+})
+
+// ---- the @ menu's files: narrowed by the word, and honest about a cap ----
+
+test('typing narrows the files the ask returned, the way it narrows agents', () => {
+  const files = [
+    { path: 'src/composer-menus.js', kind: 'file' },
+    { path: 'README.md', kind: 'file' },
+    { path: 'src/split.js', kind: 'file' },
+  ]
+  assert.deepEqual(
+    mentionItems('composer', { files }).map((i) => i.label),
+    ['src/composer-menus.js'],
+    'only the file that carries the word',
+  )
+  // A word nothing matches leaves no files at all, so the menu can say it is
+  // empty rather than showing rows that cannot be what was meant.
+  assert.deepEqual(mentionItems('zzz', { files }), [])
+  // The path matcher is the one the file ask already uses: every character of
+  // the word, in order, anywhere (the daemon ranks a path the same way).
+  assert.deepEqual(
+    mentionItems('cmn', { files }).map((i) => i.label),
+    ['src/composer-menus.js'],
+    'a subsequence of a path still finds it',
+  )
+  // An empty word is not a filter.
+  assert.equal(mentionItems('', { files }).length, 3)
+})
+
+test('the cap keeps a line that says the list is short', () => {
+  const files = Array.from({ length: 90 }, (_, i) => ({ path: `src/file-${i}.js`, kind: 'file' }))
+  const trimmed = mentionItems('src', { files })
+  assert.equal(trimmed.length, 80, 'the budget for rows does not grow for the line')
+  assert.equal(trimmed.filter((i) => i.kind === 'file').length, 79, 'the line costs one row')
+  const last = trimmed.at(-1)
+  assert.equal(last.note, true, 'the last row is the line, not a file')
+  assert.equal(last.detail, '11 more - keep typing to narrow')
+  assert.equal(last.disabled, true, 'a note is read, never picked')
+  // Both lines fit when an ask also failed: the trim line, then the failure.
+  const both = mentionItems('src', { files, unavailable: 'Commands and agents did not load.' })
+  assert.equal(both.length, 80)
+  assert.equal(both.at(-2).detail, '12 more - keep typing to narrow')
+  assert.equal(both.at(-1).detail, 'Commands and agents did not load.')
+})
+
+test('a failed file ask leaves no stale rows and says so once', () => {
+  // What the hook holds after an ask fails for a newer word: nothing that
+  // belongs to the word before it.
+  const stale = filesForQuery({ q: 'src', entries: [{ path: 'src/a.js', kind: 'file' }] }, 'notes')
+  assert.deepEqual(stale, [])
+  const line = 'Files did not load. They are asked again as you type.'
+  const items = mentionItems('notes', { files: stale, filesUnavailable: line })
+  assert.deepEqual(
+    items.map((i) => i.kind),
+    ['note'],
+    'the menu says the ask failed and shows no files',
+  )
+  assert.equal(items[0].detail, line)
+  assert.equal(items[0].disabled, true)
+  // The same word keeping its own failed answer is still the failure, not the
+  // rows from a beat ago.
+  assert.deepEqual(filesForQuery({ q: 'notes', entries: [] }, 'notes'), [])
+})
+
+test('an ask that answered nothing leaves an empty menu, or the line if it failed', () => {
+  assert.deepEqual(mentionItems('notes', { files: [] }), [], 'nothing to show, nothing said')
+  const line = 'Files did not load. They are asked again as you type.'
+  assert.deepEqual(
+    mentionItems('notes', { files: [], filesUnavailable: line }).map((i) => i.detail),
+    [line],
+  )
+  // An answer is not the failure: no line when the ask worked.
+  assert.deepEqual(
+    mentionItems('notes', { files: [], filesUnavailable: null }),
+    [],
+    'a successful answer says nothing',
+  )
 })

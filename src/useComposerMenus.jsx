@@ -55,6 +55,9 @@ export function useComposerMenus({
   // showing rows that belong to another harness or another chat.
   const [unavailable, setUnavailable] = useState(false)
   const [files, setFiles] = useState(null)
+  // The file ask fails on its own: it is a separate request to the machine, so
+  // its failure gets its own line and never borrows the commands' one.
+  const [filesFailed, setFilesFailed] = useState(false)
 
   const menu = enabled ? menuAt(text, caret) : null
   const menuKey = menuKeyOf(menu)
@@ -99,6 +102,11 @@ export function useComposerMenus({
     ? 'Commands and agents did not load. They load again when the chat changes or the daemon reconnects.'
     : null
 
+  // Said in place of the files when their ask failed. Files are asked again on
+  // every typing stop, so the way out is to keep typing, and the line says
+  // that rather than offering a control the menu does not have.
+  const filesUnavailableLine = filesFailed ? 'Files did not load. They are asked again as you type.' : null
+
   // Files for the @ word, a beat after typing stops.
   const fileQuery = open && menu.kind === '@' ? menu.query : null
   useEffect(() => {
@@ -106,17 +114,23 @@ export function useComposerMenus({
     // The answer before this one is kept on screen while this word's own ask
     // is in flight, narrowed by filesForQuery to what still matches. An ask
     // that fails leaves this word with nothing rather than the rows of the
-    // word before it, and one that was dropped for a newer word writes
-    // nothing at all.
+    // word before it - and says so, because an empty menu with no line reads
+    // as "this word matches no files". One that was dropped for a newer word
+    // writes nothing at all.
     let live = true
+    setFilesFailed(false)
     const controller = new AbortController()
     const timer = setTimeout(() => {
       filesFor({ workspace, session: sessionId, deviceId, q: fileQuery, signal: controller.signal })
         .then((found) => {
-          if (live) setFiles({ q: fileQuery, entries: found?.entries ?? [] })
+          if (!live) return
+          setFiles({ q: fileQuery, entries: found?.entries ?? [] })
+          setFilesFailed(false)
         })
         .catch(() => {
-          if (live) setFiles({ q: fileQuery, entries: [] })
+          if (!live) return
+          setFiles({ q: fileQuery, entries: [] })
+          setFilesFailed(true)
         })
     }, 120)
     return () => {
@@ -154,6 +168,7 @@ export function useComposerMenus({
         chats: otherChats,
         harness: view?.harness ?? harness,
         unavailable: unavailableLine,
+        filesUnavailable: filesUnavailableLine,
       })
     } else {
       items = argItems(menu.query, choicesFor?.(menu.arg) ?? [])
