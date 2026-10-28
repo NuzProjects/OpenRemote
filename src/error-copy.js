@@ -21,7 +21,7 @@ const TIMEOUT = 'The console got no answer in time.'
 
 export const UNREACHABLE = 'The console could not reach its daemon.'
 
-const NETWORK = /failed to fetch|network ?error|load failed|err_connection/i
+const NETWORK = /failed to fetch|fetch failed|network ?error|load failed|err_connection/i
 
 const trimDot = (said) => said.replace(/[.!?]+$/, '')
 
@@ -46,9 +46,15 @@ export function errorCopy(err) {
   // The console wrote this one itself, so it is repeated rather than quoted.
   // TIMEOUT carries its own period now, so the sentence is not doubled.
   if (said.startsWith(TIMEOUT)) return `${TIMEOUT} Try again.`
-  // The stream's own close line: a status with no words around it.
-  if (/^SSE HTTP \d+$/.test(said)) {
-    return 'The live stream to the daemon dropped. The console is reconnecting on its own.'
+  // The stream's own close line: a status with no words around it. Only the
+  // statuses a reconnect can fix are called a drop that is healing itself; a 404 (a
+  // daemon that no longer serves that route) or a 403 would promise a recovery that
+  // never comes.
+  const stream = said.match(/^SSE HTTP (\d+)$/)
+  if (stream) {
+    const code = Number(stream[1])
+    if (code >= 500) return 'The live stream to the daemon dropped. The console is reconnecting on its own.'
+    return `The daemon refused the live stream (HTTP ${code}). Try again, or reconnect from Settings.`
   }
   if (status != null) {
     // `call()` puts the daemon's own sentence in the message and keeps the
@@ -60,8 +66,11 @@ export function errorCopy(err) {
       : `The daemon answered ${status} and gave no reason for it.`
   }
   // No status: the request never reached the daemon (a closed port, a socket
-  // the webview dropped), or what was thrown was not an Error at all.
-  if (err instanceof TypeError || NETWORK.test(said)) {
+  // the webview dropped), or what was thrown was not an Error at all. The test is
+  // the message, not the error's class: `instanceof TypeError` was read as proof
+  // that the request never landed, so a shape bug in the console's own code told the
+  // person their daemon was down and sent them to restart a process that was fine.
+  if (NETWORK.test(said)) {
     return `${UNREACHABLE} Check that it is running, then try again.`
   }
   if (!said) return 'The console does not know why this failed. Try again.'

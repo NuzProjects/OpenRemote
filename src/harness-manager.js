@@ -27,16 +27,20 @@ export function harnessRows(capabilities, installable) {
     if (h.available) {
       // The daemon's own probe words: the version it read from the CLI
       // and the path it resolved - technical content, mono in the UI.
-      const detail = [h.version, h.path].filter(Boolean).join(' · ') || null
+      const probe = [h.version, h.path].filter(Boolean).join(' · ') || null
       const signedOut = h.signed_in === false
+      const relayable = signedOut && SIGNIN_HARNESSES.has(h.id)
       return {
         id: h.id,
         name,
         statusLabel: signedOut ? 'Not signed in' : 'Ready',
         ready: !signedOut,
-        detail,
-        detailKind: 'mono',
-        action: signedOut && SIGNIN_HARNESSES.has(h.id) ? 'signin' : 'none',
+        // A harness the daemon cannot sign in for says how its own sign-in works,
+        // in the note slot the missing rows use: the row states a fault, and it used
+        // to offer nothing at all beside it.
+        detail: signedOut && !relayable ? `${name} signs in through its own setup, in a terminal.` : probe,
+        detailKind: signedOut && !relayable ? 'note' : 'mono',
+        action: relayable ? 'signin' : 'none',
       }
     }
     const spec = specById?.get(h.id)
