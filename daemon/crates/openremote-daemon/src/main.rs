@@ -274,10 +274,13 @@ fn status() -> ExitCode {
     ExitCode::from(code)
 }
 
-/// What the daemon's own phase says about being reachable, in one sentence, or
-/// nothing when there is no state to read. The words are the console's own
-/// ("can't reach OpenRemote Cloud" comes from the mesh), so a person reading
-/// both ends sees the same story.
+/// What a `status` run can honestly say beyond enrolment. The command opens its
+/// own Cloud from the two files in the data folder, so the phase it reads is a
+/// record left by the last daemon that ran, not the live mesh: printing
+/// "reachable" from it would be a claim nobody measured, on a machine whose relay
+/// may be blocked right now. One state is a fact the files really hold - a
+/// credential the registry refused - and that one is worth saying, because
+/// signing in again is the only way back.
 fn reach_line(state: Option<&str>, error: Option<&str>) -> Option<String> {
     let why = error
         .map(str::trim)
@@ -285,11 +288,6 @@ fn reach_line(state: Option<&str>, error: Option<&str>) -> Option<String> {
         .map(|e| format!(" ({e})"))
         .unwrap_or_default();
     match state {
-        Some("online") => Some("Reachable from your other devices.".to_string()),
-        Some("connecting") => Some("Connecting to OpenRemote Cloud.".to_string()),
-        Some("offline") => Some(format!(
-            "Not reachable from your other devices right now{why}."
-        )),
         // The credential is present (so the line above says enrolled) but the
         // registry no longer accepts it: signing in again is the only way back.
         Some("relink") => Some(format!(
@@ -436,25 +434,14 @@ mod tests {
     }
 
     #[test]
-    fn status_says_whether_the_machine_is_reachable() {
-        // Enrolment is not reachability, which is the thing a server admin
-        // cannot see otherwise: a proxy that blocks the relay still enrols.
-        assert_eq!(
-            reach_line(Some("online"), None).unwrap(),
-            "Reachable from your other devices."
-        );
-        assert_eq!(
-            reach_line(Some("connecting"), None).unwrap(),
-            "Connecting to OpenRemote Cloud."
-        );
-        let offline = reach_line(Some("offline"), None).unwrap();
-        assert!(offline.starts_with("Not reachable"), "{offline}");
-        let with_reason =
-            reach_line(Some("offline"), Some("can't reach OpenRemote Cloud")).unwrap();
-        assert!(
-            with_reason.contains("can't reach OpenRemote Cloud"),
-            "{with_reason}"
-        );
+    fn status_says_only_what_the_files_can_prove() {
+        // A `status` run opens its own Cloud, so the phase it reads is a record
+        // from the last daemon that ran rather than the live mesh. Every state
+        // but the refused credential is silence, because "reachable" would be a
+        // claim this command never measured.
+        assert_eq!(reach_line(Some("online"), None), None);
+        assert_eq!(reach_line(Some("connecting"), None), None);
+        assert_eq!(reach_line(Some("offline"), None), None);
         let relink = reach_line(
             Some("relink"),
             Some("this device's credential was rejected"),
@@ -462,15 +449,14 @@ mod tests {
         .unwrap();
         assert!(relink.contains("sign in again"), "{relink}");
         assert!(relink.contains("rejected"), "{relink}");
-        // No state to read (an older view, a stubbed cloud): say nothing rather
-        // than claim a reachability nobody measured.
+        // No state to read (an older view, a stubbed cloud): say nothing.
         assert_eq!(reach_line(None, None), None);
         assert_eq!(reach_line(Some("signed_out"), None), None);
         // An empty reason is no reason, not "()".
         assert!(
-            !reach_line(Some("offline"), Some("  "))
+            !reach_line(Some("relink"), Some("  "))
                 .unwrap()
-                .contains("(")
+                .contains("()")
         );
     }
 
