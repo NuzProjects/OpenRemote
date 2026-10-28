@@ -482,8 +482,13 @@ export default function BrowserView({ onClosePane = null }) {
     const tab = activeTab()
     if (!tab?.native) return
     const factor = nextZoom(tab.zoom ?? 1, dir)
-    patchTab(tab.key, { zoom: factor })
-    call('browser_zoom', { tab: tab.native, factor })
+    // The record follows the shell, not the wish: a refused zoom used to leave the
+    // address bar's badge, the menu's "Actual size" entry and Ctrl+0 all describing
+    // a zoom the page never took, so the console argued with the page about how big
+    // it was. `call` answers null when the command did not land.
+    call('browser_zoom', { tab: tab.native, factor }).then((done) => {
+      if (done != null) patchTab(tab.key, { zoom: factor })
+    })
   }
 
   const focusAddress = () => {
@@ -773,6 +778,12 @@ export default function BrowserView({ onClosePane = null }) {
             onSelect: () => (refused ? call('browser_open_external', { url: d.url }) : call('browser_reveal', { path: d.path })),
           }
         }),
+        // The store keeps more than the menu draws, and a list that just stops is
+        // a list that says it is everything: the row below names what is not here
+        // so twelve of fifty does not read as fifty.
+        ...(downloads.length > 12
+          ? [{ label: `and ${downloads.length - 12} more this session`, hint: 'The menu shows the newest twelve', disabled: true }]
+          : []),
       ]
     }
     if (menu.kind === 'tab') {

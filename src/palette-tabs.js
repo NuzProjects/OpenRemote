@@ -21,6 +21,11 @@ export function tabRow(tab) {
     key: tab?.key ?? null,
     name: title || 'New tab',
     sub: title ? url : url || 'No address yet',
+    // What this row is searched by: the title and the address, because the address
+    // is the most distinctive thing about a tab and the row already shows it in the
+    // sub line. Ranking on the title alone meant typing an address found nothing
+    // while the row it would have picked had that address printed on it.
+    search: [title || 'New tab', url].filter(Boolean).join(' '),
     active: Boolean(tab?.active),
   }
 }
@@ -35,5 +40,5 @@ export function browserTabs({ tabs = null, mounted = false, query = '' } = {}) {
     .filter((tab) => tab && tab.key != null)
     .map((tab) => tabRow(tab))
   if (!query.trim()) return rows
-  return rankMatches(query, rows, (row) => row.name)
+  return rankMatches(query, rows, (row) => row.search ?? row.name)
 }

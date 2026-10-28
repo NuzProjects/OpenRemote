@@ -103,7 +103,14 @@ export default function CloudNotices() {
               : <>New device: <span className="pv">{device.name}</span> joined your Cloud. Not you?</>}
           </span>
           {confirming === device.id ? (
+            // Keep comes first: the press that opened this row landed on the
+            // control in the first slot, so leaving Remove there would let a
+            // second press, an Enter or a double click take a device out of the
+            // account. MachineModal's removal reads the same way.
             <>
+              <button type="button" className="cn-btn" onClick={() => setConfirming(null)} disabled={removing === device.id}>
+                Keep
+              </button>
               <button
                 type="button"
                 className="cn-btn primary"
@@ -125,9 +132,6 @@ export default function CloudNotices() {
                 }}
               >
                 {removing === device.id ? 'Removing...' : 'Remove'}
-              </button>
-              <button type="button" className="cn-btn" onClick={() => setConfirming(null)} disabled={removing === device.id}>
-                Keep
               </button>
             </>
           ) : (

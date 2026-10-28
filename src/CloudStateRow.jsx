@@ -149,12 +149,16 @@ export default function CloudStateRow({ one = 'computer' }) {
           </div>
         ) : inCloud ? (
           confirmSignOut ? (
+            // The safe answer comes first: the press that opened this row was on
+            // the control in the first slot, so leaving "Sign out" there would put
+            // a second press, an Enter or a double click on the way out of the
+            // account. MachineModal's removal reads the same way.
             <div className="pn-actions">
-              <button type="button" className="pn-btn" onClick={signOut} disabled={busy}>
-                Sign out
-              </button>
               <button type="button" className="pn-btn" onClick={() => setConfirmSignOut(false)}>
                 Cancel
+              </button>
+              <button type="button" className="pn-btn" onClick={signOut} disabled={busy}>
+                Sign out
               </button>
             </div>
           ) : (
@@ -173,6 +177,13 @@ export default function CloudStateRow({ one = 'computer' }) {
             className="pn-btn"
             onClick={start}
             disabled={busy || connection.state !== 'connected'}
+            // A disabled control with no reason reads as a broken app. The daemon
+            // is the gate here, and the row's own line says so while it is.
+            title={
+              connection.state !== 'connected'
+                ? 'The console is not connected to its daemon yet, so sign-in cannot start'
+                : undefined
+            }
           >
             {cloud?.state === 'revoked' || cloud?.state === 'relink' ? 'Sign in again' : 'Sign in'}
           </button>
@@ -185,7 +196,15 @@ export default function CloudStateRow({ one = 'computer' }) {
             <button
               type="button"
               className="pn-btn"
-              onClick={() => navigator.clipboard?.writeText(link).catch(() => {})}
+              // A refused clipboard is silent, and the link is the one thing this
+              // row cannot reproduce: say so, so the address can be copied by hand
+              // while it is still on screen above.
+              onClick={() =>
+                navigator.clipboard?.writeText(link).then(
+                  () => setAlert(null),
+                  () => setAlert('The link could not be copied. Select it above and copy it by hand.'),
+                )
+              }
             >
               Copy link
             </button>
