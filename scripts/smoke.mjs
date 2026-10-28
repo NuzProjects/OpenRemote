@@ -25,23 +25,27 @@
 //   that its rows and Escape behave; not that a split row's effect is what it
 //   says (the Layouts menu is the palette's page, not a pane-header control).
 // - the palette's Rules group: proves it is offered only while Automations is
-//   mounted; not that any rule in it runs. It needs a profile with at least one
-//   rule, which the dev profile does not have: make one in Automations (New
-//   automation), or run against the fixture profile the daemon e2e suites seed
-//   (cargo test -p openremote-daemon with OPENREMOTE_DATA_DIR pointing at the
-//   e2e fixture, or the fake-cloud suite's seeded chats). With none it skips.
+//   mounted, and that a rule made through the form reaches the palette and can
+//   be removed again; not that running one does what it says. The check seeds
+//   its own rule, because the dev profile never holds one: the name and task
+//   are typed into the form, the project, harness and machine come from the
+//   form's own pickers, and the rule is deleted at the end. When the profile
+//   has no project or no installed harness to make one with, the form refuses
+//   Save and the check skips, naming the piece that is missing.
 // - an armed plugin row: proves the first press arms, Escape disarms, and the
 //   plugin is still installed; not that a second press would remove it. It
-//   needs an installed plugin, which the dev profile does not have: install one
-//   from a local folder (Plugins > Install > folder) or from the fixture the
-//   plugins e2e uses. With none it skips.
+//   needs an installed plugin, which the dev profile never has: install one
+//   from a local folder first (Plugins, Install, pick the plugin's folder in
+//   the in-app picker) or run against the fixture the plugins e2e uses. With
+//   none it skips and says so.
 //
-// WHAT IT DOES NOT COVER: it never exercises the daemon's write path (no chat
-// is created and no task is typed, so the stream and the transcript are never
-// read), no settings are changed, no plugin is actually removed and no layout
-// is saved or applied. A green run says every view opens, draws, keeps the
-// boundary panel away and that the four interactions above behave; it does not
-// say the app works.
+// WHAT IT DOES NOT COVER: no chat is created and no message is typed into one,
+// so the stream and the transcript are never read. The one write is the rule the
+// palette check seeds and deletes, whose name and task are typed into the rule
+// form; no settings are changed, no plugin is actually removed and no layout is
+// saved or applied. A green run says every
+// view opens, draws, keeps the boundary panel away and that the four
+// interactions above behave; it does not say the app works.
 
 const port = process.env.OPENREMOTE_CDP_PORT ?? '9333'
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -648,9 +652,13 @@ if (!(await clickSidebar(`(x.textContent || '').trim() === 'New chat'`))) {
   }
 }
 
-// (c) The palette's Rules group: typing "rul" offers it only while Automations
-// is mounted. Proves the group is mounted with the view rather than always on;
-// not that a rule in it runs.
+// (c) The palette's Rules group: a query that matches a rule offers the group
+// only while Automations is mounted. Proves the group is mounted with the view
+// rather than always on, and that a rule made through the form reaches the
+// palette; not that running one does what it says. The dev profile never holds
+// a rule, so the check makes its own through the form and deletes it again: a
+// gate that skips without a populated profile has never opened the door it
+// exists to watch.
 const goView = async (label, hash) => {
   const clicked = await clickSidebar(`(x.textContent || '').trim() === '${label}'`)
   if (!clicked) return false
@@ -658,39 +666,240 @@ const goView = async (label, hash) => {
   await sleep(300)
   return reached
 }
-const rulesIn = async (label, hash) => {
+
+// Click an element the way a person does: real mouse events at its centre, so
+// every handler that reads a coordinate (a picker's anchor, a menu's spot)
+// gets a real one. A selector that finds nothing is a false answer, never a
+// silent pass.
+const clickElement = async (selector) => {
+  const box = await evaluate(`(() => {
+    const el = document.querySelector(${JSON.stringify(selector)});
+    if (!el) return null;
+    const b = el.getBoundingClientRect();
+    return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+  })()`)
+  if (!box) return false
+  await click(box.x, box.y)
+  return true
+}
+
+// What the form receives from the keyboard: letters and spaces, key by key,
+// with the printable text attached so the field sees each character. A name
+// with no digits keeps this honest about what it exercises.
+const typeText = async (text) => {
+  for (const ch of text) {
+    const keyName = ch === ' ' ? ' ' : ch
+    const code = ch === ' ' ? 'Space' : `Key${ch.toUpperCase()}`
+    const vk = ch === ' ' ? 32 : ch.toUpperCase().charCodeAt(0)
+    await key({ key: keyName, code, vk, text: ch })
+  }
+}
+
+const ruleNames = () =>
+  evaluate(`[...document.querySelectorAll('.am-rule .am-name')].map((n) => (n.textContent || '').trim())`)
+
+// The rule this check makes and then removes. The palette is searched with the
+// first three letters of whichever rule the check is about, because a query that
+// begins a rule's name is the shortest honest one: it proves the group is offered
+// for a rule this run looked for, not that some other row matched.
+const smokeRuleName = 'Smoke rule'
+const smokeRuleTask = 'Run the smoke rule'
+
+// Seed the check's own subject through the UI, exactly as a person would. On a
+// profile that already holds a rule this is a no-op and the first rule is the
+// subject, so two runs against one profile behave the same.
+const seedRule = async () => {
+  await key({ key: 'Escape', code: 'Escape', vk: 27 })
+  await sleep(150)
+  if (!(await goView('Automations', '#automations'))) {
+    return { created: false, name: null, why: 'the Automations view did not open' }
+  }
+  const before = await ruleNames()
+  if (before.length > 0) return { created: false, name: before[0], rules: before, refusedShort: null }
+
+  if (!(await clickElement('.automations header button.dv-act'))) {
+    return { created: false, name: null, why: 'Automations has no New rule button' }
+  }
+  if (!(await waitFor(`!!document.querySelector('[aria-label="New automation"]')`, { timeout: 4000 }))) {
+    return { created: false, name: null, why: 'the New rule form did not open' }
+  }
+
+  // The name field carries focus when the dialog opens, so the first word goes
+  // there without a click. The task field is filled next.
+  await typeText(smokeRuleName)
+  await sleep(120)
+  // The form's own gate, read before the task is filled: Save stays refused
+  // while the rule is short of the fields it needs. Recording the refusal is
+  // what makes the later save a proof that the gate opened, not that a click
+  // happened to land.
+  const refusedShort = await evaluate(`(() => {
+    const b = document.querySelector('.af-foot .dv-connect');
+    return Boolean(b && b.disabled && (b.textContent || '').trim() === 'Create rule');
+  })()`)
+  await clickElement('.af-task')
+  await typeText(smokeRuleTask)
+  await sleep(150)
+  const ready = await waitFor(
+    `(() => { const b = document.querySelector('.af-foot .dv-connect'); return Boolean(b && !b.disabled); })()`,
+    { timeout: 6000 },
+  )
+  if (!ready) {
+    // What is missing, in the form's own words: the harness, machine and
+    // project cells each say when they hold nothing, and the notes say what a
+    // save still needs. A rule needs all three, so the skip names them.
+    const form = await evaluate(`(() => {
+      const cells = [...document.querySelectorAll('.af-then-cell .af-pick')].map((b) => (b.textContent || '').trim());
+      const project = document.querySelector('.af-workspace .af-pick');
+      const notes = [...document.querySelectorAll('.af-when-note')].map((n) => (n.textContent || '').trim());
+      return {
+        harness: cells[0] ?? null,
+        machine: cells[1] ?? null,
+        project: project ? (project.textContent || '').trim() : null,
+        notes,
+      };
+    })()`)
+    await clickElement('.af-foot .dv-act')
+    await waitFor(`!document.querySelector('[aria-label="New automation"]')`, { timeout: 3000 })
+    return {
+      created: false,
+      name: null,
+      refusedShort,
+      why: `the form refuses Save with name and task filled (harness "${form.harness ?? '(none)'}", machine "${form.machine ?? '(none)'}", project "${form.project ?? '(none)'}"${form.notes.length ? `; the form says "${form.notes.join(' | ')}"` : ''}); a rule needs all three, so install a harness in Plugins or add a project from New chat and run again`,
+    }
+  }
+
+  if (!(await clickElement('.af-foot .dv-connect'))) {
+    return { created: false, name: null, refusedShort, why: 'the Create rule button disappeared' }
+  }
+  const appeared = await waitFor(
+    `[...document.querySelectorAll('.am-rule .am-name')].some((n) => (n.textContent || '').trim() === ${JSON.stringify(smokeRuleName)})`,
+    { timeout: 8000 },
+  )
+  if (!appeared) {
+    const said = await evaluate(`document.querySelector('.af-error')?.textContent?.trim() ?? null`)
+    // Cancel discards on purpose: Escape only raises the form's own warning
+    // while a half-written rule is in it, so the dialog would stay open over
+    // the next check.
+    await clickElement('.af-foot .dv-act')
+    await waitFor(`!document.querySelector('[aria-label="New automation"]')`, { timeout: 3000 })
+    return {
+      created: false,
+      name: null,
+      refusedShort,
+      why: `the save produced no rule${said ? ` (the form said "${said}")` : ''}`,
+    }
+  }
+  return { created: true, name: smokeRuleName, rules: [smokeRuleName], refusedShort }
+}
+
+const rulesIn = async (label, hash, query) => {
   // Any menu or popup left by an earlier check is dismissed first: a check that
   // fails on the previous check's state is worse than no check.
   await key({ key: 'Escape', code: 'Escape', vk: 27 })
   await sleep(120)
   if (!(await goView(label, hash))) return null
-  // The view's own words say whether it holds any rules; a profile with none
-  // cannot show the group on any view, so the gating is not exercised there.
-  const empty = await evaluate(`(document.querySelector('.split-body')?.innerText ?? '').includes('No rules yet.')`)
   await key({ key: 'k', code: 'KeyK', vk: 75, modifiers: 2 })
   if (!(await waitFor("!!document.querySelector('.kb-palette')"))) return null
-  for (const [ch, code, vk] of [
-    ['r', 'KeyR', 82],
-    ['u', 'KeyU', 85],
-    ['l', 'KeyL', 76],
-  ]) {
-    await key({ key: ch, code, vk, text: ch })
-  }
+  await typeText(query)
   await sleep(250)
-  const labels = await evaluate(`[...document.querySelectorAll('.kb-group-label')].map((l) => l.textContent.trim())`)
+  const seen = await evaluate(`(() => {
+    const groups = [...document.querySelectorAll('.kb-group')].map((g) => ({
+      label: (g.querySelector('.kb-group-label')?.textContent || '').trim(),
+      rows: [...g.querySelectorAll('.kb-item .kb-name')].map((n) => (n.textContent || '').trim()),
+    }));
+    const rules = groups.find((g) => g.label === 'Rules');
+    return {
+      labels: groups.map((g) => g.label),
+      rulesRows: rules ? rules.rows : [],
+      hasRules: groups.some((g) => g.label === 'Rules'),
+    };
+  })()`)
   await key({ key: 'Escape', code: 'Escape', vk: 27 })
   await waitFor("!document.querySelector('.kb-palette')", { timeout: 4000 })
-  return { empty, labels, hasRules: labels.includes('Rules') }
+  return seen
 }
-const onAutomations = await rulesIn('Automations', '#automations')
-const onPlugins = await rulesIn('Plugins', '#plugins')
-if (onAutomations?.empty) {
-  skip('the palette rules group', 'this dev profile has no rules, so the group is empty on every view')
+
+// Remove the rule this run made, by the same two presses a person uses: the
+// row's trash, then the row's own confirmation. Every path that created one
+// calls this, including the ones that skip: a gate that leaves its subject in
+// the profile has changed what it was asked to observe.
+const removeSeededRule = async (name) => {
+  await clickSidebar(`(x.textContent || '').trim() === 'Automations'`)
+  await sleep(300)
+  const armed = await clickElement(`button[aria-label=${JSON.stringify(`Remove ${name}`)}]`)
+  const armedUp =
+    armed &&
+    (await waitFor(
+      `[...document.querySelectorAll('.am-rule button')].some((b) => (b.textContent || '').trim() === 'Remove it and its schedule')`,
+      { timeout: 3000 },
+    ))
+  if (armedUp) await clickElement('.am-rule button.pn-btn--danger')
+  const removed = await waitFor(
+    `![...document.querySelectorAll('.am-rule .am-name')].some((n) => (n.textContent || '').trim() === ${JSON.stringify(name)})`,
+    { timeout: 8000 },
+  )
+  return {
+    removed,
+    note: removed
+      ? ''
+      : `the rule "${name}" is still in this profile: remove it by hand in Automations (its trash, then Remove it and its schedule) before the next run`,
+  }
+}
+
+const seed = await seedRule()
+const rulesQuery = seed.name ? seed.name.trim().slice(0, 3).toLowerCase() || 'rul' : 'rul'
+const onAutomations = seed.name ? await rulesIn('Automations', '#automations', rulesQuery) : null
+const onPlugins = seed.name ? await rulesIn('Plugins', '#plugins', rulesQuery) : null
+if (!seed.name) {
+  skip('the palette rules group', seed.why ?? 'no rule to look for and none could be made')
+  skip('the smoke rule in the palette', seed.why ?? 'no rule to look for and none could be made')
+} else if (!onAutomations) {
+  // The palette never opened, so the rule this run made has to go before the
+  // skip: leaving it would mean the next run starts against a profile this one
+  // changed.
+  const cleaned = seed.created ? await removeSeededRule(seed.name) : { removed: true, note: '' }
+  const why = `the command palette did not open on Automations${cleaned.note ? `; ${cleaned.note}` : ''}`
+  skip('the palette rules group', why)
+  skip('the smoke rule in the palette', why)
+} else if (!seed.created && !onAutomations.hasRules) {
+  // A shared profile can hold a rule whose machine is away, and the palette
+  // rightly offers no group for a rule it cannot run. That is the app's rule
+  // about the run, not the gating this check is about, so it says so instead
+  // of failing or, worse, passing on an empty list.
+  skip(
+    'the palette rules group',
+    `the profile's rule "${seed.name}" is not offered (its machine is not online), so there is no group to gate; bring that machine online or remove the rule, then run again`,
+  )
+  skip('the smoke rule in the palette', 'the profile has only a rule the palette cannot offer')
 } else {
   record(
     "the palette's Rules group appears only while Automations is mounted",
-    Boolean(onAutomations?.hasRules) && Boolean(onPlugins) && !onPlugins.hasRules,
-    `Automations: "${onAutomations?.labels.join(', ') ?? '(none)'}"; Plugins: "${onPlugins?.labels.join(', ') ?? '(none)'}"`,
+    Boolean(onAutomations?.hasRules) &&
+      Boolean(onPlugins) &&
+      !onPlugins.hasRules &&
+      (!seed.created || seed.refusedShort === true),
+    `Automations: "${onAutomations?.labels.join(', ') ?? '(none)'}"; Plugins: "${onPlugins?.labels.join(', ') ?? '(none)'}"; the subject was "${seed.name}" (${seed.created ? 'created for this check' : 'already in the profile'}) and Save was refused before the task: ${seed.refusedShort ?? '(no form opened)'}`,
+  )
+
+  // The half the skip was hiding: the rule this run is about is offered as a
+  // row, not just a label. On a shared profile the subject is whichever rule
+  // was already there, and the palette may rightly not offer one whose machine
+  // is away, so there the assertion is that every row it does offer names a
+  // rule this profile holds.
+  const offered = seed.created
+    ? Boolean(onAutomations?.rulesRows?.includes(seed.name))
+    : (onAutomations?.rulesRows ?? []).every((name) => (seed.rules ?? []).includes(name))
+  let removed = !seed.created
+  let removalNote = ''
+  if (seed.created) {
+    const cleaned = await removeSeededRule(seed.name)
+    removed = cleaned.removed
+    removalNote = cleaned.note
+  }
+  record(
+    'the rule the palette offers can be removed again',
+    offered && removed,
+    `Rules rows: "${(onAutomations?.rulesRows ?? []).join(', ') || '(none)'}"; the subject offered: ${offered}; created by this run: ${seed.created}; removed: ${removed}${removalNote ? `; ${removalNote}` : ''}`,
   )
 }
 
@@ -723,7 +932,10 @@ if (armTarget) {
   pluginArm.before = armTarget.before
 }
 if (!armTarget) {
-  skip('the armed plugin row', 'no installed plugin in this dev profile')
+  skip(
+    'the armed plugin row',
+    'no installed plugin in this dev profile; install one from a local folder first (Plugins, Install, pick its folder in the in-app picker) and this check runs',
+  )
 } else {
   record(
     'arming a plugin row and pressing Escape cancels the arm and removes nothing',
