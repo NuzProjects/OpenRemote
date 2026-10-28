@@ -18,6 +18,10 @@ export default function AddMachineModal({ onClose }) {
   const [enrollment, setEnrollment] = useState(null)
   const [error, setError] = useState(null)
   const [copied, setCopied] = useState(false)
+  // A refused clipboard looked exactly like one that never happened: the icon stayed the
+  // copy glyph and the person pasted an empty clipboard into the machine believing the
+  // command was in it.
+  const [copyFailed, setCopyFailed] = useState(false)
   const [now, setNow] = useState(() => Date.now())
   // The devices there before the command existed: a new one is the arrival.
   const known = useRef(new Set((devices ?? []).map((d) => d.id)))
@@ -60,8 +64,10 @@ export default function AddMachineModal({ onClose }) {
     try {
       await navigator.clipboard.writeText(enrollment.install_command)
       setCopied(true)
+      setCopyFailed(false)
     } catch {
-      /* the command stays selectable */
+      // The command stays selectable, and the hint says to take it by hand.
+      setCopyFailed(true)
     }
   }
 
@@ -98,6 +104,11 @@ export default function AddMachineModal({ onClose }) {
               </div>
             )}
             {enrollment && !expired && <p className="dv-modal-hint">Waiting for it to join…</p>}
+            {copyFailed && (
+              <p className="dv-modal-hint">
+                Could not copy it. Select the command above and copy it by hand.
+              </p>
+            )}
           </>
         )}
         {error && <p className="dv-error">{error}</p>}

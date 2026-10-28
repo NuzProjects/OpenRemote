@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useConsole } from './state/console.jsx'
+import { loadConnection } from './api/daemon.js'
 import HarnessManagerModal from './HarnessManagerModal.jsx'
 import { harnessName } from './harness-names.js'
 import { HarnessMark } from './brand-marks.jsx'
@@ -19,6 +20,21 @@ const ALL_HARNESSES = new Intl.ListFormat('en', { type: 'conjunction' }).format(
   ['claude', 'codex', 'grok', 'pi', 'opencode', 'agy'].map(harnessName),
 )
 
+// The connect form's starting address. A saved one is the right answer (this console has
+// talked to that daemon before); otherwise the placeholder describes the shape, never a
+// literal port. It used to read http://127.0.0.1:5175, which is the browser dev server's
+// own port: a person following it in the one fallback shown when nothing answered
+// connected to the console's dev server and was told it could not be reached.
+const savedAddress = () => {
+  try {
+    return loadConnection()?.url ?? ''
+  } catch {
+    return ''
+  }
+}
+const ADDRESS_SHAPE = 'http://127.0.0.1:<the port the daemon printed>'
+const CONNECT_HINT = 'The daemon prints its address when it starts.'
+
 // The happy path is the welcome, then the ready screen, and the user never
 // sees connection plumbing: the daemon comes up with the app. A quiet setup
 // beat shows only while it boots (a moment), and the manual connect form is
@@ -34,7 +50,7 @@ export default function Onboarding({ onDone, onDismiss = null, startManual = fal
   const { connection, capabilities, connect } = useConsole()
   const [step, setStep] = useState(startManual ? 'setup' : 'welcome') // welcome | setup | agents | ready
   const [manual, setManual] = useState(startManual)
-  const [url, setUrl] = useState('')
+  const [url, setUrl] = useState(savedAddress)
   const [token, setToken] = useState('')
   // The harness manager, opened where the person already is. It installs
   // through its own chain; the wizard only opens it and takes the answer.
@@ -112,7 +128,8 @@ export default function Onboarding({ onDone, onDismiss = null, startManual = fal
             <div className="ob-harnesses">
               <input
                 className="ob-input"
-                placeholder="http://127.0.0.1:5175"
+                placeholder={ADDRESS_SHAPE}
+                title={CONNECT_HINT}
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 spellCheck={false}
