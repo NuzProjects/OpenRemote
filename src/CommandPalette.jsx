@@ -27,6 +27,7 @@ import {
   MagnifyingGlass,
   PencilSimple,
   Play,
+  Plus,
   PuzzlePiece,
   Repeat,
   SquaresFour,
@@ -41,6 +42,8 @@ import { ACTIONS, comboFromEvent, comboLabel, rankMatches, tieRule } from './sho
 import { reopenAvailable, reopenClosed, browserMounted, getState, setState, subscribe } from './browser-store.js'
 import { BROWSER_GROUP, browserTabs } from './palette-tabs.js'
 import { chatTitle } from './shape.js'
+import { canSeedChat, chatSetup } from './chat-setup.js'
+import { pickable } from './harness-manager.js'
 import { activeSessions } from './archive.js'
 import { hasFileChanges } from './changes.js'
 import { chatMarkdown, copiedLine } from './chat-markdown.js'
@@ -113,7 +116,7 @@ const SECTION_CAP = 8
 // The pages with no keyboard source behind them, so the crumb has a name.
 const PAGE_TITLES = { since: 'Since your last look', 'caught-up': 'Since your last look', layouts: 'Layouts', 'rule-run': 'Rules' }
 
-export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onOpenProject, onOpenMachine, onRace, raceFree, panes = 1, paneCapacity = 4, onSaveLayout, onRestoreLayout, onRenameChat = null, focusedChatId = null }) {
+export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onOpenProject, onOpenMachine, onRace, raceFree, panes = 1, paneCapacity = 4, onSaveLayout, onRestoreLayout, onRenameChat = null, onNewWithSetup = null, focusedChatId = null }) {
   // One line on purpose: the stop-everything wiring test reads this call to
   // prove the palette stops chats through the action a single chat already
   // uses. The two new names sit before `stopChat`, which stays last.
@@ -245,6 +248,43 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
   const chatActionsRef = useRef({ key: null, onScreen: '', reviewChat: null, markdownChat: null })
   if (chatActionsRef.current.key !== chatActions.key) chatActionsRef.current = chatActions
   const { reviewChat, markdownChat } = chatActionsRef.current
+
+  // The setup the focused chat implies, read by the same rule the shell applies
+  // when the row is pressed (chat-setup.js). Read here only to decide whether
+  // the row can deliver anything: a chat whose harness this console cannot
+  // offer would open a New chat on another harness and call it the setup the
+  // person asked to copy.
+  //
+  // The record is read on every render (its model can change mid-stream), but
+  // the setup is rebuilt only when one of its own fields does: its key is those
+  // fields, so a token that merely grows the timeline keeps the row's identity,
+  // the same reason chatActions above carries a key.
+  const setupRecord = focusedChatId
+    ? chats?.[focusedChatId] ?? (sessions ?? []).find((s) => s.id === focusedChatId) ?? null
+    : null
+  const setupFields = setupRecord
+    ? [
+        focusedChatId,
+        setupRecord.harness,
+        setupRecord.model,
+        setupRecord.effort,
+        setupRecord.permissionMode ?? setupRecord.permission_mode,
+        setupRecord.workspace,
+        setupRecord.executor,
+      ].join('|')
+    : ''
+  const rowSetup = useMemo(
+    () =>
+      setupRecord
+        ? chatSetup(setupRecord, {
+            harnesses: (capabilities?.harnesses ?? []).filter(pickable),
+            projects: projects ?? [],
+            thisDevice,
+          })
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [setupFields, capabilities, projects, thisDevice],
+  )
 
   const everything = useMemo(() => {
     const keys = (id) => comboLabel(kb.bindings[id], isMac)
@@ -472,6 +512,24 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
             },
           ]
         : []
+    // "New chat with this setup": the same chat the rename row means, opened
+    // again with its harness, model, effort, approval word and folder. Offered
+    // only when the rule can deliver a setup, so the row never promises a New
+    // chat on a harness this console cannot start.
+    const setupRow =
+      focusedChatId && onNewWithSetup && canSeedChat(rowSetup)
+        ? [
+            {
+              key: 'action:new-with-setup',
+              section: 'Actions',
+              name: 'New chat with this setup',
+              sub: chats?.[focusedChatId]?.title ?? 'This chat',
+              subVeiled: true,
+              icon: <Plus size={15} />,
+              run: { newWithSetup: focusedChatId },
+            },
+          ]
+        : []
     // Saving this chat's setup as a New chat preset. The plan carries what the
     // preset would hold and refuses with a reason when the chat cannot become
     // one, so the row appears only where pressing it would mean something.
@@ -523,14 +581,14 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
         }))
       : []
     return {
-      actions: [...stopRow, ...harnessRow, ...raceRow, ...sinceRow, ...layoutRow, ...layoutsRow, ...renameRow, ...presetRow, ...reopenRow, ...review, ...markdown, ...jobRow, ...pages, ...actions],
+      actions: [...stopRow, ...harnessRow, ...raceRow, ...sinceRow, ...layoutRow, ...layoutsRow, ...renameRow, ...setupRow, ...presetRow, ...reopenRow, ...review, ...markdown, ...jobRow, ...pages, ...actions],
       chats: chatRows,
       projectRows,
       machines: machineRows,
       harnessRows,
       ruleRows,
     }
-  }, [kb, sessions, archived, projects, devices, thisDevice, capabilities, machines, raceFree, moved, panes, savedLayouts, onScreen, reviewChat, markdownChat, hasFileChanges, focusedChatId, onRenameChat, rulesCanRun, automations, machinesAnswered])
+  }, [kb, sessions, archived, projects, devices, thisDevice, capabilities, machines, raceFree, moved, panes, savedLayouts, onScreen, reviewChat, markdownChat, hasFileChanges, focusedChatId, onRenameChat, rowSetup, onNewWithSetup, rulesCanRun, automations, machinesAnswered])
 
   const sections = useMemo(() => {
     if (page === 'layouts') {
@@ -1031,6 +1089,9 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
       // surface that offers renaming), so the palette closes first and then
       // asks, the same shape as the arms above.
       else if (r.renameChat) onRenameChat?.(r.renameChat)
+    // "New chat with this setup" navigates, and navigation belongs to the
+    // shell: the palette closes and asks, the same shape as the rename arm.
+    else if (r.newWithSetup) onNewWithSetup?.(r.newWithSetup)
     else if (r.reopenClosed) reopenClosed()
     })
   }

@@ -58,6 +58,7 @@ export default function NewChat({
   addProjectOpen = false,
   onAddProjectDone,
   presetProject = null,
+  setupSeed = null,
   focused = true,
   onOpenPlugins = null,
   topRight = null,
@@ -155,6 +156,22 @@ export default function NewChat({
     requestAnimationFrame(() => inputRef.current?.focus())
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [presetProject?.nonce])
+
+  // "New chat with this setup": the seed waits in the preset slot, because
+  // both a saved preset and a setup copied from a chat have to be settled
+  // against the model list the harness answers with a moment later (the
+  // settlePreset branch below). The nonce makes a second press apply again,
+  // and the model effect below re-runs on it so a same-harness seed is settled
+  // too, rather than waiting for a fetch that would never come.
+  const seedApplied = useRef(null)
+  useEffect(() => {
+    if (!setupSeed?.nonce || seedApplied.current === setupSeed.nonce) return
+    seedApplied.current = setupSeed.nonce
+    pendingPreset.current = setupSeed
+    if (setupSeed.harness) setHarness(setupSeed.harness)
+    requestAnimationFrame(() => inputRef.current?.focus())
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setupSeed?.nonce])
 
   // The registered projects on the machine the chat will run on. A
   // project belongs to the machine that owns its folder, so the list
@@ -401,7 +418,7 @@ export default function NewChat({
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentHarness?.id, connection.state, target])
+  }, [currentHarness?.id, connection.state, target, setupSeed?.nonce])
 
   const chosenProject = targetProjects.find((p) => p.id === projectId) ?? null
   // The chat's workspace is the project's folder; no project, no

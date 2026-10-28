@@ -38,6 +38,8 @@ import RestoreLayoutConfirm from './RestoreLayoutConfirm.jsx'
 import { fitLayout, restoreConfirm } from './layouts.js'
 import RenameChatModal from './RenameChatModal.jsx'
 import { overlayStale } from './rename-chat.js'
+import { canSeedChat, chatSetup } from './chat-setup.js'
+import { pickable } from './harness-manager.js'
 import { chatTitle } from './shape.js'
 import ViewPopup from './ViewPopup.jsx'
 import { POPUP_VIEWS, onPopup } from './popups.js'
@@ -147,6 +149,9 @@ function Shell() {
     setChatArchived,
     retryDaemon,
     renameChat,
+    capabilities,
+    projects,
+    thisDevice,
   } = useConsole()
   // The sidebar's docked-vs-overlay shape is the viewport's, not a mount-time
   // guess: crossing 640px live swaps the layout (the alternative - reading
@@ -396,6 +401,9 @@ function Shell() {
   // Opening a chat from the sidebar: make sure its record exists even
   // before the next session poll.
   const openSession = (id) => {
+    // Opening a chat leaves New chat, so a setup seed from an earlier press is
+    // spent: a later New chat must open on its own pickers, not on that seed.
+    setSetupSeed(null)
     const session = (sessions ?? []).find((s) => s.id === id)
     if (session) ensureChat(session)
     navigate(id)
@@ -413,6 +421,9 @@ function Shell() {
   // design, so the rule for "which chat is this pane about" lives in one place.
   const focusedChatId = paneChatId(focused?.view, isChatView(view) ? view : null)
   const openInFocus = (id) => {
+    // The same rule for the focused pane's own route: an ordinary New chat
+    // (the tile, the shortcut) is not a press of the setup row.
+    if (id === 'new') setSetupSeed(null)
     if (focused?.view !== null && (id === 'new' || isChatView(id))) {
       const session = (sessions ?? []).find((s) => s.id === id)
       if (session) ensureChat(session)
@@ -666,6 +677,10 @@ function Shell() {
   useEffect(() => onPopup((name) => setPopup(name)), [])
   const [sheet, setSheet] = useState(false)
   const [presetProject, setPresetProject] = useState(null)
+  // A New chat opened from "New chat with this setup": the fields chat-setup.js
+  // read off the chat, plus a nonce so a second press of the same row applies
+  // again (the view settles it once per nonce).
+  const [setupSeed, setSetupSeed] = useState(null)
   const [openDevice, setOpenDevice] = useState(null)
   const goView = (id) => {
     if (POPUP_VIEWS.includes(id)) {
@@ -706,7 +721,29 @@ function Shell() {
   // palette's project rows): the home screen with that project chosen and
   // its message box focused.
   const newChatIn = (id) => {
+    // A project row opens a New chat of its own chosen project, so any setup
+    // left from the last press of "New chat with this setup" is spent.
+    setSetupSeed(null)
     setPresetProject({ id, nonce: Date.now() })
+    focusPrimary()
+    navigate('new')
+    if (typeof window !== 'undefined' && !window.matchMedia('(min-width: 640px)').matches)
+      setSidebarOpen(false)
+  }
+  // "New chat with this setup": the focused chat's own fields, read by the same
+  // rule the palette offers the row on, and handed to New chat as a seed it
+  // settles against today's lists (the preset path in NewChat.jsx). Without a
+  // harness this console can offer there is no setup to copy, so nothing opens:
+  // a New chat on a different harness is not the setup that was asked for.
+  const newChatWithSetup = (chatId) => {
+    const record = chats?.[chatId] ?? (sessions ?? []).find((s) => s.id === chatId) ?? null
+    const setup = chatSetup(record, {
+      harnesses: (capabilities?.harnesses ?? []).filter(pickable),
+      projects: projects ?? [],
+      thisDevice,
+    })
+    if (!canSeedChat(setup)) return
+    setSetupSeed({ nonce: Date.now(), ...setup })
     focusPrimary()
     navigate('new')
     if (typeof window !== 'undefined' && !window.matchMedia('(min-width: 640px)').matches)
@@ -803,6 +840,7 @@ function Shell() {
             addProjectOpen={addProjectOpen}
             onAddProjectDone={() => setAddProjectOpen(false)}
             presetProject={presetProject}
+            setupSeed={setupSeed}
             focused={primaryFocused}
             onOpenPlugins={() => goView('plugins')}
             topRight={<FloatingBar browserOn={browserOpen} onBrowser={toggleBrowser} />}
@@ -1116,6 +1154,7 @@ function Shell() {
               // Renaming from the palette: the focused pane's chat, and the
               // opener the sidebar already uses (the dialog is hosted below).
               onRenameChat={openRename}
+              onNewWithSetup={newChatWithSetup}
               focusedChatId={focusedChatId}
               onOpenMachine={(id) => {
                 setOpenDevice({ id, nonce: Date.now() })
