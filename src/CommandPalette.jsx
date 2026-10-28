@@ -40,6 +40,7 @@ import { useKeyboard, isMac } from './keyboard.jsx'
 import { ACTIONS, comboFromEvent, comboLabel, rankMatches, tieRule } from './shortcuts.js'
 import { reopenAvailable, reopenClosed, browserMounted, getState, setState, subscribe } from './browser-store.js'
 import { BROWSER_GROUP, browserTabs } from './palette-tabs.js'
+import { chatTitle } from './shape.js'
 import { activeSessions } from './archive.js'
 import { hasFileChanges } from './changes.js'
 import { chatMarkdown, copiedLine } from './chat-markdown.js'
@@ -161,7 +162,7 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
     () =>
       activeSessions(sessions ?? [], archived).map((session) => ({
         id: session.id,
-        title: session.title ?? 'A new task',
+        title: chatTitle(session),
         harness: session.harness,
         updatedAt: session.updated_at ?? 0,
         status: chatStatus(session.status),
@@ -299,7 +300,7 @@ export default function CommandPalette({ recentChatIds, onClose, onOpenChat, onO
     const chatRows = activeSessions(sessions ?? [], archived).map((s) => ({
       key: `chat:${s.id}`,
       section: 'Chats',
-      name: s.title ?? 'A new task',
+      name: chatTitle(s),
       sub: harnessName(s.harness),
       icon: <HarnessMark harness={s.harness} size={15} />,
       veiled: true,

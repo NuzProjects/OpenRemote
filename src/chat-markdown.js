@@ -14,6 +14,7 @@
 
 import { decisionText } from './question-line.js'
 import { harnessName } from './harness-names.js'
+import { chatTitle } from './shape.js'
 
 // One tool's input or output is capped: a chat that pasted a whole log should
 // copy as something a person can paste. The cap is generous enough for a
@@ -145,7 +146,10 @@ export function chatMarkdown(chat, { harness = null } = {}) {
   }
   if (!wrote) return null
   const body = out.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd()
-  const title = text(chat?.title) || 'A new task'
+  // The heading is the same name the sidebar and the header print, from the
+  // same reader, so the copy and the window cannot disagree about what a chat
+  // is called.
+  const title = chatTitle(chat)
   const rendered = `# ${title}\n\n${body}\n`
   return {
     text: rendered,

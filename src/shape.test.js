@@ -2,10 +2,15 @@
 // property that matters most: an encoded id cannot leave the path segment it
 // was meant for, while a raw one can. The second half of that pair is the
 // hazard this file exists to prevent, so it is asserted too.
+//
+// The last test is the one a second reader would not expect here: it scans the
+// surfaces for the fallback fed by hand, because `chatTitle` exists to stop the
+// console having eight copies of one sentence.
 
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
-import { list, seg, text } from './shape.js'
+import { CHAT_TITLE_FALLBACK, chatTitle, list, seg, text } from './shape.js'
 
 test('an encoded id stays in its segment, where a raw one changes the route', () => {
   const hostile = '../automations/abc'
@@ -49,4 +54,44 @@ test('list gives an array for anything, and empty for a shape that is not one', 
   assert.deepEqual(list('three'), [])
   // A malformed answer behaves like a server with nothing to say.
   assert.deepEqual(list({}).filter(() => true), [])
+})
+
+test('a chat name is its title, trimmed, or the one fallback', () => {
+  assert.equal(chatTitle({ title: 'fix the parser' }), 'fix the parser')
+  assert.equal(chatTitle({ title: '  fix the parser  ' }), 'fix the parser', 'edges trimmed')
+  assert.equal(chatTitle({}), CHAT_TITLE_FALLBACK)
+  assert.equal(chatTitle({ title: null }), CHAT_TITLE_FALLBACK)
+  assert.equal(chatTitle({ title: undefined }), CHAT_TITLE_FALLBACK)
+  assert.equal(chatTitle(null), CHAT_TITLE_FALLBACK)
+  // The corners the eight hand-written copies disagreed on:
+  assert.equal(chatTitle({ title: '' }), CHAT_TITLE_FALLBACK, 'an empty title is no title')
+  assert.equal(chatTitle({ title: '   ' }), CHAT_TITLE_FALLBACK, 'whitespace is no title either')
+  assert.equal(chatTitle({ title: 42 }), '42', 'a numeric title still reads, as text')
+  assert.equal(chatTitle({ title: {} }), CHAT_TITLE_FALLBACK, 'an object reads as no title, not a crash')
+  assert.equal(CHAT_TITLE_FALLBACK, 'A new task', 'the words every surface prints')
+})
+
+test('no surface feeds the chat-title fallback by hand any more', () => {
+  // The surfaces that print a chat's name. Each one used to write the sentence
+  // itself; if a new copy appears, this is where it shows up. ChatView.jsx and
+  // stop-everything.js are not listed because those two files are not this
+  // change's to edit; their lines are named in the hand-off note instead.
+  const surfaces = [
+    'Sidebar.jsx',
+    'CommandPalette.jsx',
+    'App.jsx',
+    'NewChat.jsx',
+    'SettingsView.jsx',
+    'chat-markdown.js',
+    'settings-search.js',
+  ]
+  for (const file of surfaces) {
+    const source = readFileSync(new URL(file, import.meta.url), 'utf8')
+    assert.doesNotMatch(
+      source,
+      /\?\?\s*'A new task'|\|\|\s*'A new task'/,
+      `${file} still writes the fallback by hand`,
+    )
+    assert.match(source, /chatTitle/, `${file} prints the name through chatTitle`)
+  }
 })

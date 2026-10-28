@@ -11,7 +11,7 @@
 
 import { ACTIONS, GROUPS, fuzzyScore } from './shortcuts.js'
 import { harnessName } from './harness-names.js'
-import { text } from './shape.js'
+import { chatTitle, text } from './shape.js'
 
 // The sidebar's category order. A section names its group by id; the tab
 // list renders one small label per group.
@@ -135,7 +135,10 @@ export function dynamicEntries({
   const harnessList = Array.isArray(harnesses) ? harnesses : []
   const servers = Array.isArray(mcpServers) ? mcpServers : []
   const archivedRows = Array.isArray(archived) ? archived : []
-  const titleOf = (s) => chats?.[s.id]?.title ?? s.title ?? 'A new task'
+  // The name the sidebar prints for the same chat, from the same reader: a
+  // search row that said "A new task" where the list said something else would
+  // be a second naming rule by the back door.
+  const titleOf = (s) => chatTitle({ title: chats?.[s.id]?.title ?? s.title })
 
   const entries = [
     ...harnessList.map((h) => ({

@@ -39,6 +39,7 @@ import { HarnessMark } from './brand-marks.jsx'
 import ContextMenu from './ContextMenu.jsx'
 import DeleteChatModal from './DeleteChatModal.jsx'
 import { shownTitle } from './rename-chat.js'
+import { chatTitle } from './shape.js'
 import { RECONNECTING } from './pane-header.js'
 import { canCopyChat, chatMarkdown, copiedLine } from './chat-markdown.js'
 import { errorCopy } from './error-copy.js'
@@ -168,7 +169,9 @@ export default function Sidebar({
         id: session.id,
         title: shownTitle(
           renamedTitles[session.id],
-          chats[session.id]?.title ?? session.title ?? 'A new task',
+          // The live stream's title when it has one, else the poll's, and the
+          // console's one word for "nothing yet" (shape.js) when neither does.
+          chatTitle({ title: chats[session.id]?.title ?? session.title }),
         ),
         status: liveStatus ?? 'idle',
         liveStatus,

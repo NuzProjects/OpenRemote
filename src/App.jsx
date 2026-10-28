@@ -38,6 +38,7 @@ import RestoreLayoutConfirm from './RestoreLayoutConfirm.jsx'
 import { fitLayout, restoreConfirm } from './layouts.js'
 import RenameChatModal from './RenameChatModal.jsx'
 import { overlayStale } from './rename-chat.js'
+import { chatTitle } from './shape.js'
 import ViewPopup from './ViewPopup.jsx'
 import { POPUP_VIEWS, onPopup } from './popups.js'
 import { KeyboardProvider, useKeyboard, useShortcut } from './keyboard.jsx'
@@ -432,7 +433,7 @@ function Shell() {
     const session = (sessions ?? []).find((s) => s.id === id)
     setRenaming({
       id,
-      title: record?.title ?? session?.title ?? 'A new task',
+      title: chatTitle({ title: record?.title ?? session?.title }),
       synced: Boolean(record?.executor ?? session?.executor),
     })
   }

@@ -43,6 +43,7 @@ import './newchat.css'
 import './composer.css'
 import { errorCopy } from './error-copy.js'
 import { messageBound } from './send-bound.js'
+import { chatTitle } from './shape.js'
 
 // The harnesses whose own login command the daemon can relay - the
 // sign-in prompt offers the relay only there; the others say their own
@@ -1470,7 +1471,7 @@ export default function NewChat({
             <div className="nc-resume-label">In progress</div>
             {inProgress.map((session) => {
               const chat = chats[session.id]
-              const title = chat?.title ?? 'A new task'
+              const title = chatTitle(chat ?? session)
               return (
                 <button key={session.id} type="button" onClick={() => onOpen(session.id)}>
                   <span className={`dot dot--${chat?.status ?? session.status}`} />

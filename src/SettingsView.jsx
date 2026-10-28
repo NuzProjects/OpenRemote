@@ -26,6 +26,7 @@ import PickerMenu from './PickerMenu.jsx'
 import Toggle from './Toggle.jsx'
 import { SECTIONS, SETTING_GROUPS, SETTINGS_ENTRIES, dynamicEntries, searchSettings, visibleSections } from './settings-search.js'
 import { projectName } from './projects.js'
+import { chatTitle } from './shape.js'
 import { armRow, clearRow } from './row-confirm.js'
 import { useBack } from './use-back.js'
 import { useConsole } from './state/console.jsx'
@@ -1570,7 +1571,7 @@ export default function SettingsView({ onReplay, onOpenChat, onClose = null, onM
               archivedRows.map((s) => (
                 <div className="pn-row" key={s.id} data-stg={`archived-${s.id}`}>
                   <div>
-                    <div className="pn-name pv">{chats[s.id]?.title ?? s.title ?? 'A new task'}</div>
+                    <div className="pn-name pv">{chatTitle({ title: chats[s.id]?.title ?? s.title })}</div>
                     <div className="pn-detail">
                       {harnessName(s.harness)}
                       {s.workspace ? <> · <span className="pv">{s.workspace}</span></> : ''}

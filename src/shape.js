@@ -53,3 +53,24 @@ export function list(value) {
   }
   return []
 }
+
+/// What a chat with no title is called. Exported because a test and a future
+/// surface both need the words, and two copies of them is the problem this
+/// reader exists to end.
+export const CHAT_TITLE_FALLBACK = 'A new task'
+
+/// A chat's name as every surface prints it: its title, edges trimmed, and the
+/// fallback when there is nothing to print.
+///
+/// The title is the one string the console shows in more places than any other
+/// (the sidebar row, the palette, the chat's own header, the copy as Markdown),
+/// and each of those used to write the fallback by hand, so changing the words
+/// would have reached one surface and missed seven. The trim is part of the
+/// same rule: the daemon can send the whitespace a person typed around a title,
+/// and a title that is only whitespace is no title at all. A field that is not
+/// text (an object where the daemon meant a string) reads as no title too,
+/// rather than reaching a renderer that throws on it.
+export function chatTitle(chat) {
+  const title = text(chat?.title).trim()
+  return title || CHAT_TITLE_FALLBACK
+}
