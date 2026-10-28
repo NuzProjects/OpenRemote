@@ -25,8 +25,12 @@
 //
 // The checks past the view walk press things, and each says what it proves
 // and what it does not:
-// - a chat row's menu: proves right-click opens it and Escape closes it and
-//   focus comes back to the row; not that any row in it acts.
+// - a chat row's menu: proves right-click opens it, that its one mark item
+//   ("Mark as read" or "Mark as unread", whichever the row's state calls for)
+//   sits after Open and before Rename and closes the menu when pressed, and
+//   that Escape closes the menu and hands focus back to the row; not that the
+//   other rows in it do their jobs. Pressing the mark item writes the
+//   sidebar's own seen map for that chat, which can clear its unread mark.
 // - the pane menu in a split: proves a split can be made from the menu and
 //   that its rows and Escape behave; not that a split row's effect is what it
 //   says (the Layouts menu is the palette's page, not a pane-header control).
@@ -74,11 +78,14 @@
 // this one.
 //
 // WHAT IT DOES NOT COVER: no chat is created and no message is typed into one,
-// so the stream and the transcript are never read. The two writes are the rule
-// the palette check seeds and deletes, and the plugin this check installs and
-// removes; the palette's setup check and the two searches write nothing to the
-// profile, though the setup check does open a chat, which clears that chat's
-// local unread mark. No settings are changed and no
+// so the stream and the transcript are never read. The two writes to the
+// profile are the rule the palette check seeds and deletes, and the plugin this
+// check installs and removes. Two checks also touch the chat list's own read
+// marks and do not put them back: the palette's setup check opens a chat, which
+// clears that chat's unread mark, and the menu check presses Mark as read or
+// Mark as unread, which writes that one chat's mark in the direction the row
+// was drawn, so a run may leave that mark changed. The two searches write
+// nothing. No settings are changed and no
 // layout is saved or applied. A green run says every view opens, draws, keeps
 // the boundary panel away and that the seven interactions above behave; it does
 // not say the app works.
@@ -562,9 +569,14 @@ for (const view of POPUPS) {
 // change nothing at all. Each one asserts what changes on screen, and the
 // header says what it proves and what it leaves alone.
 //
-// (a) A chat row's menu: right-click opens it, Escape closes it, and the focus
-// comes back to the row. Proves the menu's own open, close and focus rules on
-// the sidebar's rows; not that any row inside it does its job.
+// (a) A chat row's menu: right-click opens it, its one mark item sits after
+// Open and before Rename and closes the menu when pressed, and a second menu
+// answers Escape by closing with focus back on the row. Proves those rows are
+// where the sidebar's own menu puts them (src/Sidebar.jsx:537 for Open, :545
+// for the mark item, :557 for Rename) and that the mark item acts without
+// throwing; not that the other rows in the menu do their jobs. The label is
+// read rather than asserted: whether the first chat carries the unread mark
+// depends on the profile, so the check says which one it found.
 const rowMenuTarget = await evaluate(`(() => {
   const r = document.querySelector('.chat-row');
   if (!r) return null;
@@ -572,36 +584,90 @@ const rowMenuTarget = await evaluate(`(() => {
   const b = r.getBoundingClientRect();
   return { x: b.x + Math.min(40, b.width / 2), y: b.y + b.height / 2, label: (r.textContent || '').trim().slice(0, 40) };
 })()`)
+// Open the menu again from the row's current box: the first press through the
+// mark item re-renders the row, and a coordinate remembered from before that
+// render could land somewhere else.
+const openRowMenu = async () => {
+  const box = await evaluate(`(() => {
+    const r = document.querySelector('.chat-row');
+    if (!r) return null;
+    r.focus();
+    const b = r.getBoundingClientRect();
+    return { x: b.x + Math.min(40, b.width / 2), y: b.y + b.height / 2 };
+  })()`)
+  if (!box) return false
+  await click(box.x, box.y, 'right')
+  return waitFor("!!document.querySelector('.ctx-menu')", { timeout: 4000 })
+}
 let rowMenu = null
 if (rowMenuTarget) {
-  await click(rowMenuTarget.x, rowMenuTarget.y, 'right')
-  if (await waitFor("!!document.querySelector('.ctx-menu')")) {
-    const shown = await evaluate(`(() => {
+  if (await openRowMenu()) {
+    // The menu's rows in its own markup: .nc-item-name is the label a person
+    // reads (src/ContextMenu.jsx:128), and the menu itself is .nc-menu
+    // (src/ContextMenu.jsx:100). Exactly one of the two mark labels belongs in
+    // the list, between Open and Rename.
+    const menu = await evaluate(`(() => {
       const menu = document.querySelector('.ctx-menu');
-      window.__smokeRow = document.querySelector('.chat-row');
+      const names = [...menu.querySelectorAll('.nc-item .nc-item-name')].map((n) => (n.textContent || '').trim());
+      const marks = names.filter((n) => n === 'Mark as read' || n === 'Mark as unread');
+      const mark = marks[0] ?? null;
+      const at = names.indexOf(mark);
+      const openAt = names.indexOf('Open');
+      const renameAt = names.indexOf('Rename');
+      const item = [...menu.querySelectorAll('.nc-item')].find(
+        (b) => (b.querySelector('.nc-item-name')?.textContent || '').trim() === mark,
+      ) ?? null;
+      const box = item?.getBoundingClientRect() ?? null;
       return {
-        labels: [...menu.querySelectorAll('.nc-item')].map((i) => i.textContent.trim()),
+        names,
+        mark,
+        marks: marks.length,
+        afterOpen: openAt !== -1 && at > openAt,
+        beforeRename: renameAt === -1 || at < renameAt,
+        box: box ? { x: box.x + box.width / 2, y: box.y + box.height / 2 } : null,
         menuFocused: document.activeElement === menu,
       };
     })()`)
-    await key({ key: 'Escape', code: 'Escape', vk: 27 })
-    const closed = await waitFor("!document.querySelector('.ctx-menu')")
-    const back = await evaluate(`(() => {
-      const a = document.activeElement;
-      return {
-        onRow: Boolean(window.__smokeRow) && a === window.__smokeRow,
-        on: a ? a.tagName + (a.className ? '.' + a.className : '') : '(none)',
-      };
-    })()`)
-    rowMenu = { shown, closed, back }
+    let pressed = null
+    if (menu.box) {
+      await click(menu.box.x, menu.box.y)
+      // The menu closes itself when a row is chosen (src/ContextMenu.jsx:64-67:
+      // onClose before the row's own action), so nothing may be left over.
+      pressed = { closed: await waitFor("!document.querySelector('.nc-menu')", { timeout: 3000 }) }
+    }
+    // A second menu for the Escape half: pressing the mark item already closed
+    // the first one, and closing by key is a separate promise. The row was
+    // re-rendered by the mark write, so the focus check below reads the row as
+    // it is now rather than a node remembered from before the press.
+    const reopened = await openRowMenu()
+    let closed = false
+    let back = { onRow: false, on: '(none)' }
+    if (reopened) {
+      await key({ key: 'Escape', code: 'Escape', vk: 27 })
+      closed = await waitFor("!document.querySelector('.ctx-menu')", { timeout: 3000 })
+      back = await evaluate(`(() => {
+        const a = document.activeElement;
+        const row = document.querySelector('.chat-row');
+        return {
+          onRow: Boolean(row) && a === row,
+          on: a ? a.tagName + (a.className ? '.' + a.className : '') : '(none)',
+        };
+      })()`)
+    }
+    rowMenu = { menu, pressed, reopened, closed, back }
   }
 }
 record(
-  'a chat row menu opens on right-click, Escape closes it, and focus returns to the row',
-  Boolean(rowMenu?.closed) && Boolean(rowMenu?.back.onRow),
+  'a chat row menu opens on right-click, its mark item sits between Open and Rename and closes the menu, and Escape closes it with focus back on the row',
+  rowMenu?.menu?.marks === 1 &&
+    Boolean(rowMenu.menu.afterOpen) &&
+    Boolean(rowMenu.menu.beforeRename) &&
+    Boolean(rowMenu.pressed?.closed) &&
+    Boolean(rowMenu.closed) &&
+    Boolean(rowMenu.back.onRow),
   rowMenuTarget
     ? rowMenu
-      ? `row "${rowMenuTarget.label}": ${rowMenu.shown.labels.length} row(s) "${rowMenu.shown.labels.slice(0, 4).join(' / ')}", Escape closed it: ${rowMenu.closed}, focus after: ${rowMenu.back.on} (on the row: ${rowMenu.back.onRow})`
+      ? `row "${rowMenuTarget.label}": ${rowMenu.menu.names.length} row(s) "${rowMenu.menu.names.slice(0, 5).join(' / ')}", the mark item was "${rowMenu.menu.mark}" (one of the two: ${rowMenu.menu.marks}, after Open: ${rowMenu.menu.afterOpen}, before Rename: ${rowMenu.menu.beforeRename}), pressing it closed the menu: ${rowMenu.pressed?.closed}, the menu reopened: ${rowMenu.reopened}, Escape closed it: ${rowMenu.closed}, focus after: ${rowMenu.back.on} (on the row: ${rowMenu.back.onRow})`
       : 'the row menu never opened'
     : 'no .chat-row in the sidebar',
 )
