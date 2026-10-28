@@ -44,6 +44,7 @@ import './composer.css'
 import { errorCopy } from './error-copy.js'
 import { messageBound } from './send-bound.js'
 import { chatTitle } from './shape.js'
+import { isActive } from './status-words.js'
 
 // The harnesses whose own login command the daemon can relay - the
 // sign-in prompt offers the relay only there; the others say their own
@@ -425,7 +426,10 @@ export default function NewChat({
     resolvedDefaultName && currentHarness?.default_effort
       ? `${resolvedDefaultName} · ${currentHarness.default_effort}`
       : resolvedDefaultName
-  const inProgress = (sessions ?? []).filter((s) => ['starting', 'working', 'waiting'].includes(s.status))
+  // What is in flight here, from the one vocabulary (status-words.js): the three
+  // statuses a chat is busy in, whether the row comes from the daemon or from the
+  // console's own word for them.
+  const inProgress = (sessions ?? []).filter((s) => isActive(s.status))
   // The effort slot follows the model slot's rule: only where the active
   // model advertises tiers. A saved default that the active model doesn't
   // offer is dropped, not rendered - never a dead selection.

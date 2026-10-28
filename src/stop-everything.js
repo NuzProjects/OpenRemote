@@ -21,6 +21,7 @@
 // counting, the order, the cap and every sentence can be tested without a
 // DOM.
 
+import { chatTitle } from './shape.js'
 import { isRunning as runningStatus, isWaiting } from './status-words.js'
 
 // A handful of names under the question; the rest is "and N more".
@@ -90,7 +91,10 @@ export function stopQuestion(count) {
 export function namedChats(chats, cap = NAMED_CAP) {
   const rows = (chats ?? []).slice(0, cap).map((chat) => ({
     id: chat.id,
-    name: chat.title ?? 'A new task',
+    // The same name every other surface prints, from the one reader (shape.js),
+    // so the row under "Stop everything?" cannot call a chat something the
+    // sidebar does not.
+    name: chatTitle(chat),
     harness: chat.harness ?? null,
   }))
   return { rows, more: Math.max(0, (chats ?? []).length - cap) }
