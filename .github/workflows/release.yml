@@ -323,17 +323,19 @@ jobs:
       - name: stage the portable pair
         if: steps.build.outputs.skip != '1'
         run: |
-          set -euo pipefail
+          set -uo pipefail
           app=src-tauri/target/release/openremote-ui-desktop.exe
           daemon=src-tauri/target/release/openremote-daemon.exe
-          if [ -f "$app" ] && [ -f "$daemon" ]; then
-            cp "$app" OpenRemote-windows-x64.exe
-            cp "$daemon" openremote-daemon-windows-x64.exe
-            sha256sum OpenRemote-windows-x64.exe openremote-daemon-windows-x64.exe \
-              > SHA256SUMS-portable-windows-x64
+          if [ -f "$app" ] && [ -f "$daemon" ] \
+            && cp "$app" OpenRemote-windows-x64.exe \
+            && cp "$daemon" openremote-daemon-windows-x64.exe \
+            && sha256sum OpenRemote-windows-x64.exe openremote-daemon-windows-x64.exe \
+                 > SHA256SUMS-portable-windows-x64; then
             cat SHA256SUMS-portable-windows-x64
           else
-            echo "::warning::no portable pair beside the bundles, so this release has no npm entry"
+            # No -e above on purpose: a disk-full runner or a renamed build
+            # output must cost this release its npm entry, not its installers.
+            echo "::warning::the portable pair could not be staged, so this release has no npm entry"
           fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: steps.build.outputs.skip != '1'
