@@ -54,9 +54,25 @@ export function loadPrefs() {
 // caller the difference between "kept" and "the row re-read the old value":
 // switching a document attribute on a write nobody kept would leave the app
 // and its own settings row disagreeing.
+//
+// The stored set is read here rather than through loadPrefs, because that one
+// answers defaults for anything it cannot read: a profile that refuses the read
+// but allows the write would have every other preference written back as its
+// default, which is a silent reset of settings nobody touched. A set that is
+// there and cannot be parsed is refused instead, and the caller says so.
 export function savePrefs(partial) {
   try {
-    localStorage.setItem(PREFS_KEY, JSON.stringify({ ...loadPrefs(), ...partial }))
+    const raw = localStorage.getItem(PREFS_KEY)
+    let stored = {}
+    if (raw == null) {
+      // Nothing stored yet: the defaults plus the superseded reduce-motion key
+      // are the best truth there is, and the first save is what writes them.
+      stored = loadPrefs()
+    } else {
+      stored = JSON.parse(raw)
+      if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return false
+    }
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ ...stored, ...partial }))
     return true
   } catch {
     return false

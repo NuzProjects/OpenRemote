@@ -347,3 +347,22 @@ test('the startup rows and the preference toggles say when a write did not land'
   const lines = viewSource.match(/\{startupNote && \(\s*\n\s*<p className="pn-error" role="status">/g) ?? []
   assert.equal(lines.length, 2, 'the note renders under Appearance and under Startup')
 })
+test('a stored set that cannot be read is not an empty set', () => {
+  // The failure this guards: savePrefs used to build on loadPrefs, which answers
+  // defaults for anything it cannot read. A profile that refused the read but
+  // allowed the write would then write every other preference back as its
+  // default, a silent reset of settings nobody touched.
+  localStorage.clear()
+  localStorage.setItem('openremote-prefs', '{not json')
+  assert.equal(savePrefs({ density: 'compact' }), false, 'a set that cannot be read is refused')
+  assert.equal(localStorage.getItem('openremote-prefs'), '{not json', 'and nothing was written over it')
+  // An array is not a preference set either.
+  localStorage.setItem('openremote-prefs', '[1,2]')
+  assert.equal(savePrefs({ density: 'compact' }), false)
+  // And the migration still lands on the first save: nothing stored means the
+  // defaults plus the superseded key are the best truth there is.
+  localStorage.clear()
+  localStorage.setItem('openremote-reduce-motion', '1')
+  assert.equal(savePrefs({ density: 'compact' }), true)
+  assert.equal(loadPrefs().reduce_motion, true, 'the first save keeps the migrated value')
+})
