@@ -69,6 +69,13 @@ fn main() -> ExitCode {
             None => runtime.block_on(serve(true)),
         },
         Some("enroll") => match (args.get(1), args.get(2)) {
+            // A flag where the code belongs is the same unit-file mistake the
+            // commands above refuse: without this check it would be sent to the
+            // registry as a code and answered with "that code is not valid",
+            // sending a person to mint another one for a flag.
+            (Some(flag), None) if flag.starts_with('-') => usage_error(&format!(
+                "enroll takes the code from the machine list, not a flag (got '{flag}')"
+            )),
             (Some(code), None) => runtime.block_on(enroll(code)),
             (None, _) => usage_error("enroll needs the code from the machine list"),
             (Some(_), Some(extra)) => {
