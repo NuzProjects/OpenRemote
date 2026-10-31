@@ -179,13 +179,11 @@
 }
 
 .cv-agent {
-  /* Left edge is halfway from the pane's left edge to the input box's
-     left edge. The box inset is the side gutter plus the centering
-     remainder; half of that, from this thread's content edge, is the
-     remainder over two minus half the side inset. The timeline rail
-     stays on tool cards - a reply is just the text, so its edge is the
-     alignment, not a dot hanging left of it. */
-  margin-left: calc(max(0px, (100% - var(--cv-box)) / 2) / 2 - var(--cv-side) / 2);
+  /* Left edge is the input box's left edge. The thread and the composer
+     share one side inset, so the centering remainder is the whole inset.
+     The timeline rail stays on tool cards - a reply is just the text, so
+     its edge is the alignment, not a dot hanging left of it. */
+  margin-left: max(0px, calc((100% - var(--cv-box)) / 2));
   color: var(--text-2);
   font-size: 14px;
   line-height: 1.65;
