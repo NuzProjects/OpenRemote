@@ -1,28 +1,15 @@
 // Cloud's door: the main area while the mode switch sits on Cloud and this
-// computer isn't signed in. The subject is the hero - the cloud with
-// machines checking in around it, in the app's own status palette, drawn
-// in once - then the words and one action. Signing in happens in the
-// system browser; the daemon opens it and the poll notices when it's done.
+// computer isn't signed in. The subject is the cloud, drawn in once, then
+// the words and one action. Signing in happens in the system browser; the
+// daemon opens it and the poll notices when it's done.
 
 import { useState } from 'react'
-import { Copy, House } from '@phosphor-icons/react'
+import { Copy } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
 import { cloudAlert, daemonReason } from './cloud.js'
 import { isMobile } from './platform.js'
 import './cloudmode.css'
 import { errorCopy } from './error-copy.js'
-
-// One machine checking in: a small card with its status dot - green for
-// online, hollow for not-yet. The same vocabulary the machine cards use.
-function MachineNode({ x, y, online, delay }) {
-  return (
-    <g className="cm-node" style={{ '--cm-delay': `${delay}ms` }}>
-      <rect x={x} y={y} width={26} height={19} rx={5} />
-      <circle className={online ? 'cm-ndot on' : 'cm-ndot'} cx={x + 8} cy={y + 9.5} r={2.4} />
-      <line x1={x + 14} y1={y + 9.5} x2={x + 21} y2={y + 9.5} />
-    </g>
-  )
-}
 
 // What the screen says for each sign-in state. A phone is Cloud only, so
 // its door speaks for the whole app and never offers Local.
@@ -83,7 +70,7 @@ function phoneWords(cloud) {
   }
 }
 
-export default function CloudMode({ onBackToLocal }) {
+export default function CloudMode() {
   const { cloud, connection, signInCloud, cancelCloudSignIn } = useConsole()
   const [link, setLink] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -124,25 +111,13 @@ export default function CloudMode({ onBackToLocal }) {
           className="cm-hero"
           viewBox="0 0 260 170"
           role="img"
-          aria-label="A cloud with machines checking in around it"
+          aria-label="Cloud"
         >
-          {/* the connectors: each machine reaching the cloud */}
-          <line className="cm-link" style={{ '--cm-delay': '300ms' }} x1="34" y1="46" x2="86" y2="72" />
-          <line className="cm-link" style={{ '--cm-delay': '420ms' }} x1="224" y1="38" x2="176" y2="66" />
-          <line className="cm-link" style={{ '--cm-delay': '540ms' }} x1="18" y1="132" x2="82" y2="102" />
-          <line className="cm-link" style={{ '--cm-delay': '660ms' }} x1="238" y1="126" x2="180" y2="100" />
-
-          {/* the cloud itself - lucide's own cloud path, drawn in */}
           <path
             className="cm-cloud"
             d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"
             transform="translate(68 34) scale(5.2)"
           />
-
-          <MachineNode x={8} y={36} online delay={300} />
-          <MachineNode x={212} y={28} online delay={420} />
-          <MachineNode x={4} y={124} delay={540} />
-          <MachineNode x={226} y={118} delay={660} />
         </svg>
 
         <h1 className="cm-title">{title}</h1>
@@ -190,12 +165,6 @@ export default function CloudMode({ onBackToLocal }) {
                   {cloud?.state === 'revoked' || cloud?.state === 'relink' ? 'Sign in again' : 'Sign in'}
                 </button>
               </div>
-              {onBackToLocal && (
-                <button type="button" className="cm-back" onClick={onBackToLocal}>
-                  <House size={13} />
-                  Back to Local
-                </button>
-              )}
             </>
           )}
         </div>
