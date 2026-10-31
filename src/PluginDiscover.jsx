@@ -55,15 +55,12 @@ export default function PluginDiscover({ onInstall }) {
       return
     }
     if (pickerLeavingRef.current) return
-    const frame =
-      e.currentTarget.closest('.main')?.getBoundingClientRect() ??
-      e.currentTarget.closest('.pg-panel')?.getBoundingClientRect()
     const btn = e.currentTarget.getBoundingClientRect()
-    if (frame && btn.width > 0) {
+    if (btn.width > 0) {
       setPicker({
         kind,
-        x: Math.max(Math.round(frame.left + 28), Math.round(frame.right - 28 - 264)),
-        y: Math.round(btn.bottom + 8),
+        x: Math.max(8, Math.round(btn.right - 264)),
+        y: Math.round(btn.bottom + 4),
       })
       return
     }

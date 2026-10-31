@@ -3,12 +3,12 @@
 // and an Install / Update / Installed / Unavailable action.
 
 import PluginIcon from './PluginIcon.jsx'
-import { entryState, notSandboxed } from './plugins.js'
+import { entryState, notSandboxed, pluginTitle } from './plugins.js'
 
 export function PluginCard({ entry, onInstall, onInspect }) {
   if (!entry) return null
 
-  const displayName = entry.display_name ?? entry.name ?? ''
+  const displayName = pluginTitle(entry.display_name ?? entry.name ?? '')
   const state = entryState(entry)
   const isNotSandboxed = Boolean(entry.not_sandboxed) || notSandboxed(entry)
   const versionOrCategory = entry.version || entry.category

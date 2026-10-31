@@ -9,6 +9,7 @@ import {
   POWER_LABEL,
   POWER_SHORT,
   RUNTIME_LABEL,
+  pluginTitle,
   entryState,
   notSandboxed,
 } from './plugins.js'
@@ -36,7 +37,7 @@ export function PluginDetailModal({ entry, onClose, onInstall }) {
 
   if (!entry) return null
 
-  const displayName = entry.display_name ?? entry.name ?? ''
+  const displayName = pluginTitle(entry.display_name ?? entry.name ?? '')
   const technicalId = entry.id ?? entry.name ?? ''
   const state = entryState(entry)
   const isNotSandboxed = Boolean(entry.not_sandboxed) || notSandboxed(entry)

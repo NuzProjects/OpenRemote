@@ -21,6 +21,7 @@ import {
   installedEmptyLine,
   installedSearchHint,
   notSandboxed,
+  pluginTitle,
   searchInstalled,
   sourceLabel,
 } from './plugins.js'
@@ -268,7 +269,7 @@ function InstalledPlugins({ onUpdate }) {
                   />
                   <div>
                     <div className="pn-name">
-                      {p.name}
+                      {pluginTitle(p.name)}
                       {p.version && <span className="pg-version">{p.version}</span>}
                       {author && <span className="pg-author-badge">by {author}</span>}
                       <span className="pg-badge-marketplace">@{p.marketplace}</span>
