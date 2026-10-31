@@ -68,6 +68,13 @@
   color: var(--text-2);
 }
 
+.nc-meta:focus,
+.nc-meta:focus-visible,
+.nc-meta:active {
+  outline: none;
+  box-shadow: none;
+}
+
 /* A harness's brand mark: the real logo, verbatim geometry in its own
    official color (set by the mark component), sitting in a box next to
    the name. The colors are fixed brand values, not currentColor - a

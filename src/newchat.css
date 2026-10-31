@@ -276,6 +276,7 @@ html[data-reduce-motion] .nc-label-out {
 }
 
 .nc-effort-name {
+  justify-self: center;
   color: #fff;
   font-family: var(--font-sans);
   font-size: 14px;
@@ -329,8 +330,9 @@ html[data-reduce-motion] .nc-label-out {
 
 .nc-label-swap {
   display: grid;
-  place-items: center;
-  min-width: 0;
+  justify-items: start;
+  width: 12ch;
+  white-space: nowrap;
 }
 
 .nc-label-swap > span {
@@ -349,24 +351,20 @@ html[data-reduce-motion] .nc-label-out {
 @keyframes nc-label-in {
   from {
     opacity: 0;
-    transform: translateY(4px);
   }
 
   to {
     opacity: 1;
-    transform: none;
   }
 }
 
 @keyframes nc-label-out {
   from {
     opacity: 1;
-    transform: none;
   }
 
   to {
     opacity: 0;
-    transform: translateY(-4px);
   }
 }
 

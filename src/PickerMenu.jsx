@@ -26,6 +26,7 @@ export default function PickerMenu({
   footer, // a pinned action row under the list; renders in the empty state too
   hideSearch = false,
   leaving = false,
+  place = 'below',
 }) {
   const [query, setQuery] = useState('')
   const [cursor, setCursor] = useState(0)
@@ -53,6 +54,9 @@ export default function PickerMenu({
     else ref.current?.focus()
     const close = (e) => {
       if (ref.current && ref.current.contains(e.target)) return
+      // The chip that opened this menu handles a second press itself. Closing
+      // here would run first, and the click would open the menu again.
+      if (e.target.closest?.('[data-picker]')) return
       onClose()
     }
     window.addEventListener('mousedown', close)
@@ -71,6 +75,16 @@ export default function PickerMenu({
     const vw = window.innerWidth
     const vh = window.innerHeight
     const rect = el.getBoundingClientRect()
+    // Above the box the menu is shifted with a transform, so the layout rect
+    // is already the visual one. Rewriting top from that rect would drop it
+    // back onto the field.
+    if (place === 'above') {
+      let left = spot.left
+      if (rect.right > vw - 8) left = Math.max(8, vw - rect.width - 8)
+      el.style.left = `${left}px`
+      if (rect.top < 8) el.style.top = `${Math.round(spot.top + (8 - rect.top))}px`
+      return
+    }
     let { left, top } = rect
     let maxHeight = ''
     if (rect.bottom > vh - 8) {
@@ -146,7 +160,7 @@ export default function PickerMenu({
   return (
     <div
       ref={ref}
-      className={`nc-menu${wide ? ' nc-menu--wide' : ''}${leaving ? ' is-out' : ''}`}
+      className={`nc-menu${wide ? ' nc-menu--wide' : ''}${leaving ? ' is-out' : ''}${place === 'above' ? ' is-above' : ''}`}
       role="listbox"
       tabIndex={-1}
       aria-label={label}

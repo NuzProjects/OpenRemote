@@ -1450,20 +1450,6 @@ export default function NewChat({
                 <span className="nc-via">via</span>
               </>
             )}
-            <button
-              className="nc-meta"
-              data-unset={!currentHarness || undefined}
-              onClick={() => openBoxPicker('harness')}
-              aria-haspopup="listbox"
-              aria-expanded={picker?.kind === 'harness'}
-              data-picker="harness"
-              title={hintHarness('Harness')}
-            >
-              <span className="nc-provider" key={currentHarness?.id ?? 'none'}>
-                <HarnessMark harness={currentHarness?.id} size={16} />
-                {currentHarness?.name ?? 'No harness installed'}
-              </span>
-            </button>
             {model && effortTiers.length > 0 && (
               <div className="nc-effort-wrap">
                 <button
@@ -1491,6 +1477,20 @@ export default function NewChat({
                 )}
               </div>
             )}
+            <button
+              className="nc-meta"
+              data-unset={!currentHarness || undefined}
+              onClick={() => openBoxPicker('harness')}
+              aria-haspopup="listbox"
+              aria-expanded={picker?.kind === 'harness'}
+              data-picker="harness"
+              title={hintHarness('Harness')}
+            >
+              <span className="nc-provider" key={currentHarness?.id ?? 'none'}>
+                <HarnessMark harness={currentHarness?.id} size={16} />
+                {currentHarness?.name ?? 'No harness installed'}
+              </span>
+            </button>
             {(picker?.kind === 'harness' || harnessLeaving) && (
               <PickerMenu
                 label="Harness"
