@@ -226,7 +226,7 @@
 .pg-tabs {
   position: relative;
   display: inline-grid;
-  grid-template-columns: repeat(3, max-content);
+  grid-template-columns: repeat(3, 112px);
   align-self: flex-start;
   gap: 0;
   width: auto;
@@ -251,7 +251,7 @@ html[data-reduce-motion] .pg-tabs-thumb {
   top: 3px;
   bottom: 3px;
   left: 3px;
-  width: calc((100% - 6px) / 3);
+  width: 112px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.08);
   pointer-events: none;
@@ -259,17 +259,19 @@ html[data-reduce-motion] .pg-tabs-thumb {
 }
 
 .pg-tabs[data-tab='installed'] .pg-tabs-thumb {
-  transform: translateX(100%);
+  transform: translateX(112px);
 }
 
 .pg-tabs[data-tab='marketplaces'] .pg-tabs-thumb {
-  transform: translateX(200%);
+  transform: translateX(224px);
 }
 
 .pg-tab {
   position: relative;
   z-index: 1;
+  width: 100%;
   height: 30px;
+  text-align: center;
   margin: 0;
   padding: 0 14px;
   border: 0;
@@ -637,12 +639,10 @@ html[data-reduce-motion] .pg-stage {
 }
 
 .pg-card:hover {
-  border-color: rgba(255, 255, 255, 0.16);
   background: rgba(255, 255, 255, 0.05);
 }
 
 .pg-card:focus-visible {
-  border-color: rgba(255, 255, 255, 0.3);
   background: rgba(255, 255, 255, 0.06);
 }
 
@@ -832,8 +832,13 @@ html[data-reduce-motion] .pg-stage {
   line-height: 1;
 }
 
-.pg-icon-svg {
+.pg-icon-svg,
+.pg-icon-img {
   display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 8px;
 }
 
 .pg-update {
@@ -966,9 +971,12 @@ html[data-reduce-motion] .pg-spin {
 }
 
 .pg-homepage-btn {
-  display: inline-flex;
+  display: flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
+  width: 100%;
+  height: 34px;
   font-size: 12.5px;
 }
 
@@ -994,14 +1002,24 @@ html[data-reduce-motion] .pg-spin {
   font-size: 12px;
 }
 
+.pg-detail-modal-foot > button {
+  width: 100%;
+  justify-content: center;
+}
+
 .pg-detail-modal-foot {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 8px;
   margin-top: 4px;
   padding-top: 14px;
   border-top: 1px solid var(--line);
+}
+
+.pg-detail-modal-foot .dv-act {
+  justify-content: center;
+  background: #fff;
+  color: #1c1c1c;
 }
 
 /* A refresh that failed: the sentence and its retry on one row, so it

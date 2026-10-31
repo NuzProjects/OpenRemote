@@ -2,7 +2,7 @@
 // read from their cached catalogs. Opening it fetches any catalog over a
 // day old - nothing refreshes in the background.
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   CaretDown,
   CaretUp,
@@ -35,14 +35,34 @@ export default function PluginDiscover({ onInstall }) {
   // nothing still says something here.
   const [refreshError, setRefreshError] = useState(null)
   const [picker, setPicker] = useState(null)
+  const [pickerLeaving, setPickerLeaving] = useState(false)
+  const pickerLeavingRef = useRef(false)
+
+  const hidePicker = () => {
+    if (!picker || pickerLeavingRef.current) return
+    pickerLeavingRef.current = true
+    setPickerLeaving(true)
+    setTimeout(() => {
+      pickerLeavingRef.current = false
+      setPickerLeaving(false)
+      setPicker(null)
+    }, 160)
+  }
 
   const openPicker = (kind) => (e) => {
-    const panel = e.currentTarget.closest('.pg-panel')?.getBoundingClientRect()
+    if (picker?.kind === kind) {
+      hidePicker()
+      return
+    }
+    if (pickerLeavingRef.current) return
+    const frame =
+      e.currentTarget.closest('.main')?.getBoundingClientRect() ??
+      e.currentTarget.closest('.pg-panel')?.getBoundingClientRect()
     const btn = e.currentTarget.getBoundingClientRect()
-    if (panel && btn.width > 0) {
+    if (frame && btn.width > 0) {
       setPicker({
         kind,
-        x: Math.max(Math.round(panel.left + 8), Math.round(panel.right - 8 - 264)),
+        x: Math.max(Math.round(frame.left + 28), Math.round(frame.right - 28 - 264)),
         y: Math.round(btn.bottom + 8),
       })
       return
@@ -172,6 +192,7 @@ export default function PluginDiscover({ onInstall }) {
         <button
           type="button"
           className="pg-select"
+          data-picker="plugins"
           onClick={openPicker('category')}
           aria-label="Category"
           aria-haspopup="listbox"
@@ -194,7 +215,8 @@ export default function PluginDiscover({ onInstall }) {
               setCategory(id)
               setPicker(null)
             }}
-            onClose={() => setPicker(null)}
+            leaving={pickerLeaving}
+            onClose={hidePicker}
             anchor={{ left: picker.x, top: picker.y }}
           />
         )}
@@ -202,6 +224,7 @@ export default function PluginDiscover({ onInstall }) {
         <button
           type="button"
           className="pg-select"
+          data-picker="plugins"
           onClick={openPicker('market')}
           aria-label="Marketplace"
           aria-haspopup="listbox"
@@ -224,7 +247,8 @@ export default function PluginDiscover({ onInstall }) {
               setMarket(id)
               setPicker(null)
             }}
-            onClose={() => setPicker(null)}
+            leaving={pickerLeaving}
+            onClose={hidePicker}
             anchor={{ left: picker.x, top: picker.y }}
           />
         )}

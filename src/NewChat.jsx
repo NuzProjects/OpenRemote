@@ -517,11 +517,16 @@ export default function NewChat({
         // change had to drop comes back if this harness carries the same row,
         // and one it no longer lists is let go with the note saying so.
         const back = restoreFromCatalog(pendingCarry.current, list ?? [])
+        const first = (list ?? []).find((m) => m.is_default)?.model ?? (list ?? [])[0]?.model ?? null
         if (back && !pendingPreset.current) {
           pendingCarry.current = null
           setModel(back)
           droppedAtSwitch.current = droppedAtSwitch.current.filter((key) => key !== 'model')
           setCarryNote(droppedLine(droppedAtSwitch.current, currentHarness?.name ?? harnessId))
+        } else if (!pendingPreset.current && first) {
+          setModel((current) =>
+            current && (list ?? []).some((m) => m.model === current) ? current : first,
+          )
         }
         // The opening preset, or one whose chip switched the harness, is
         // settled here: this is the first moment its model and effort can
