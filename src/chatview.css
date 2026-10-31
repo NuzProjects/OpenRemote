@@ -8,32 +8,24 @@
      instead of .cv-scroll scrolling */
   min-height: 0;
   background: var(--bg-app);
+  /* The composer box and the transcript share one column: a 720px box
+     centered inside this side inset. Message alignment is measured from it. */
+  --cv-side: 28px;
+  --cv-box: 720px;
 }
 
 .cv-head {
   flex: none;
   align-self: stretch;
   width: 100%;
-  padding: 22px 32px 16px;
-  border-bottom: 1px solid var(--line);
-}
-
-.cv-head h1 {
-  margin: 0;
-  overflow: hidden;
-  font-size: 16px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--text-1);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  padding: 14px var(--cv-side) 8px;
 }
 
 .cv-facts {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  margin: 6px 0 0;
+  margin: 0;
   color: var(--text-3);
   font-size: 12.5px;
   line-height: 1.4;
@@ -92,14 +84,21 @@
 .cv-thread {
   /* bottom padding tracks the floating composer's measured height
      (--cv-clear, set by ChatView) plus breathing room - the last
-     message sits above the box at full scroll, never under it */
-  padding: 28px 32px calc(var(--cv-clear, 130px) + 20px);
+     message sits above the box at full scroll, never under it.
+     Side inset matches .cv-composer so a 100% here is the box's column. */
+  padding: 28px var(--cv-side) calc(var(--cv-clear, 130px) + 20px);
   display: flex;
   flex-direction: column;
   gap: 14px;
 }
 
 .cv-user {
+  /* Right edge sits on the input box's right edge. A short message
+     shrinks and stays on that edge; a long one stops at the box width. */
+  width: fit-content;
+  max-width: min(var(--cv-box), calc(100% - max(0px, (100% - var(--cv-box)) / 2)));
+  margin-left: auto;
+  margin-right: max(0px, calc((100% - var(--cv-box)) / 2));
   padding: 11px 14px;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -180,9 +179,21 @@
 }
 
 .cv-agent {
+  /* Left edge is halfway from the pane's left edge to the input box's
+     left edge. The box inset is the side gutter plus the centering
+     remainder; half of that, from this thread's content edge, is the
+     remainder over two minus half the side inset. The timeline rail
+     stays on tool cards - a reply is just the text, so its edge is the
+     alignment, not a dot hanging left of it. */
+  margin-left: calc(max(0px, (100% - var(--cv-box)) / 2) / 2 - var(--cv-side) / 2);
   color: var(--text-2);
   font-size: 14px;
   line-height: 1.65;
+}
+
+.cv-agent::before,
+.cv-agent::after {
+  content: none;
 }
 
 /* ── the harness's own reasoning: dim, collapsible, never in the way ── */
@@ -489,7 +500,7 @@
   bottom: 0;
   left: 0;
   z-index: 2;
-  padding: 0 28px 22px;
+  padding: 0 var(--cv-side) 22px;
   background: none;
   pointer-events: none;
 }
@@ -975,12 +986,16 @@ html[data-reduce-motion] .cv-tool-actions button {
 
 /* ---- phone width: tighter gutters, the language holds ---- */
 @media (max-width: 640px) {
+  .chatview {
+    --cv-side: 16px;
+  }
+
   .cv-head {
-    padding: 14px 16px 12px;
+    padding: 14px var(--cv-side) 12px;
   }
 
   .cv-thread {
-    padding: 18px 16px calc(var(--cv-clear, 130px) + 14px);
+    padding: 18px var(--cv-side) calc(var(--cv-clear, 130px) + 14px);
   }
 
   .cv-composer {

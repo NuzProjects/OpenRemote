@@ -743,7 +743,6 @@ export default function ChatView({ chat, onBack, focused = true }) {
   return (
     <div className="chatview">
       <header className="cv-head">
-        <h1 className="pv">{chat.title ?? 'A new task'}</h1>
         <p className="cv-facts">
           {chat.status !== 'idle' && <span className={`cv-dot cv-dot--${chat.status}`} />}
           <span className="cv-where pv">{chat.workspace}</span>
