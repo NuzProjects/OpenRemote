@@ -197,9 +197,9 @@ html[data-reduce-motion] .nc-skeleton {
    glow pulse, the round trip ~0.24s on the house curve. Empty stays
    quiet: transparent, muted arrow. */
 .nc-send:not(:disabled) {
-  background: var(--accent);
-  color: #fff;
-  box-shadow: 0 0 18px rgba(122, 92, 255, 0.25);
+  background: #d4d4d8;
+  color: #1c1c1c;
+  box-shadow: none;
   transition:
     transform 0.12s cubic-bezier(0.2, 0, 0, 1),
     box-shadow 0.12s cubic-bezier(0.2, 0, 0, 1);

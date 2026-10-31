@@ -47,8 +47,7 @@ import './newchat.css'
 import './composer.css'
 import { errorCopy } from './error-copy.js'
 import { messageBound } from './send-bound.js'
-import { chatTitle } from './shape.js'
-import { isActive } from './status-words.js'
+
 
 // The harnesses whose own login command the daemon can relay - the
 // sign-in prompt offers the relay only there; the others say their own
@@ -229,7 +228,7 @@ export default function NewChat({
 }) {
   const privacy = usePrivacyMode()
   const {
-    connection, capabilities, sessions, chats, createChat, modelsFor, endpointsFor, refreshEndpoints,
+    connection, capabilities, chats, createChat, modelsFor, endpointsFor, refreshEndpoints,
     endpointModelsFor, devices, thisDevice,
     capabilitiesFor, apiFor, projects, addProject, plugins, cloud, renameChat,
   } = useConsole()
@@ -641,7 +640,6 @@ export default function NewChat({
   // What is in flight here, from the one vocabulary (status-words.js): the three
   // statuses a chat is busy in, whether the row comes from the daemon or from the
   // console's own word for them.
-  const inProgress = (sessions ?? []).filter((s) => isActive(s.status))
   // The effort slot follows the model slot's rule: only where the active
   // model advertises tiers. A saved default that the active model doesn't
   // offer is dropped, not rendered - never a dead selection.
@@ -1450,33 +1448,6 @@ export default function NewChat({
                 <span className="nc-via">via</span>
               </>
             )}
-            {model && effortTiers.length > 0 && (
-              <div className="nc-effort-wrap">
-                <button
-                  type="button"
-                  className="nc-meta"
-                  onClick={toggleEffort}
-                  aria-haspopup="dialog"
-                  aria-expanded={picker?.kind === 'effort'}
-                  data-picker="effort"
-                  title={hintEffort("The harness's own effort tier")}
-                >
-                  <FadingLabel text={effortLabel(chosenEffort)} />
-                </button>
-                {(picker?.kind === 'effort' || effortLeaving) && (
-                  <EffortSlider
-                    tiers={effortTiers}
-                    value={chosenEffort}
-                    leaving={effortLeaving}
-                    spot={spotAtBox(boxRef.current?.getBoundingClientRect(), { gap: 8 })}
-                    fast={fast}
-                    fastSupported={currentHarness?.fast_supported === true}
-                    onEffort={setEffort}
-                    onFast={() => setFast((v) => !v)}
-                  />
-                )}
-              </div>
-            )}
             <button
               className="nc-meta"
               data-unset={!currentHarness || undefined}
@@ -1524,6 +1495,33 @@ export default function NewChat({
                   </button>
                 }
               />
+            )}
+            {model && effortTiers.length > 0 && (
+              <div className="nc-effort-wrap">
+                <button
+                  type="button"
+                  className="nc-meta"
+                  onClick={toggleEffort}
+                  aria-haspopup="dialog"
+                  aria-expanded={picker?.kind === 'effort'}
+                  data-picker="effort"
+                  title={hintEffort("The harness's own effort tier")}
+                >
+                  <FadingLabel text={effortLabel(chosenEffort)} />
+                </button>
+                {(picker?.kind === 'effort' || effortLeaving) && (
+                  <EffortSlider
+                    tiers={effortTiers}
+                    value={chosenEffort}
+                    leaving={effortLeaving}
+                    spot={spotAtBox(boxRef.current?.getBoundingClientRect(), { gap: 8 })}
+                    fast={fast}
+                    fastSupported={currentHarness?.fast_supported === true}
+                    onEffort={setEffort}
+                    onFast={() => setFast((v) => !v)}
+                  />
+                )}
+              </div>
             )}
 
           </div>
@@ -1748,26 +1746,7 @@ export default function NewChat({
             onChanged={reloadEndpoints}
           />
         )}
-        {inProgress.length > 0 && (
-          <div className="nc-resume">
-            <div className="nc-resume-label">In progress</div>
-            {inProgress.map((session) => {
-              const chat = chats[session.id]
-              const title = chatTitle(chat ?? session)
-              return (
-                <button key={session.id} type="button" onClick={() => onOpen(session.id)}>
-                  <span className={`dot dot--${chat?.status ?? session.status}`} />
-                  <span className="nc-resume-title">{title}</span>
-                  <span className="nc-resume-meta">
-                    {session.status === 'waiting'
-                      ? 'Needs a decision'
-                      : harnessName(session.harness)}
-                  </span>
-                </button>
-              )
-            })}
-          </div>
-        )}
+
       </div>
     </div>
   )

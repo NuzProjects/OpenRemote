@@ -17,9 +17,10 @@ import { chatAccess, deviceName, signedIn } from './cloud.js'
 import { railItems } from './state/reducer.js'
 import { harnessName } from './harness-names.js'
 import { findModel, modelDisplayName, prettyModelName } from './model-display.js'
-import { modelMaker } from './model-maker.js'
-import { ModelMark } from './model-marks.jsx'
 import { HarnessMark } from './brand-marks.jsx'
+import { pickable } from './harness-manager.js'
+import HarnessManagerModal from './HarnessManagerModal.jsx'
+import SignInModal from './SignInModal.jsx'
 import { editRows, isFileEdit, writeRows } from './diff.js'
 import { isCommandRun } from './command-card.js'
 import { renderMarkdown } from './markdown.js'
@@ -235,6 +236,8 @@ export default function ChatView({ chat, onBack, focused = true }) {
   const [endpoints, setEndpoints] = useState([])
   const [endpointModels, setEndpointModels] = useState([])
   const [manageModels, setManageModels] = useState(false)
+  const [managingHarnesses, setManagingHarnesses] = useState(false)
+  const [signInFor, setSignInFor] = useState(null)
   const [customDraft, setCustomDraft] = useState('')
   const scrollRef = useRef(null)
   const composerRef = useRef(null)
@@ -417,10 +420,11 @@ export default function ChatView({ chat, onBack, focused = true }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chat.harness, connection.state, elsewhere ? chat.executor : null])
 
-  const boxSpot = () => {
+  const boxSpot = (edge = 'left') => {
     const rect = composerRef.current?.querySelector('.cv-box')?.getBoundingClientRect()
     if (!rect || !(rect.width > 0)) return { x: 16, y: 16 }
-    return { x: Math.round(rect.left), y: Math.round(rect.top) }
+    const x = edge === 'right' ? Math.round(rect.right - 264) : Math.round(rect.left)
+    return { x, y: Math.round(rect.top) }
   }
 
   const hidePicker = () => {
@@ -434,13 +438,13 @@ export default function ChatView({ chat, onBack, focused = true }) {
     }, 160)
   }
 
-  const togglePicker = (kind) => () => {
+  const togglePicker = (kind, edge = 'left') => () => {
     if (picker?.kind === kind) {
       hidePicker()
       return
     }
     if (pickerLeavingRef.current) return
-    const spot = boxSpot()
+    const spot = boxSpot(edge)
     setPickerLeaving(false)
     setPicker({ kind, x: spot.x, y: spot.y })
   }
@@ -597,7 +601,7 @@ export default function ChatView({ chat, onBack, focused = true }) {
       hidePicker()
       return true
     }
-    const spot = boxSpot()
+    const spot = boxSpot(kind === 'permission' ? 'right' : 'left')
     setPicker({ kind, x: spot.x, y: spot.y })
     return true
   }
@@ -659,7 +663,7 @@ export default function ChatView({ chat, onBack, focused = true }) {
             items: models.map((m) => ({
               id: m.model,
               name: prettyModelName(m.display_name ?? m.model),
-              icon: <ModelMark maker={modelMaker(chat.harness, m.model, m.resolved_model)} size={14} />,
+              icon: null,
             })),
             selectedId: currentModel?.model ?? chat.model,
             choose: (id) => changeSettings({ model: id }),
@@ -1164,14 +1168,6 @@ export default function ChatView({ chat, onBack, focused = true }) {
                   data-unset={!chat.model || undefined}
                   title={hintModel('Model - applies to the next turn')}
                 >
-                  {(() => {
-                    // Nothing chosen, nothing shown as chosen: the slot
-                    // reads "Model" until the user picks one.
-                    if (!chat.model) return null
-                    const row = findModel(models, chat.model)
-                    const maker = modelMaker(chat.harness, row?.model, row?.resolved_model)
-                    return maker ? <ModelMark maker={maker} size={14} /> : null
-                  })()}
                   {chat.model ? modelDisplayName(models, chat.model) : 'Model'}
                 </button>
               ) : (
@@ -1194,9 +1190,6 @@ export default function ChatView({ chat, onBack, focused = true }) {
                   place="above"
                   onClose={hidePicker}
                   anchor={{ left: picker.x, top: picker.y }}
-                  renderIcon={(m) => (
-                    <ModelMark maker={modelMaker(chat.harness, m.id, m.resolved_model)} size={14} />
-                  )}
                   renderSubline={(m) =>
                     m.group ? <span className="nc-item-sub">via {m.group}</span> : null
                   }
@@ -1270,6 +1263,46 @@ export default function ChatView({ chat, onBack, focused = true }) {
                   }
                 />
               )}
+              <button
+                type="button"
+                className="nc-meta"
+                onClick={togglePicker('harness')}
+                aria-haspopup="listbox"
+                aria-expanded={picker?.kind === 'harness'}
+                data-picker="harness"
+                title="Harness"
+              >
+                <HarnessMark harness={chat.harness} size={16} />
+                {harnessName(chat.harness)}
+              </button>
+              {picker?.kind === 'harness' && (
+                <PickerMenu
+                  label="Harness"
+                  searchPlaceholder="Search harnesses"
+                  leaving={pickerLeaving}
+                  place="above"
+                  items={(capabilities?.harnesses ?? []).filter(pickable).map((h) => ({ id: h.id, name: h.name }))}
+                  renderIcon={(h) => <HarnessMark harness={h.id} size={16} />}
+                  groups={null}
+                  selectedId={chat.harness}
+                  onChoose={() => hidePicker()}
+                  onClose={hidePicker}
+                  anchor={{ left: picker.x, top: picker.y }}
+                  footer={
+                    isMobile ? null : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPicker(null)
+                          setManagingHarnesses(true)
+                        }}
+                      >
+                        Manage harnesses…
+                      </button>
+                    )
+                  }
+                />
+              )}
               {canChange.effort && efforts.length > 0 && (
                 <div className="nc-effort-wrap">
                   <button
@@ -1302,10 +1335,6 @@ export default function ChatView({ chat, onBack, focused = true }) {
                   )}
                 </div>
               )}
-              <span className="nc-meta nc-static">
-                <HarnessMark harness={chat.harness} size={16} />
-                {harnessName(chat.harness)}
-              </span>
 
             </div>
             <div className="nc-send-group">
@@ -1321,7 +1350,7 @@ export default function ChatView({ chat, onBack, focused = true }) {
                     type="button"
                     className="nc-meta"
                     data-unset={!chat.permissionMode || undefined}
-                    onClick={togglePicker('permission')}
+                    onClick={togglePicker('permission', 'right')}
                     aria-haspopup="listbox"
                     aria-expanded={picker?.kind === 'permission'}
                     data-picker="permission"
@@ -1389,6 +1418,16 @@ export default function ChatView({ chat, onBack, focused = true }) {
         {(error || connection.state === 'error') && (
           <p className="cv-error-line">{error ?? connection.error}</p>
         )}
+        {managingHarnesses && (
+          <HarnessManagerModal
+            onClose={() => setManagingHarnesses(false)}
+            onSignIn={(id) => {
+              setManagingHarnesses(false)
+              setSignInFor(id)
+            }}
+          />
+        )}
+        {signInFor && <SignInModal harnessId={signInFor} onDone={() => setSignInFor(null)} />}
         {manageModels && (
           <EndpointManagerModal
             harness={chat.harness}

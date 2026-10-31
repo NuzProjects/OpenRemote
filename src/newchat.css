@@ -276,7 +276,9 @@ html[data-reduce-motion] .nc-label-out {
 }
 
 .nc-effort-name {
-  justify-self: center;
+  justify-self: stretch;
+  width: auto;
+  justify-items: center;
   color: #fff;
   font-family: var(--font-sans);
   font-size: 14px;
@@ -333,6 +335,12 @@ html[data-reduce-motion] .nc-label-out {
   justify-items: start;
   width: 12ch;
   white-space: nowrap;
+}
+
+.nc-effort-name.nc-label-swap {
+  width: auto;
+  justify-self: stretch;
+  justify-items: center;
 }
 
 .nc-label-swap > span {
