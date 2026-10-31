@@ -343,6 +343,10 @@ html[data-reduce-motion] .nc-label-out {
   justify-items: center;
 }
 
+.nc-effort-wrap .nc-label-swap {
+  width: auto;
+}
+
 .nc-label-swap > span {
   grid-area: 1 / 1;
 }

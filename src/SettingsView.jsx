@@ -255,7 +255,21 @@ export default function SettingsView({ onReplay, onOpenChat, onClose = null, onM
     return landed
   }
 
-  const openPicker = (kind) => (e) => setPicker({ kind, x: e.clientX, y: e.clientY })
+  const openPicker = (kind, edge = 'pointer') => (e) => {
+    if (edge === 'panel-right') {
+      const panel = panelRef.current?.getBoundingClientRect()
+      const btn = e.currentTarget.getBoundingClientRect()
+      if (panel && btn.width > 0) {
+        setPicker({
+          kind,
+          x: Math.round(panel.right - 20 - 264),
+          y: Math.round(btn.bottom + 8),
+        })
+        return
+      }
+    }
+    setPicker({ kind, x: e.clientX, y: e.clientY })
+  }
 
   // The document attribute follows the stored preference, never ahead of it: a
   // switch that reads on while the app is not is worse than one that stayed
@@ -968,7 +982,7 @@ export default function SettingsView({ onReplay, onOpenChat, onClose = null, onM
                   <button
                     type="button"
                     className="pn-btn"
-                    onClick={openPicker('permission')}
+                    onClick={openPicker('permission', 'panel-right')}
                     aria-haspopup="listbox"
                     aria-expanded={picker?.kind === 'permission'}
                   >
@@ -1549,7 +1563,7 @@ export default function SettingsView({ onReplay, onOpenChat, onClose = null, onM
                     </button>
                   ) : (
                     <span className={`pn-btn${h.available && h.signed_in !== false ? ' on' : ''}`}>
-                      {!h.available ? 'Missing' : h.signed_in === false ? 'Not signed in' : h.signed_in ? 'Signed in' : 'Ready'}
+                      {!h.available ? 'Missing' : h.signed_in === false ? 'Not signed in' : 'Ready'}
                     </span>
                   )}
                 </div>

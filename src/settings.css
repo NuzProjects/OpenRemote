@@ -326,6 +326,11 @@ html[data-reduce-motion] .stg-panel.stg-switch .stg-results-view:not([hidden]) {
   background: transparent;
 }
 
+.stg-panel button:focus,
+.stg-panel button:focus-visible {
+  outline: none;
+}
+
 /* The empty sentence lives in the add card. No second hairline above it. */
 .stg-panel .mcp-add {
   border: 0;

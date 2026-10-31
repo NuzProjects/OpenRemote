@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Archive,
+  DotsThree,
   ArrowDown,
   ArrowLeft,
   ArrowRight,
@@ -702,23 +703,21 @@ export default function Sidebar({
           // than a delivery the next device has not confirmed.
           <Cloud size={11} className="chat-synced" aria-label="Syncs to your devices" />
         )}
-        <span
-          className={`dot dot--${row.offline ? 'offline' : row.status}`}
-          title={row.offline ? (privacy ? 'Offline' : `${row.device} is offline`) : undefined}
-        />
       </button>
-      {/* Archive hides the chat from this list; Settings keeps it. A pointer
-          shortcut only: the row keeps the list's one Tab stop, and archiving
-          from the keyboard is Mod+Shift+A or the palette's own row. */}
       <button
         type="button"
-        className="chat-archive"
-        title="Archive this chat"
-        aria-label={`Archive ${row.title}`}
+        className="chat-more"
+        title="Chat actions"
+        aria-label={`Actions for ${row.title}`}
+        aria-haspopup="menu"
         tabIndex={-1}
-        onClick={() => archive(row.id)}
+        onClick={(e) => {
+          e.stopPropagation()
+          const rect = e.currentTarget.getBoundingClientRect()
+          setMenu({ x: Math.round(rect.right), y: Math.round(rect.bottom + 6), items: menuItems(row) })
+        }}
       >
-        <Archive size={12} />
+        <DotsThree size={16} weight="bold" />
       </button>
     </div>
   )
@@ -842,6 +841,7 @@ export default function Sidebar({
       )}
 
       <nav className="sb-list" aria-label="Projects and chats">
+        <div key={mode} className="sb-mode-fade">
         {/* The one group that exists only while it has something in it: a
             chat whose harness is blocked on an answer is starving, and it
             should not be hunted for in a long list. Same row, same mark, same
@@ -1029,6 +1029,7 @@ export default function Sidebar({
         {rows.length > 0 && query.trim() && visible.length === 0 && (
           <p className="sb-empty">No chats match “{query.trim()}”.</p>
         )}
+        </div>
       </nav>
 
       <footer className="sb-foot">

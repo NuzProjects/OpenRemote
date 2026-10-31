@@ -111,11 +111,19 @@ export default function PluginsView() {
           its search, its two filters and its expanded sections are view
           state the user typed, and going to Installed to check something
           and coming back used to empty all of it. */}
-      <div hidden={tab !== 'discover'}>
+      <div className="pg-stage" hidden={tab !== 'discover'}>
         <PluginDiscover onInstall={(entry) => setInstalling({ entry })} />
       </div>
-      {tab === 'installed' && <InstalledPlugins onUpdate={(entry) => setInstalling({ entry })} />}
-      {tab === 'marketplaces' && <PluginMarketplaces />}
+      {tab === 'installed' && (
+        <div className="pg-stage">
+          <InstalledPlugins onUpdate={(entry) => setInstalling({ entry })} />
+        </div>
+      )}
+      {tab === 'marketplaces' && (
+        <div className="pg-stage">
+          <PluginMarketplaces />
+        </div>
+      )}
 
       {installing && <InstallPluginModal entry={installing.entry} onClose={() => setInstalling(null)} />}
     </div>

@@ -85,6 +85,41 @@ a:focus,
   min-height: 0;
 }
 
+.pane-switch {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  animation: pane-in 0.28s ease;
+}
+
+@keyframes pane-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.sb-mode-fade {
+  animation: pane-in 0.28s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pane-switch,
+  .sb-mode-fade {
+    animation: none;
+  }
+}
+
+html[data-reduce-motion] .pane-switch,
+html[data-reduce-motion] .sb-mode-fade {
+  animation: none;
+}
+
 .main {
   flex: 1;
   min-width: 0;
@@ -1054,7 +1089,7 @@ of the list rather than as a banner that arrived from somewhere else. */
   position: relative;
 }
 
-.chat-archive {
+.chat-more {
   position: absolute;
   top: 50%;
   right: 6px;
@@ -1063,20 +1098,30 @@ of the list rather than as a banner that arrived from somewhere else. */
   width: 22px;
   height: 22px;
   border: 0;
-  border-radius: 5px;
-  background: var(--bg-active);
-  color: var(--text-2);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-3);
   opacity: 0;
   pointer-events: none;
   transform: translateY(-50%);
   cursor: pointer;
-  transition: opacity 0.12s ease;
+  transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
 }
 
-.chat-item:hover .chat-archive,
-.chat-item:focus-within .chat-archive {
+.chat-item:hover .chat-more,
+.chat-item:focus-within .chat-more {
   opacity: 1;
   pointer-events: auto;
+}
+
+.chat-more:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-1);
+}
+
+.chat-more:focus,
+.chat-more:focus-visible {
+  outline: none;
 }
 
 .chat-archive:hover {

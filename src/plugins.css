@@ -182,8 +182,10 @@
   margin: 20px 0 0;
 }
 
-.pg-panel {
+.panel.pg-panel {
   width: 100%;
+  align-items: stretch;
+  padding: 24px 20px 40px;
 }
 
 .pg-head {
@@ -198,32 +200,76 @@
 }
 
 .pg-list-full,
-.pn-list.pg-list-full {
+.pn-list.pg-list-full,
+.pg-panel .pn-list {
   width: 100%;
   max-width: 100%;
+  gap: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  overflow: hidden;
+}
+
+.pg-panel .pn-row {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.pg-panel .pn-row + .pn-row {
+  border-top: 1px solid var(--line);
 }
 
 /* ---- the three tabs ---- */
 
 .pg-tabs {
-  display: flex;
+  display: inline-flex;
   gap: 2px;
+  width: auto;
   margin-top: 16px;
-  width: 100%;
+  padding: 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .pg-tab {
-  margin-bottom: -1px;
-  padding: 8px 12px;
+  height: 30px;
+  margin: 0;
+  padding: 0 14px;
   border: 0;
-  border-bottom: 2px solid transparent;
+  border-radius: 999px;
   background: none;
   color: var(--text-3);
   font: inherit;
   font-size: 13px;
   font-weight: 500;
   cursor: default;
-  transition: color 120ms ease;
+  transition: color 0.16s ease, background 0.16s ease;
+}
+
+.pg-stage {
+  animation: pg-in 0.22s ease;
+}
+
+@keyframes pg-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pg-stage {
+    animation: none;
+  }
+}
+
+html[data-reduce-motion] .pg-stage {
+  animation: none;
 }
 
 .pg-tab:hover {
@@ -231,7 +277,7 @@
 }
 
 .pg-tab.on {
-  border-bottom-color: var(--text-1);
+  background: rgba(255, 255, 255, 0.08);
   color: var(--text-1);
 }
 

@@ -914,7 +914,9 @@ function Shell() {
         setLayout((l) => focusLeaf(setLeafView(l, leaf.id, 'new'), leaf.id))
       }}
     >
-      {paneContent(leaf)}
+      <div key={leaf.view ?? view} className="pane-switch">
+        {paneContent(leaf)}
+      </div>
     </ViewBoundary>
   )
 
