@@ -3,7 +3,6 @@ import {
   ArrowUp,
   ArrowUpRight,
   Check,
-  Lightning,
   Stop,
   Play,
   HandPalm,
@@ -27,6 +26,7 @@ import { renderMarkdown } from './markdown.js'
 import { capLines, capRows, MAX_RENDER_LINES, MAX_RENDER_ROWS, shouldRenderLive } from './render-budget.js'
 import ContextRing from './ContextRing.jsx'
 import PickerMenu from './PickerMenu.jsx'
+import { EffortSlider, FadingLabel, effortLabel } from './NewChat.jsx'
 import { EndpointManagerModal } from './EndpointManager.jsx'
 import { isMobile } from './platform.js'
 import { usePrivacyMode } from './privacy.js'
@@ -223,6 +223,8 @@ export default function ChatView({ chat, onBack, focused = true }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const [picker, setPicker] = useState(null)
+  const [effortLeaving, setEffortLeaving] = useState(false)
+  const effortLeavingRef = useRef(false)
   const [models, setModels] = useState([])
   const [modelsPending, setModelsPending] = useState(true)
   // Custom endpoints on the machine running this chat: the records and
@@ -415,6 +417,41 @@ export default function ChatView({ chat, onBack, focused = true }) {
 
   const openPicker = (kind) => (e) => setPicker({ kind, x: e.clientX, y: e.clientY })
 
+  const leaveEffort = () => {
+    if (effortLeavingRef.current) return
+    effortLeavingRef.current = true
+    setEffortLeaving(true)
+    setTimeout(() => {
+      effortLeavingRef.current = false
+      setEffortLeaving(false)
+      setPicker((current) => (current?.kind === 'effort' ? null : current))
+    }, 160)
+  }
+
+  const toggleEffort = () => {
+    if (picker?.kind === 'effort') leaveEffort()
+    else if (!effortLeavingRef.current) setPicker({ kind: 'effort', x: 1, y: 1 })
+  }
+
+  const applySettings = async (settings) => {
+    setError(null)
+    try {
+      await updateChatSettings(chat.id, settings)
+    } catch (err) {
+      setError(err.message ?? String(err))
+    }
+  }
+
+  useEffect(() => {
+    if (picker?.kind !== 'effort') return
+    const close = (e) => {
+      if (e.target.closest?.('.nc-effort-wrap, .nc-effort')) return
+      leaveEffort()
+    }
+    window.addEventListener('mousedown', close)
+    return () => window.removeEventListener('mousedown', close)
+  }, [picker?.kind])
+
   const changeSettings = async (settings) => {
     setPicker(null)
     setBusy(true)
@@ -559,13 +596,20 @@ export default function ChatView({ chat, onBack, focused = true }) {
     focused,
   )
   useShortcut('pick-model', () => openPickerAt('model'), focused)
-  useShortcut('pick-effort', () => openPickerAt('effort'), focused)
+  useShortcut(
+    'pick-effort',
+    () => {
+      if (!canChange.effort || efforts.length === 0) return false
+      toggleEffort()
+    },
+    focused,
+  )
   useShortcut('pick-permission', () => openPickerAt('permission'), focused)
   useShortcut(
     'toggle-fast',
     () => {
       if (!canChange.fast || !harness?.fast_supported) return false
-      changeSettings({ fast: !chat.fast })
+      applySettings({ fast: !chat.fast })
     },
     focused,
   )
@@ -658,7 +702,6 @@ export default function ChatView({ chat, onBack, focused = true }) {
   const hintModel = useHint('pick-model')
   const hintEffort = useHint('pick-effort')
   const hintPermission = useHint('pick-permission')
-  const hintFast = useHint('toggle-fast')
 
   return (
     <div className="chatview">
@@ -1138,29 +1181,38 @@ export default function ChatView({ chat, onBack, focused = true }) {
                 />
               )}
               {canChange.effort && efforts.length > 0 && (
-                <button
-                  type="button"
-                  className="nc-meta"
-                  onClick={openPicker('effort')}
-                  aria-haspopup="listbox"
-                  aria-expanded={picker?.kind === 'effort'}
-                  data-picker="effort"
-                  title={hintEffort("The harness's own effort")}
-                >
-                  {chat.effort ?? 'Effort'}
-                </button>
-              )}
-              {picker?.kind === 'effort' && (
-                <PickerMenu
-                  label="Effort"
-                  searchPlaceholder="Search efforts"
-                  items={efforts.map((effort) => ({ id: effort, name: effort }))}
-                  groups={null}
-                  selectedId={chat.effort ?? ''}
-                  onChoose={(id) => changeSettings({ effort: id })}
-                  onClose={() => setPicker(null)}
-                  anchor={{ left: picker.x, top: picker.y }}
-                />
+                <div className="nc-effort-wrap">
+                  <button
+                    type="button"
+                    className="nc-meta"
+                    onClick={toggleEffort}
+                    aria-haspopup="dialog"
+                    aria-expanded={picker?.kind === 'effort'}
+                    data-picker="effort"
+                    title={hintEffort("The harness's own effort")}
+                  >
+                    <FadingLabel text={effortLabel(chat.effort)} />
+                  </button>
+                  {(picker?.kind === 'effort' || effortLeaving) && (
+                    // The composer sits on the bottom edge, so this panel opens
+                    // above the box. New chat hangs the same panel under its box.
+                    <EffortSlider
+                      tiers={efforts}
+                      value={chat.effort}
+                      leaving={effortLeaving}
+                      place="above"
+                      spot={(() => {
+                        const rect = composerRef.current?.querySelector('.cv-box')?.getBoundingClientRect()
+                        if (!rect || !(rect.width > 0)) return null
+                        return { left: Math.round(rect.left), top: Math.round(rect.top) }
+                      })()}
+                      fast={Boolean(chat.fast)}
+                      fastSupported={canChange.fast && harness?.fast_supported === true}
+                      onEffort={(tier) => applySettings({ effort: tier })}
+                      onFast={() => applySettings({ fast: !chat.fast })}
+                    />
+                  )}
+                </div>
               )}
               {(canChange.model ? modelItems.length > 0 : Boolean(chat.model)) && (
                 <span className="nc-via">via</span>
@@ -1219,18 +1271,7 @@ export default function ChatView({ chat, onBack, focused = true }) {
                 <HarnessMark harness={chat.harness} size={16} />
                 {harnessName(chat.harness)}
               </span>
-              {canChange.fast && harness?.fast_supported && (
-                <button
-                  type="button"
-                  className={`nc-meta nc-fast${chat.fast ? ' on' : ''}`}
-                  onClick={() => changeSettings({ fast: !chat.fast })}
-                  aria-pressed={Boolean(chat.fast)}
-                  title={hintFast("The harness's own fast mode")}
-                >
-                  <Lightning size={13} weight={chat.fast ? 'fill' : 'light'} />
-                  Fast
-                </button>
-              )}
+
             </div>
             <div className="nc-send-group">
               {/* The harness's own permission word for this chat, by the

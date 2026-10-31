@@ -469,7 +469,7 @@ Every screen the design specifies, backed by the real daemon:
   codex `approvalPolicy`, grok `--permission-mode` - the vocabulary rides
   /capabilities, the harness's own default row marked "runs this by
   default", unset sends nothing so the default holds; agy/pi/opencode
-  offer no words, so no chip), the Fast toggle
+  offer no words, so no chip), the Fast toggle on the effort panel
   where the harness's own fast mode is usable
   (claude `fastMode` ≥ 2.1.205, codex `fast` service tier ≥ 0.110), the
   project picker (the registered projects on the machine the chat runs
@@ -483,7 +483,8 @@ Every screen the design specifies, backed by the real daemon:
   status - the permission word shown in the harness's own spelling,
   changeable only while stopped: start-time on every harness, so a
   stopped chat's change lands on resume), stop/resume, the floating
-  composer with the ContextRing where the harness reports its window
+  composer with the same effort panel as New chat, opened above the box,
+  and the ContextRing where the harness reports its window
   (codex; claude reports usage but no window on the wire).
 - **Machines** - Cloud's view of the account's devices (2026-10-07): this
   computer first with its "Make this computer a machine" row, then each

@@ -65,13 +65,45 @@ const EFFORT_LABELS = {
   maximum: 'Max',
 }
 
-function effortLabel(tier) {
+export function effortLabel(tier) {
   if (!tier) return 'Effort'
   const key = tier.toLowerCase().replace(/[\s_-]+/g, '')
   return EFFORT_LABELS[key] ?? tier.charAt(0).toUpperCase() + tier.slice(1)
 }
 
-function EffortSlider({ tiers, value, spot, fast, fastSupported, leaving, onEffort, onFast }) {
+export function FadingLabel({ text, className }) {
+  const shown = useRef(text)
+  const [outgoing, setOutgoing] = useState(null)
+  const [, bump] = useState(0)
+  useEffect(() => {
+    if (text === shown.current) return
+    setOutgoing(shown.current)
+    shown.current = text
+    bump((n) => n + 1)
+    const id = setTimeout(() => setOutgoing(null), 320)
+    return () => clearTimeout(id)
+  }, [text])
+  return (
+    <span className={`nc-label-swap${className ? ` ${className}` : ''}`}>
+      {outgoing != null && <span className="nc-label-out">{outgoing}</span>}
+      <span className="nc-label-in" key={shown.current}>
+        {shown.current}
+      </span>
+    </span>
+  )
+}
+
+export function EffortSlider({
+  tiers,
+  value,
+  spot,
+  fast,
+  fastSupported,
+  leaving,
+  onEffort,
+  onFast,
+  place = 'below',
+}) {
   const index = Math.max(0, tiers.indexOf(value ?? tiers[0]))
   const last = Math.max(1, tiers.length - 1)
   const snapped = tiers.length < 2 ? 0 : (index / last) * 100
@@ -113,7 +145,7 @@ function EffortSlider({ tiers, value, spot, fast, fastSupported, leaving, onEffo
   }
   const panel = (
     <div
-      className={`nc-effort${fast ? ' is-fast' : ''}${leaving ? ' is-out' : ''}`}
+      className={`nc-effort${fast ? ' is-fast' : ''}${leaving ? ' is-out' : ''}${place === 'above' ? ' is-above' : ''}`}
       role="dialog"
       aria-label="Effort"
       style={spot ? { left: spot.left, top: spot.top } : undefined}
@@ -132,9 +164,7 @@ function EffortSlider({ tiers, value, spot, fast, fastSupported, leaving, onEffo
         ) : (
           <span />
         )}
-        <span className="nc-effort-name" key={effortLabel(value ?? tiers[index])}>
-          {effortLabel(value ?? tiers[index])}
-        </span>
+        <FadingLabel className="nc-effort-name" text={effortLabel(value ?? tiers[index])} />
       </div>
       <div
         className={`nc-effort-slider${dragging ? ' is-drag' : ''}${fast ? ' is-fast' : ''}`}
@@ -1445,8 +1475,7 @@ export default function NewChat({
                   data-picker="effort"
                   title={hintEffort("The harness's own effort tier")}
                 >
-                  {fast && <Lightning size={13} weight="fill" />}
-                  {effortLabel(chosenEffort)}
+                  <FadingLabel text={effortLabel(chosenEffort)} />
                 </button>
                 {(picker?.kind === 'effort' || effortLeaving) && (
                   <EffortSlider

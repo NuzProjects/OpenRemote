@@ -62,7 +62,9 @@ html[data-reduce-motion] .nc-provider,
 html[data-reduce-motion] .nc-effort,
 html[data-reduce-motion] .nc-effort-fill,
 html[data-reduce-motion] .nc-effort-thumb,
-html[data-reduce-motion] .nc-effort-slider.is-fast .nc-effort-fill {
+html[data-reduce-motion] .nc-effort-slider.is-fast .nc-effort-fill,
+html[data-reduce-motion] .nc-label-in,
+html[data-reduce-motion] .nc-label-out {
   transition: none;
   animation: none;
 }
@@ -73,7 +75,9 @@ html[data-reduce-motion] .nc-effort-slider.is-fast .nc-effort-fill {
   .nc-effort,
   .nc-effort-fill,
   .nc-effort-thumb,
-  .nc-effort-slider.is-fast .nc-effort-fill {
+  .nc-effort-slider.is-fast .nc-effort-fill,
+  .nc-label-in,
+  .nc-label-out {
     transition: none;
     animation: none;
   }
@@ -272,7 +276,6 @@ html[data-reduce-motion] .nc-effort-slider.is-fast .nc-effort-fill {
 }
 
 .nc-effort-name {
-  animation: nc-label-in 0.22s ease;
   color: #fff;
   font-family: var(--font-sans);
   font-size: 14px;
@@ -324,13 +327,46 @@ html[data-reduce-motion] .nc-effort-slider.is-fast .nc-effort-fill {
   color: var(--text-1);
 }
 
+.nc-label-swap {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+}
+
+.nc-label-swap > span {
+  grid-area: 1 / 1;
+}
+
+.nc-label-in {
+  animation: nc-label-in 0.32s ease;
+}
+
+.nc-label-out {
+  animation: nc-label-out 0.32s ease forwards;
+  pointer-events: none;
+}
+
 @keyframes nc-label-in {
   from {
     opacity: 0;
+    transform: translateY(4px);
   }
 
   to {
     opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes nc-label-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+
+  to {
+    opacity: 0;
+    transform: translateY(-4px);
   }
 }
 
@@ -381,6 +417,39 @@ html[data-reduce-motion] .nc-effort-slider.is-fast .nc-effort-fill {
 
 .nc-effort.is-out {
   animation: nc-menu-out 0.16s ease forwards;
+}
+
+.nc-effort.is-above {
+  transform: translateY(calc(-100% - 8px));
+  animation: nc-menu-in-above 0.18s ease;
+}
+
+.nc-effort.is-above.is-out {
+  animation: nc-menu-out-above 0.16s ease forwards;
+}
+
+@keyframes nc-menu-in-above {
+  from {
+    opacity: 0;
+    transform: translateY(calc(-100% - 4px));
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(calc(-100% - 8px));
+  }
+}
+
+@keyframes nc-menu-out-above {
+  from {
+    opacity: 1;
+    transform: translateY(calc(-100% - 8px));
+  }
+
+  to {
+    opacity: 0;
+    transform: translateY(calc(-100% - 4px));
+  }
 }
 
 .nc-effort-specks {
