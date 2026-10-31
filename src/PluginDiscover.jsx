@@ -4,7 +4,6 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import {
-  ArrowClockwise,
   CaretDown,
   CaretUp,
   MagnifyingGlass,
@@ -37,7 +36,19 @@ export default function PluginDiscover({ onInstall }) {
   const [refreshError, setRefreshError] = useState(null)
   const [picker, setPicker] = useState(null)
 
-  const openPicker = (kind) => (e) => setPicker({ kind, x: e.clientX, y: e.clientY })
+  const openPicker = (kind) => (e) => {
+    const panel = e.currentTarget.closest('.pg-panel')?.getBoundingClientRect()
+    const btn = e.currentTarget.getBoundingClientRect()
+    if (panel && btn.width > 0) {
+      setPicker({
+        kind,
+        x: Math.max(Math.round(panel.left + 8), Math.round(panel.right - 8 - 264)),
+        y: Math.round(btn.bottom + 8),
+      })
+      return
+    }
+    setPicker({ kind, x: e.clientX, y: e.clientY })
+  }
 
   const refreshOne = async (name) => {
     setFetching((curr) => (curr.includes(name) ? curr : [...curr, name]))
@@ -78,15 +89,6 @@ export default function PluginDiscover({ onInstall }) {
   const all = catalog?.entries ?? []
   const on = (marketplaces ?? []).filter((m) => m.enabled)
   const failed = on.filter((m) => m.error && !dismissedErrors.has(m.name))
-
-  const handleRefresh = () => {
-    if (fetching.length > 0) return
-    const stale = on.filter((m) => isStale(m))
-    const targets = stale.length > 0 ? stale : on
-    for (const m of targets) {
-      refreshOne(m.name)
-    }
-  }
 
   const handleRetry = (name) => {
     setDismissedErrors((prev) => {
@@ -227,20 +229,6 @@ export default function PluginDiscover({ onInstall }) {
           />
         )}
 
-        <button
-          type="button"
-          className="pn-btn pg-refresh-btn"
-          onClick={handleRefresh}
-          disabled={fetching.length > 0}
-          title={fetching.length > 0 ? `Fetching ${fetching.join(', ')}...` : 'Refresh catalogs'}
-          aria-label="Refresh catalogs"
-        >
-          <ArrowClockwise
-            size={15}
-            weight="bold"
-            className={fetching.length > 0 ? 'pg-spin' : ''}
-          />
-        </button>
       </div>
 
       {refreshError && (

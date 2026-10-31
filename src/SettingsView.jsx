@@ -262,7 +262,7 @@ export default function SettingsView({ onReplay, onOpenChat, onClose = null, onM
       if (panel && btn.width > 0) {
         setPicker({
           kind,
-          x: Math.round(panel.right - 20 - 264),
+          x: Math.max(Math.round(panel.left + 8), Math.round(panel.right - 8 - 264)),
           y: Math.round(btn.bottom + 8),
         })
         return
@@ -858,7 +858,7 @@ export default function SettingsView({ onReplay, onOpenChat, onClose = null, onM
                   type="button"
                   className="pn-btn"
                   data-unset={!defaultHarness || undefined}
-                  onClick={openPicker('harness')}
+                  onClick={openPicker('harness', 'panel-right')}
                   aria-haspopup="listbox"
                   aria-expanded={picker?.kind === 'harness'}
                 >
@@ -886,7 +886,7 @@ export default function SettingsView({ onReplay, onOpenChat, onClose = null, onM
                   <button
                     type="button"
                     className="pn-btn"
-                    onClick={openPicker('model')}
+                    onClick={openPicker('model', 'panel-right')}
                     aria-haspopup="listbox"
                     aria-expanded={picker?.kind === 'model'}
                   >
@@ -949,7 +949,7 @@ export default function SettingsView({ onReplay, onOpenChat, onClose = null, onM
                   <button
                     type="button"
                     className="pn-btn"
-                    onClick={openPicker('effort')}
+                    onClick={openPicker('effort', 'panel-right')}
                     aria-haspopup="listbox"
                     aria-expanded={picker?.kind === 'effort'}
                   >
@@ -1170,7 +1170,7 @@ export default function SettingsView({ onReplay, onOpenChat, onClose = null, onM
                 <button
                   type="button"
                   className="pn-btn"
-                  onClick={openPicker('startup')}
+                  onClick={openPicker('startup', 'panel-right')}
                   aria-haspopup="listbox"
                   aria-expanded={picker?.kind === 'startup'}
                 >

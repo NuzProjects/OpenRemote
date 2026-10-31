@@ -224,16 +224,51 @@
 /* ---- the three tabs ---- */
 
 .pg-tabs {
-  display: inline-flex;
-  gap: 2px;
+  position: relative;
+  display: inline-grid;
+  grid-template-columns: repeat(3, max-content);
+  align-self: flex-start;
+  gap: 0;
   width: auto;
   margin-top: 16px;
   padding: 3px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.045);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pg-tabs-thumb {
+    transition: none;
+  }
+}
+
+html[data-reduce-motion] .pg-tabs-thumb {
+  transition: none;
+}
+
+.pg-tabs-thumb {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc((100% - 6px) / 3);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  pointer-events: none;
+  transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.pg-tabs[data-tab='installed'] .pg-tabs-thumb {
+  transform: translateX(100%);
+}
+
+.pg-tabs[data-tab='marketplaces'] .pg-tabs-thumb {
+  transform: translateX(200%);
 }
 
 .pg-tab {
+  position: relative;
+  z-index: 1;
   height: 30px;
   margin: 0;
   padding: 0 14px;
@@ -277,7 +312,7 @@ html[data-reduce-motion] .pg-stage {
 }
 
 .pg-tab.on {
-  background: rgba(255, 255, 255, 0.08);
+  background: none;
   color: var(--text-1);
 }
 

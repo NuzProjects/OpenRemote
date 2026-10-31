@@ -83,7 +83,8 @@ export default function PluginsView() {
         </button>
       </header>
 
-      <div className="pg-tabs" role="tablist" aria-label="Plugins">
+      <div className="pg-tabs" data-tab={tab} role="tablist" aria-label="Plugins">
+        <span className="pg-tabs-thumb" aria-hidden="true" />
         {TABS.map((t) => (
           <button
             key={t.id}
