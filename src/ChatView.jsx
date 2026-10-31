@@ -196,7 +196,9 @@ export default function ChatView({ chat, onBack, focused = true }) {
     chats,
   } = useConsole()
   const [panel, setPanel] = useState(null)
+  const [panelOut, setPanelOut] = useState(false)
   const panelRef = useRef(null)
+  const panelTimer = useRef(null)
   const [commitMessage, setCommitMessage] = useState('')
   const [commitBusy, setCommitBusy] = useState(false)
   const [barNote, setBarNote] = useState(null)
@@ -729,15 +731,33 @@ export default function ChatView({ chat, onBack, focused = true }) {
   const hintModel = useHint('pick-model')
   const hintEffort = useHint('pick-effort')
   const hintPermission = useHint('pick-permission')
+  useEffect(() => () => clearTimeout(panelTimer.current), [])
+
+  const closePanel = () => {
+    if (!panel || panelOut) return
+    setPanelOut(true)
+    clearTimeout(panelTimer.current)
+    panelTimer.current = setTimeout(() => {
+      setPanel(null)
+      setPanelOut(false)
+    }, 140)
+  }
+
+  const showPanel = (kind) => {
+    clearTimeout(panelTimer.current)
+    setPanelOut(false)
+    setPanel(kind)
+  }
+
   useEffect(() => {
     if (!panel) return
     const away = (event) => {
       if (panelRef.current?.contains(event.target)) return
-      setPanel(null)
+      closePanel()
     }
     document.addEventListener('mousedown', away)
     return () => document.removeEventListener('mousedown', away)
-  }, [panel])
+  }, [panel, panelOut])
 
   const workspace = typeof chat.workspace === 'string' ? chat.workspace.trim() : ''
   const commitFiles = fileChanges(rail).files
@@ -773,7 +793,7 @@ export default function ChatView({ chat, onBack, focused = true }) {
         message: commitMessage,
         paths: commitFiles.map((file) => file.path),
       })
-      setPanel(null)
+      closePanel()
       setBarNote({ error: false, text: text || 'Committed.' })
     } catch (err) {
       setBarNote({ error: true, text: String(err?.message || err) })
@@ -800,20 +820,21 @@ export default function ChatView({ chat, onBack, focused = true }) {
                 aria-expanded={panel === 'open'}
                 onClick={() => {
                   setBarNote(null)
-                  setPanel((current) => (current === 'open' ? null : 'open'))
+                  if (panel === 'open' && !panelOut) closePanel()
+                  else showPanel('open')
                 }}
               >
                 Open
                 <CaretDown size={12} />
               </button>
-              {panel === 'open' && (
-                <div className="cv-commit">
+              {(panel === 'open' || (panelOut && panel === 'open')) && (
+                <div className={`cv-commit${panelOut ? ' is-out' : ''}`}>
                   <button
                     type="button"
-                    className="cv-commit-go"
+                    className="cv-open-row"
                     disabled={!workspace}
                     onClick={() => {
-                      setPanel(null)
+                      closePanel()
                       openFolder()
                     }}
                   >
@@ -821,9 +842,9 @@ export default function ChatView({ chat, onBack, focused = true }) {
                   </button>
                   <button
                     type="button"
-                    className="cv-open-link"
+                    className="cv-open-row"
                     onClick={() => {
-                      setPanel(null)
+                      closePanel()
                       openChanges(chat.id)
                     }}
                   >
@@ -841,14 +862,15 @@ export default function ChatView({ chat, onBack, focused = true }) {
                 onClick={() => {
                   setBarNote(null)
                   setCommitMessage((current) => current || (chatTitle(chat) === 'A new task' ? '' : chatTitle(chat)))
-                  setPanel((current) => (current === 'commit' ? null : 'commit'))
+                  if (panel === 'commit' && !panelOut) closePanel()
+                  else showPanel('commit')
                 }}
               >
                 Commit
                 <CaretDown size={12} />
               </button>
-              {panel === 'commit' && (
-                <form className="cv-commit" onSubmit={runCommit}>
+              {(panel === 'commit' || (panelOut && panel === 'commit')) && (
+                <form className={`cv-commit${panelOut ? ' is-out' : ''}`} onSubmit={runCommit}>
                   {commitFiles.length === 0 ? (
                     <p className="cv-commit-files">This chat has not reported a file to commit.</p>
                   ) : (
