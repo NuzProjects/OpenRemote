@@ -1123,36 +1123,17 @@ export default function ChatView({ chat, onBack, focused = true }) {
                     m.group ? <span className="nc-item-sub">via {m.group}</span> : null
                   }
                   footer={
-                    <div className="nc-model-custom">
-                      <input
-                        value={customDraft}
-                        onChange={(e) => setCustomDraft(e.target.value)}
-                        placeholder="Custom model id…"
-                        spellCheck={false}
-                        aria-label="Custom model id"
-                      />
+                    harness?.custom_endpoint_supported ? (
                       <button
                         type="button"
-                        disabled={!customDraft.trim()}
                         onClick={() => {
-                          changeSettings({ model: customDraft.trim() })
-                          setCustomDraft('')
+                          setPicker(null)
+                          setManageModels(true)
                         }}
                       >
-                        Use custom
+                        Manage models…
                       </button>
-                      {harness?.custom_endpoint_supported && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setPicker(null)
-                            setManageModels(true)
-                          }}
-                        >
-                          Manage models…
-                        </button>
-                      )}
-                    </div>
+                    ) : null
                   }
                 />
               )}

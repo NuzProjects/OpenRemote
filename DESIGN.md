@@ -35,7 +35,7 @@ typography:
 spacing:
   rhythm: 4px grid; paddings 6–16px; view gutters 32px
 rounded:
-  default: 7px       # --radius - cards, boxes, pickers
+  default: 12px      # --radius - cards, boxes, pickers
   full: 9999px       # dots, send buttons, pills
 
 ## Overview
@@ -44,7 +44,7 @@ A quiet, dense, machine-room dark UI: near-black canvas with a cool cast,
 one amber accent, and a single green for life. Chrome recedes; the content
 (chats, tools, commands) is the surface. No shadows for depth - 1px
 `rgba(255,255,255,0.07)` lines and white-alpha tint steps define structure.
-Everything is small and calm: 11–14px type, 7px radii, generous but not airy
+Everything is small and calm: 11–14px type, 12px radii, generous but not airy
 spacing.
 
 ## Colors

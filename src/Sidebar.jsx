@@ -15,7 +15,7 @@ import {
   Copy,
   Desktop,
   DeviceMobile,
-  GearSix,
+  Gear,
   House,
   Lightning,
   MagnifyingGlass,
@@ -108,6 +108,7 @@ export default function Sidebar({
   const { connection, sessions, chats, devices, thisDevice, projects, projectsAnswered, sessionsAnswered, removeProject, archived, setChatArchived, deleteChat, api, reconnecting } = useConsole()
   const privacy = usePrivacyMode()
   const [query, setQuery] = useState('')
+  const [searchOn, setSearchOn] = useState(false)
   const [collapsed, setCollapsed] = useState(loadCollapsed)
   // The project waiting on a "unregister?" answer. The sidebar's trash sits
   // two pixels from the project's new-chat button, and unregistering has no
@@ -647,7 +648,7 @@ export default function Sidebar({
       }}
     >
       <button
-        className={`chat-row${row.id === active ? ' active' : ''}`}
+        className={`chat-row${row.id === active && !searchOn ? ' active' : ''}`}
         data-status={row.status}
         // The quiet mark: one white-alpha tint step (DESIGN.md's ladder),
         // not a colour and not a number. The status column keeps its own
@@ -728,13 +729,14 @@ export default function Sidebar({
         {/* Local is this computer's chats; Cloud is the synced chats of
             every device the user signed in on. A phone has only Cloud. */}
         {!isMobile && (
-        <div className="mode-switch" role="group" aria-label="Connection mode">
+        <div className="mode-switch" data-mode={mode} role="group" aria-label="Connection mode">
+          <span className="mode-switch-thumb" aria-hidden="true" />
           <button
             className={mode === 'local' ? 'on' : ''}
             aria-pressed={mode === 'local'}
             onClick={() => onMode('local')}
           >
-            <House size={13} />
+            <House size={15} weight="duotone" />
             Local
           </button>
           <button
@@ -742,21 +744,23 @@ export default function Sidebar({
             aria-pressed={mode === 'cloud'}
             onClick={() => onMode('cloud')}
           >
-            <Cloud size={13} />
+            <Cloud size={15} weight="duotone" />
             Cloud
           </button>
         </div>
         )}
         <button className="side-tile" onClick={() => onSelect('new')} title={hintNew('New chat')}>
-          <Plus size={17} weight="bold" />
+          <Plus size={16} weight="bold" />
           New chat
         </button>
         <label className="side-tile search">
-          <MagnifyingGlass size={17} className="search-icon" />
+          <MagnifyingGlass size={16} weight="bold" className="search-icon" />
           <input
             ref={searchRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            onFocus={() => setSearchOn(true)}
+            onBlur={() => setSearchOn(false)}
             onKeyDown={(e) => {
               // Esc in the search clears it, then leaves it.
               if (e.key === 'Escape') {
@@ -782,17 +786,17 @@ export default function Sidebar({
         <div className={`machines-reveal${isMobile ? ' closed' : ''}`}>
           <div className="machines-clip">
             <button
-              className={`side-tile${active === 'plugins' ? ' on' : ''}`}
+              className={`side-tile${active === 'plugins' && !searchOn ? ' on' : ''}`}
               onClick={() => onSelect('plugins')}
             >
-              <PuzzlePiece size={17} />
+              <PuzzlePiece size={18} weight="duotone" />
               Plugins
             </button>
             <button
-              className={`side-tile${active === 'automations' ? ' on' : ''}`}
+              className={`side-tile${active === 'automations' && !searchOn ? ' on' : ''}`}
               onClick={() => onSelect('automations')}
             >
-              <Lightning size={17} />
+              <Lightning size={18} weight="duotone" />
               Automations
             </button>
           </div>
@@ -800,10 +804,10 @@ export default function Sidebar({
         <div className={`machines-reveal${mode === 'cloud' ? '' : ' closed'}`}>
           <div className="machines-clip">
             <button
-              className={`side-tile${active === 'machines' ? ' on' : ''}`}
+              className={`side-tile${active === 'machines' && !searchOn ? ' on' : ''}`}
               onClick={() => onSelect('machines')}
             >
-              <Desktop size={17} />
+              <Desktop size={18} weight="duotone" />
               Machines
             </button>
           </div>
@@ -1034,19 +1038,17 @@ export default function Sidebar({
         <div className="sb-foot-row" role="group" aria-label="Account, mobile, metrics, settings">
           <button
             type="button"
-            className={`sb-icon-btn${active === 'account' ? ' on' : ''}`}
+            className={`sb-icon-btn${active === 'account' && !searchOn ? ' on' : ''}`}
             aria-pressed={active === 'account'}
             title="Account"
             aria-label="Account"
             onClick={() => onSelect('account')}
           >
-            {/* UserCircle's ink sits inside a thin circle, so it reads
-                smaller than its neighbors - 2px of optical correction. */}
-            <UserCircle size={22} />
+            <UserCircle size={22} weight="duotone" />
           </button>
           <button
             type="button"
-            className={`sb-icon-btn${phones.length ? (phoneOnline ? ' sb-phone--online' : ' sb-phone--offline') : ''}${active === 'mobile' ? ' on' : ''}`}
+            className={`sb-icon-btn${phones.length ? (phoneOnline ? ' sb-phone--online' : ' sb-phone--offline') : ''}${active === 'mobile' && !searchOn ? ' on' : ''}`}
             aria-pressed={active === 'mobile'}
             title={
               !phones.length
@@ -1058,7 +1060,7 @@ export default function Sidebar({
             aria-label="Mobile"
             onClick={() => onSelect('mobile')}
           >
-            <DeviceMobile size={20} />
+            <DeviceMobile size={20} weight="duotone" />
             {/* The status is color, not words: a reachable phone tints
                 the tile green with a black glyph; an away one leaves a
                 hollow dot in the tile's corner. */}
@@ -1068,23 +1070,23 @@ export default function Sidebar({
           </button>
           <button
             type="button"
-            className={`sb-icon-btn${active === 'metrics' ? ' on' : ''}`}
+            className={`sb-icon-btn${active === 'metrics' && !searchOn ? ' on' : ''}`}
             aria-pressed={active === 'metrics'}
             title="Metrics"
             aria-label="Metrics"
             onClick={() => onSelect('metrics')}
           >
-            <ChartBar size={20} />
+            <ChartBar size={20} weight="duotone" />
           </button>
           <button
             type="button"
-            className={`sb-icon-btn${active === 'settings' ? ' on' : ''}`}
+            className={`sb-icon-btn${active === 'settings' && !searchOn ? ' on' : ''}`}
             aria-pressed={active === 'settings'}
             title="Settings"
             aria-label="Settings"
             onClick={() => onSelect('settings')}
           >
-            <GearSix size={20} />
+            <Gear size={20} weight="duotone" />
           </button>
         </div>
       </footer>

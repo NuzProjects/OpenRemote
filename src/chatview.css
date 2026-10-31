@@ -516,7 +516,7 @@
   margin: 0 auto;
   padding: 12px 14px 8px;
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: 22px;
   background: linear-gradient(rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.04)), var(--bg-app);
   pointer-events: auto;
 }

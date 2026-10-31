@@ -24,6 +24,8 @@ export default function PickerMenu({
   renderSubline, // a muted second line inside the item (efforts, paths)
   wide, // room for sublines without cramped trailing text
   footer, // a pinned action row under the list; renders in the empty state too
+  hideSearch = false,
+  leaving = false,
 }) {
   const [query, setQuery] = useState('')
   const [cursor, setCursor] = useState(0)
@@ -47,7 +49,8 @@ export default function PickerMenu({
   useEffect(() => {
     // On a phone the keyboard would cover the list it's searching; the
     // search field is a tap away.
-    if (!isMobile) searchRef.current?.focus()
+    if (!hideSearch && !isMobile) searchRef.current?.focus()
+    else ref.current?.focus()
     const close = (e) => {
       if (ref.current && ref.current.contains(e.target)) return
       onClose()
@@ -98,7 +101,7 @@ export default function PickerMenu({
       onClose()
       return
     }
-    if (e.target !== searchRef.current) return
+    if (!hideSearch && e.target !== searchRef.current) return
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       setCursor((c) => Math.min(filtered.length - 1, c + 1))
@@ -143,13 +146,14 @@ export default function PickerMenu({
   return (
     <div
       ref={ref}
-      className={`nc-menu${wide ? ' nc-menu--wide' : ''}`}
+      className={`nc-menu${wide ? ' nc-menu--wide' : ''}${leaving ? ' is-out' : ''}`}
       role="listbox"
+      tabIndex={-1}
       aria-label={label}
       style={spot}
       onKeyDown={onKeyDown}
     >
-      <label className="nc-search">
+      {!hideSearch && <label className="nc-search">
         <MagnifyingGlass size={13} />
         <input
           ref={searchRef}
@@ -161,7 +165,7 @@ export default function PickerMenu({
           placeholder={searchPlaceholder}
           spellCheck={false}
         />
-      </label>
+      </label>}
       <div className="nc-items">
         {grouped.map((group) => (
           <div key={group.label ?? 'all'} className="nc-group">

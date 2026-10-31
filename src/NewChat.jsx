@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { ArrowRight, ArrowUp, House, FolderOpen, Lightning, Plus, Star, X } from '@phosphor-icons/react'
 import PickerMenu from './PickerMenu.jsx'
 import { usePrivacyMode } from './privacy.js'
@@ -53,6 +54,137 @@ import { isActive } from './status-words.js'
 // sign-in prompt offers the relay only there; the others say their own
 // honest words.
 
+
+const EFFORT_LABELS = {
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'Extra High',
+  extrahigh: 'Extra High',
+  max: 'Max',
+  maximum: 'Max',
+}
+
+function effortLabel(tier) {
+  if (!tier) return 'Effort'
+  const key = tier.toLowerCase().replace(/[\s_-]+/g, '')
+  return EFFORT_LABELS[key] ?? tier.charAt(0).toUpperCase() + tier.slice(1)
+}
+
+function EffortSlider({ tiers, value, spot, fast, fastSupported, leaving, onEffort, onFast }) {
+  const index = Math.max(0, tiers.indexOf(value ?? tiers[0]))
+  const last = Math.max(1, tiers.length - 1)
+  const snapped = tiers.length < 2 ? 0 : (index / last) * 100
+  const trackRef = useRef(null)
+  const draggingRef = useRef(false)
+  const [dragging, setDragging] = useState(false)
+  const [live, setLive] = useState(snapped)
+  const [specks, setSpecks] = useState([])
+  useEffect(() => {
+    if (!draggingRef.current) setLive(snapped)
+  }, [snapped])
+  useEffect(() => {
+    if (!fast) {
+      setSpecks([])
+      return
+    }
+    const count = 3 + index
+    setSpecks(
+      Array.from({ length: count }, (_, id) => ({
+        id,
+        y: 6 + Math.random() * 88,
+        bob: (Math.random() * 8 - 4).toFixed(1),
+      })),
+    )
+  }, [fast, index])
+  const pctFrom = (e) => {
+    const rect = trackRef.current?.getBoundingClientRect()
+    if (!rect || rect.width <= 0) return snapped
+    const x = Math.min(Math.max(0, e.clientX - rect.left), rect.width)
+    return (x / rect.width) * 100
+  }
+  const release = (e) => {
+    if (!draggingRef.current) return
+    draggingRef.current = false
+    setDragging(false)
+    const pct = pctFrom(e)
+    const next = Math.min(last, Math.max(0, Math.round((pct / 100) * last)))
+    onEffort(tiers[next])
+  }
+  const panel = (
+    <div
+      className={`nc-effort${fast ? ' is-fast' : ''}${leaving ? ' is-out' : ''}`}
+      role="dialog"
+      aria-label="Effort"
+      style={spot ? { left: spot.left, top: spot.top } : undefined}
+    >
+      <div className="nc-effort-head">
+        {fastSupported ? (
+          <button
+            type="button"
+            className={`nc-effort-fast${fast ? ' on' : ''}`}
+            aria-pressed={fast}
+            title="Fast"
+            onClick={onFast}
+          >
+            <Lightning size={15} weight={fast ? 'fill' : 'regular'} className="nc-effort-bolt" />
+          </button>
+        ) : (
+          <span />
+        )}
+        <span className="nc-effort-name" key={effortLabel(value ?? tiers[index])}>
+          {effortLabel(value ?? tiers[index])}
+        </span>
+      </div>
+      <div
+        className={`nc-effort-slider${dragging ? ' is-drag' : ''}${fast ? ' is-fast' : ''}`}
+        ref={trackRef}
+        onPointerDown={(e) => {
+          draggingRef.current = true
+          setDragging(true)
+          setLive(pctFrom(e))
+          e.currentTarget.setPointerCapture(e.pointerId)
+        }}
+        onPointerMove={(e) => {
+          if (!draggingRef.current) return
+          setLive(pctFrom(e))
+        }}
+        onPointerUp={release}
+        onPointerCancel={() => setDragging(false)}
+      >
+        <span className="nc-effort-track" />
+        <span className="nc-effort-fill" style={{ width: `calc(11px + (100% - 22px) * ${live / 100})` }} />
+        <span className="nc-effort-specks" style={{ width: `calc(11px + (100% - 22px) * ${live / 100})` }}>
+          <span className="nc-effort-speck-lane">
+            {specks.map((speck) => (
+              <span
+                key={speck.id}
+                className="nc-effort-speck"
+                style={{
+                  top: `${speck.y}%`,
+                  animationDelay: `${-(speck.id * 2.4) / specks.length}s`,
+                  '--bob': `${speck.bob}px`,
+                }}
+              />
+            ))}
+          </span>
+        </span>
+        {tiers.map((tier, i) => {
+          const at = tiers.length < 2 ? 0 : i / last
+          return (
+            <span
+              key={tier}
+              className={`nc-effort-dot${at * 100 <= live + 0.5 ? ' on' : ''}`}
+              style={{ left: `calc(11px + (100% - 22px) * ${at})` }}
+            />
+          )
+        })}
+        <span className="nc-effort-thumb" style={{ left: `calc(11px + (100% - 22px) * ${live / 100})` }} />
+      </div>
+    </div>
+  )
+  return createPortal(panel, document.body)
+}
 
 export default function NewChat({
   onOpen,
@@ -112,15 +244,33 @@ export default function NewChat({
   // A new chat opens on the next sentence. While the box stays empty the
   // line keeps moving, so a page left sitting does not freeze on one greeting.
   const [greetingIndex, setGreetingIndex] = useState(() => greetingForNewChat())
+  const [greetingOn, setGreetingOn] = useState(true)
   useEffect(() => {
-    if (text.trim()) return
-    const idle = setTimeout(() => setGreetingIndex((i) => nextGreetingIndex(i)), 8000)
+    if (text.trim()) {
+      setGreetingOn(true)
+      return
+    }
+    const idle = setTimeout(() => setGreetingOn(false), 5 * 60 * 1000)
     return () => clearTimeout(idle)
   }, [text, greetingIndex])
+  useEffect(() => {
+    if (greetingOn || text.trim()) return
+    const swap = setTimeout(() => {
+      setGreetingIndex((i) => nextGreetingIndex(i))
+      setGreetingOn(true)
+    }, 320)
+    return () => clearTimeout(swap)
+  }, [greetingOn, text])
   // The project the chat runs in: one of the registered projects, or
   // null - a chat that belongs to no project and runs in the home folder.
   const [projectId, setProjectId] = useState(null)
   const [picker, setPicker] = useState(null)
+  const [harnessLeaving, setHarnessLeaving] = useState(false)
+  const [modelLeaving, setModelLeaving] = useState(false)
+  const [effortLeaving, setEffortLeaving] = useState(false)
+  const [permissionLeaving, setPermissionLeaving] = useState(false)
+  const permissionLeavingRef = useRef(false)
+  const effortLeavingRef = useRef(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const [harness, setHarness] = useState(() => openingPreset?.harness ?? loadDefaults().harness)
@@ -696,13 +846,107 @@ export default function NewChat({
       setEndpointId(null)
     }
     setEffort(null)
-    setPicker(null)
+    leaveModel()
   }
 
   const openPicker = (kind) => (e) => setPicker({ kind, x: e.clientX, y: e.clientY })
+  // Permission hangs off the composer's right edge, the mirror of the model
+  // list on the left, and never off the pointer.
+  const leavePermission = () => {
+    if (permissionLeavingRef.current) return
+    permissionLeavingRef.current = true
+    setPermissionLeaving(true)
+    setTimeout(() => {
+      permissionLeavingRef.current = false
+      setPermissionLeaving(false)
+      setPicker((current) => (current?.kind === 'permission' ? null : current))
+    }, 160)
+  }
+  const openPermissionPicker = () => {
+    if (picker?.kind === 'permission') {
+      leavePermission()
+      return
+    }
+    const rect = boxRef.current?.getBoundingClientRect()
+    if (!rect) {
+      setPicker({ kind: 'permission', x: 16, y: 16 })
+      return
+    }
+    const spot = spotAtBox(rect)
+    setPicker({
+      kind: 'permission',
+      x: Math.round(rect.right - 264),
+      y: spot?.top ?? Math.round(rect.bottom),
+    })
+  }
+  // The project list shares the composer box's left edge and always opens in
+  // that spot. A second press on the same control closes it.
+  const openProjectPicker = () => {
+    if (picker?.kind === 'project') {
+      setPicker(null)
+      return
+    }
+    const box = boxRef.current?.getBoundingClientRect()
+    const row = boxRef.current?.parentElement?.querySelector('.nc-below')?.getBoundingClientRect()
+    if (!box) {
+      setPicker({ kind: 'project', x: 16, y: 16 })
+      return
+    }
+    setPicker({
+      kind: 'project',
+      x: Math.round(box.left),
+      y: Math.round((row?.bottom ?? box.bottom) + 8),
+    })
+  }
+  const leaveEffort = () => {
+    if (effortLeavingRef.current) return
+    effortLeavingRef.current = true
+    setEffortLeaving(true)
+    setTimeout(() => {
+      effortLeavingRef.current = false
+      setEffortLeaving(false)
+      setPicker((current) => (current?.kind === 'effort' ? null : current))
+    }, 160)
+  }
+  const toggleEffort = () => {
+    if (picker?.kind === 'effort') leaveEffort()
+    else if (!effortLeaving) setPicker({ kind: 'effort', x: 1, y: 1 })
+  }
+  const leaveModel = () => {
+    if (modelLeaving) return
+    setModelLeaving(true)
+    setTimeout(() => {
+      setModelLeaving(false)
+      setPicker((current) => (current?.kind === 'model' ? null : current))
+    }, 160)
+  }
+  const leaveHarness = (next) => {
+    if (harnessLeaving) return
+    setHarnessLeaving(true)
+    setTimeout(() => {
+      setHarnessLeaving(false)
+      setPicker((current) => (current?.kind === 'harness' ? null : current))
+      if (next === 'manage') setManagingHarnesses(true)
+    }, 160)
+  }
+  useEffect(() => {
+    if (picker?.kind !== 'effort') return
+    const close = (e) => {
+      if (e.target.closest?.('.nc-effort-wrap, .nc-effort')) return
+      leaveEffort()
+    }
+    window.addEventListener('mousedown', close)
+    return () => window.removeEventListener('mousedown', close)
+  }, [picker?.kind])
   // The model list is the composer's, so it shares the box's left padding and
   // opens under the box rather than wherever the pointer happened to be.
   const openBoxPicker = (kind) => {
+    if (picker?.kind === kind) {
+      if (kind === 'harness') leaveHarness('close')
+      else if (kind === 'model') leaveModel()
+      else setPicker(null)
+      return
+    }
     const spot = spotAtBox(boxRef.current?.getBoundingClientRect())
     if (spot) setPicker({ kind, x: spot.left, y: spot.top })
     else setPicker({ kind, x: 16, y: 16 })
@@ -997,7 +1241,7 @@ export default function NewChat({
         {presetsRow}
         {topRight}
       </div>
-      <h1 className="nc-greeting" key={greetingIndex}>{greetingAt(greetingIndex)}</h1>
+      <h1 className={`nc-greeting${greetingOn ? '' : ' is-out'}`}>{greetingAt(greetingIndex)}</h1>
       {clashing.map((c) => (
         <div className="nc-signin" key={c.name}>
           <div className="nc-signin-note">
@@ -1023,10 +1267,10 @@ export default function NewChat({
           the harness picker under the box; it scans this computer each time it opens.
         </p>
       )}
-      <div className={`nc-box${needsSignIn || usingApiKey ? ' nc-box--auth' : ''}`} ref={boxRef}>
-        {(presetNote || carryNote || selectionNote) && (
+      <div className={`nc-box${needsSignIn || usingApiKey ? ' nc-box--auth' : ''}${fast ? ' is-fast' : ''}`} ref={boxRef}>
+        {(presetNote || selectionNote) && (
           <p className="nc-preset-note" role="status">
-            {presetNote ?? carryNote ?? selectionNote}
+            {presetNote ?? selectionNote}
           </p>
         )}
         {menus.element}
@@ -1081,15 +1325,6 @@ export default function NewChat({
                     data-unset={!model || undefined}
                     title={hintModel('Model')}
                   >
-                    {(() => {
-                      // Nothing chosen, nothing shown as chosen: the slot
-                      // reads "Model" until the user picks one. The
-                      // harness's default still applies at send.
-                      if (!model) return null
-                      const row = findModel(models, model)
-                      const maker = modelMaker(currentHarness?.id, row?.model, row?.resolved_model)
-                      return maker ? <ModelMark maker={maker} size={14} /> : null
-                    })()}
                     {model ? shownModelName : 'Model'}
                   </button>
                 ) : (
@@ -1100,56 +1335,33 @@ export default function NewChat({
                     {defaultLabel}
                   </span>
                 )}
-                {picker?.kind === 'model' && (
+                {(picker?.kind === 'model' || modelLeaving) && (
                   <PickerMenu
                     label="Model"
                     searchPlaceholder="Search models"
                     wide
+                    leaving={modelLeaving}
                     items={modelItems}
                     groups={customItems.length > 0}
                     selectedId={model ?? ''}
                     onChoose={chooseModelId}
-                    onClose={() => setPicker(null)}
+                    onClose={leaveModel}
                     anchor={{ left: picker.x, top: picker.y }}
-                    renderIcon={(m) => (
-                      <ModelMark maker={modelMaker(currentHarness?.id, m.id, m.resolved_model)} size={14} />
-                    )}
                     renderSubline={(m) =>
                       m.group ? <span className="nc-item-sub">via {m.group}</span> : null
                     }
                     footer={
-                      <div className="nc-model-custom">
-                        <input
-                          value={customDraft}
-                          onChange={(e) => setCustomDraft(e.target.value)}
-                          placeholder="Custom model id…"
-                          spellCheck={false}
-                          aria-label="Custom model id"
-                        />
+                      currentHarness?.custom_endpoint_supported ? (
                         <button
                           type="button"
-                          disabled={!customDraft.trim()}
                           onClick={() => {
-                            setModel(customDraft.trim())
-                            setCustomDraft('')
-                            setEffort(null)
                             setPicker(null)
+                            setManageModels(true)
                           }}
                         >
-                          Use custom
+                          Manage models…
                         </button>
-                        {currentHarness?.custom_endpoint_supported && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setPicker(null)
-                              setManageModels(true)
-                            }}
-                          >
-                            Manage models…
-                          </button>
-                        )}
-                      </div>
+                      ) : null
                     }
                   />
                 )}
@@ -1205,34 +1417,6 @@ export default function NewChat({
                     }
                   />
                 )}
-                {effortTiers.length > 0 && (
-                  <button
-                    type="button"
-                    className="nc-meta"
-                    onClick={openPicker('effort')}
-                    aria-haspopup="listbox"
-                    aria-expanded={picker?.kind === 'effort'}
-                    data-picker="effort"
-                    title={hintEffort("The harness's own effort tier")}
-                  >
-                    {chosenEffort ?? 'Effort'}
-                  </button>
-                )}
-                {picker?.kind === 'effort' && (
-                  <PickerMenu
-                    label="Effort"
-                    searchPlaceholder="Search efforts"
-                    items={effortTiers.map((t) => ({ id: t, name: t }))}
-                    groups={null}
-                    selectedId={chosenEffort ?? ''}
-                    onChoose={(id) => {
-                      setEffort(id)
-                      setPicker(null)
-                    }}
-                    onClose={() => setPicker(null)}
-                    anchor={{ left: picker.x, top: picker.y }}
-                  />
-                )}
                 <span className="nc-via">via</span>
               </>
             )}
@@ -1245,13 +1429,44 @@ export default function NewChat({
               data-picker="harness"
               title={hintHarness('Harness')}
             >
-              <HarnessMark harness={currentHarness?.id} size={16} />
-              {currentHarness?.name ?? 'No harness installed'}
+              <span className="nc-provider" key={currentHarness?.id ?? 'none'}>
+                <HarnessMark harness={currentHarness?.id} size={16} />
+                {currentHarness?.name ?? 'No harness installed'}
+              </span>
             </button>
-            {picker?.kind === 'harness' && (
+            {model && effortTiers.length > 0 && (
+              <div className="nc-effort-wrap">
+                <button
+                  type="button"
+                  className="nc-meta"
+                  onClick={toggleEffort}
+                  aria-haspopup="dialog"
+                  aria-expanded={picker?.kind === 'effort'}
+                  data-picker="effort"
+                  title={hintEffort("The harness's own effort tier")}
+                >
+                  {fast && <Lightning size={13} weight="fill" />}
+                  {effortLabel(chosenEffort)}
+                </button>
+                {(picker?.kind === 'effort' || effortLeaving) && (
+                  <EffortSlider
+                    tiers={effortTiers}
+                    value={chosenEffort}
+                    leaving={effortLeaving}
+                    spot={spotAtBox(boxRef.current?.getBoundingClientRect(), { gap: 8 })}
+                    fast={fast}
+                    fastSupported={currentHarness?.fast_supported === true}
+                    onEffort={setEffort}
+                    onFast={() => setFast((v) => !v)}
+                  />
+                )}
+              </div>
+            )}
+            {(picker?.kind === 'harness' || harnessLeaving) && (
               <PickerMenu
                 label="Harness"
                 searchPlaceholder="Search harnesses"
+                leaving={harnessLeaving}
                 items={available.map((h) => ({ id: h.id, name: h.name }))}
                 renderIcon={(h) => <HarnessMark harness={h.id} size={16} />}
                 groups={null}
@@ -1262,9 +1477,9 @@ export default function NewChat({
                   // switch resets the choice to the new harness's default.
                   setEffort(null)
                   setPermission(null)
-                  setPicker(null)
+                  leaveHarness('close')
                 }}
-                onClose={() => setPicker(null)}
+                onClose={() => leaveHarness('close')}
                 anchor={{ left: picker.x, top: picker.y }}
                 footer={
                   // The way in to the harness manager - the only row in
@@ -1274,27 +1489,14 @@ export default function NewChat({
                   // Machines).
                   isMobile ? null : <button
                     type="button"
-                    onClick={() => {
-                      setPicker(null)
-                      setManagingHarnesses(true)
-                    }}
+                    onClick={() => leaveHarness('manage')}
                   >
                     Manage harnesses…
                   </button>
                 }
               />
             )}
-            {currentHarness?.fast_supported && (
-              <button
-                className={`nc-meta nc-fast${fast ? ' on' : ''}`}
-                onClick={() => setFast((v) => !v)}
-                aria-pressed={fast}
-                title={hintFast("The harness's own fast mode - its speed tier, never a model switch")}
-              >
-                <Lightning size={13} weight={fast ? 'fill' : 'light'} />
-                Fast
-              </button>
-            )}
+
           </div>
           <div className="nc-send-group">
             {/* What the agent may do without asking sits by the send button:
@@ -1304,7 +1506,7 @@ export default function NewChat({
                 type="button"
                 className="nc-meta"
                 data-unset={!chosenPermission || undefined}
-                onClick={openPicker('permission')}
+                onClick={openPermissionPicker}
                 aria-haspopup="listbox"
                 aria-expanded={picker?.kind === 'permission'}
                 data-picker="permission"
@@ -1313,18 +1515,19 @@ export default function NewChat({
                 {permissionWords.find((w) => (w.w ?? w) === chosenPermission)?.l ?? chosenPermission ?? 'Permission'}
               </button>
             )}
-            {picker?.kind === 'permission' && (
+            {(picker?.kind === 'permission' || permissionLeaving) && (
               <PickerMenu
                 label="Permission"
-                searchPlaceholder="Search permission words"
+                hideSearch
+                leaving={permissionLeaving}
                 items={permissionWords.map((word) => ({ id: word.w ?? word, name: word.l ?? word.w ?? word }))}
                 groups={null}
                 selectedId={chosenPermission ?? ''}
                 onChoose={(id) => {
                   setPermission(id)
-                  setPicker(null)
+                  leavePermission()
                 }}
-                onClose={() => setPicker(null)}
+                onClose={leavePermission}
                 anchor={{ left: picker.x, top: picker.y }}
                 renderSubline={(item) =>
                   item.id === currentHarness?.default_permission ? (
@@ -1336,7 +1539,7 @@ export default function NewChat({
               />
             )}
             <button className="nc-send" onClick={start} disabled={!canSend} title="Start task">
-              <ArrowUp size={15} weight="bold" />
+              <ArrowUp size={16} weight="bold" />
             </button>
           </div>
         </div>
@@ -1380,12 +1583,12 @@ export default function NewChat({
           <div className="nc-device">
             <button
               className="nc-meta"
-              onClick={openPicker('project')}
+              onClick={openProjectPicker}
               aria-haspopup="listbox"
               aria-expanded={picker?.kind === 'project'}
               title={chosenProject ? (privacy ? 'The project this chat runs in' : workspace) : 'A chat can run in a project, or in no folder at all'}
             >
-              <FolderOpen size={13} weight="light" />
+              <FolderOpen size={15} weight="duotone" />
               {chosenProject ? <span className="pv">{projectName(chosenProject)}</span> : 'No project'}
             </button>
             {picker?.kind === 'project' && (
@@ -1451,7 +1654,7 @@ export default function NewChat({
                   anchor={{ left: picker.x, top: picker.y }}
                   renderIcon={(m) =>
                     m.here ? (
-                      <House size={13} weight="light" />
+                      <House size={14} weight="duotone" />
                     ) : (
                       <span className={`nc-dev-dot nc-dev-dot--${m.online ? 'online' : 'offline'}`} />
                     )
