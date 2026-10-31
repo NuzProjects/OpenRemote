@@ -285,8 +285,8 @@
   --cv-side: 14px;
 }
 
-.split-area.is-split .split-body .cv-head {
-  padding: 14px var(--cv-side) 12px;
+.split-area.is-split .split-body .cv-bar-row {
+  padding: 0 12px;
 }
 
 .split-area.is-split .split-body .cv-composer {

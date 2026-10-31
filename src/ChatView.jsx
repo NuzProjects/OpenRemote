@@ -3,12 +3,8 @@ import {
   ArrowUp,
   ArrowUpRight,
   Check,
-  Stop,
-  Play,
-  HandPalm,
+  CaretDown,
   Brain,
-  Trash,
-  CloudArrowUp,
   PencilSimple,
   X,
 } from '@phosphor-icons/react'
@@ -16,6 +12,9 @@ import { useConsole } from './state/console.jsx'
 import { chatAccess, deviceName, signedIn } from './cloud.js'
 import { railItems } from './state/reducer.js'
 import { harnessName } from './harness-names.js'
+import { chatTitle } from './shape.js'
+import ContextMenu from './ContextMenu.jsx'
+import { openChanges } from './ChangesModal.jsx'
 import { findModel, modelDisplayName, prettyModelName } from './model-display.js'
 import { HarnessMark } from './brand-marks.jsx'
 import { pickable } from './harness-manager.js'
@@ -41,15 +40,6 @@ import './composer.css'
 // The harnesses that run one process per prompt cannot take a message
 // mid-turn: Steer interrupts the turn and runs the message next there.
 const INTERRUPT_STEER = new Set(['grok', 'agy'])
-
-const STATUS_LABEL = {
-  starting: 'Starting',
-  running: 'Running',
-  waiting: 'Needs your decision',
-  idle: 'Idle',
-  stopped: 'Stopped',
-  failed: 'Failed',
-}
 
 /// The choice the harness's own words gave the answered decision - the
 /// option's label, never its wire id.
@@ -209,6 +199,7 @@ export default function ChatView({ chat, onBack, focused = true }) {
   } = useConsole()
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [confirmSync, setConfirmSync] = useState(false)
+  const [barMenu, setBarMenu] = useState(null)
   // A synced chat may run on another device: what can be done from here.
   const access = chatAccess(chat, devices, thisDevice, cloud)
   const reachable = access === 'here' || access === 'remote'
@@ -734,133 +725,102 @@ export default function ChatView({ chat, onBack, focused = true }) {
   // send (one process per prompt), or simply send when nothing runs.
   const steerButton = turnOpen ? (INTERRUPT_STEER.has(chat.harness) ? 'Interrupt + send' : 'Steer') : 'Send now'
   const hintSteer = useHint('steer')
-  const hintInterrupt = useHint('interrupt')
-  const hintStop = useHint('stop')
   const hintModel = useHint('pick-model')
   const hintEffort = useHint('pick-effort')
   const hintPermission = useHint('pick-permission')
 
   return (
     <div className="chatview">
-      <header className="cv-head">
-        <p className="cv-facts">
-          {chat.status !== 'idle' && <span className={`cv-dot cv-dot--${chat.status}`} />}
-          <span className="cv-where pv">{chat.workspace}</span>
-          <span className="cv-fact">{harnessName(chat.harness)}</span>
-          {elsewhere && <span className="cv-fact">on <span className="pv">{where}</span></span>}
-          {chat.model && (
-            <span className="cv-fact" title={chat.model}>
-              {modelDisplayName(models, chat.model)}
-            </span>
-          )}
-          {chat.effort && <span className="cv-fact">{chat.effort}</span>}
-          {chat.permissionMode && (
-            <span
-              className="cv-fact"
-              title={`The harness's permission word for this chat (${harnessName(chat.harness)}'s own spelling)`}
-            >
-              {chat.permissionMode}
-            </span>
-          )}
-          {chat.fast && <span className="cv-fact">Fast</span>}
-          {chat.costUsd > 0 && (
-            <span className="cv-fact">${chat.costUsd < 0.01 ? chat.costUsd.toFixed(4) : chat.costUsd.toFixed(2)}</span>
-          )}
-          {chat.thinkingTokens > 0 && (
-            <span className="cv-fact">{chat.thinkingTokens.toLocaleString()} thinking tokens</span>
-          )}
-          {chat.approvedTools?.length > 0 && (
-            <span className="cv-fact">
-              <span className="pv">{chat.approvedTools.join(' · ')}</span> allowed for this chat
-            </span>
-          )}
-          <span className="cv-fact">{STATUS_LABEL[chat.status] ?? chat.status}</span>
-          {access === 'not-machine' && (
-            <button
-              className="cv-fact-btn"
-              onClick={() => control(() => setDeviceKind(chat.executor, 'machine'))}
-              title={privacy ? 'Let your other devices run chats on it' : `Let your other devices run chats on ${where}`}
-            >
-              Make <span className="pv">{where}</span> a machine
-            </button>
-          )}
-          {reachable && chat.running && (
-            <>
-              <button className="cv-fact-btn" onClick={() => control(() => interruptChat(chat.id))} title={hintInterrupt('Interrupt the running turn - the session stays alive')}>
-                <HandPalm size={11} weight="fill" />
-                Interrupt
-              </button>
-              <button className="cv-fact-btn" onClick={() => control(() => stopChat(chat.id))} title={hintStop('Stop the session')}>
-                <Stop size={11} weight="fill" />
-                Stop
-              </button>
-            </>
-          )}
-          {/* Resume rides the harness's own conversation (claude
-              `--resume`, codex thread/resume, ...). A chat stopped before
-              its first message never got one - the daemon would only
-              answer "nothing to resume", so the button never shows there. */}
-          {reachable && (chat.status === 'stopped' || chat.status === 'failed') && chat.resumable && (
-            <button className="cv-fact-btn" onClick={() => control(() => resumeChat(chat.id))} title="Resume the session">
-              <Play size={11} weight="fill" />
-              Resume
-            </button>
-          )}
-          {/* A private chat can join Cloud - asked first, since the whole
-              transcript goes, tool output included. */}
-          {!chat.executor && signedIn(cloud) && (
-            confirmSync ? (
-              <>
-                <span className="cv-fact">Copy this chat, tool output included, to your other devices?</span>
-                <button
-                  className="cv-fact-btn"
-                  onClick={() =>
-                    control(async () => {
-                      await syncChat(chat.id)
-                      setConfirmSync(false)
-                    })
-                  }
-                >
-                  <CloudArrowUp size={11} />
-                  Sync
-                </button>
-                <button className="cv-fact-btn" onClick={() => setConfirmSync(false)}>
-                  Cancel
-                </button>
-              </>
-            ) : (
-              <button
-                className="cv-fact-btn"
-                onClick={() => setConfirmSync(true)}
-                title="Copy this chat to your other devices"
-              >
-                <CloudArrowUp size={11} />
-                Sync
-              </button>
-            )
-          )}
-          {/* Deleting a synced chat removes it from every device - asked
-              twice, in place. */}
-          {chat.executor && (
-            confirmDelete ? (
-              <>
-                <button className="cv-fact-btn" onClick={() => control(() => deleteChat(chat.id))} title="Delete this chat on all your devices">
-                  <Trash size={11} />
-                  Delete everywhere
-                </button>
-                <button className="cv-fact-btn" onClick={() => setConfirmDelete(false)}>
-                  Keep
-                </button>
-              </>
-            ) : (
-              <button className="cv-fact-btn" onClick={() => setConfirmDelete(true)} title="Delete this chat">
-                <Trash size={11} />
-                Delete
-              </button>
-            )
-          )}
-        </p>
-        {chat.lastError && chat.status === 'failed' && <p className="cv-facts cv-error pv">{chat.lastError}</p>}
+      <header className="cv-bar">
+        <div className="cv-bar-row">
+        <div className="cv-bar-left">
+          <h1 className="cv-bar-title pv">{chatTitle(chat)}</h1>
+          <span className="cv-chip cv-facts" title={harnessName(chat.harness)}>
+            <HarnessMark harness={chat.harness} size={14} />
+            <span className="cv-fact">{harnessName(chat.harness)}</span>
+          </span>
+        </div>
+        <div className="cv-bar-actions">
+          <button
+            type="button"
+            className="cv-bar-btn"
+            aria-haspopup="menu"
+            aria-expanded={barMenu?.kind === 'open'}
+            onClick={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect()
+              setBarMenu({ kind: 'open', x: rect.left, y: rect.bottom + 6 })
+            }}
+          >
+            Open
+            <CaretDown size={12} />
+          </button>
+          <button
+            type="button"
+            className="cv-bar-btn"
+            aria-haspopup="menu"
+            aria-expanded={barMenu?.kind === 'commit'}
+            onClick={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect()
+              setBarMenu({ kind: 'commit', x: rect.left, y: rect.bottom + 6 })
+            }}
+          >
+            Commit
+            <CaretDown size={12} />
+          </button>
+        </div>
+        </div>
+        {barMenu && (
+          <ContextMenu
+            x={barMenu.x}
+            y={barMenu.y}
+            onClose={() => setBarMenu(null)}
+            items={
+              barMenu.kind === 'commit'
+                ? [{ label: 'Review changes', onSelect: () => openChanges(chat.id) }]
+                : [
+                    reachable && chat.running && {
+                      label: 'Interrupt',
+                      onSelect: () => control(() => interruptChat(chat.id)),
+                    },
+                    reachable && chat.running && {
+                      label: 'Stop',
+                      onSelect: () => control(() => stopChat(chat.id)),
+                    },
+                    reachable && (chat.status === 'stopped' || chat.status === 'failed') && chat.resumable && {
+                      label: 'Resume',
+                      onSelect: () => control(() => resumeChat(chat.id)),
+                    },
+                    { label: 'Changes in this chat', onSelect: () => openChanges(chat.id) },
+                    access === 'not-machine' && {
+                      label: privacy ? 'Make it a machine' : `Make ${where} a machine`,
+                      onSelect: () => control(() => setDeviceKind(chat.executor, 'machine')),
+                    },
+                    !chat.executor && signedIn(cloud) && !confirmSync && {
+                      label: 'Sync',
+                      onSelect: () => setConfirmSync(true),
+                    },
+                    !chat.executor && signedIn(cloud) && confirmSync && {
+                      label: 'Copy this chat to your other devices',
+                      onSelect: () =>
+                        control(async () => {
+                          await syncChat(chat.id)
+                          setConfirmSync(false)
+                        }),
+                    },
+                    chat.executor && !confirmDelete && {
+                      label: 'Delete',
+                      onSelect: () => setConfirmDelete(true),
+                    },
+                    chat.executor && confirmDelete && {
+                      label: 'Delete everywhere',
+                      danger: true,
+                      onSelect: () => control(() => deleteChat(chat.id)),
+                    },
+                  ].filter(Boolean)
+            }
+          />
+        )}
+        {chat.lastError && chat.status === 'failed' && <p className="cv-bar-error pv">{chat.lastError}</p>}
       </header>
       <div className="cv-scroll" ref={scrollRef}>
         <div className="cv-thread">

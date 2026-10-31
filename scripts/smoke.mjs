@@ -1566,7 +1566,7 @@ try {
     } else if (!chatDrawn) {
       newWithSetup.why = `the chat "${firstChat.title}" opened but its view never drew a facts row (.chatview .cv-facts)`
     } else if (!harness) {
-      newWithSetup.why = `the chat "${firstChat.title}" shows no harness in its facts row (.cv-facts .cv-fact, src/ChatView.jsx:828)`
+      newWithSetup.why = `the chat "${firstChat.title}" shows no harness in its bar (.cv-facts .cv-fact)`
     } else {
       await key({ key: 'k', code: 'KeyK', vk: 75, modifiers: 2 })
       const palette = await waitFor("!!document.querySelector('.kb-palette')", { timeout: 4000 })
