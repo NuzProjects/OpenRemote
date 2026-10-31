@@ -4,6 +4,7 @@ import {
   ArrowUpRight,
   Check,
   CaretDown,
+  Stop,
   Brain,
   PencilSimple,
   X,
@@ -13,7 +14,6 @@ import { chatAccess, deviceName, signedIn } from './cloud.js'
 import { railItems } from './state/reducer.js'
 import { harnessName } from './harness-names.js'
 import { chatTitle } from './shape.js'
-import ContextMenu from './ContextMenu.jsx'
 import { openChanges } from './ChangesModal.jsx'
 import { fileChanges } from './changes.js'
 import { hasTauri } from './platform.js'
@@ -195,8 +195,8 @@ export default function ChatView({ chat, onBack, focused = true }) {
     renameChat,
     chats,
   } = useConsole()
-  const [barMenu, setBarMenu] = useState(null)
-  const [commitOpen, setCommitOpen] = useState(false)
+  const [panel, setPanel] = useState(null)
+  const panelRef = useRef(null)
   const [commitMessage, setCommitMessage] = useState('')
   const [commitBusy, setCommitBusy] = useState(false)
   const [barNote, setBarNote] = useState(null)
@@ -725,9 +725,20 @@ export default function ChatView({ chat, onBack, focused = true }) {
   // send (one process per prompt), or simply send when nothing runs.
   const steerButton = turnOpen ? (INTERRUPT_STEER.has(chat.harness) ? 'Interrupt + send' : 'Steer') : 'Send now'
   const hintSteer = useHint('steer')
+  const hintStop = useHint('stop')
   const hintModel = useHint('pick-model')
   const hintEffort = useHint('pick-effort')
   const hintPermission = useHint('pick-permission')
+  useEffect(() => {
+    if (!panel) return
+    const away = (event) => {
+      if (panelRef.current?.contains(event.target)) return
+      setPanel(null)
+    }
+    document.addEventListener('mousedown', away)
+    return () => document.removeEventListener('mousedown', away)
+  }, [panel])
+
   const workspace = typeof chat.workspace === 'string' ? chat.workspace.trim() : ''
   const commitFiles = fileChanges(rail).files
 
@@ -762,7 +773,7 @@ export default function ChatView({ chat, onBack, focused = true }) {
         message: commitMessage,
         paths: commitFiles.map((file) => file.path),
       })
-      setCommitOpen(false)
+      setPanel(null)
       setBarNote({ error: false, text: text || 'Committed.' })
     } catch (err) {
       setBarNote({ error: true, text: String(err?.message || err) })
@@ -781,85 +792,84 @@ export default function ChatView({ chat, onBack, focused = true }) {
               <span className="cv-fact">{harnessName(chat.harness)}</span>
             </span>
           </div>
-          <div className="cv-bar-actions">
-            {reachable && chat.running && (
-              <button type="button" className="cv-bar-btn" onClick={() => control(() => stopChat(chat.id))}>
-                Stop
+          <div className="cv-bar-actions" ref={panelRef}>
+            <div className="cv-bar-pop">
+              <button
+                type="button"
+                className="cv-bar-btn"
+                aria-expanded={panel === 'open'}
+                onClick={() => {
+                  setBarNote(null)
+                  setPanel((current) => (current === 'open' ? null : 'open'))
+                }}
+              >
+                Open
+                <CaretDown size={12} />
               </button>
-            )}
-            {reachable && (chat.status === 'stopped' || chat.status === 'failed') && chat.resumable && (
-              <button type="button" className="cv-bar-btn" onClick={() => control(() => resumeChat(chat.id))}>
-                Resume
+              {panel === 'open' && (
+                <div className="cv-commit">
+                  <button
+                    type="button"
+                    className="cv-commit-go"
+                    disabled={!workspace}
+                    onClick={() => {
+                      setPanel(null)
+                      openFolder()
+                    }}
+                  >
+                    Open folder
+                  </button>
+                  <button
+                    type="button"
+                    className="cv-open-link"
+                    onClick={() => {
+                      setPanel(null)
+                      openChanges(chat.id)
+                    }}
+                  >
+                    Changes in this chat
+                  </button>
+                  {!workspace && <p className="cv-commit-files">This chat has no folder to open.</p>}
+                </div>
+              )}
+            </div>
+            <div className="cv-bar-pop">
+              <button
+                type="button"
+                className="cv-bar-btn"
+                aria-expanded={panel === 'commit'}
+                onClick={() => {
+                  setBarNote(null)
+                  setCommitMessage((current) => current || (chatTitle(chat) === 'A new task' ? '' : chatTitle(chat)))
+                  setPanel((current) => (current === 'commit' ? null : 'commit'))
+                }}
+              >
+                Commit
+                <CaretDown size={12} />
               </button>
-            )}
-            <button
-              type="button"
-              className="cv-bar-btn"
-              aria-haspopup="menu"
-              aria-expanded={barMenu?.kind === 'open'}
-              onClick={(e) => {
-                const rect = e.currentTarget.getBoundingClientRect()
-                setCommitOpen(false)
-                setBarMenu({ kind: 'open', x: rect.left, y: rect.bottom + 6 })
-              }}
-            >
-              Open
-              <CaretDown size={12} />
-            </button>
-            <button
-              type="button"
-              className="cv-bar-btn"
-              aria-expanded={commitOpen}
-              onClick={() => {
-                setBarMenu(null)
-                setBarNote(null)
-                setCommitMessage((current) => current || (chatTitle(chat) === 'A new task' ? '' : chatTitle(chat)))
-                setCommitOpen((open) => !open)
-              }}
-            >
-              Commit
-              <CaretDown size={12} />
-            </button>
+              {panel === 'commit' && (
+                <form className="cv-commit" onSubmit={runCommit}>
+                  {commitFiles.length === 0 ? (
+                    <p className="cv-commit-files">This chat has not reported a file to commit.</p>
+                  ) : (
+                    <>
+                      <textarea
+                        value={commitMessage}
+                        onChange={(e) => setCommitMessage(e.target.value)}
+                        placeholder="Commit message"
+                        aria-label="Commit message"
+                      />
+                      <p className="cv-commit-files">{commitFiles.map((file) => file.path).join('\n')}</p>
+                      <button type="submit" className="cv-commit-go" disabled={commitBusy || !commitMessage.trim() || !workspace}>
+                        {commitBusy ? 'Committing…' : 'Commit'}
+                      </button>
+                    </>
+                  )}
+                </form>
+              )}
+            </div>
           </div>
         </div>
-        {barMenu?.kind === 'open' && (
-          <ContextMenu
-            x={barMenu.x}
-            y={barMenu.y}
-            onClose={() => setBarMenu(null)}
-            items={[
-              {
-                label: 'Open folder',
-                disabled: !workspace,
-                hint: workspace ? undefined : 'No folder',
-                onSelect: openFolder,
-              },
-              { label: 'Changes in this chat', onSelect: () => openChanges(chat.id) },
-            ]}
-          />
-        )}
-        {commitOpen && (
-          <form className="cv-commit" onSubmit={runCommit}>
-            {commitFiles.length === 0 ? (
-              <p className="cv-commit-files">This chat has not reported a file to commit.</p>
-            ) : (
-              <>
-                <textarea
-                  value={commitMessage}
-                  onChange={(e) => setCommitMessage(e.target.value)}
-                  placeholder="Commit message"
-                  aria-label="Commit message"
-                />
-                <p className="cv-commit-files">
-                  {commitFiles.map((file) => file.path).join('\n')}
-                </p>
-                <button type="submit" className="cv-commit-go" disabled={commitBusy || !commitMessage.trim() || !workspace}>
-                  {commitBusy ? 'Committing…' : 'Commit'}
-                </button>
-              </>
-            )}
-          </form>
-        )}
         {barNote && <p className={barNote.error ? 'cv-bar-error' : 'cv-bar-note'}>{barNote.text}</p>}
         {chat.lastError && chat.status === 'failed' && <p className="cv-bar-error pv">{chat.lastError}</p>}
       </header>
@@ -1048,11 +1058,7 @@ export default function ChatView({ chat, onBack, focused = true }) {
               </div>
             )
           })}
-          {chat.running && !pendingDecision && (
-            <p className="cv-node cv-node--run cv-running">
-              Working...
-            </p>
-          )}
+
         </div>
       </div>
 
@@ -1405,12 +1411,15 @@ export default function ChatView({ chat, onBack, focused = true }) {
                 />
               )}
               <button
-                className="nc-send"
-                onClick={send}
-                disabled={!canSend}
-                title={turnOpen ? `Queue (Enter) - ${hintSteer(steerLabel)}` : 'Send'}
+                className={`nc-send${chat.running ? ' is-stop' : ''}`}
+                onClick={chat.running ? () => control(() => stopChat(chat.id)) : send}
+                disabled={!chat.running && !canSend}
+                title={chat.running ? hintStop('Stop the session') : turnOpen ? `Queue (Enter) - ${hintSteer(steerLabel)}` : 'Send'}
               >
-                <ArrowUp size={15} weight="bold" />
+                <span className="nc-send-face" aria-hidden="true">
+                  <ArrowUp className={chat.running ? 'away' : ''} size={15} weight="bold" />
+                  <Stop className={chat.running ? '' : 'away'} size={12} weight="fill" />
+                </span>
               </button>
             </div>
           </div>

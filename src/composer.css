@@ -190,6 +190,27 @@ html[data-reduce-motion] .nc-skeleton {
   background: transparent;
   color: var(--text-3);
   cursor: default;
+  transition: background 180ms ease, color 180ms ease;
+}
+
+.nc-send-face {
+  display: grid;
+  place-items: center;
+}
+
+.nc-send-face > * {
+  grid-area: 1 / 1;
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.nc-send-face > .away {
+  opacity: 0;
+  transform: scale(0.72);
+}
+
+.nc-send.is-stop {
+  background: #e4e4e7;
+  color: #1c1c1c;
 }
 
 /* The film's send: the composer's one recurring primary action carries
@@ -221,11 +242,15 @@ html[data-reduce-motion] .nc-skeleton {
 /* The send's press pulse settles for either switch: the system preference
    and the in-app setting are one rule, written twice. */
 @media (prefers-reduced-motion: reduce) {
-  .nc-send:not(:disabled) {
+  .nc-send,
+  .nc-send:not(:disabled),
+  .nc-send-face > * {
     transition: none;
   }
 }
 
-html[data-reduce-motion] .nc-send:not(:disabled) {
+html[data-reduce-motion] .nc-send,
+html[data-reduce-motion] .nc-send:not(:disabled),
+html[data-reduce-motion] .nc-send-face > * {
   transition: none;
 }
