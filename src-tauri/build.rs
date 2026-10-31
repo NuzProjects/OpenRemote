@@ -30,6 +30,8 @@ const COMMANDS: &[&str] = &[
     "browser_clear_site",
     "browser_open_external",
     "browser_reveal",
+    "open_folder",
+    "workspace_commit",
 ];
 
 fn main() {

@@ -15,6 +15,8 @@ import { harnessName } from './harness-names.js'
 import { chatTitle } from './shape.js'
 import ContextMenu from './ContextMenu.jsx'
 import { openChanges } from './ChangesModal.jsx'
+import { fileChanges } from './changes.js'
+import { hasTauri } from './platform.js'
 import { findModel, modelDisplayName, prettyModelName } from './model-display.js'
 import { HarnessMark } from './brand-marks.jsx'
 import { pickable } from './harness-manager.js'
@@ -29,7 +31,6 @@ import PickerMenu from './PickerMenu.jsx'
 import { EffortSlider, FadingLabel, effortLabel } from './NewChat.jsx'
 import { EndpointManagerModal } from './EndpointManager.jsx'
 import { isMobile } from './platform.js'
-import { usePrivacyMode } from './privacy.js'
 import { useHint, useModelSwitches, usePaletteSource, useShortcut } from './keyboard.jsx'
 import { useComposerMenus } from './useComposerMenus.jsx'
 import { mentionedChats, ownCommands, takeCommands } from './composer-menus.js'
@@ -169,7 +170,6 @@ const LIVE_SETTINGS = {
 }
 
 export default function ChatView({ chat, onBack, focused = true }) {
-  const privacy = usePrivacyMode()
   const {
     capabilities,
     connection,
@@ -186,8 +186,6 @@ export default function ChatView({ chat, onBack, focused = true }) {
     devices,
     thisDevice,
     cloud,
-    setDeviceKind,
-    deleteChat,
     syncChat,
     queueMessage,
     removeQueued,
@@ -197,9 +195,11 @@ export default function ChatView({ chat, onBack, focused = true }) {
     renameChat,
     chats,
   } = useConsole()
-  const [confirmDelete, setConfirmDelete] = useState(false)
-  const [confirmSync, setConfirmSync] = useState(false)
   const [barMenu, setBarMenu] = useState(null)
+  const [commitOpen, setCommitOpen] = useState(false)
+  const [commitMessage, setCommitMessage] = useState('')
+  const [commitBusy, setCommitBusy] = useState(false)
+  const [barNote, setBarNote] = useState(null)
   // A synced chat may run on another device: what can be done from here.
   const access = chatAccess(chat, devices, thisDevice, cloud)
   const reachable = access === 'here' || access === 'remote'
@@ -728,98 +728,139 @@ export default function ChatView({ chat, onBack, focused = true }) {
   const hintModel = useHint('pick-model')
   const hintEffort = useHint('pick-effort')
   const hintPermission = useHint('pick-permission')
+  const workspace = typeof chat.workspace === 'string' ? chat.workspace.trim() : ''
+  const commitFiles = fileChanges(rail).files
+
+  const openFolder = async () => {
+    setBarNote(null)
+    if (!workspace) {
+      setBarNote({ error: true, text: 'This chat has no folder to open.' })
+      return
+    }
+    if (!hasTauri) {
+      setBarNote({ error: true, text: 'Opening a folder needs the desktop app.' })
+      return
+    }
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      await invoke('open_folder', { path: workspace })
+    } catch (err) {
+      setBarNote({ error: true, text: String(err?.message || err) })
+    }
+  }
+
+  const runCommit = async (event) => {
+    event.preventDefault()
+    if (commitBusy) return
+    setCommitBusy(true)
+    setBarNote(null)
+    try {
+      if (!hasTauri) throw new Error('Committing needs the desktop app.')
+      const { invoke } = await import('@tauri-apps/api/core')
+      const text = await invoke('workspace_commit', {
+        workspace,
+        message: commitMessage,
+        paths: commitFiles.map((file) => file.path),
+      })
+      setCommitOpen(false)
+      setBarNote({ error: false, text: text || 'Committed.' })
+    } catch (err) {
+      setBarNote({ error: true, text: String(err?.message || err) })
+    } finally {
+      setCommitBusy(false)
+    }
+  }
 
   return (
     <div className="chatview">
       <header className="cv-bar">
         <div className="cv-bar-row">
-        <div className="cv-bar-left">
-          <h1 className="cv-bar-title pv">{chatTitle(chat)}</h1>
-          <span className="cv-chip cv-facts" title={harnessName(chat.harness)}>
-            <HarnessMark harness={chat.harness} size={14} />
-            <span className="cv-fact">{harnessName(chat.harness)}</span>
-          </span>
+          <div className="cv-bar-left">
+            <span className="cv-chip cv-facts" title={harnessName(chat.harness)}>
+              <HarnessMark harness={chat.harness} size={14} />
+              <span className="cv-fact">{harnessName(chat.harness)}</span>
+            </span>
+          </div>
+          <div className="cv-bar-actions">
+            {reachable && chat.running && (
+              <button type="button" className="cv-bar-btn" onClick={() => control(() => stopChat(chat.id))}>
+                Stop
+              </button>
+            )}
+            {reachable && (chat.status === 'stopped' || chat.status === 'failed') && chat.resumable && (
+              <button type="button" className="cv-bar-btn" onClick={() => control(() => resumeChat(chat.id))}>
+                Resume
+              </button>
+            )}
+            <button
+              type="button"
+              className="cv-bar-btn"
+              aria-haspopup="menu"
+              aria-expanded={barMenu?.kind === 'open'}
+              onClick={(e) => {
+                const rect = e.currentTarget.getBoundingClientRect()
+                setCommitOpen(false)
+                setBarMenu({ kind: 'open', x: rect.left, y: rect.bottom + 6 })
+              }}
+            >
+              Open
+              <CaretDown size={12} />
+            </button>
+            <button
+              type="button"
+              className="cv-bar-btn"
+              aria-expanded={commitOpen}
+              onClick={() => {
+                setBarMenu(null)
+                setBarNote(null)
+                setCommitMessage((current) => current || (chatTitle(chat) === 'A new task' ? '' : chatTitle(chat)))
+                setCommitOpen((open) => !open)
+              }}
+            >
+              Commit
+              <CaretDown size={12} />
+            </button>
+          </div>
         </div>
-        <div className="cv-bar-actions">
-          <button
-            type="button"
-            className="cv-bar-btn"
-            aria-haspopup="menu"
-            aria-expanded={barMenu?.kind === 'open'}
-            onClick={(e) => {
-              const rect = e.currentTarget.getBoundingClientRect()
-              setBarMenu({ kind: 'open', x: rect.left, y: rect.bottom + 6 })
-            }}
-          >
-            Open
-            <CaretDown size={12} />
-          </button>
-          <button
-            type="button"
-            className="cv-bar-btn"
-            aria-haspopup="menu"
-            aria-expanded={barMenu?.kind === 'commit'}
-            onClick={(e) => {
-              const rect = e.currentTarget.getBoundingClientRect()
-              setBarMenu({ kind: 'commit', x: rect.left, y: rect.bottom + 6 })
-            }}
-          >
-            Commit
-            <CaretDown size={12} />
-          </button>
-        </div>
-        </div>
-        {barMenu && (
+        {barMenu?.kind === 'open' && (
           <ContextMenu
             x={barMenu.x}
             y={barMenu.y}
             onClose={() => setBarMenu(null)}
-            items={
-              barMenu.kind === 'commit'
-                ? [{ label: 'Review changes', onSelect: () => openChanges(chat.id) }]
-                : [
-                    reachable && chat.running && {
-                      label: 'Interrupt',
-                      onSelect: () => control(() => interruptChat(chat.id)),
-                    },
-                    reachable && chat.running && {
-                      label: 'Stop',
-                      onSelect: () => control(() => stopChat(chat.id)),
-                    },
-                    reachable && (chat.status === 'stopped' || chat.status === 'failed') && chat.resumable && {
-                      label: 'Resume',
-                      onSelect: () => control(() => resumeChat(chat.id)),
-                    },
-                    { label: 'Changes in this chat', onSelect: () => openChanges(chat.id) },
-                    access === 'not-machine' && {
-                      label: privacy ? 'Make it a machine' : `Make ${where} a machine`,
-                      onSelect: () => control(() => setDeviceKind(chat.executor, 'machine')),
-                    },
-                    !chat.executor && signedIn(cloud) && !confirmSync && {
-                      label: 'Sync',
-                      onSelect: () => setConfirmSync(true),
-                    },
-                    !chat.executor && signedIn(cloud) && confirmSync && {
-                      label: 'Copy this chat to your other devices',
-                      onSelect: () =>
-                        control(async () => {
-                          await syncChat(chat.id)
-                          setConfirmSync(false)
-                        }),
-                    },
-                    chat.executor && !confirmDelete && {
-                      label: 'Delete',
-                      onSelect: () => setConfirmDelete(true),
-                    },
-                    chat.executor && confirmDelete && {
-                      label: 'Delete everywhere',
-                      danger: true,
-                      onSelect: () => control(() => deleteChat(chat.id)),
-                    },
-                  ].filter(Boolean)
-            }
+            items={[
+              {
+                label: 'Open folder',
+                disabled: !workspace,
+                hint: workspace ? undefined : 'No folder',
+                onSelect: openFolder,
+              },
+              { label: 'Changes in this chat', onSelect: () => openChanges(chat.id) },
+            ]}
           />
         )}
+        {commitOpen && (
+          <form className="cv-commit" onSubmit={runCommit}>
+            {commitFiles.length === 0 ? (
+              <p className="cv-commit-files">This chat has not reported a file to commit.</p>
+            ) : (
+              <>
+                <textarea
+                  value={commitMessage}
+                  onChange={(e) => setCommitMessage(e.target.value)}
+                  placeholder="Commit message"
+                  aria-label="Commit message"
+                />
+                <p className="cv-commit-files">
+                  {commitFiles.map((file) => file.path).join('\n')}
+                </p>
+                <button type="submit" className="cv-commit-go" disabled={commitBusy || !commitMessage.trim() || !workspace}>
+                  {commitBusy ? 'Committing…' : 'Commit'}
+                </button>
+              </>
+            )}
+          </form>
+        )}
+        {barNote && <p className={barNote.error ? 'cv-bar-error' : 'cv-bar-note'}>{barNote.text}</p>}
         {chat.lastError && chat.status === 'failed' && <p className="cv-bar-error pv">{chat.lastError}</p>}
       </header>
       <div className="cv-scroll" ref={scrollRef}>

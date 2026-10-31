@@ -15,6 +15,7 @@
 }
 
 .cv-bar {
+  position: relative;
   flex: none;
   align-self: stretch;
   width: 100%;
@@ -38,26 +39,15 @@
   min-width: 0;
 }
 
-.cv-bar-title {
-  margin: 0;
-  overflow: hidden;
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--text-1);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .cv-chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   flex: none;
   height: 26px;
-  padding: 0 8px 0 6px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
   color: var(--text-2);
   font-size: 12.5px;
 }
@@ -97,6 +87,67 @@
   padding: 0 16px 8px;
   color: #f87171;
   font-size: 12.5px;
+}
+
+.cv-bar-note {
+  margin: 0;
+  padding: 0 16px 8px;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.cv-commit {
+  position: absolute;
+  z-index: 4;
+  top: calc(100% + 6px);
+  right: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(320px, calc(100% - 32px));
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg-app);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+}
+
+.cv-commit textarea {
+  width: 100%;
+  min-height: 64px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-1);
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+
+.cv-commit-files {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.cv-commit-go {
+  align-self: flex-end;
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: #fff;
+  color: #111;
+  font: inherit;
+  font-size: 13px;
+  cursor: default;
+}
+
+.cv-commit-go:disabled {
+  opacity: 0.45;
 }
 
 .cv-facts {

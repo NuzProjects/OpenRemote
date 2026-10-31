@@ -46,6 +46,8 @@
     "allow-browser-viewport",
     "allow-browser-clear-site",
     "allow-browser-open-external",
-    "allow-browser-reveal"
+    "allow-browser-reveal",
+    "allow-open-folder",
+    "allow-workspace-commit"
   ]
 }

@@ -13,7 +13,9 @@ use tauri::{Emitter, Manager, State, WindowEvent};
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 
-use crate::{browser, geometry, tray, DaemonFailure, DaemonFailureKind, DaemonInfo, DaemonState};
+use crate::{
+    browser, geometry, tray, workspace, DaemonFailure, DaemonFailureKind, DaemonInfo, DaemonState,
+};
 
 const DAEMON_NAME: &str = "openremote-daemon";
 
@@ -220,7 +222,9 @@ pub fn run() {
             browser::browser_viewport,
             browser::browser_clear_site,
             browser::browser_open_external,
-            browser::browser_reveal
+            browser::browser_reveal,
+            workspace::open_folder,
+            workspace::workspace_commit
         ])
         .setup(|app| {
             // Before the first paint: fit the window to the screen it is on

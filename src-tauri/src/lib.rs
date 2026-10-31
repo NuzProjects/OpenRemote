@@ -23,6 +23,8 @@ mod mobile;
 mod signin;
 #[cfg(desktop)]
 mod tray;
+#[cfg(desktop)]
+mod workspace;
 
 /// What the shell knows about the running daemon. The console asks for
 /// this on boot and while it has no connection, and the shell pushes it
